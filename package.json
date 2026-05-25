@@ -1,0 +1,71 @@
+{
+  "name": "nuxt-cf-jobs",
+  "type": "module",
+  "version": "0.0.1",
+  "packageManager": "pnpm@11.2.1",
+  "description": "Nuxt module for typed Cloudflare queue jobs.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "contributors": [
+    "Harlan Wilton <harlan@harlanzw.com>"
+  ],
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "server": [
+        "dist/runtime/server/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "nuxt-module-build build && nuxt-module-build prepare",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "test": "vitest run tests/dispatch.test.ts --typecheck=false",
+    "test:unit": "vitest run tests/dispatch.test.ts --typecheck=false",
+    "test:types": "nuxt prepare tests/fixtures/nuxt-demo && vue-tsc --noEmit -p tests/fixtures/nuxt-demo/tsconfig.json",
+    "test:e2e": "CF_JOBS_E2E=1 vitest run --no-file-parallelism tests/wrangler-dev.e2e.test.ts tests/wrangler-d1.e2e.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm test:types"
+  },
+  "peerDependencies": {
+    "nuxt": ">=3.0.0 <5.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:nuxt",
+    "@nuxt/schema": "catalog:nuxt",
+    "drizzle-orm": "catalog:"
+  },
+  "devDependencies": {
+    "@nuxt/module-builder": "catalog:nuxt",
+    "@types/node": "catalog:dev-build",
+    "@vitest/coverage-v8": "catalog:",
+    "happy-dom": "catalog:dev-test",
+    "nuxt": "catalog:nuxt",
+    "typescript": "catalog:dev-build",
+    "unbuild": "catalog:",
+    "vitest": "catalog:dev-test",
+    "vue": "catalog:vue",
+    "vue-tsc": "catalog:dev-build",
+    "wrangler": "catalog:"
+  }
+}

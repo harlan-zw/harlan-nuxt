@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "index.ts",
+    "src/**/*.ts",
+    "vitest.config.ts",
+    "build.config.ts"
+  ]
+}
