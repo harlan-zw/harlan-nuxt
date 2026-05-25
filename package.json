@@ -44,8 +44,8 @@
       "import": "./dist/runtime/composables/useQueryCache.js"
     },
     "./rpc": {
-      "types": "./dist/runtime/composables/useNuxtRpc.d.ts",
-      "import": "./dist/runtime/composables/useNuxtRpc.js"
+      "types": "./dist/runtime/rpc/index.d.ts",
+      "import": "./dist/runtime/rpc/index.js"
     }
   },
   "main": "./dist/module.mjs",

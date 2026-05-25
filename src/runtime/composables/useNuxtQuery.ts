@@ -10,6 +10,7 @@ import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/
 import { computed, getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from 'vue'
 import { clearNuxtData, useFetch } from '#app'
 import { isQueryStale, markQueryFetched, retainQuery } from '../cache'
+import { readNuxtData } from '../nuxt-data'
 import { useQueryCache } from './useQueryCache'
 
 type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
@@ -45,7 +46,6 @@ export interface UseNuxtQueryOptions<
 
 export type NuxtQuery<DataT, ErrorT> = AsyncData<DataT, ErrorT> & {
   displayData: ComputedRef<DataT>
-  isPlaceholder: ComputedRef<boolean>
   isPlaceholderData: ComputedRef<boolean>
   isPending: ComputedRef<boolean>
   isFetching: ComputedRef<boolean>
@@ -117,7 +117,7 @@ export function useNuxtQuery(
       }
       if (isQueryStale(cache, cacheKey, staleTime))
         return undefined
-      return nuxtApp.payload?.data?.[cacheKey] ?? nuxtApp.static?.data?.[cacheKey]
+      return readNuxtData(nuxtApp, cacheKey)
     },
   } as any) as NuxtQuery<any, any>
 
@@ -126,16 +126,15 @@ export function useNuxtQuery(
     if (value != null)
       previousData.value = value
   }, { immediate: true })
-  const isPlaceholder = computed(() => {
+  const isPlaceholderData = computed(() => {
     return keepPreviousData && query.data.value == null && previousData.value !== undefined
   })
   const displayData = computed(() => {
-    return isPlaceholder.value ? previousData.value : query.data.value
+    return isPlaceholderData.value ? previousData.value : query.data.value
   })
 
   query.displayData = displayData
-  query.isPlaceholder = isPlaceholder
-  query.isPlaceholderData = isPlaceholder
+  query.isPlaceholderData = isPlaceholderData
   query.isPending = computed(() => query.status.value === 'pending' && query.data.value == null)
   query.isFetching = computed(() => query.status.value === 'pending')
 

@@ -1,6 +1,7 @@
 import type { QueryCache } from '../cache'
 import { refreshNuxtData, useNuxtApp } from '#app'
 import { createQueryCache } from '../cache'
+import { listActiveNuxtDataKeys, readNuxtData, writeNuxtData } from '../nuxt-data'
 
 // Resolve the per-Nuxt-app query cache. Attached lazily to `useNuxtApp()` so
 // each SSR request has its own — no shared state across requests in a Node
@@ -21,10 +22,10 @@ export function useQueryCache(): QueryCache {
 }
 
 /**
- * Invalidate cached queries by key prefix. Reads the active keys from
- * `nuxtApp._asyncData` (Nuxt's own registry) and delegates the refresh to
- * `refreshNuxtData(keys)`. Drops `lastFetched` timestamps so the next SWR
- * check sees the queries as stale. No-prefix form invalidates every active key.
+ * Invalidate cached queries by key prefix. Reads the active keys from Nuxt's
+ * own async-data registry and delegates the refresh to `refreshNuxtData(keys)`.
+ * Drops `lastFetched` timestamps so the next SWR check sees the queries as
+ * stale. No-prefix form invalidates every active key.
  *
  * This is the Nuxt-primitive replacement for a hand-rolled refresh registry:
  * Nuxt already tracks every keyed `useFetch` / `useAsyncData`, so we ride that.
@@ -32,35 +33,23 @@ export function useQueryCache(): QueryCache {
 // eslint-disable-next-line harlanzw/vue-require-composable-prefix -- imperative helper, no reactivity of its own
 export function invalidateNuxtQueries(prefix?: string | ((key: string) => boolean)): void {
   const cache = useQueryCache()
-  const nuxt = useNuxtApp() as unknown as { _asyncData?: Record<string, unknown> }
-  const asyncData = nuxt._asyncData ?? {}
+  const nuxt = useNuxtApp()
   const matches = typeof prefix === 'function'
     ? prefix
     : (k: string) => !prefix || k.startsWith(prefix)
-  const keys = Object.keys(asyncData).filter(matches)
+  const keys = listActiveNuxtDataKeys(nuxt).filter(matches)
   for (const k of keys)
     cache.lastFetched.delete(k)
   if (keys.length > 0)
     void refreshNuxtData(keys)
 }
 
-interface PayloadHolder {
-  payload: { data: Record<string, unknown> }
-  _asyncData?: Record<string, { data: { value: unknown } } | undefined>
-}
-
 /**
- * Read the current cached value for `key`. Prefers the active `_asyncData`
- * ref (what live `useFetch` / `useAsyncData` consumers see) and falls back
- * to `payload.data` — same read order as Nuxt's own `useNuxtData(key)`.
+ * Read the current cached value for `key`. Same fallback chain as Nuxt's own
+ * `useNuxtData(key)` (live `_asyncData` ref → `payload.data` → `static.data`).
  */
-
 export function getQueryData<T = unknown>(key: string): T | undefined {
-  const nuxt = useNuxtApp() as unknown as PayloadHolder
-  const live = nuxt._asyncData?.[key]?.data.value as T | undefined
-  if (live !== undefined)
-    return live
-  return nuxt.payload.data?.[key] as T | undefined
+  return readNuxtData<T>(useNuxtApp(), key)
 }
 
 /**
@@ -68,15 +57,10 @@ export function getQueryData<T = unknown>(key: string): T | undefined {
  * value, or a `(previous) => next` function. Returns the previous value so
  * the caller can hand it back to `setQueryData(key, previous)` on rollback.
  *
- * Mirrors TanStack Query's `setQueryData`. Updates BOTH stores Nuxt reads:
- *   - `nuxtApp._asyncData[key].data.value` — the ref every active `useFetch`
- *     / `useNuxtQuery` consumer is bound to. Without this, optimistic writes
- *     are invisible to mounted components.
- *   - `nuxtApp.payload.data[key]` — the SSR-hydration payload + fallback
- *     `useNuxtData(key)` reads when `_asyncData` is empty.
- *
- * The `lastFetched` timestamp is bumped so SWR treats the write as a fresh
- * fetch and doesn't immediately overwrite it with a network refresh.
+ * Mirrors TanStack Query's `setQueryData`. Updates BOTH stores Nuxt reads —
+ * see `nuxt-data.ts` for why the dual-write is load-bearing. The
+ * `lastFetched` timestamp is bumped so SWR treats the write as a fresh fetch
+ * and doesn't immediately overwrite it with a network refresh.
  */
 // eslint-disable-next-line harlanzw/vue-require-composable-prefix -- imperative helper
 export function setQueryData<T = unknown>(
@@ -84,16 +68,12 @@ export function setQueryData<T = unknown>(
   updater: T | ((previous: T | undefined) => T),
 ): T | undefined {
   const cache = useQueryCache()
-  const nuxt = useNuxtApp() as unknown as PayloadHolder
-  nuxt.payload.data ??= {}
-  const previous = getQueryData<T>(key)
+  const nuxt = useNuxtApp()
+  const previous = readNuxtData<T>(nuxt, key)
   const next = typeof updater === 'function'
     ? (updater as (p: T | undefined) => T)(previous)
     : updater
-  nuxt.payload.data[key] = next
-  const live = nuxt._asyncData?.[key]
-  if (live)
-    live.data.value = next
+  writeNuxtData(nuxt, key, next)
   cache.lastFetched.set(key, Date.now())
   return previous
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createContractQueryEnforcer } from '../src/enforcement'
+import { createContractQueryEnforcer, formatContractQueryViolations } from '../src/enforcement'
 
 describe('contract query enforcer', () => {
   it('scans supplied source files through the factory adapter', async () => {
@@ -50,7 +50,7 @@ describe('contract query enforcer', () => {
     expect(violations[0]?.code).toBe('server-route-missing-contract')
   })
 
-  it('formats violations from the same factory interface', async () => {
+  it('formats violations via formatContractQueryViolations', async () => {
     const enforcer = createContractQueryEnforcer({
       readSourceFiles: async () => [
         {
@@ -60,7 +60,7 @@ describe('contract query enforcer', () => {
       ],
     })
 
-    const message = enforcer.format(await enforcer.scan('/app'))
+    const message = formatContractQueryViolations(await enforcer.scan('/app'))
 
     expect(message).toContain('nuxt-use-query contract enforcement failed:')
     expect(message).toContain('[api-literal-outside-query]')

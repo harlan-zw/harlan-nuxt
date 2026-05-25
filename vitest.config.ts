@@ -6,7 +6,7 @@ const packageAliases = {
   'nuxt-use-query/mutation': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useNuxtMutation.ts',
   'nuxt-use-query/query': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useNuxtQuery.ts',
   'nuxt-use-query/query-cache': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useQueryCache.ts',
-  'nuxt-use-query/rpc': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useNuxtRpc.ts',
+  'nuxt-use-query/rpc': '/home/harlan/pkg/nuxt-use-query/src/runtime/rpc/index.ts',
 }
 
 const nuxtProject = defineVitestConfig({

@@ -54,11 +54,11 @@ async function tick() {
 }
 
 describe('useNuxtQuery keepPreviousData', () => {
-  it('holds the previous result while a new key loads, flagging isPlaceholder', async () => {
-    const { displayData, isPlaceholder, isPlaceholderData } = useNuxtQuery<{ n: number }>('/api/x', { key: 'q' })
+  it('holds the previous result while a new key loads, flagging isPlaceholderData', async () => {
+    const { displayData, isPlaceholderData } = useNuxtQuery<{ n: number }>('/api/x', { key: 'q' })
 
     expect(displayData.value).toBeNull()
-    expect(isPlaceholder.value).toBe(false)
+    expect(isPlaceholderData.value).toBe(false)
 
     fetchState.data.value = { n: 1 }
     await tick()
@@ -67,13 +67,12 @@ describe('useNuxtQuery keepPreviousData', () => {
     fetchState.data.value = null
     await tick()
     expect(displayData.value).toEqual({ n: 1 })
-    expect(isPlaceholder.value).toBe(true)
     expect(isPlaceholderData.value).toBe(true)
 
     fetchState.data.value = { n: 2 }
     await tick()
     expect(displayData.value).toEqual({ n: 2 })
-    expect(isPlaceholder.value).toBe(false)
+    expect(isPlaceholderData.value).toBe(false)
   })
 
   it('does not retain previous data when keepPreviousData is false', async () => {

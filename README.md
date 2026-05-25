@@ -15,6 +15,23 @@
 - `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
 - Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
 
+## Choosing A Layer
+
+This module ships two layers that share one cache. Pick by the contract you have:
+
+| Use this                                       | When                                                                                                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **RPC layer** (`defineNuxtRpc*` + `useNuxtRpcQuery` / `useNuxtRpc().execute`) | You own both sides of the call. Default for anything user-facing or imported in more than one place.                                       |
+| **Query layer** (`useNuxtQuery` / `useNuxtMutation` directly) | Escape hatch: third-party APIs you don't own, one-off internal calls, prototypes, file downloads / blobs where a Zod schema would be theatre. |
+
+The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache and respond to the same `invalidateNuxtQueries(prefix)` calls. You can mix them in one app.
+
+**Why the RPC default**: the operation object owns the API path, cache key, method, and Zod request/response schemas. Components import the operation, not the URL. Renaming an endpoint is a one-line change; the schema catches contract drift at the boundary instead of letting it propagate as `unknown` through the app.
+
+**Why the escape hatch exists**: writing a contract for a fetch you call once is overhead with no payoff. Reach for `useNuxtQuery` directly when there is no second caller to protect.
+
+**Mutations stay manual.** There is no `useNuxtRpcMutation` composable — `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
+
 ## Query Defaults
 
 `useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow it:
@@ -25,11 +42,89 @@
 - `staleTime: Infinity` and `staleTime: 'static'` opt into immutable data until explicit invalidation.
 - `isPlaceholderData`, `isPending`, and `isFetching` are exposed alongside the Nuxt `status` ref.
 
-## Contract Queries
+## Installation
 
-Define API operations beside the feature that owns them, and import shared Zod schemas from a contracts folder. Components should consume operations, not hardcoded URLs.
+Install `nuxt-use-query` in the consuming Nuxt site:
+
+```bash
+npx nuxi@latest module add nuxt-use-query
+```
+
+If the site will define RPC contracts, add Zod as a direct app dependency:
+
+```bash
+pnpm add zod
+```
+
+Or install it manually:
+
+```bash
+pnpm add nuxt-use-query zod
+```
+
+Add the module to `nuxt.config.ts`:
 
 ```ts
+export default defineNuxtConfig({
+  modules: ['nuxt-use-query'],
+})
+```
+
+The module auto-imports:
+
+- `useNuxtQuery`
+- `useNuxtMutation`
+- `useNuxtRpc`
+- `useNuxtRpcQuery`
+- `defineNuxtQueryGroup`
+- `defineNuxtRpcQuery`
+- `defineNuxtRpcMutation`
+- `serializeNuxtRpcKey`
+- `useQueryCache`
+- `invalidateNuxtQueries`
+- `getQueryData`
+- `setQueryData`
+
+You can also import from subpaths when using the helpers outside Nuxt's auto-import scan:
+
+```ts
+import { useNuxtMutation } from 'nuxt-use-query/mutation'
+import { useNuxtQuery } from 'nuxt-use-query/query'
+import { getQueryData, invalidateNuxtQueries, setQueryData } from 'nuxt-use-query/query-cache'
+import {
+  defineNuxtRpcQuery,
+  toHumanNuxtRpcError,
+  useNuxtRpcQuery,
+} from 'nuxt-use-query/rpc'
+```
+
+## Recommended Site Pattern
+
+For app code, prefer the RPC helpers over hardcoded API URLs in components:
+
+1. Put Zod request/response schemas in `shared/contracts`.
+2. Put query and mutation operation factories in `app/queries`.
+3. Import operations into pages, components, and composables.
+4. Use stable keys that share prefixes for invalidation.
+
+Suggested structure:
+
+```txt
+shared/
+  contracts/
+    sites.ts
+app/
+  queries/
+    sites.ts
+pages/
+  sites/
+    [siteId].vue
+```
+
+### 1. Define Shared Contracts
+
+```ts
+// shared/contracts/sites.ts
 import { z } from 'zod'
 
 export const siteSchema = z.object({
@@ -41,7 +136,23 @@ export const sitePatchSchema = z.object({
   name: z.string().nullable(),
 }).strict()
 
-export const siteQueries = {
+export type Site = z.output<typeof siteSchema>
+```
+
+Use the same schemas in server routes and client query operations so request and response contracts stay aligned.
+
+### 2. Define Query Operations
+
+Define API operations beside the feature that owns them, and import shared Zod schemas from a contracts folder. Components should consume operations, not hardcoded URLs.
+
+```ts
+// app/queries/sites.ts
+import {
+  sitePatchSchema,
+  siteSchema,
+} from '~~/shared/contracts/sites'
+
+export const siteQueries = defineNuxtQueryGroup('sites', {
   detail: (siteId: string) => defineNuxtRpcQuery({
     key: ['sites', siteId],
     path: `/api/sites/${siteId}`,
@@ -53,21 +164,155 @@ export const siteQueries = {
     path: `/api/sites/${siteId}`,
     response: siteSchema,
   }),
+})
+```
+
+Keep the operation object as the single owner of the API path, cache key, method, body schema, and response schema.
+
+### 3. Use Queries In Components
+
+```vue
+<script setup lang="ts">
+import { siteQueries } from '~/queries/sites'
+
+const route = useRoute()
+const siteId = computed(() => String(route.params.siteId))
+
+const siteQuery = useNuxtRpcQuery(
+  () => siteQueries.detail(siteId.value),
+  {
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+  },
+)
+</script>
+
+<template>
+  <div v-if="siteQuery.isPending.value">
+    Loading...
+  </div>
+  <div v-else-if="siteQuery.error.value">
+    Failed to load site.
+  </div>
+  <h1 v-else>
+    {{ siteQuery.displayData.value?.name || 'Untitled site' }}
+  </h1>
+</template>
+```
+
+`useNuxtRpcQuery` wraps `useNuxtQuery`, so it accepts the same cache and refetch options while validating the response with the operation's Zod schema. Both layers share one cache: an `invalidateNuxtQueries(prefix)` triggered from an RPC mutation will refresh any plain `useNuxtQuery` reads under the same prefix and vice versa.
+
+### 4. Execute Mutations
+
+```ts
+import { siteQueries } from '~/queries/sites'
+
+const rpc = useNuxtRpc()
+
+async function saveSite(name: string | null) {
+  await rpc.execute(siteQueries.update(siteId.value), { name })
+  invalidateNuxtQueries(`sites:${siteId.value}`)
 }
 ```
 
+Use `useNuxtMutation` when the view needs pending/error state, lifecycle hooks, or optimistic cache writes:
+
 ```ts
-const { data } = useNuxtRpcQuery(() => siteQueries.detail(siteId.value))
+import type { Site } from '~~/shared/contracts/sites'
+import { siteQueries } from '~/queries/sites'
+
 const rpc = useNuxtRpc()
 
-await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' })
+const updateSite = useNuxtMutation<
+  { name: string | null },
+  Site,
+  { previous?: Site }
+>({
+  mutation: body => rpc.execute(siteQueries.update(siteId.value), body),
+  invalidates: () => [`sites:${siteId.value}`],
+  onMutate(body) {
+    const key = `sites:${siteId.value}`
+    const previous = setQueryData<Site>(key, current => ({
+      ...current!,
+      name: body.name,
+    }))
+    return { previous }
+  },
+  onError(_error, _body, context) {
+    if (context?.previous)
+      setQueryData(`sites:${siteId.value}`, context.previous)
+  },
+})
+
+await updateSite.mutate({ name: 'Docs' })
 ```
 
-RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP
-failures and Zod request/response validation failures are normalized before
-they reach hooks or callers.
+## Escape Hatch: `useNuxtQuery` Directly
+
+Skip the RPC layer when the contract isn't yours to define — third-party APIs, one-off internal calls, prototypes, file downloads, or any request where a Zod schema would be ceremony with no payoff:
 
 ```ts
+const search = ref('')
+
+const { displayData, error, isFetching, refresh } = useNuxtQuery('/api/sites', {
+  key: () => `sites:list:${search.value}`,
+  query: { search },
+  enabled: () => search.value.length >= 2,
+  staleTime: 30_000,
+  keepPreviousData: true,
+})
+```
+
+`useNuxtQuery` passes through Nuxt `useFetch` options, and adds:
+
+- `key`: required stable cache key.
+- `enabled`: disables the initial request and later refreshes until true.
+- `staleTime`: time in milliseconds before cached data is stale. Use `Infinity` or `'static'` for immutable data.
+- `gcTime`: time before inactive payload data is evicted. Defaults to 5 minutes.
+- `keepPreviousData`: exposes previous data through `displayData` while a new key loads. Defaults to true.
+- `refetchInterval`: polling interval in milliseconds.
+- `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect`: pass `true`, `false`, or `'always'`.
+
+Reads from `useNuxtQuery` live in the same cache as RPC queries, so an `invalidateNuxtQueries('sites:')` call from either layer refreshes both.
+
+## Cache Keys And Invalidation
+
+RPC array keys are serialized with `:` separators:
+
+```ts
+serializeNuxtRpcKey(['sites', siteId]) // "sites:abc"
+```
+
+Use shared prefixes so mutations can invalidate related reads:
+
+```ts
+invalidateNuxtQueries('sites:')
+invalidateNuxtQueries(`sites:${siteId}`)
+invalidateNuxtQueries(key => key.startsWith('sites:') && key.includes(':summary'))
+```
+
+Use cache helpers for optimistic UI:
+
+```ts
+const previous = getQueryData<Site>(`sites:${siteId}`)
+
+setQueryData<Site>(`sites:${siteId}`, current => ({
+  ...current!,
+  name: 'Draft name',
+}))
+
+// Roll back if the mutation fails.
+if (previous)
+  setQueryData(`sites:${siteId}`, previous)
+```
+
+## RPC Error Handling
+
+RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP failures and Zod request/response validation failures are normalized before they reach hooks or callers.
+
+```ts
+import { toHumanNuxtRpcError } from 'nuxt-use-query/rpc'
+
 const rpc = useNuxtRpc({
   onError({ error, operation }) {
     console.error(operation.path, toHumanNuxtRpcError(error))
@@ -78,6 +323,8 @@ await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
   silent: true, // skip onError for flows that handle their own UX
 })
 ```
+
+## Contract Enforcement
 
 Enable build-time enforcement when a project is ready to make the pattern mandatory:
 
@@ -97,13 +344,13 @@ export default defineNuxtConfig({
 })
 ```
 
-## Installation
+With enforcement enabled:
 
-Install `nuxt-use-query`:
+- API path literals must live in configured query directories.
+- Query files must define Zod-backed RPC operations.
+- Server API routes can be required to import shared contracts.
 
-```bash
-npx nuxi@latest module add nuxt-use-query
-```
+Start without enforcement while migrating an existing site, then enable it once queries and contracts have been moved into the recommended directories.
 
 ## License
 

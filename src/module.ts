@@ -30,24 +30,23 @@ export default defineNuxtModule<ModuleOptions>({
   },
   setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
-    const runtimeDir = resolver.resolve('./runtime')
 
-    nuxt.options.alias['#nuxt-use-query'] = runtimeDir
-    nuxt.options.alias['#nuxt-query'] = runtimeDir
+    const composables = resolver.resolve('./runtime/composables')
+    const rpcCore = resolver.resolve('./runtime/rpc/core')
 
     addImports([
-      { name: 'useNuxtQuery', from: resolver.resolve('./runtime/composables/useNuxtQuery') },
-      { name: 'useNuxtMutation', from: resolver.resolve('./runtime/composables/useNuxtMutation') },
-      { name: 'defineNuxtQueryGroup', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'defineNuxtRpcMutation', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'defineNuxtRpcQuery', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'serializeNuxtRpcKey', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'useNuxtRpc', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'useNuxtRpcQuery', from: resolver.resolve('./runtime/composables/useNuxtRpc') },
-      { name: 'useQueryCache', from: resolver.resolve('./runtime/composables/useQueryCache') },
-      { name: 'invalidateNuxtQueries', from: resolver.resolve('./runtime/composables/useQueryCache') },
-      { name: 'getQueryData', from: resolver.resolve('./runtime/composables/useQueryCache') },
-      { name: 'setQueryData', from: resolver.resolve('./runtime/composables/useQueryCache') },
+      { name: 'useNuxtQuery', from: `${composables}/useNuxtQuery` },
+      { name: 'useNuxtMutation', from: `${composables}/useNuxtMutation` },
+      { name: 'useNuxtRpc', from: `${composables}/useNuxtRpc` },
+      { name: 'useNuxtRpcQuery', from: `${composables}/useNuxtRpc` },
+      { name: 'useQueryCache', from: `${composables}/useQueryCache` },
+      { name: 'invalidateNuxtQueries', from: `${composables}/useQueryCache` },
+      { name: 'getQueryData', from: `${composables}/useQueryCache` },
+      { name: 'setQueryData', from: `${composables}/useQueryCache` },
+      { name: 'defineNuxtQueryGroup', from: rpcCore },
+      { name: 'defineNuxtRpcMutation', from: rpcCore },
+      { name: 'defineNuxtRpcQuery', from: rpcCore },
+      { name: 'serializeNuxtRpcKey', from: rpcCore },
     ])
 
     if (options.contracts?.enabled) {
