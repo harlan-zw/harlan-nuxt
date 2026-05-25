@@ -4,6 +4,11 @@ export interface ContractQueryEnforcementOptions {
    * existing consumers can adopt the contract pattern deliberately.
    */
   enabled?: boolean
+  /**
+   * How violations are reported. `'error'` fails the build (default);
+   * `'warn'` logs them through `consola` and lets the build continue.
+   */
+  severity?: 'error' | 'warn'
   /** API prefixes that must be reached through query operations. */
   apiPrefixes?: string[]
   /** Files allowed to own API path literals and operation definitions. */

@@ -56,8 +56,15 @@ export default defineNuxtModule<ModuleOptions>({
           scanContractQueryViolations,
         } = await import('./enforcement')
         const violations = await scanContractQueryViolations(nuxt.options.rootDir, options.contracts)
-        if (violations.length)
-          throw new Error(formatContractQueryViolations(violations))
+        if (!violations.length)
+          return
+        const message = formatContractQueryViolations(violations)
+        if (options.contracts?.severity === 'warn') {
+          const { consola } = await import('consola')
+          consola.withTag('nuxt-use-query').warn(message)
+          return
+        }
+        throw new Error(message)
       })
     }
   },
