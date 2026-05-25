@@ -10,6 +10,6 @@ export default {
     globals: true,
     environment: 'happy-dom',
     include: ['tests/**/*.test.ts'],
-    exclude: ['tests/**/*.e2e.test.ts'],
+    exclude: process.env.CF_JOBS_E2E === '1' ? [] : ['tests/**/*.e2e.test.ts'],
   },
 }

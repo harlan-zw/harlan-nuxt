@@ -1,15 +1,28 @@
+export type QueueMessageContentType = 'text' | 'json' | 'bytes' | 'v8'
+
+export interface QueueSendOptions {
+  delaySeconds?: number
+  contentType?: QueueMessageContentType
+}
+
+export interface QueueRetryOptions {
+  delaySeconds?: number
+}
+
 export interface QueueMessage<T = unknown> {
+  id?: string
   body: T
   attempts: number
+  timestamp?: Date | number
   ack: () => void
-  retry: (opts?: { delaySeconds?: number }) => void
+  retry: (opts?: QueueRetryOptions) => void
 }
 
 export interface QueueBatch<T = unknown> {
   queue: string
   messages: Array<QueueMessage<T>>
   ackAll?: () => void
-  retryAll?: (opts?: { delaySeconds?: number }) => void
+  retryAll?: (opts?: QueueRetryOptions) => void
 }
 
 export interface QueuePayload<T = unknown, Env extends Record<string, unknown> = Record<string, unknown>> {
@@ -17,15 +30,35 @@ export interface QueuePayload<T = unknown, Env extends Record<string, unknown> =
   env: Env
 }
 
+export interface CloudflareQueueSendBatchMessage<T = unknown> {
+  body: T
+  contentType?: QueueMessageContentType
+  delaySeconds?: number
+}
+
 export interface CloudflareQueue<T = unknown> {
-  send: (message: T, opts?: { delaySeconds?: number }) => Promise<void>
-  sendBatch?: (messages: Array<{ body: T }>, opts?: { delaySeconds?: number }) => Promise<void>
+  send: (message: T, opts?: QueueSendOptions) => Promise<void>
+  sendBatch?: (messages: Array<CloudflareQueueSendBatchMessage<T>>, opts?: QueueSendOptions) => Promise<void>
 }
 
 export interface QueueBindingConfig {
   binding: string
   queueName?: string
   jobType?: string
+  /** Wrangler `[[queues.consumers]].max_batch_size` (informational; validated against handler expectations). */
+  maxBatchSize?: number
+  /** Wrangler `[[queues.consumers]].max_batch_timeout` in seconds. */
+  maxBatchTimeout?: number
+  /** Wrangler `[[queues.consumers]].max_concurrency`. */
+  maxConcurrency?: number
+  /** Wrangler `[[queues.consumers]].max_retries`. Compared against `definition.tries`. */
+  maxRetries?: number
+  /** Wrangler `[[queues.consumers]].retry_delay` in seconds (default retry delay if none supplied per-message). */
+  retryDelay?: number
+  /** Wrangler `[[queues.consumers]].dead_letter_queue` — the *Cloudflare* queue name. */
+  deadLetterQueue?: string
+  /** Binding name of the DLQ producer, used when this module manually forwards exhausted messages. */
+  deadLetterQueueBinding?: string
 }
 
 export type QueueBindingsConfig = Record<string, string | QueueBindingConfig>
@@ -88,12 +121,8 @@ export interface JobDefinition<Name extends string, Payload, Queue extends strin
   tries?: number
   maxAttempts?: number
   backoff?: JobBackoff
-  timeout?: number
   unique?: boolean
-  uniqueFor?: number
   uniqueId?: (payload: Payload) => string
-  skipUserRateLimit?: boolean
-  rateLimit?: { perUser?: number, perSite?: number }
 }
 
 export interface DispatchableJob<Payload = Record<string, unknown>> {

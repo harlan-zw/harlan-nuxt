@@ -8,11 +8,18 @@ import type {
   JobHandler,
   QueueMessage,
 } from './types'
+import type { SendBackpressureOptions } from './queue'
+import type { QueueSendOptions } from './types'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
 import { dispatchRegisteredJob } from './dispatch'
+import { CF_QUEUE_MAX_MESSAGE_BYTES, sendBatchChunked, withSendBackpressure } from './queue'
 import type { AnyJobDefinition, JobNameOf, JobPayloadByName, JobQueueByName } from './registry'
 import { parseJobInput } from './registry'
+
+function byteLength(value: string): number {
+  return typeof Buffer !== 'undefined' ? Buffer.byteLength(value, 'utf8') : new TextEncoder().encode(value).byteLength
+}
 
 export interface DurableJobRoute<Queue extends string = string> {
   queue: Queue
@@ -65,6 +72,36 @@ export interface DurableJobRepository<
   Record extends DurableJobRecord<Queue> = DurableJobRecord<Queue>,
 > {
   insertJob: (record: Record) => Promise<boolean>
+  /**
+   * Optional batched insert. When implemented, callers can persist many records in chunks
+   * (chunked at the D1 100-statement limit by D1-backed implementations).
+   */
+  insertJobs?: (records: readonly Record[], opts?: { batchSize?: number }) => Promise<{ inserted: Record[], chunks: Array<{ ok: boolean, ids: string[], changes: number, error?: unknown }> }>
+}
+
+export interface RecordDurableJobFailureInput<Queue extends string = string> {
+  id?: string
+  queue: Queue | string
+  jobType: string
+  batchId?: string | null
+  userId?: number | null
+  siteId?: string | null
+  partnerId?: string | null
+  traceId?: string | null
+  uniqueKey?: string | null
+  payload: string
+  exception: string
+  attempts: number
+  maxAttempts?: number
+}
+
+/**
+ * Persists a failure record without claiming or deleting a `jobs` row.
+ * Used by the DLQ helper to log exhausted messages whose original job rows may not exist
+ * (e.g. lightweight queue path) or whose lifecycle has already been finalized.
+ */
+export interface DurableJobFailureRepository {
+  recordFailure: (input: RecordDurableJobFailureInput) => Promise<void>
 }
 
 export interface DurableJobRegistryLike<Env = unknown, Db = unknown, Logger = unknown> {
@@ -106,8 +143,8 @@ export interface QueuePublisher<
   Queue extends string = string,
   Message extends QueueJobMessage<Queue> = QueueJobMessage<Queue>,
 > {
-  send: (queue: Queue, message: Message, opts?: { delaySeconds?: number }) => Promise<boolean>
-  sendBatch: (queue: Queue, messages: Message[], opts?: { delaySeconds?: number }) => Promise<boolean>
+  send: (queue: Queue, message: Message, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
+  sendBatch: (queue: Queue, messages: Message[], opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
 }
 
 export interface DurableJobRecoveryQuery {
@@ -171,6 +208,9 @@ export async function prepareDurableJob<
     ? await createJobUniqueKey(opts.name, parsedPayload.data, definition.uniqueId as never)
     : undefined
   const payload = buildJobPayload(opts.name, parsedPayload.data as Payload)
+  const serialized = JSON.stringify(continuations ? { ...payload, _continuations: continuations } : payload)
+  if (byteLength(serialized) > CF_QUEUE_MAX_MESSAGE_BYTES)
+    throw new Error(`Job payload exceeds Cloudflare Queue limit of ${CF_QUEUE_MAX_MESSAGE_BYTES} bytes for task: ${opts.name}`)
 
   return {
     id: opts.id ?? crypto.randomUUID(),
@@ -182,7 +222,7 @@ export async function prepareDurableJob<
     partnerId: opts.partnerId,
     traceId: opts.traceId ?? createJobTraceId(),
     uniqueKey,
-    payload: JSON.stringify(continuations ? { ...payload, _continuations: continuations } : payload),
+    payload: serialized,
     attempts: 0,
     maxAttempts: resolveJobMaxAttempts(definition) ?? opts.defaultMaxAttempts ?? 3,
     availableAt: now + (opts.delaySeconds ?? 0),
@@ -374,7 +414,7 @@ export function createQueuePublisher<
         await opts.onMissingBinding?.(queue, 1)
         return false
       }
-      await cfQueue.send(message, sendOpts)
+      await withSendBackpressure(() => cfQueue.send(message, sendOpts), sendOpts)
       return true
     },
     async sendBatch(queue, messages, sendOpts) {
@@ -387,12 +427,7 @@ export function createQueuePublisher<
         return false
       }
 
-      if (typeof cfQueue.sendBatch === 'function') {
-        await cfQueue.sendBatch(messages.map(body => ({ body })), sendOpts)
-        return true
-      }
-
-      await Promise.all(messages.map(message => cfQueue.send(message, sendOpts)))
+      await sendBatchChunked(cfQueue, messages, sendOpts)
       return true
     },
   }
@@ -466,15 +501,36 @@ export async function enqueueDurableJob<
   publisher: Pick<QueuePublisher<Queue>, 'send'>,
   record: Record,
   opts?: { delaySeconds?: number },
-): Promise<{ inserted: boolean, dispatched: boolean }> {
+): Promise<{ inserted: boolean, dispatched: boolean, error?: unknown }> {
   const inserted = await repository.insertJob(record)
   if (!inserted)
     return { inserted: false, dispatched: false }
 
-  return {
-    inserted: true,
-    dispatched: await publisher.send(record.queue, toQueueJobMessage(record), opts),
-  }
+  const dispatched = await publisher
+    .send(record.queue, toQueueJobMessage(record), opts)
+    .catch(error => ({ error }))
+
+  if (typeof dispatched === 'object' && dispatched && 'error' in dispatched)
+    return { inserted: true, dispatched: false, error: dispatched.error }
+
+  return { inserted: true, dispatched }
+}
+
+export interface SweepDurableJobsResult<Queue extends string> {
+  swept: number
+  dispatched: Array<{ queue: Queue, dispatched: boolean, error?: unknown }>
+}
+
+export async function sweepDispatchableDurableJobs<Queue extends string>(
+  repository: Pick<DurableJobRecoveryRepository<Queue, Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>, 'findDispatchableJobs'>,
+  publisher: Pick<QueuePublisher<Queue>, 'sendBatch'>,
+  query?: DurableJobRecoveryQuery,
+): Promise<SweepDurableJobsResult<Queue>> {
+  const records = await findDispatchableDurableJobs(repository, query)
+  if (records.length === 0)
+    return { swept: 0, dispatched: [] }
+  const dispatched = await dispatchDurableJobBatch(publisher, records)
+  return { swept: records.length, dispatched }
 }
 
 export async function dispatchDurableJobBatch<Queue extends string>(

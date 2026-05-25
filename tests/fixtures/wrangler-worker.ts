@@ -2,7 +2,7 @@ import {
   buildJobPayload,
   defineJob,
   defineJobRegistry,
-  dispatchRegisteredJob,
+  processRegisteredQueueBatch,
 } from '../../src/runtime/server/index'
 
 interface Env {
@@ -74,47 +74,36 @@ export default {
   },
 
   async queue(batch: MessageBatch<Record<string, unknown>>, env: Env) {
-    for (const message of batch.messages) {
-      try {
-        const result = await dispatchRegisteredJob({
-          registry,
-          job: {
-            id: message.id,
-            queue: batch.queue,
-            attempts: message.attempts,
-            batchId: null,
-            payload: message.body,
-          },
-          createContext: ({ control, job }) => ({
-            env,
-            db: null,
-            log: console,
-            jobId: job.id,
-            batchId: null,
-            attempt: job.attempts,
-            async release(delaySeconds: number) {
-              control.handled = true
-              control.action = 'released'
-              control.delaySeconds = delaySeconds
-              message.retry({ delaySeconds })
-            },
-            async fail(error: string) {
-              control.handled = true
-              control.action = 'failed'
-              control.error = error
-              state.failures.push(error)
-              message.ack()
-            },
-          }),
-        })
-
-        if (result.success)
+    await processRegisteredQueueBatch({
+      batch,
+      env,
+    }, {
+      registry,
+      queues: { default: { binding: 'JOBS', queueName: 'nuxt-cf-jobs-e2e' } },
+      createContext: ({ control, job, message }) => ({
+        env,
+        db: null,
+        log: console,
+        jobId: job.id,
+        batchId: null,
+        attempt: job.attempts,
+        async release(delaySeconds: number) {
+          control.handled = true
+          control.action = 'released'
+          control.delaySeconds = delaySeconds
+          message.retry({ delaySeconds })
+        },
+        async fail(error: string) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+          state.failures.push(error)
           message.ack()
-      }
-      catch (error) {
+        },
+      }),
+      onDispatchError({ error }) {
         state.failures.push(error instanceof Error ? error.message : String(error))
-        throw error
-      }
-    }
+      },
+    })
   },
 }

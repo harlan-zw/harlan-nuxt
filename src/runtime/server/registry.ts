@@ -46,18 +46,24 @@ export type JobMessageByQueue<
   [Name in JobNameOf<Jobs>]: JobQueueByName<Jobs, Name> extends Queue
     ? JobMessageByName<Jobs, Name>
     : never
-}[JobNameOf<Jobs>]
+  }[JobNameOf<Jobs>]
+
+export interface JobDefinitionValidationIssue {
+  name: string
+  reason: 'invalid-definition' | 'duplicate-name' | 'invalid-queue'
+}
 
 export function defineJob<
   const Name extends string,
   Payload extends object,
-  const Queue extends string,
+  const Queue extends string = string,
   Env = unknown,
   Db = unknown,
   Logger = unknown,
 >(opts: {
   name: Name
-  queue: Queue
+  /** Logical queue name. Optional only when `cfJobs.defaultQueue` is configured. */
+  queue?: Queue
   jobType?: string
   input?: JobPayloadSchema<Payload>
   handle: JobHandler<Payload, Env, Db, Logger>
@@ -66,14 +72,10 @@ export function defineJob<
   tries?: number
   maxAttempts?: number
   backoff?: JobBackoff
-  timeout?: number
   unique?: boolean
-  uniqueFor?: number
   uniqueId?: (payload: Payload) => string
-  skipUserRateLimit?: boolean
-  rateLimit?: { perUser?: number, perSite?: number }
 }): JobDefinition<Name, Payload, Queue, Env, Db, Logger> {
-  return opts
+  return opts as JobDefinition<Name, Payload, Queue, Env, Db, Logger>
 }
 
 export function parseJobInput<Payload>(
@@ -96,9 +98,58 @@ export function buildJobMessage<const Job extends AnyJobDefinition>(
   return buildJobPayload(definition.name, parsed.data as JobPayloadOf<Job>) as JobMessageOf<Job>
 }
 
+export function validateJobDefinitions(
+  jobs: readonly unknown[],
+): JobDefinitionValidationIssue[] {
+  const issues: JobDefinitionValidationIssue[] = []
+  const seen = new Set<string>()
+
+  for (const job of jobs) {
+    if (!job || typeof job !== 'object') {
+      issues.push({ name: '<unknown>', reason: 'invalid-definition' })
+      continue
+    }
+
+    const definition = job as Partial<AnyJobDefinition>
+    const name = typeof definition.name === 'string' && definition.name.length > 0
+      ? definition.name
+      : '<unknown>'
+
+    if (
+      typeof definition.name !== 'string'
+      || definition.name.length === 0
+      || typeof definition.handle !== 'function'
+    ) {
+      issues.push({ name, reason: 'invalid-definition' })
+    }
+
+    if (typeof definition.queue !== 'string' || definition.queue.length === 0)
+      issues.push({ name, reason: 'invalid-queue' })
+
+    if (seen.has(name))
+      issues.push({ name, reason: 'duplicate-name' })
+    seen.add(name)
+  }
+
+  return issues
+}
+
+export function assertJobDefinitions(jobs: readonly unknown[]): void {
+  const issues = validateJobDefinitions(jobs)
+  if (issues.length === 0)
+    return
+
+  const details = issues
+    .map(issue => `${issue.name}: ${issue.reason}`)
+    .join(', ')
+  throw new Error(`Invalid nuxt-cf-jobs registry: ${details}`)
+}
+
 export function defineJobRegistry<
   const Jobs extends readonly AnyJobDefinition[],
 >(jobs: Jobs) {
+  assertJobDefinitions(jobs)
+
   const handlers = new Map<string, JobHandler<unknown, unknown, unknown, unknown>>(
     jobs.map(job => [job.name, job.handle as JobHandler<unknown, unknown, unknown, unknown>]),
   )

@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'

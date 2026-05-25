@@ -12,7 +12,12 @@ export function createFakeQueue<T = unknown>() {
       messages.push({ body: message, opts })
     },
     async sendBatch(batch, opts) {
-      messages.push(...batch.map(message => ({ body: message.body, opts })))
+      for (const message of batch) {
+        const perMessage = (message.delaySeconds !== undefined || message.contentType !== undefined)
+          ? { delaySeconds: message.delaySeconds, contentType: message.contentType }
+          : undefined
+        messages.push({ body: message.body, opts: perMessage ?? opts })
+      }
     },
   }
 
@@ -33,11 +38,12 @@ export function createFakeQueueEnv<T = unknown>(binding = 'QUEUE') {
   }
 }
 
-export function createQueueMessage<T>(body: T, attempts = 0): QueueMessage<T> & {
+export function createQueueMessage<T>(body: T, attempts = 0, id?: string): QueueMessage<T> & {
   acked: boolean
   retries: Array<{ delaySeconds?: number } | undefined>
 } {
   return {
+    id,
     body,
     attempts,
     acked: false,
@@ -51,18 +57,25 @@ export function createQueueMessage<T>(body: T, attempts = 0): QueueMessage<T> & 
   }
 }
 
-export function createQueueBatch<T>(queue: string, bodies: T[]): QueueBatch<T> {
-  const messages = bodies.map(body => createQueueMessage(body))
-  return {
+export function createQueueBatch<T>(queue: string, bodies: T[], opts?: { ids?: string[] }): QueueBatch<T> & {
+  ackedAll: boolean
+  retriedAll: Array<{ delaySeconds?: number } | undefined>
+} {
+  const messages = bodies.map((body, i) => createQueueMessage(body, 0, opts?.ids?.[i]))
+  const batch = {
     queue,
     messages,
+    ackedAll: false,
+    retriedAll: [] as Array<{ delaySeconds?: number } | undefined>,
     ackAll() {
-      for (const message of messages)
-        message.ack()
+      batch.ackedAll = true
+      for (const message of messages) message.ack()
     },
-    retryAll(opts) {
-      for (const message of messages)
-        message.retry(opts)
+    retryAll(retryOpts: { delaySeconds?: number } | undefined) {
+      batch.retriedAll.push(retryOpts)
+      for (const message of messages) message.retry(retryOpts)
     },
   }
+  return batch
 }
+

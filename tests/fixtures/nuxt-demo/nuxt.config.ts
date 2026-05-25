@@ -10,6 +10,5 @@ export default defineNuxtConfig({
       analytics: 'QUEUE_ANALYTICS',
     },
     jobsDir: 'server/jobs',
-    orphanedJobThresholdSeconds: 600,
   },
 })

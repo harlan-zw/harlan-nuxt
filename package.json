@@ -23,6 +23,31 @@
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js",
       "default": "./dist/runtime/server/index.js"
+    },
+    "./d1": {
+      "types": "./dist/runtime/server/d1.d.ts",
+      "import": "./dist/runtime/server/d1.js",
+      "default": "./dist/runtime/server/d1.js"
+    },
+    "./durable": {
+      "types": "./dist/runtime/server/outbox.d.ts",
+      "import": "./dist/runtime/server/outbox.js",
+      "default": "./dist/runtime/server/outbox.js"
+    },
+    "./queue": {
+      "types": "./dist/runtime/server/queue.d.ts",
+      "import": "./dist/runtime/server/queue.js",
+      "default": "./dist/runtime/server/queue.js"
+    },
+    "./schema": {
+      "types": "./dist/runtime/server/schema.d.ts",
+      "import": "./dist/runtime/server/schema.js",
+      "default": "./dist/runtime/server/schema.js"
+    },
+    "./testing": {
+      "types": "./dist/runtime/server/testing.d.ts",
+      "import": "./dist/runtime/server/testing.js",
+      "default": "./dist/runtime/server/testing.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -31,6 +56,21 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
+      ],
+      "d1": [
+        "dist/runtime/server/d1.d.ts"
+      ],
+      "durable": [
+        "dist/runtime/server/outbox.d.ts"
+      ],
+      "queue": [
+        "dist/runtime/server/queue.d.ts"
+      ],
+      "schema": [
+        "dist/runtime/server/schema.d.ts"
+      ],
+      "testing": [
+        "dist/runtime/server/testing.d.ts"
       ]
     }
   },
