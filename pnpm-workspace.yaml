@@ -1,0 +1,54 @@
+catalogMode: prefer
+cleanupUnusedCatalogs: true
+shellEmulator: true
+trustPolicy: no-downgrade
+
+packages:
+  - playground
+
+catalog:
+  '@vitest/coverage-v8': 4.1.7
+  '@vueuse/core': ^14.3.0
+  bumpp: ^11.1.0
+  eslint-plugin-harlanzw: ^0.15.1
+  nitropack: ^2.13.4
+  oxc-parser: 0.132.0
+  oxc-walker: 1.0.0
+  pathe: ^2.0.3
+  unbuild: ^3.6.1
+  zod: 4.4.3
+
+catalogs:
+  dev-build:
+    '@arethetypeswrong/cli': ^0.18.2
+    typescript: ^6.0.3
+    vue-tsc: ^3.3.1
+  dev-lint:
+    '@antfu/eslint-config': ^9.0.0
+    eslint: ^10.4.0
+  dev-test:
+    '@nuxt/test-utils': ^4.0.3
+    '@vue/test-utils': ^2.4.10
+    happy-dom: ^20.9.0
+    vitest: ^4.1.7
+  nuxt:
+    '@nuxt/kit': ^4.4.6
+    '@nuxt/module-builder': ^1.0.2
+    '@nuxt/schema': ^4.4.6
+    nuxt: ^4.4.6
+  vue:
+    vue: ^3.5.34
+    vue-router: ^5.0.7
+
+onlyBuiltDependencies:
+  - '@parcel/watcher'
+  - esbuild
+  - vue-demi
+
+trustPolicyIgnoreAfter: 262800
+
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+  vue-demi: true
+  workerd: true
