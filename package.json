@@ -1,7 +1,7 @@
 {
   "name": "nuxt-use-query",
   "type": "module",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
