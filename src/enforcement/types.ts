@@ -20,7 +20,7 @@ export interface ContractQueryEnforcementOptions {
    * Directories (relative to `rootDir`) the scanner walks. Limiting the scan to
    * Nuxt app/server code roots keeps build-time config (`nuxt.config.ts`, vite
    * config, etc.) out of contract enforcement. Supports a single `*` segment
-   * for layer/module fan-out, e.g. `'layers/*/app'`.
+   * for layer/module fan-out (e.g. `layers/<asterisk>/app`).
    */
   scanDirs?: string[]
 }
