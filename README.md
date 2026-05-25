@@ -63,6 +63,22 @@ const rpc = useNuxtRpc()
 await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' })
 ```
 
+RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP
+failures and Zod request/response validation failures are normalized before
+they reach hooks or callers.
+
+```ts
+const rpc = useNuxtRpc({
+  onError({ error, operation }) {
+    console.error(operation.path, toHumanNuxtRpcError(error))
+  },
+})
+
+await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
+  silent: true, // skip onError for flows that handle their own UX
+})
+```
+
 Enable build-time enforcement when a project is ready to make the pattern mandatory:
 
 ```ts

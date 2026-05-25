@@ -18,7 +18,7 @@ describe('rpc type contracts', () => {
       key: ['sites', '1'],
       path: '/api/sites/1',
       response: siteSchema,
-    }))
+    }), { silent: true })
 
     expectTypeOf(queryResult).toEqualTypeOf<{ id: string }>()
 
@@ -69,8 +69,11 @@ describe('rpc type contracts', () => {
     })
 
     await rpc.execute(patch, { name: 'Docs' })
+    await rpc.execute(patch, { name: 'Docs' }, { silent: true })
     await rpc.execute(refresh)
+    await rpc.execute(refresh, { silent: true })
     await rpc.execute(remove)
+    await rpc.execute(remove, { silent: true })
 
     if (false) {
       // @ts-expect-error body schema mutations require a body.
