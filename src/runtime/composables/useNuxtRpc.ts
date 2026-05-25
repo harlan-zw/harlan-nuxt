@@ -24,17 +24,18 @@ export type {
   NuxtRpcQueryOperation,
 } from '../rpc/core'
 
+// eslint-disable-next-line harlanzw/vue-no-faux-composables -- delegates to `useNuxtQuery`; cast only avoids leaking Nuxt overload internals through Zod generics.
 export function useNuxtRpcQuery<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
   operation: MaybeRefOrGetter<NuxtRpcQueryOperation<TResponseSchema, TQuery>>,
   options: Omit<UseNuxtQueryOptions<z.output<TResponseSchema>>, 'key' | 'query'> = {},
 ) {
   const resolved = () => toValue(operation)
-  return useNuxtQuery<z.output<TResponseSchema>>(() => resolved().path, {
+  return (useNuxtQuery as any)(() => resolved().path, {
     ...options,
     key: () => serializeNuxtRpcKey(resolved().key),
     query: computed(() => resolved().query),
     transform: (payload: unknown) => resolved().response.parse(payload),
-  })
+  } as UseNuxtQueryOptions<z.output<TResponseSchema>>)
 }
 
 export interface UseNuxtRpcOptions {
