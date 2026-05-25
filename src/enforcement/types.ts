@@ -16,6 +16,13 @@ export interface ContractQueryEnforcementOptions {
   requireServerContracts?: boolean
   /** Extra path globs to skip. */
   ignore?: string[]
+  /**
+   * Directories (relative to `rootDir`) the scanner walks. Limiting the scan to
+   * Nuxt app/server code roots keeps build-time config (`nuxt.config.ts`, vite
+   * config, etc.) out of contract enforcement. Supports a single `*` segment
+   * for layer/module fan-out, e.g. `'layers/*/app'`.
+   */
+  scanDirs?: string[]
 }
 
 export type ContractQueryViolationCode
@@ -39,6 +46,7 @@ export interface ResolvedContractQueryEnforcementOptions {
   ignore: string[]
   requireServerContracts: boolean
   serverApiDirs: string[]
+  scanDirs: string[]
 }
 
 export interface ContractQuerySourceFile {

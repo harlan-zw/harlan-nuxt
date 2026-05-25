@@ -16,6 +16,25 @@ const DEFAULT_SERVER_API_DIRS = [
   'layers/*/server/api',
 ]
 
+/**
+ * Default Nuxt code roots. Walking only these directories keeps build-time
+ * config files (`nuxt.config.ts`, vite config, etc.) out of the scan; their
+ * own `apiPrefixes: ['/api/']` literal would otherwise trip the rule it
+ * configures.
+ */
+const DEFAULT_SCAN_DIRS = [
+  'app',
+  'server',
+  'shared',
+  'modules',
+  'layers/*/app',
+  'layers/*/server',
+  'layers/*/shared',
+  'apps/*/app',
+  'apps/*/server',
+  'apps/*/shared',
+]
+
 const DEFAULT_IGNORE = [
   '.git',
   '.nuxt',
@@ -33,6 +52,7 @@ export function resolveContractQueryEnforcementOptions(options: ContractQueryEnf
     ignore: options.ignore ?? DEFAULT_IGNORE,
     requireServerContracts: options.requireServerContracts ?? false,
     serverApiDirs: options.serverApiDirs ?? DEFAULT_SERVER_API_DIRS,
+    scanDirs: options.scanDirs ?? DEFAULT_SCAN_DIRS,
   }
 }
 
