@@ -216,6 +216,51 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     expect(echoCalls.mock.calls.length).toBe(baseline + 2)
   })
 
+  it('two useNuxtQuery calls with the same key dedupe to a single network request', async () => {
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    // Simulates a parent + nested child both mounting the same key in the
+    // same tick. With Nuxt's _asyncDataPromises dedup, only one fetch hits.
+    const [a, b] = await Promise.all([
+      useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key' }),
+      useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key' }),
+    ])
+
+    expect(echoCalls.mock.calls.length).toBe(1)
+    expect(a.data.value?.call).toBe(b.data.value?.call)
+  })
+
+  it('a second useNuxtQuery mount AFTER the first resolved does not refetch with staleTime > 0', async () => {
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-2', staleTime: 60_000 })
+    const callsAfterFirst = echoCalls.mock.calls.length
+
+    // Second mount, sequential — fresh cache should be reused.
+    await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-2', staleTime: 60_000 })
+    expect(echoCalls.mock.calls.length).toBe(callsAfterFirst)
+  })
+
+  it('sequential mount with the same key reuses the existing _asyncData entry (no refetch)', async () => {
+    // Documents the surprising-vs-TanStack behavior: even with staleTime=0,
+    // a second `useFetch(key=X)` after the first resolved reuses Nuxt's
+    // existing `_asyncData[X]` entry rather than consulting `getCachedData`
+    // again. Refetch only happens via explicit refresh/invalidation/focus.
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-3' })
+    const callsAfterFirst = echoCalls.mock.calls.length
+
+    await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-3' })
+    expect(echoCalls.mock.calls.length).toBe(callsAfterFirst)
+  })
+
   it('invalidateNuxtQueries with no prefix refreshes every active key', async () => {
     const cache = useQueryCache()
     cache.lastFetched.clear()

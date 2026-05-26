@@ -15,6 +15,9 @@ catalogs:
     bumpp:
       specifier: ^11.1.0
       version: 11.1.0
+    consola:
+      specifier: ^3.4.2
+      version: 3.4.2
     eslint-plugin-harlanzw:
       specifier: ^0.15.1
       version: 0.15.1
@@ -100,6 +103,9 @@ importers:
       '@vueuse/core':
         specifier: 'catalog:'
         version: 14.3.0(vue@3.5.34(typescript@6.0.3))
+      consola:
+        specifier: 'catalog:'
+        version: 3.4.2
       oxc-parser:
         specifier: 'catalog:'
         version: 0.132.0

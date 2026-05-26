@@ -1,7 +1,7 @@
 {
   "name": "nuxt-use-query",
   "type": "module",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
@@ -75,6 +75,7 @@
     "@nuxt/kit": "catalog:nuxt",
     "@nuxt/schema": "catalog:nuxt",
     "@vueuse/core": "catalog:",
+    "consola": "catalog:",
     "oxc-parser": "catalog:",
     "oxc-walker": "catalog:",
     "pathe": "catalog:",

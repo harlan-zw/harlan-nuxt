@@ -109,6 +109,12 @@ export function useNuxtQuery(
     ...fetchOptions,
     key,
     immediate: fetchOptions.immediate ?? enabled.value,
+    // Nuxt's default dedupe is 'cancel' which aborts the in-flight request on
+    // a concurrent same-key call — the server has usually already received
+    // the cancelled request, so two sibling components mounting the same
+    // query still produce two network hits. 'defer' makes the second mount
+    // await the first promise instead.
+    dedupe: fetchOptions.dedupe ?? 'defer',
     getCachedData: (cacheKey: string, nuxtApp: any, context: any) => {
       if (fetchOptions.getCachedData) {
         const cached = fetchOptions.getCachedData(cacheKey, nuxtApp, context)

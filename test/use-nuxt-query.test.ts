@@ -145,6 +145,26 @@ describe('useNuxtQuery TanStack-style refetch aliases', () => {
   })
 })
 
+describe('useNuxtQuery staleTime default', () => {
+  // Regression: an earlier change bumped this to 30_000 to "dedupe sibling
+  // mounts", but Nuxt's useAsyncData already dedupes concurrent fetches by
+  // key. The documented default (README) is 0, matching TanStack v5.
+  it('defaults staleTime to 0 so getCachedData treats any prior fetch as stale', () => {
+    useNuxtQuery('/api/x', { key: 'q' })
+    cache.lastFetched.set('q', Date.now())
+    const cached = lastUseFetchOpts.getCachedData('q', {}, { cause: 'initial' })
+    expect(cached).toBeUndefined()
+  })
+
+  it('returns cached data when staleTime is explicitly non-zero and within window', () => {
+    const nuxtApp: any = { payload: { data: { q: { hit: true } } } }
+    useNuxtQuery('/api/x', { key: 'q', staleTime: 60_000 })
+    cache.lastFetched.set('q', Date.now())
+    const cached = lastUseFetchOpts.getCachedData('q', nuxtApp, { cause: 'initial' })
+    expect(cached).toEqual({ hit: true })
+  })
+})
+
 describe('useNuxtQuery refetchInterval', () => {
   it('does not start polling when refetchInterval is undefined', () => {
     lastIntervalFn = undefined
