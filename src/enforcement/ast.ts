@@ -44,6 +44,36 @@ export function hasApiLiteral(ast: any, apiPrefixes: string[]): boolean {
   return found
 }
 
+/**
+ * True iff the file references zod — either imports `zod` / `zod/v4`, or
+ * uses a `z.<member>` expression somewhere in the program. Used to scope the
+ * server-route-missing-contract rule to files that actually define schemas.
+ */
+export function hasZodUsage(ast: any): boolean {
+  let found = false
+  walk(ast.program, {
+    enter(node: any) {
+      if (found)
+        return
+      if (node.type === 'ImportDeclaration') {
+        const source = node.source?.value
+        if (typeof source === 'string' && (source === 'zod' || source.startsWith('zod/'))) {
+          found = true
+          return
+        }
+      }
+      if (
+        node.type === 'MemberExpression'
+        && node.object?.type === 'Identifier'
+        && node.object.name === 'z'
+      ) {
+        found = true
+      }
+    },
+  })
+  return found
+}
+
 /** True iff any `import ... from '<contract-dir>...'` is present. */
 export function hasContractImport(ast: any, contractDirs: string[]): boolean {
   let found = false

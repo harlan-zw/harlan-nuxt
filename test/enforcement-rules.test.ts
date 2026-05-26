@@ -161,13 +161,22 @@ describe('mutationBodySchemaMissingRule', () => {
 })
 
 describe('serverRouteMissingContractRule', () => {
-  it('fires on server/api files without contract import when enabled', () => {
+  it('fires on server/api files that declare a zod schema inline', () => {
+    const ctx = makeCtx(
+      'server/api/sites.get.ts',
+      'import { z } from "zod"; const body = z.object({ id: z.string() }); export default defineEventHandler(() => ({ ok: true }))',
+      { requireServerContracts: true },
+    )
+    expect(runRule(serverRouteMissingContractRule, ctx)).toBe(true)
+  })
+
+  it('skips server/api files with no zod usage', () => {
     const ctx = makeCtx(
       'server/api/sites.get.ts',
       'export default defineEventHandler(() => ({ ok: true }))',
       { requireServerContracts: true },
     )
-    expect(runRule(serverRouteMissingContractRule, ctx)).toBe(true)
+    expect(runRule(serverRouteMissingContractRule, ctx)).toBe(false)
   })
 
   it('skips when requireServerContracts is false', () => {

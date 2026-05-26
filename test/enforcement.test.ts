@@ -34,7 +34,23 @@ describe('contract query enforcer', () => {
     ])
   })
 
-  it('checks server API contract imports when enabled', async () => {
+  it('flags server API routes that declare a zod schema inline', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'server/api/sites.get.ts',
+          source: 'import { z } from "zod"; const schema = z.object({ id: z.string() }); export default defineEventHandler(() => ({ ok: true }))',
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app', { requireServerContracts: true })
+
+    expect(violations).toHaveLength(1)
+    expect(violations[0]?.code).toBe('server-route-missing-contract')
+  })
+
+  it('ignores server API routes that have no zod schema', async () => {
     const enforcer = createContractQueryEnforcer({
       readSourceFiles: async () => [
         {
@@ -46,8 +62,7 @@ describe('contract query enforcer', () => {
 
     const violations = await enforcer.scan('/app', { requireServerContracts: true })
 
-    expect(violations).toHaveLength(1)
-    expect(violations[0]?.code).toBe('server-route-missing-contract')
+    expect(violations).toEqual([])
   })
 
   it('formats violations via formatContractQueryViolations', async () => {
