@@ -16,7 +16,7 @@ Both linked via `link:../../pkg/nuxt-cf-jobs` (or deeper). Changes here ship to 
   - `getDurableJobContinuationsForStage`, `parseDurableJobContinuation`, `serializeDurableJobContinuation`
   - `createQueuePublisher`, `resolveQueueBindingName`, `resolveJobRetryDelay`, `resolveJobMaxAttempts`
 - Also uses `#cf-jobs/app` (`jobRegistry`, `jobs`, `JobName`, `JobPayload`).
-- Passes `cfJobs.defaultQueue` — option not currently in `ModuleOptions`.
+- Passes `cfJobs.defaultQueue` (supported in `ModuleOptions`).
 
 ### `~/sites/nuxtseo.com/apps/pro`
 
