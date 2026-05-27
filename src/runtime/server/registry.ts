@@ -3,12 +3,6 @@ import { buildJobPayload } from './payload'
 
 export type JobPayloadMap = Record<string, unknown>
 export type AnyJobDefinition = JobDefinition<string, any, string, any, any, any>
-export type JobDefinitionLoader<Job extends AnyJobDefinition = AnyJobDefinition> = () => Promise<Job>
-export type JobDefinitionLoaderMap = Record<string, JobDefinitionLoader>
-export type JobDefinitionOfLoader<Loader extends JobDefinitionLoader> = Awaited<ReturnType<Loader>>
-export type JobDefinitionsByNameOfLoaders<Loaders extends JobDefinitionLoaderMap> = {
-  readonly [Name in keyof Loaders]: Loaders[Name] extends JobDefinitionLoader<infer Job> ? Job : never
-}
 export type JobPayloadOf<Job extends AnyJobDefinition> =
   Job extends JobDefinition<string, infer Payload, string, any, any, any>
     ? Payload extends object ? Payload : never

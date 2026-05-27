@@ -507,7 +507,7 @@ export function registerQueueConsumer<T, Env extends Record<string, unknown>>(
   handler: (payload: QueuePayload<T, Env>) => Promise<void>,
   queues?: QueueBindingsConfig,
 ) {
-  nitroApp.hooks.hook('cloudflare:queue', async (payload) => {
+  nitroApp.hooks.hook('cloudflare:queue', async (payload: QueuePayload<T, Env>) => {
     const cfQueue = payload.batch.queue
     const matchesCfName = cfQueue === queueName
     const matchesLogical = queues ? resolveCloudflareQueueName(queues, queueName) === cfQueue : false

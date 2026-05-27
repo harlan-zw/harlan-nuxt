@@ -2,7 +2,6 @@ import type {
   AnyJobDefinition,
   JobNameOf,
   JobPayloadByName,
-  JobQueueByName,
 } from './registry'
 import type {
   PrepareRegisteredDurableJobOptions,
@@ -18,7 +17,7 @@ import { prepareRegisteredDurableJob } from './outbox'
 import {
   assertJobQueueBindings,
   createJobQueue,
-  registerRegisteredQueueConsumer,
+  processRegisteredQueueBatch,
   resolveNitroTaskEnv,
   validateJobQueueBindings,
   validateQueueBindingShape,
@@ -33,21 +32,41 @@ export interface CfJobsRuntimeConfig {
 export type CfJobsQueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>
   = Omit<RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>, 'registry' | 'queues'>
 
+export type UseRuntimeConfigFn = (event?: unknown) => CfJobsRuntimeConfig
+
 export interface CreateCfJobsAppOptions {
+  /** Bundled nitro's `useRuntimeConfig`. Required — tests can pass a stub. */
+  useRuntimeConfig: UseRuntimeConfigFn
   /** Fallback queue applied to jobs whose `defineJob` omits `queue`. */
   defaultQueue?: string
 }
 
+/**
+ * Builds the registry + helpers around a statically-known array of jobs. The
+ * generated `#cf-jobs/app` template imports each job source file directly and
+ * passes the resulting array in — rollup resolves nuxt `#aliases` and
+ * extensionless paths inside the bundle.
+ *
+ * `useRuntimeConfig` is injected so this module never imports `nitropack/runtime`
+ * itself; that keeps `app.ts` usable from unit tests / non-nitro consumers and
+ * avoids `#nitro-internal-virtual/*` pulling into anything that isn't bundled.
+ */
 export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   jobs: Jobs,
-  useRuntimeConfig: (event?: unknown) => CfJobsRuntimeConfig,
-  appOpts: CreateCfJobsAppOptions = {},
+  { useRuntimeConfig, defaultQueue }: CreateCfJobsAppOptions,
 ) {
-  const effectiveJobs = (appOpts.defaultQueue
-    ? jobs.map(job => (job.queue ? job : { ...job, queue: appOpts.defaultQueue }))
-    : jobs) as unknown as Jobs
+  const materialized = (defaultQueue
+    ? jobs.map(j => (j.queue ? j : { ...j, queue: defaultQueue }))
+    : jobs.slice()) as unknown as Jobs
 
-  const jobRegistry = defineJobRegistry(effectiveJobs)
+  const jobRegistry = defineJobRegistry(materialized)
+
+  // Eager: invalid `defineJob` shapes surface at boot rather than on first message.
+  const jobIssues = validateJobDefinitions(materialized)
+  if (jobIssues.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${i.reason}`).join('\n')}`)
+  }
 
   function getQueue<const Job extends Jobs[number]>(job: Job): ReturnType<typeof createJobQueue<Job>>
   function getQueue<const Job extends Jobs[number]>(
@@ -82,47 +101,48 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     return prepareRegisteredDurableJob(jobRegistry, opts)
   }
 
-  let startupLogged = false
-  function logStartupWarnings(queues: QueueBindingsConfig): void {
-    if (startupLogged)
-      return
-    startupLogged = true
+  // Queue-binding validation depends on runtimeConfig — runs on first batch only.
+  function logQueueWarnings(queues: QueueBindingsConfig): void {
     const issues: string[] = []
-    for (const issue of validateJobDefinitions(effectiveJobs))
-      issues.push(`[job:${issue.name}] ${issue.reason}`)
     for (const issue of validateQueueBindingShape(queues))
       issues.push(`[queue:${issue.queue}] ${issue.reason}: ${issue.detail}`)
-    for (const issue of validateJobQueueBindings(queues, effectiveJobs))
+    for (const issue of validateJobQueueBindings(queues, materialized))
       issues.push(`[job:${issue.jobName}] missing binding for queue "${issue.queue}"`)
-    for (const issue of validateQueueConsumerConfig(queues, effectiveJobs))
+    for (const issue of validateQueueConsumerConfig(queues, materialized))
       issues.push(`[job:${issue.jobName ?? '?'}@${issue.queue}] ${issue.reason}: ${issue.detail}`)
     if (issues.length === 0)
       return
     // eslint-disable-next-line no-console
-    console.warn(`[nuxt-cf-jobs] configuration warnings:\n${issues.map(i => `  - ${i}`).join('\n')}`)
+    console.warn(`[nuxt-cf-jobs] queue config warnings:\n${issues.map(i => `  - ${i}`).join('\n')}`)
   }
 
   function registerQueueConsumer<Env extends Record<string, unknown>, Db, Logger>(
     nitroApp: { hooks: { hook: (name: any, handler: any) => void } },
     opts: CfJobsQueueConsumerOptions<Env, Db, Logger>,
   ) {
-    const queues = useRuntimeConfig().cfJobs.queues
-    logStartupWarnings(queues)
-    return registerRegisteredQueueConsumer(nitroApp, {
+    const ready: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger> = {
       ...opts,
       registry: jobRegistry,
       queues: () => useRuntimeConfig().cfJobs.queues,
+    }
+    let warned = false
+    nitroApp.hooks.hook('cloudflare:queue', async (payload: RegisteredQueueConsumerPayload<Env>) => {
+      if (!warned) {
+        warned = true
+        logQueueWarnings(useRuntimeConfig().cfJobs.queues)
+      }
+      await processRegisteredQueueBatch(payload, ready)
     })
   }
 
   const validateQueueBindings = (queues: QueueBindingsConfig = useRuntimeConfig().cfJobs.queues) =>
-    validateJobQueueBindings(queues, effectiveJobs)
+    validateJobQueueBindings(queues, materialized)
 
   const assertQueueBindings = (queues: QueueBindingsConfig = useRuntimeConfig().cfJobs.queues) =>
-    assertJobQueueBindings(queues, effectiveJobs)
+    assertJobQueueBindings(queues, materialized)
 
   return {
-    jobs: effectiveJobs,
+    jobs: materialized,
     jobRegistry,
     getHandler: jobRegistry.getHandler,
     getJobDefinition: jobRegistry.getJobDefinition,
