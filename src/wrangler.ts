@@ -134,6 +134,12 @@ export interface ModuleQueueExpectation {
   logical: string
   binding: string
   cfQueueName: string
+  /**
+   * When false, `cfQueueName` is just a fallback (derived from the logical key).
+   * The cross-check will prefer the queue name from the producer entry that
+   * matches `binding`, and won't flag a `producer-queue-mismatch`.
+   */
+  explicitQueueName?: boolean
   maxRetries?: number
   hasConsumer?: boolean
 }
@@ -158,7 +164,7 @@ export function crossCheckWrangler(
         detail: `no [[queues.producers]] with binding="${exp.binding}" in ${wrangler.path}`,
       })
     }
-    else if (producer.queue !== exp.cfQueueName) {
+    else if (exp.explicitQueueName && producer.queue !== exp.cfQueueName) {
       issues.push({
         reason: 'producer-queue-mismatch',
         logical: exp.logical,
@@ -167,12 +173,13 @@ export function crossCheckWrangler(
     }
 
     if (exp.hasConsumer !== false) {
-      const consumer = consumersByQueue.get(exp.cfQueueName)
+      const effectiveQueueName = producer && !exp.explicitQueueName ? producer.queue : exp.cfQueueName
+      const consumer = consumersByQueue.get(effectiveQueueName)
       if (!consumer) {
         issues.push({
           reason: 'missing-consumer',
           logical: exp.logical,
-          detail: `no [[queues.consumers]] for queue="${exp.cfQueueName}" (handler is registered but wrangler won't deliver to it)`,
+          detail: `no [[queues.consumers]] for queue="${effectiveQueueName}" (handler is registered but wrangler won't deliver to it)`,
         })
       }
       else if (exp.maxRetries !== undefined && consumer.maxRetries !== undefined && consumer.maxRetries < exp.maxRetries - 1) {

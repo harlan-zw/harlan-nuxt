@@ -107,8 +107,8 @@ export type QueueSource =
     context?: {
       cloudflare?: {
         env?: Record<string, unknown>
-      }
-    }
+      } | unknown
+    } | unknown
   }
 
 export interface JobQueuePublisher<Job extends AnyJobDefinition> {
@@ -502,7 +502,7 @@ export function defineCfJobsQueues<const T extends QueueBindingsConfig>(queues: 
 }
 
 export function registerQueueConsumer<T, Env extends Record<string, unknown>>(
-  nitroApp: { hooks: { hook: (name: string, handler: (payload: QueuePayload<T, Env>) => Promise<void>) => void } },
+  nitroApp: { hooks: { hook: (name: any, handler: any) => void } },
   queueName: string,
   handler: (payload: QueuePayload<T, Env>) => Promise<void>,
   queues?: QueueBindingsConfig,
@@ -611,10 +611,10 @@ export interface RegisterRegisteredQueueConsumerOptions<Env extends Record<strin
 }
 
 export function registerRegisteredQueueConsumer<Env extends Record<string, unknown>, Db, Logger>(
-  nitroApp: { hooks: { hook: (name: string, handler: (payload: RegisteredQueueConsumerPayload<Env>) => Promise<void>) => void } },
+  nitroApp: { hooks: { hook: (name: any, handler: any) => void } },
   opts: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>,
 ) {
-  nitroApp.hooks.hook('cloudflare:queue', async payload => processRegisteredQueueBatch(payload, opts))
+  nitroApp.hooks.hook('cloudflare:queue', async (payload: RegisteredQueueConsumerPayload<Env>) => processRegisteredQueueBatch(payload, opts))
 }
 
 export async function processRegisteredQueueBatch<Env extends Record<string, unknown>, Db, Logger>(

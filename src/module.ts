@@ -8,6 +8,9 @@ import {
   parseWranglerConfig,
   renderSuggestedWranglerToml,
   type ModuleQueueExpectation,
+  type WranglerConfig,
+  type WranglerQueueConsumer,
+  type WranglerQueueProducer,
 } from './wrangler'
 
 export type { ModuleOptions } from './types'
@@ -63,11 +66,11 @@ export default defineNuxtModule<ModuleOptions>({
       addServerPlugin(resolver.resolve('./runtime/server/plugins/dev-queues'))
 
     if (options.validateWrangler !== false)
-      runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'))
+      runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), nuxt.options.nitro)
   },
 })
 
-function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, templateDir: string): void {
+function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, templateDir: string, nitroOptions: unknown): void {
   const logger = useLogger('nuxt-cf-jobs')
   const wranglerPath = options.wranglerPath
     ? resolve(rootDir, options.wranglerPath)
@@ -78,8 +81,9 @@ function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, template
     const binding = typeof config === 'string' ? config : config?.binding
     if (!binding)
       continue
-    const cfQueueName = typeof config === 'object' && config?.queueName ? config.queueName : logical
-    expectations.push({ logical, binding, cfQueueName })
+    const explicitQueueName = typeof config === 'object' && !!config?.queueName
+    const cfQueueName = explicitQueueName ? (config as { queueName: string }).queueName : logical
+    expectations.push({ logical, binding, cfQueueName, explicitQueueName })
   }
 
   if (expectations.length === 0)
@@ -93,18 +97,78 @@ function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, template
     getContents: () => suggested,
   })
 
-  if (!wranglerPath) {
-    logger.warn(`No wrangler.{toml,jsonc,json} found in ${rootDir}. See ${resolve(templateDir, 'wrangler.suggested.toml')} for the expected [[queues.producers]] / [[queues.consumers]] blocks.`)
+  const nitroQueues = readNitroCloudflareQueues(nitroOptions)
+  const fileWrangler = wranglerPath ? parseWranglerConfig(wranglerPath) : undefined
+  const merged = mergeWranglerSources(fileWrangler, nitroQueues, wranglerPath ?? rootDir)
+
+  if (!merged) {
+    logger.warn(`No wrangler.{toml,jsonc,json} found in ${rootDir} and no queues declared via nitro.cloudflare.wrangler. See ${resolve(templateDir, 'wrangler.suggested.toml')} for the expected [[queues.producers]] / [[queues.consumers]] blocks.`)
     return
   }
 
-  const wrangler = parseWranglerConfig(wranglerPath)
-  const issues = crossCheckWrangler(wrangler, expectations)
+  const issues = crossCheckWrangler(merged, expectations)
   if (issues.length === 0)
     return
 
   const lines = issues.map(i => `  - [${i.logical}] ${i.reason}: ${i.detail}`)
-  logger.warn(`nuxt-cf-jobs / wrangler config drift in ${wranglerPath}:\n${lines.join('\n')}\nSee ${resolve(templateDir, 'wrangler.suggested.toml')} for the expected blocks.`)
+  logger.warn(`nuxt-cf-jobs / wrangler config drift in ${merged.path}:\n${lines.join('\n')}\nSee ${resolve(templateDir, 'wrangler.suggested.toml')} for the expected blocks.`)
+}
+
+function readNitroCloudflareQueues(nitroOptions: unknown): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } | undefined {
+  const cf = (nitroOptions as { cloudflare?: { wrangler?: { queues?: { producers?: unknown[], consumers?: unknown[] } }, deploy?: { configuration?: { queues?: { producers?: unknown[], consumers?: unknown[] } } } } })?.cloudflare
+  const queues = cf?.wrangler?.queues ?? cf?.deploy?.configuration?.queues
+  if (!queues)
+    return undefined
+  const producers: WranglerQueueProducer[] = []
+  const consumers: WranglerQueueConsumer[] = []
+  for (const p of queues.producers ?? []) {
+    if (!p || typeof p !== 'object')
+      continue
+    const obj = p as { binding?: unknown, queue?: unknown }
+    if (typeof obj.binding === 'string' && typeof obj.queue === 'string')
+      producers.push({ binding: obj.binding, queue: obj.queue })
+  }
+  for (const c of queues.consumers ?? []) {
+    if (!c || typeof c !== 'object')
+      continue
+    const obj = c as Record<string, unknown>
+    if (typeof obj.queue !== 'string')
+      continue
+    const consumer: WranglerQueueConsumer = { queue: obj.queue }
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'queue')
+        continue
+      ;(consumer as unknown as Record<string, unknown>)[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = v
+    }
+    consumers.push(consumer)
+  }
+  return { producers, consumers }
+}
+
+function mergeWranglerSources(
+  fileWrangler: WranglerConfig | undefined,
+  nitroQueues: { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } | undefined,
+  fallbackPath: string,
+): WranglerConfig | undefined {
+  if (!fileWrangler && !nitroQueues)
+    return undefined
+  const producerKey = (p: WranglerQueueProducer) => `${p.binding}::${p.queue}`
+  const consumerKey = (c: WranglerQueueConsumer) => c.queue
+  const producers = new Map<string, WranglerQueueProducer>()
+  const consumers = new Map<string, WranglerQueueConsumer>()
+  for (const p of fileWrangler?.producers ?? [])
+    producers.set(producerKey(p), p)
+  for (const c of fileWrangler?.consumers ?? [])
+    consumers.set(consumerKey(c), c)
+  for (const p of nitroQueues?.producers ?? [])
+    producers.set(producerKey(p), p)
+  for (const c of nitroQueues?.consumers ?? [])
+    consumers.set(consumerKey(c), c)
+  return {
+    path: fileWrangler?.path ?? `${fallbackPath} (nitro.cloudflare.deploy.configuration)`,
+    producers: [...producers.values()],
+    consumers: [...consumers.values()],
+  }
 }
 
 async function generateRegistryTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {

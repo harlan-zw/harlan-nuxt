@@ -103,7 +103,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   }
 
   function registerQueueConsumer<Env extends Record<string, unknown>, Db, Logger>(
-    nitroApp: { hooks: { hook: (name: string, handler: (payload: RegisteredQueueConsumerPayload<Env>) => Promise<void>) => void } },
+    nitroApp: { hooks: { hook: (name: any, handler: any) => void } },
     opts: CfJobsQueueConsumerOptions<Env, Db, Logger>,
   ) {
     const queues = useRuntimeConfig().cfJobs.queues
