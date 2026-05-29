@@ -7,15 +7,15 @@ trustPolicyExclude:
 
 catalog:
   '@vitest/coverage-v8': 4.1.7
-  drizzle-orm: 0.45.2
+  drizzle-orm: 1.0.0-rc.3
   unbuild: ^3.6.1
-  wrangler: ^4.94.0
+  wrangler: ^4.95.0
 
 catalogs:
   dev-build:
     '@types/node': ^25.9.1
     typescript: ^6.0.3
-    vue-tsc: ^3.3.1
+    vue-tsc: ^3.3.2
   dev-test:
     happy-dom: ^20.9.0
     vitest: ^4.1.7
@@ -25,7 +25,7 @@ catalogs:
     '@nuxt/schema': ^4.4.6
     nuxt: ^4.4.6
   vue:
-    vue: ^3.5.34
+    vue: ^3.5.35
 
 onlyBuiltDependencies:
   - '@parcel/watcher'
