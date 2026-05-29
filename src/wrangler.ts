@@ -53,7 +53,7 @@ function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProduce
   while ((m = blockRe.exec(source)) !== null)
     matches.push({ kind: m[1] as 'producers' | 'consumers', index: m.index + m[0].length })
 
-  const stopRe = /^\s*\[\[?[^\]]+\]\]?\s*$/m
+  const stopRe = /^\s*\[[^\]]+\]\]?\s*$/m
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i]!.index
     const end = i + 1 < matches.length ? matches[i + 1]!.index - (matches[i + 1]?.kind.length ?? 0) : source.length
@@ -79,9 +79,9 @@ function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProduce
     if (matches[i]!.kind === 'consumers' && typeof entry.queue === 'string') {
       const consumer: WranglerQueueConsumer = { queue: entry.queue }
       for (const [k, v] of Object.entries(entry)) {
-        if (k === 'queue')
+        if (k === 'queue') {
           continue
-        ;(consumer as unknown as Record<string, unknown>)[k] = v
+        }(consumer as unknown as Record<string, unknown>)[k] = v
       }
       consumers.push(consumer)
     }
@@ -107,9 +107,9 @@ function parseJsoncQueues(source: string): { producers: WranglerQueueProducer[],
       .map((c) => {
         const out: WranglerQueueConsumer = { queue: String(c.queue ?? '') }
         for (const [k, v] of Object.entries(c)) {
-          if (k === 'queue')
+          if (k === 'queue') {
             continue
-          ;(out as unknown as Record<string, unknown>)[camelCase(k)] = v
+          }(out as unknown as Record<string, unknown>)[camelCase(k)] = v
         }
         return out
       })

@@ -1,4 +1,5 @@
 import { getTableName } from 'drizzle-orm'
+import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it, vi } from 'vitest'
 import {
   assertJobDefinitions,
@@ -41,13 +42,13 @@ import {
   resolveJobBackoff,
   resolveJobMaxAttempts,
   resolveJobRetryDelay,
+  resolveLogicalQueueName,
   resolveQueueBindingName,
   resolveQueueJobType,
-  resolveLogicalQueueName,
   runDurableJobMessage,
   serializeDurableJobContinuation,
-  validateJobQueueBindings,
   validateJobDefinitions,
+  validateJobQueueBindings,
 } from '#cf-jobs/server'
 
 describe('nuxt-cf-jobs dispatch kernel', () => {
@@ -1064,6 +1065,37 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(getTableName(cfFailedJobs)).toBe('failed_jobs')
   })
 
+  // Drift guard: the Drizzle schema (schema.ts) is the single source of truth for the
+  // durable-jobs tables; the raw migration SQL (d1.ts) must stay in sync with it. Adding a
+  // column/index to the schema without updating the migration SQL (or vice versa) fails here.
+  it('keeps d1DurableJobMigrationSql in sync with the Drizzle schema', () => {
+    const createStatements = d1DurableJobMigrationSql.filter(sql => /CREATE TABLE/i.test(sql))
+    const indexStatements = d1DurableJobMigrationSql.filter(sql => /CREATE (?:UNIQUE )?INDEX/i.test(sql))
+
+    const schemaIndexNames = new Set<string>()
+    for (const table of [cfJobBatches, cfJobs, cfFailedJobs]) {
+      const config = getTableConfig(table)
+      const createSql = createStatements.find(sql => new RegExp(`CREATE TABLE IF NOT EXISTS ${config.name}\\b`).test(sql))
+      expect(createSql, `missing CREATE TABLE for "${config.name}"`).toBeTruthy()
+
+      // every Drizzle column must appear in the table's CREATE statement
+      for (const column of config.columns)
+        expect(createSql, `column "${config.name}.${column.name}" missing from migration SQL`).toContain(column.name)
+
+      for (const idx of config.indexes) {
+        const name = idx.config.name
+        schemaIndexNames.add(name)
+        expect(
+          indexStatements.some(sql => sql.includes(name)),
+          `index "${name}" defined in schema.ts but missing from migration SQL`,
+        ).toBe(true)
+      }
+    }
+
+    // no migration index without a matching Drizzle index (reverse drift)
+    expect(indexStatements).toHaveLength(schemaIndexNames.size)
+  })
+
   it('reports queue send failures from enqueueDurableJob without losing the row', async () => {
     const inserted: unknown[] = []
     const error = new Error('payload too large')
@@ -1146,9 +1178,14 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       registry,
       job: { id: 'job_1', queue: 'default', attempts: 1, batchId: null, payload: buildJobPayload('demo/failed-throws', {}) },
       createContext: () => ({
-        env: {}, db: {}, log: {},
-        jobId: 'job_1', batchId: null, attempt: 1,
-        release: vi.fn(), fail: vi.fn(),
+        env: {},
+        db: {},
+        log: {},
+        jobId: 'job_1',
+        batchId: null,
+        attempt: 1,
+        release: vi.fn(),
+        fail: vi.fn(),
       }),
     })).rejects.toThrow('original')
   })
@@ -1249,9 +1286,14 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       },
       onDlq,
       createContext: ({ job, message }) => ({
-        env: {}, db: {}, log: {},
-        jobId: job.id, batchId: null, attempt: message.attempts,
-        release: vi.fn(), fail: vi.fn(),
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        fail: vi.fn(),
       }),
     })
 
@@ -1276,9 +1318,14 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       registry,
       queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
       createContext: ({ job }: { job: { id: string } }) => ({
-        env: {}, db: {}, log: {},
-        jobId: job.id, batchId: null, attempt: 1,
-        release: vi.fn(), fail: vi.fn(),
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: 1,
+        release: vi.fn(),
+        fail: vi.fn(),
       }),
     }
     const first = createQueueBatch('cf-default', [buildJobPayload('demo/idempotent', { n: 1 })], { ids: ['msg-1'] })
@@ -1423,7 +1470,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     ])
   })
 
-  it('D1 repo insertJobs batches and reports per-chunk results', async () => {
+  it('d1 repo insertJobs batches and reports per-chunk results', async () => {
     const db = createFakeD1()
     db.nextRun = { success: true, meta: { changes: 1 } }
     const repository = createD1DurableJobRepository(db)
@@ -1442,7 +1489,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(result.inserted).toHaveLength(3)
   })
 
-  it('D1 repo insertJobs uses db.batch when available', async () => {
+  it('d1 repo insertJobs uses db.batch when available', async () => {
     const calls: number[] = []
     const db = createFakeD1() as ReturnType<typeof createFakeD1> & {
       batch: (stmts: unknown[]) => Promise<Array<{ success: boolean, meta: { changes: number } }>>
@@ -1465,7 +1512,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(result.inserted).toHaveLength(4)
   })
 
-  it('D1 repo fires lifecycle hooks fire-and-forget', async () => {
+  it('d1 repo fires lifecycle hooks fire-and-forget', async () => {
     const db = createFakeD1()
     const events: Array<{ type: string, id: string }> = []
     const repository = createD1DurableJobRepository(db, {
@@ -1475,10 +1522,24 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       onJobReleased: ({ job }) => { events.push({ type: 'released', id: job.id }) },
     })
     db.nextFirst = {
-      id: 'h_1', queue: 'default', job_type: 'demo', batch_id: null, user_id: null, site_id: null,
-      partner_id: null, trace_id: null, unique_key: null, payload: '{}', attempts: 1,
-      max_attempts: 3, reserved_at: 100, available_at: 100, created_at: 100,
-      completed_at: null, failed_at: null, last_error: null,
+      id: 'h_1',
+      queue: 'default',
+      job_type: 'demo',
+      batch_id: null,
+      user_id: null,
+      site_id: null,
+      partner_id: null,
+      trace_id: null,
+      unique_key: null,
+      payload: '{}',
+      attempts: 1,
+      max_attempts: 3,
+      reserved_at: 100,
+      available_at: 100,
+      created_at: 100,
+      completed_at: null,
+      failed_at: null,
+      last_error: null,
     }
     const claimed = await repository.claimJob('h_1')
     await repository.completeJob(claimed!)
@@ -1487,7 +1548,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(events.map(e => e.type)).toEqual(['claimed', 'completed', 'released', 'failed'])
   })
 
-  it('D1 repo recordFailure persists DLQ messages without touching jobs row', async () => {
+  it('d1 repo recordFailure persists DLQ messages without touching jobs row', async () => {
     const db = createFakeD1()
     const repository = createD1DurableJobRepository(db)
     await repository.recordFailure({

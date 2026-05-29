@@ -1,10 +1,9 @@
+import type { JobDefinitionOf, JobName, JobPayload, JobQueue } from '#cf-jobs/app'
 import {
   buildJobPayload,
+
   jobLoaders,
-  type JobDefinitionOf,
-  type JobName,
-  type JobPayload,
-  type JobQueue,
+
 } from '#cf-jobs/app'
 
 const syncJobName: JobName = 'sync/table'

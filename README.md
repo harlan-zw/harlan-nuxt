@@ -73,13 +73,13 @@ jobsIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts']
 The generated registry is available as `#cf-jobs/app` by default.
 
 ```ts
+import type { JobName, JobPayload } from '#cf-jobs/app'
 import {
   buildJobPayload,
   getJobDefinition,
   getQueue,
-  prepareJob,
-  type JobName,
-  type JobPayload,
+
+  prepareJob
 } from '#cf-jobs/app'
 
 const name: JobName = 'sync/table'
@@ -201,8 +201,7 @@ export default defineEventHandler(async (event) => {
   await repository.migrate()
 
   const publisher = createQueuePublisher(env, queue =>
-    queue === 'default' ? 'QUEUE_DEFAULT' : undefined,
-  )
+    queue === 'default' ? 'QUEUE_DEFAULT' : undefined,)
 
   const record = await prepareJob({
     name: 'sync/table',
@@ -220,8 +219,8 @@ export default defineEventHandler(async (event) => {
 Consume durable queue messages with `runDurableJobMessage()` and the D1 repository:
 
 ```ts
-import { runDurableJobMessage } from 'nuxt-cf-jobs/durable'
 import { createD1DurableJobRepository } from 'nuxt-cf-jobs/d1'
+import { runDurableJobMessage } from 'nuxt-cf-jobs/durable'
 import { jobRegistry } from '#cf-jobs/app'
 
 export default defineNitroPlugin((nitroApp) => {
@@ -298,9 +297,9 @@ assertQueueBindings()
 Use the narrow subpaths when you can:
 
 ```ts
-import { defineJob } from 'nuxt-cf-jobs/server'
-import { runDurableJobMessage } from 'nuxt-cf-jobs/durable'
 import { createD1DurableJobRepository } from 'nuxt-cf-jobs/d1'
+import { runDurableJobMessage } from 'nuxt-cf-jobs/durable'
+import { defineJob } from 'nuxt-cf-jobs/server'
 import { createFakeQueue } from 'nuxt-cf-jobs/testing'
 ```
 

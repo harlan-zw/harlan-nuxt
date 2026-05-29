@@ -1,6 +1,5 @@
 import type { JobBackoff, JobDefinition } from './types'
-
-const CF_QUEUE_MAX_DELAY_SECONDS = 43200
+import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
 
 export function clampDelay(seconds: number | undefined): number | undefined {
   if (seconds === undefined)
@@ -58,20 +57,4 @@ function toHex(buffer: ArrayBuffer): string {
   return [...new Uint8Array(buffer)]
     .map(byte => byte.toString(16).padStart(2, '0'))
     .join('')
-}
-
-function stableStringify(value: unknown): string {
-  if (typeof value === 'bigint')
-    return `"@bigint:${value.toString()}"`
-  if (value instanceof Date)
-    return `"@date:${value.toISOString()}"`
-  if (Array.isArray(value))
-    return `[${value.map(stableStringify).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value)
 }

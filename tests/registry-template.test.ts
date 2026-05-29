@@ -36,8 +36,7 @@ describe('generateRegistryTemplate (bundled .ts, inlined into the nitro graph)',
   it('builds the app from a const tuple of jobs', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/export const jobs = \[.*\] as const/)
-    expect(out).toMatch(/createCfJobsApp\(jobs,\s*\{/)
-    expect(out).toMatch(/useRuntimeConfig,\s+defaultQueue:/)
+    expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*useRuntimeConfig,/)
     expect(out).toContain('registerQueueConsumer,')
     expect(out).toContain('jobRegistry,')
   })

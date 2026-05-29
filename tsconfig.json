@@ -1,21 +1,9 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "preserve",
-    "moduleResolution": "bundler",
-    "moduleDetection": "force",
-    "strict": true,
-    "types": [
-      "node",
-      "vitest/globals"
-    ],
-    "skipLibCheck": true,
-    "noEmit": true
-  },
-  "include": [
-    "index.ts",
-    "src/**/*.ts",
-    "vitest.config.ts",
-    "build.config.ts"
-  ]
+  "references": [
+    { "path": "./.nuxt/tsconfig.app.json" },
+    { "path": "./.nuxt/tsconfig.server.json" },
+    { "path": "./.nuxt/tsconfig.shared.json" },
+    { "path": "./.nuxt/tsconfig.node.json" }
+  ],
+  "files": []
 }

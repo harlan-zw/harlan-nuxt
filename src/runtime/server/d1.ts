@@ -202,13 +202,16 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           chunks.push({ ok: true, ids: slice.map(r => r.id), changes })
           // Best-effort: when batch is atomic we trust `changes`; per-row attribution isn't possible
           // with INSERT OR IGNORE so we report all slice records as inserted only when `changes === slice.length`.
-          if (changes === slice.length)
+          if (changes === slice.length) {
             inserted.push(...slice)
-          else if (changes > 0 && typeof db.batch !== 'function')
+          }
+          else if (changes > 0 && typeof db.batch !== 'function') {
             // sequential path returns per-statement meta — we can attribute precisely
-            for (let j = 0; j < slice.length; j++)
+            for (let j = 0; j < slice.length; j++) {
               if ((results[j]?.meta?.changes ?? 0) > 0)
                 inserted.push(slice[j]!)
+            }
+          }
         }
         catch (error) {
           chunks.push({ ok: false, ids: slice.map(r => r.id), changes: 0, error })

@@ -6,8 +6,12 @@ trustPolicyExclude:
   - tinyexec@1.2.2
 
 catalog:
+  '@antfu/eslint-config': latest
   '@vitest/coverage-v8': 4.1.7
   drizzle-orm: 1.0.0-rc.3
+  eslint: latest
+  eslint-plugin-harlanzw: latest
+  eslint-plugin-vue: latest
   unbuild: ^3.6.1
   wrangler: ^4.95.0
 

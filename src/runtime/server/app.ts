@@ -1,9 +1,4 @@
 import type {
-  AnyJobDefinition,
-  JobNameOf,
-  JobPayloadByName,
-} from './registry'
-import type {
   PrepareRegisteredDurableJobOptions,
 } from './outbox'
 import type {
@@ -11,19 +6,24 @@ import type {
   RegisteredQueueConsumerPayload,
   RegisterRegisteredQueueConsumerOptions,
 } from './queue'
+import type {
+  AnyJobDefinition,
+  JobNameOf,
+  JobPayloadByName,
+} from './registry'
 import type { QueueBindingsConfig } from './types'
-import { defineJobRegistry } from './registry'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
   assertJobQueueBindings,
   createJobQueue,
   processRegisteredQueueBatch,
   resolveNitroTaskEnv,
+  runtimeConfigSource,
   validateJobQueueBindings,
   validateQueueBindingShape,
   validateQueueConsumerConfig,
 } from './queue'
-import { validateJobDefinitions } from './registry'
+import { defineJobRegistry, validateJobDefinitions } from './registry'
 
 export interface CfJobsRuntimeConfig {
   cfJobs: { queues: QueueBindingsConfig }
@@ -64,7 +64,6 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   // Eager: invalid `defineJob` shapes surface at boot rather than on first message.
   const jobIssues = validateJobDefinitions(materialized)
   if (jobIssues.length > 0) {
-    // eslint-disable-next-line no-console
     console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${i.reason}`).join('\n')}`)
   }
 
@@ -112,7 +111,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
       issues.push(`[job:${issue.jobName ?? '?'}@${issue.queue}] ${issue.reason}: ${issue.detail}`)
     if (issues.length === 0)
       return
-    // eslint-disable-next-line no-console
+
     console.warn(`[nuxt-cf-jobs] queue config warnings:\n${issues.map(i => `  - ${i}`).join('\n')}`)
   }
 
@@ -123,13 +122,13 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     const ready: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger> = {
       ...opts,
       registry: jobRegistry,
-      queues: () => useRuntimeConfig().cfJobs.queues,
+      queues: (source?: QueueSource) => useRuntimeConfig(source as never).cfJobs.queues,
     }
     let warned = false
     nitroApp.hooks.hook('cloudflare:queue', async (payload: RegisteredQueueConsumerPayload<Env>) => {
       if (!warned) {
         warned = true
-        logQueueWarnings(useRuntimeConfig().cfJobs.queues)
+        logQueueWarnings(useRuntimeConfig(runtimeConfigSource(payload.env) as never).cfJobs.queues)
       }
       await processRegisteredQueueBatch(payload, ready)
     })
@@ -158,8 +157,47 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   }
 }
 
+/**
+ * Thin wrapper used by the generated `#cf-jobs/app` template: bridges nitro's
+ * `useRuntimeConfig` (whose types aren't visible from this package, hence the
+ * `any` param + cast) to the strictly-typed injectable. Keeping this here means
+ * the template emits only dynamic data, and the cast is type-checked in source.
+ */
+export function createGeneratedCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
+  jobs: Jobs,
+
+  useRuntimeConfig: (...args: any[]) => any,
+  defaultQueue?: string,
+) {
+  return createCfJobsApp(jobs, { useRuntimeConfig: useRuntimeConfig as UseRuntimeConfigFn, defaultQueue })
+}
+
 export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
   = ReturnType<typeof createCfJobsApp<Jobs>>
+
+/**
+ * Authoritative list of `createCfJobsApp` members re-exported by the generated
+ * `#cf-jobs/app` module. The build-time templates (`generateRegistryTemplate` /
+ * `generateRegistryTypesTemplate`) map over this so the runtime destructure, the
+ * `.d.ts` declarations, and the app's return shape can't drift apart.
+ *
+ * `jobs` is exported separately by the template (as a `const` tuple), so it is
+ * intentionally absent here.
+ */
+export const cfJobsAppExportNames = [
+  'jobRegistry',
+  'getHandler',
+  'getJobDefinition',
+  'getJobQueue',
+  'getJobRoute',
+  'validateRegistry',
+  'validateQueueBindings',
+  'assertQueueBindings',
+  'getQueue',
+  'buildJobPayload',
+  'prepareJob',
+  'registerQueueConsumer',
+] as const satisfies readonly Exclude<keyof CfJobsApp<readonly AnyJobDefinition[]>, 'jobs'>[]
 
 export type QueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>
   = CfJobsQueueConsumerOptions<Env, Db, Logger>

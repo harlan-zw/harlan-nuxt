@@ -3,12 +3,12 @@ import { buildJobPayload } from './payload'
 
 export type JobPayloadMap = Record<string, unknown>
 export type AnyJobDefinition = JobDefinition<string, any, string, any, any, any>
-export type JobPayloadOf<Job extends AnyJobDefinition> =
-  Job extends JobDefinition<string, infer Payload, string, any, any, any>
+export type JobPayloadOf<Job extends AnyJobDefinition>
+  = Job extends JobDefinition<string, infer Payload, string, any, any, any>
     ? Payload extends object ? Payload : never
     : never
-export type JobMessageOf<Job extends AnyJobDefinition> =
-  Job extends JobDefinition<infer Name, any, string, any, any, any>
+export type JobMessageOf<Job extends AnyJobDefinition>
+  = Job extends JobDefinition<infer Name, any, string, any, any, any>
     ? { _task: Name } & JobPayloadOf<Job>
     : never
 export type JobNameOf<Jobs extends readonly AnyJobDefinition[]> = Jobs[number]['name']
@@ -40,7 +40,7 @@ export type JobMessageByQueue<
   [Name in JobNameOf<Jobs>]: JobQueueByName<Jobs, Name> extends Queue
     ? JobMessageByName<Jobs, Name>
     : never
-  }[JobNameOf<Jobs>]
+}[JobNameOf<Jobs>]
 
 export interface JobDefinitionValidationIssue {
   name: string

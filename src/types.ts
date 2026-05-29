@@ -47,6 +47,37 @@ export interface ModuleOptions {
    */
   registryAlias?: string
   /**
+   * Directories scanned at build/dev time for `defineScheduledTask` (and plain
+   * nitro `defineTask`) default exports. Each discovered file is registered in
+   * `nitro.tasks` keyed by its declared `name`; files that declare a `cron` are
+   * also wired into `nitro.scheduledTasks` and the Cloudflare cron triggers.
+   * Relative paths are resolved from the Nuxt root directory.
+   *
+   * This replaces hand-maintaining `nitro.tasks` + `nitro.scheduledTasks` +
+   * `nitro.cloudflare.wrangler.triggers.crons` in `nuxt.config`.
+   */
+  tasksDir?: string | string[]
+  /**
+   * Glob pattern used inside each tasksDir. Defaults to `'**\/*.ts'`.
+   */
+  tasksPattern?: string | string[]
+  /**
+   * Extra glob ignore patterns for tasksDir scanning.
+   */
+  tasksIgnore?: string[]
+  /**
+   * Whether to populate `nitro.scheduledTasks` (and thus fire crons via
+   * croner/Cloudflare) from discovered tasks.
+   * - `undefined` (default): enabled only when NOT in dev — mirrors the common
+   *   `NODE_ENV === 'production' ? {...} : {}` gate so crons don't fire locally.
+   * - `true`: always populate (crons fire in dev too).
+   * - `false`: never populate (handlers are still registered for manual runs).
+   *
+   * The Cloudflare `triggers.crons` deploy metadata is always written regardless
+   * of this flag (it only takes effect on deploy).
+   */
+  scheduledTasks?: boolean
+  /**
    * Cross-check the user's wrangler config against `queues` at build time
    * and emit `.nuxt/cf-jobs/wrangler.suggested.toml`. Defaults to `true`.
    */

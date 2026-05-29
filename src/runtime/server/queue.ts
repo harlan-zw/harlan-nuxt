@@ -1,15 +1,17 @@
 import type { JobRegistryLike } from './dispatch'
 import type { DurableJobFailureRepository } from './outbox'
 import type { AnyJobDefinition, JobMessageOf, JobPayloadOf } from './registry'
-import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueueHandlerResult, QueuePayload, QueueSendOptions } from './types'
-import { buildJobMessage } from './registry'
+import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendOptions } from './types'
 import { dispatchRegisteredJob } from './dispatch'
+import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
 import { clampDelay, resolveJobMaxAttempts, resolveJobRetryDelay } from './policy'
+import { buildJobMessage } from './registry'
+
+export { CF_QUEUE_MAX_DELAY_SECONDS } from './internal'
 
 export const CF_QUEUE_MAX_BATCH_SIZE = 100
 export const CF_QUEUE_MAX_BATCH_BYTES = 256 * 1024
 export const CF_QUEUE_MAX_MESSAGE_BYTES = 128 * 1024
-export const CF_QUEUE_MAX_DELAY_SECONDS = 43200
 
 function chunkBatch<T>(items: readonly T[], size: number): T[][] {
   if (items.length <= size)
@@ -45,7 +47,7 @@ export async function withSendBackpressure<R>(
   const base = opts?.baseDelayMs ?? 100
   const cap = opts?.maxDelayMs ?? 5000
   let attempt = 0
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     try {
       return await fn()
@@ -101,15 +103,15 @@ export async function sendBatchMessagesChunked<T>(
   }
 }
 
-export type QueueSource =
-  | Record<string, unknown>
-  | {
-    context?: {
-      cloudflare?: {
-        env?: Record<string, unknown>
+export type QueueSource
+  = | Record<string, unknown>
+    | {
+      context?: {
+        cloudflare?: {
+          env?: Record<string, unknown>
+        } | unknown
       } | unknown
-    } | unknown
-  }
+    }
 
 export interface JobQueuePublisher<Job extends AnyJobDefinition> {
   send: (payload: JobPayloadOf<Job>, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
@@ -176,6 +178,15 @@ export function resolveQueueSourceEnv(source: QueueSource | undefined): Record<s
 
   const maybeEvent = source as { context?: { cloudflare?: { env?: Record<string, unknown> } } }
   return maybeEvent.context?.cloudflare?.env ?? source as Record<string, unknown>
+}
+
+/**
+ * Wraps a Cloudflare env as the event-shaped source `useRuntimeConfig` expects.
+ * Queue consumers run without an `H3Event`, so without this the `queues` resolver
+ * would call `useRuntimeConfig()` bare and miss per-deployment `NUXT_*` env overrides.
+ */
+export function runtimeConfigSource(env: Record<string, unknown>): QueueSource {
+  return { context: { cloudflare: { env } } }
 }
 
 export function createJobQueue<const Job extends AnyJobDefinition>(
@@ -583,7 +594,7 @@ export interface RegisteredQueueConsumerHookInput<Env extends Record<string, unk
 
 export interface RegisterRegisteredQueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger> {
   registry: JobRegistryLike<Env, Db, Logger> & { jobs?: readonly AnyJobDefinition[] }
-  queues: QueueBindingsConfig | (() => QueueBindingsConfig)
+  queues: QueueBindingsConfig | ((source?: QueueSource) => QueueBindingsConfig)
   createContext: (input: RegisteredQueueConsumerContextInput<Env>) => JobContext<Env, Db, Logger> | Promise<JobContext<Env, Db, Logger>>
   getJobId?: (input: RegisteredQueueConsumerHookInput<Env> & { payload: Record<string, unknown> }) => string
   getSiteId?: (payload: Record<string, unknown>) => string | null | undefined
@@ -621,7 +632,7 @@ export async function processRegisteredQueueBatch<Env extends Record<string, unk
   payload: RegisteredQueueConsumerPayload<Env>,
   opts: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>,
 ) {
-  const queues = typeof opts.queues === 'function' ? opts.queues() : opts.queues
+  const queues = typeof opts.queues === 'function' ? opts.queues(runtimeConfigSource(payload.env)) : opts.queues
   const logicalQueue = resolveLogicalQueueName(queues, payload.batch.queue)
   const unknownDelay = clampDelay(opts.unknownQueueRetryDelaySeconds ?? 60) ?? 60
 
@@ -647,27 +658,33 @@ export async function processRegisteredQueueBatch<Env extends Record<string, unk
         await handler?.onMessage?.(dlqInput)
         await opts.onDlq?.(dlqInput)
       }
-      if (typeof payload.batch.ackAll === 'function')
+      if (typeof payload.batch.ackAll === 'function') {
         payload.batch.ackAll()
-      else
+      }
+      else {
         for (const message of payload.batch.messages) message.ack()
+      }
       return
     }
     // Unknown queue but not configured as DLQ: don't silently drop — return to queue.
     await opts.onMissingQueue?.({ env: payload.env, batch: payload.batch, message: payload.batch.messages[0]! })
-    if (typeof payload.batch.retryAll === 'function')
+    if (typeof payload.batch.retryAll === 'function') {
       payload.batch.retryAll({ delaySeconds: unknownDelay })
-    else
+    }
+    else {
       for (const message of payload.batch.messages) message.retry({ delaySeconds: unknownDelay })
+    }
     return
   }
 
   if (opts.registry.jobs && !opts.registry.jobs.some(job => job.queue === logicalQueue)) {
     await opts.onMissingQueue?.({ env: payload.env, batch: payload.batch, message: payload.batch.messages[0]!, logicalQueue })
-    if (typeof payload.batch.retryAll === 'function')
+    if (typeof payload.batch.retryAll === 'function') {
       payload.batch.retryAll({ delaySeconds: unknownDelay })
-    else
+    }
+    else {
       for (const message of payload.batch.messages) message.retry({ delaySeconds: unknownDelay })
+    }
     return
   }
 
@@ -766,7 +783,7 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
   catch (error) {
     await opts.onDispatchError?.({ ...input, taskName, definition, job, error })
 
-    const queues = typeof opts.queues === 'function' ? opts.queues() : opts.queues
+    const queues = typeof opts.queues === 'function' ? opts.queues(runtimeConfigSource(input.env as Record<string, unknown>)) : opts.queues
     const maxAttempts = resolveJobMaxAttempts(definition)
       ?? (typeof queues[input.logicalQueue] === 'object' ? (queues[input.logicalQueue] as { maxRetries?: number }).maxRetries : undefined)
     const exhausted = shouldSendToDlq({ attempts: input.message.attempts, maxAttempts })
@@ -803,7 +820,7 @@ function isDlqQueue<Env extends Record<string, unknown>>(queueName: string, dlqQ
     return dlqQueues(queueName)
   if (Array.isArray(dlqQueues))
     return dlqQueues.includes(queueName)
-  return Object.prototype.hasOwnProperty.call(dlqQueues as Record<string, unknown>, queueName)
+  return Object.hasOwn(dlqQueues as Record<string, unknown>, queueName)
 }
 
 function resolveDlqHandler<Env extends Record<string, unknown>>(
@@ -822,18 +839,6 @@ function stablePayloadId(payload: Record<string, unknown>): string {
   return stableStringify(payload)
 }
 
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value))
-    return `[${value.map(stableStringify).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value)
-}
-
 export function exponentialBackoff(
   attempts: number,
   opts: { baseSeconds?: number, maxSeconds?: number } = {},
@@ -842,5 +847,3 @@ export function exponentialBackoff(
   const max = Math.min(opts.maxSeconds ?? 300, CF_QUEUE_MAX_DELAY_SECONDS)
   return Math.min(base * 2 ** Math.max(0, attempts), max)
 }
-
-

@@ -44,6 +44,11 @@
       "import": "./dist/runtime/server/schema.js",
       "default": "./dist/runtime/server/schema.js"
     },
+    "./scheduled": {
+      "types": "./dist/runtime/server/scheduled.d.ts",
+      "import": "./dist/runtime/server/scheduled.js",
+      "default": "./dist/runtime/server/scheduled.js"
+    },
     "./testing": {
       "types": "./dist/runtime/server/testing.d.ts",
       "import": "./dist/runtime/server/testing.js",
@@ -69,6 +74,9 @@
       "schema": [
         "dist/runtime/server/schema.d.ts"
       ],
+      "scheduled": [
+        "dist/runtime/server/scheduled.d.ts"
+      ],
       "testing": [
         "dist/runtime/server/testing.d.ts"
       ]
@@ -85,7 +93,9 @@
     "test:unit": "vitest run tests/dispatch.test.ts --typecheck=false",
     "test:types": "nuxt prepare tests/fixtures/nuxt-demo && vue-tsc --noEmit -p tests/fixtures/nuxt-demo/tsconfig.json",
     "test:e2e": "CF_JOBS_E2E=1 vitest run --no-file-parallelism tests/wrangler-dev.e2e.test.ts tests/wrangler-d1.e2e.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm test:types"
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm test:types",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "peerDependencies": {
     "nuxt": ">=3.0.0 <5.0.0"
@@ -96,9 +106,13 @@
     "drizzle-orm": "catalog:"
   },
   "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
     "@nuxt/module-builder": "catalog:nuxt",
     "@types/node": "catalog:dev-build",
     "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-harlanzw": "catalog:",
+    "eslint-plugin-vue": "catalog:",
     "happy-dom": "catalog:dev-test",
     "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
