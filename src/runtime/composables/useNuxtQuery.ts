@@ -13,7 +13,7 @@ import { isQueryStale, markQueryFetched, retainQuery } from '../cache'
 import { readNuxtData } from '../nuxt-data'
 import { useQueryCache } from './useQueryCache'
 
-type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
+export type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
 type PickFrom<T, K extends Array<string>> = T extends Array<any>
   ? T
   : T extends Record<string, any>

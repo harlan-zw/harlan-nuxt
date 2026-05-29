@@ -4,7 +4,7 @@ import type {
   NuxtRpcClientOptions,
   NuxtRpcQueryOperation,
 } from '../rpc/core'
-import type { UseNuxtQueryOptions } from './useNuxtQuery'
+import type { KeysOf, UseNuxtQueryOptions } from './useNuxtQuery'
 import { computed, toValue } from 'vue'
 import { useNuxtApp } from '#app'
 import {
@@ -14,11 +14,21 @@ import {
 } from '../rpc/core'
 import { useNuxtQuery } from './useNuxtQuery'
 
-export type UseNuxtRpcQueryOptions<TData> = Omit<UseNuxtQueryOptions<TData>, 'key' | 'query' | 'transform'>
+// `DefaultT` must stay a generic so the `default` factory drives its own
+// inference. Without it `DefaultT` pins to `undefined` and `default` collapses
+// to `() => Ref<undefined, undefined> | undefined`, rejecting every real value.
+export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
+  UseNuxtQueryOptions<TData, TData, KeysOf<TData>, DefaultT>,
+  'key' | 'query' | 'transform'
+>
 
-export function useNuxtRpcQuery<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+export function useNuxtRpcQuery<
+  TResponseSchema extends z.ZodTypeAny,
+  TQuery = undefined,
+  DefaultT = undefined,
+>(
   operation: MaybeRefOrGetter<NuxtRpcQueryOperation<TResponseSchema, TQuery>>,
-  options: UseNuxtRpcQueryOptions<z.output<TResponseSchema>> = {},
+  options: UseNuxtRpcQueryOptions<z.output<TResponseSchema>, DefaultT> = {},
 ) {
   const resolved = () => toValue(operation)
   return (useNuxtQuery as any)(() => resolved().path, {
