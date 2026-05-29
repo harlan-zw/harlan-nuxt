@@ -275,6 +275,43 @@ export default defineNitroPlugin((nitroApp) => {
 - `releaseStaleReservedJobs()`
 - `toDispatchableJob()`
 
+## Scheduled Tasks (cron)
+
+Queue jobs handle per-request deferred work; **scheduled tasks** handle cron work. `defineScheduledTask` co-locates the cron schedule with its handler, and the module derives `nitro.tasks`, `nitro.scheduledTasks`, and the Cloudflare `triggers.crons` from it — so there is no central list to keep in sync (and no way for the three to silently drift apart).
+
+```ts
+// server/tasks/cleanup.ts
+export default defineScheduledTask({
+  name: 'db:cleanup', // nitro task name (also the runTask id)
+  cron: '0 3 * * *', // or cron: ['0 3 * * *', '0 */6 * * *']
+  description: 'Nightly cleanup',
+  run() {
+    // ...same shape as nitro defineTask's run
+    return { result: 'ok' }
+  },
+})
+```
+
+Enable scanning via `cfJobs.tasksDir`:
+
+```ts
+export default defineNuxtConfig({
+  cfJobs: {
+    // `true` → auto-discover `server/tasks` in the app AND every extended layer
+    // (nuxt.options._layers), so a new layer with cron work needs no host config.
+    tasksDir: true,
+    // …or be explicit: tasksDir: ['server/tasks', '../some-layer/server/tasks']
+  },
+})
+```
+
+Notes:
+
+- `name` and `cron` must be **string literals** — the module reads them statically at build time (without executing the file, which typically imports a DB/server utils that won't load outside nitro). Computed values are skipped with a warning.
+- Plain nitro `defineTask` files in the same dirs are still registered (so they're runnable via `runTask`), just not scheduled.
+- `nitro.scheduledTasks` is populated only outside dev by default (so crons don't fire locally); override with `cfJobs.scheduledTasks: true | false`. The deploy-only `triggers.crons` is always written.
+- Opt-in: nothing is scanned or registered unless `tasksDir` is set.
+
 ## CLI
 
 The package ships a `cf-jobs` binary, an `artisan queue:*`-style tool for inspecting and managing the durable D1 job tables. It queries D1 through `wrangler d1 execute`, so it works against both the local miniflare database (default) and production (`--remote`), auto-detecting the D1 binding from your wrangler config.
