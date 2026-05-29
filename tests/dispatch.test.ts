@@ -1096,6 +1096,79 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(indexStatements).toHaveLength(schemaIndexNames.size)
   })
 
+  // Drift guard for the hand-written INSERT statements in d1.ts: a column added to the
+  // list without a matching placeholder/bind arg (or vice versa) is a silent SQL bug. The
+  // column names are also checked against the Drizzle schema so a typo can't slip through.
+  it('keeps d1 INSERT column lists in sync with placeholders, binds, and the schema', async () => {
+    // depth-aware split on top-level commas (so `unixepoch()` stays one token)
+    const splitTopLevel = (inner: string) => {
+      const out: string[] = []
+      let depth = 0
+      let current = ''
+      for (const ch of inner) {
+        if (ch === '(')
+          depth++
+        else if (ch === ')')
+          depth--
+        if (ch === ',' && depth === 0) {
+          out.push(current.trim())
+          current = ''
+        }
+        else {
+          current += ch
+        }
+      }
+      if (current.trim())
+        out.push(current.trim())
+      return out
+    }
+    // inner content of the first balanced (...) group at/after `from`
+    const parenGroup = (sql: string, from: number) => {
+      const start = sql.indexOf('(', from)
+      let depth = 0
+      for (let i = start; i < sql.length; i++) {
+        if (sql[i] === '(')
+          depth++
+        else if (sql[i] === ')' && --depth === 0)
+          return sql.slice(start + 1, i)
+      }
+      throw new Error('unbalanced parens')
+    }
+
+    const db = createFakeD1()
+    const repository = createD1DurableJobRepository(db)
+    const record = await prepareDurableJob({ name: 'x', payload: { a: 1 }, route: { queue: 'q', jobType: 't' } })
+    await repository.insertJob(record)
+    await repository.recordFailure({ queue: 'q', jobType: 't', payload: '{}', exception: 'boom', attempts: 1 })
+
+    const schemaColumns = {
+      jobs: new Set(getTableConfig(cfJobs).columns.map(c => c.name)),
+      failed_jobs: new Set(getTableConfig(cfFailedJobs).columns.map(c => c.name)),
+    }
+
+    for (let i = 0; i < db.queries.length; i++) {
+      const sql = db.queries[i]!
+      const match = sql.match(/INSERT(?: OR \w+)? INTO (\w+)/)
+      if (!match)
+        continue
+      const table = match[1] as keyof typeof schemaColumns
+      if (!schemaColumns[table])
+        continue
+
+      const columns = splitTopLevel(parenGroup(sql, match.index! + match[0].length))
+      const values = splitTopLevel(parenGroup(sql, sql.indexOf('VALUES')))
+      const placeholders = values.filter(v => v === '?').length
+
+      // every listed column exists in the Drizzle schema
+      for (const column of columns)
+        expect(schemaColumns[table].has(column), `INSERT into "${table}" references unknown column "${column}"`).toBe(true)
+      // one value expression per column
+      expect(values, `INSERT into "${table}": ${columns.length} columns but ${values.length} values`).toHaveLength(columns.length)
+      // exactly one bind arg per `?` placeholder
+      expect(db.bindings[i], `INSERT into "${table}": ${placeholders} placeholders but ${db.bindings[i]?.length} bind args`).toHaveLength(placeholders)
+    }
+  })
+
   it('reports queue send failures from enqueueDurableJob without losing the row', async () => {
     const inserted: unknown[] = []
     const error = new Error('payload too large')

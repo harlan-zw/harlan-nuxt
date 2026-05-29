@@ -12,6 +12,9 @@ catalogs:
     '@vitest/coverage-v8':
       specifier: 4.1.7
       version: 4.1.7
+    citty:
+      specifier: ^0.1.6
+      version: 0.1.6
     drizzle-orm:
       specifier: 1.0.0-rc.3
       version: 1.0.0-rc.3
@@ -75,6 +78,9 @@ importers:
       '@nuxt/schema':
         specifier: catalog:nuxt
         version: 4.4.6
+      citty:
+        specifier: 'catalog:'
+        version: 0.1.6
       drizzle-orm:
         specifier: 'catalog:'
         version: 1.0.0-rc.3

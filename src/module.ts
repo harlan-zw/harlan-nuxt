@@ -1,14 +1,18 @@
+import type { Nuxt } from '@nuxt/schema'
 import type { ModuleOptions } from './types'
 import type { ModuleQueueExpectation, WranglerConfig, WranglerQueueConsumer, WranglerQueueProducer } from './wrangler'
 import { existsSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 import { addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, resolveFiles, updateTemplates, useLogger } from '@nuxt/kit'
 import { cfJobsAppExportNames } from './runtime/server/app'
+import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
 import {
+  crossCheckCrons,
   crossCheckWrangler,
   findWranglerConfig,
 
   parseWranglerConfig,
+  renderSuggestedCronsToml,
   renderSuggestedWranglerToml,
 
 } from './wrangler'
@@ -31,14 +35,19 @@ export default defineNuxtModule<ModuleOptions>({
     jobsDir: 'server/jobs',
     jobsPattern: '**/*.ts',
     jobsIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
+    // tasksDir is opt-in: scanning + registering tasks mutates nitro.tasks /
+    // scheduledTasks / triggers.crons, so it only runs when explicitly set.
+    tasksPattern: '**/*.ts',
+    tasksIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
     registryAlias: '#cf-jobs/app',
   },
-  setup(options, nuxt) {
+  async setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
 
     nuxt.options.alias['#cf-jobs/server'] = resolver.resolve('./runtime/server')
     addServerImports([
       { name: 'defineJob', from: resolver.resolve('./runtime/server/registry') },
+      { name: 'defineScheduledTask', from: resolver.resolve('./runtime/server/scheduled') },
     ])
     const registryTemplate = addTemplate({
       filename: 'cf-jobs/registry.ts',
@@ -72,8 +81,111 @@ export default defineNuxtModule<ModuleOptions>({
 
     if (options.validateWrangler !== false)
       runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), (nuxt.options as { nitro?: unknown }).nitro)
+
+    await wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
   },
 })
+
+/**
+ * Discover `defineScheduledTask` / `defineTask` files under `tasksDir`, register
+ * their handlers in `nitro.tasks`, derive `nitro.scheduledTasks` + the wrangler
+ * `triggers.crons` union from co-located crons, and cross-check an external
+ * wrangler file. Replaces hand-maintaining all three lists in `nuxt.config`.
+ */
+async function wireScheduledTasks(options: ModuleOptions, nuxt: Nuxt, templateDir: string): Promise<void> {
+  if (!options.tasksDir)
+    return
+
+  const logger = useLogger('nuxt-cf-jobs')
+  const rootDir = nuxt.options.rootDir
+  const tasksDir = resolveTaskDirs(options.tasksDir, nuxt)
+  const { tasks, unnamed } = await collectTasks({ ...options, tasksDir }, rootDir)
+
+  for (const file of unnamed)
+    logger.warn(`nuxt-cf-jobs: task at ${relative(rootDir, file)} declares a cron but no statically-readable string-literal \`name\` — skipped.`)
+
+  if (tasks.length === 0)
+    return
+
+  const dupes = findDuplicateTaskNames(tasks)
+  if (dupes.length > 0)
+    throw new Error(`Duplicate nuxt-cf-jobs task names: ${dupes.join(', ')}`)
+
+  // `nitro.cloudflare.*` and `nitro.tasks` aren't on the public Nuxt nitro type
+  // surface here; the module already casts nitro options elsewhere.
+  const nitro = ((nuxt.options as { nitro?: Record<string, any> }).nitro ??= {})
+
+  // 1. Register every discovered task handler — replaces the hand-maintained
+  //    `nitro.tasks` map. Name comes from the file's declared `name`.
+  nitro.tasks ??= {}
+  for (const t of tasks) {
+    const existing = nitro.tasks[t.name] as { handler?: string } | undefined
+    if (existing && existing.handler && existing.handler !== t.handler)
+      logger.warn(`nuxt-cf-jobs: task "${t.name}" already registered (${existing.handler}) — overriding with ${relative(rootDir, t.file)}.`)
+    nitro.tasks[t.name] = { ...existing, handler: t.handler }
+  }
+
+  // 2. Cron schedule. Gated off in dev by default so crons don't fire locally
+  //    (mirrors the common `NODE_ENV === 'production' ? {...} : {}` pattern).
+  const scheduled = tasks.filter(t => t.crons.length > 0)
+  const cronUnion = buildCronUnion(tasks)
+  const enableSchedule = options.scheduledTasks ?? !nuxt.options.dev
+  if (enableSchedule && scheduled.length > 0)
+    nitro.scheduledTasks = buildScheduledTasks(tasks, (nitro.scheduledTasks ?? {}) as Record<string, string[]>)
+
+  // 3. Cloudflare cron triggers — always written (deploy-only metadata). This is
+  //    the list that silently drifts from scheduledTasks when hand-maintained.
+  if (cronUnion.length > 0) {
+    nitro.cloudflare ??= {}
+    nitro.cloudflare.wrangler ??= {}
+    nitro.cloudflare.wrangler.triggers ??= {}
+    nitro.cloudflare.wrangler.triggers.crons = buildCronUnion(tasks, nitro.cloudflare.wrangler.triggers.crons ?? [])
+  }
+
+  // 4. Validate-and-suggest against an external wrangler file that manages crons
+  //    directly (mirrors the queue cross-check). Files with no `[triggers]`
+  //    block are left alone — nitro generates that section from the config above.
+  if (options.validateWrangler !== false && cronUnion.length > 0) {
+    addTemplate({
+      filename: 'cf-jobs/crons.suggested.toml',
+      write: true,
+      getContents: () => renderSuggestedCronsToml(cronUnion),
+    })
+    const wranglerPath = options.wranglerPath ? resolve(rootDir, options.wranglerPath) : findWranglerConfig(rootDir)
+    if (wranglerPath) {
+      const { crons } = parseWranglerConfig(wranglerPath)
+      if (crons !== undefined) {
+        const { missing, extra } = crossCheckCrons(crons, cronUnion)
+        if (missing.length > 0)
+          logger.warn(`nuxt-cf-jobs / cron drift in ${wranglerPath}: missing trigger(s) ${missing.join(', ')} — those scheduled tasks won't fire on deploy. See ${resolve(templateDir, 'crons.suggested.toml')}.`)
+        if (extra.length > 0)
+          logger.info(`nuxt-cf-jobs: ${wranglerPath} declares cron trigger(s) no task uses: ${extra.join(', ')}.`)
+      }
+    }
+  }
+
+  logger.info(`nuxt-cf-jobs: registered ${tasks.length} task(s); ${scheduled.length} scheduled across ${cronUnion.length} cron(s)${enableSchedule ? '' : ' (schedule disabled in dev)'}.`)
+}
+
+/**
+ * Resolve `cfJobs.tasksDir` into a concrete dir list. `true` auto-discovers
+ * `server/tasks` across the app + every extended layer (`nuxt.options._layers`);
+ * a string/array is passed through (collectTasks resolves them from rootDir).
+ */
+function resolveTaskDirs(tasksDir: NonNullable<ModuleOptions['tasksDir']>, nuxt: Nuxt): string[] {
+  if (tasksDir !== true)
+    return Array.isArray(tasksDir) ? tasksDir : [tasksDir]
+
+  const layers = (nuxt.options as { _layers?: Array<{ cwd?: string, config?: { rootDir?: string } }> })._layers ?? []
+  const dirs = [
+    resolve(nuxt.options.rootDir, 'server/tasks'),
+    ...layers
+      .map(layer => layer.cwd ?? layer.config?.rootDir)
+      .filter((cwd): cwd is string => !!cwd)
+      .map(cwd => resolve(cwd, 'server/tasks')),
+  ]
+  return [...new Set(dirs)]
+}
 
 function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, templateDir: string, nitroOptions: unknown): void {
   const logger = useLogger('nuxt-cf-jobs')

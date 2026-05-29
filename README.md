@@ -275,6 +275,34 @@ export default defineNitroPlugin((nitroApp) => {
 - `releaseStaleReservedJobs()`
 - `toDispatchableJob()`
 
+## CLI
+
+The package ships a `cf-jobs` binary, an `artisan queue:*`-style tool for inspecting and managing the durable D1 job tables. It queries D1 through `wrangler d1 execute`, so it works against both the local miniflare database (default) and production (`--remote`), auto-detecting the D1 binding from your wrangler config.
+
+```bash
+# backpressure overview: per-queue ready/reserved/delayed, ready-lag, failures, stuck reservations
+pnpm cf-jobs            # alias for `cf-jobs status`
+pnpm cf-jobs status --remote
+
+# inspect jobs
+pnpm cf-jobs jobs --queue billing --state ready --limit 20
+pnpm cf-jobs failed                       # artisan queue:failed
+pnpm cf-jobs schedule                     # artisan schedule:list (cron + next run)
+pnpm cf-jobs tasks                        # every discovered task
+
+# manage (prompt for confirmation; pass --yes to skip, required when non-interactive)
+pnpm cf-jobs retry <id>                   # artisan queue:retry — re-queue a failed job
+pnpm cf-jobs retry --queue billing        # re-queue a whole queue's failures
+pnpm cf-jobs forget <id>                  # artisan queue:forget
+pnpm cf-jobs flush                        # artisan queue:flush — delete all failed jobs
+pnpm cf-jobs clear --state reserved       # artisan queue:clear — drop active jobs (e.g. stuck reservations)
+pnpm cf-jobs migrate                      # create the job tables/indexes in D1
+```
+
+Every command accepts `--config <wrangler path>`, `--db <binding>`, `--remote`, `--json`, and `--jobs-table` / `--failed-table` overrides. `status` flags queues whose oldest ready job is lagging and reservations stuck for more than five minutes (a crashed or timed-out consumer). Run `cf-jobs <command> --help` for the full argument list.
+
+`cf-jobs` shells out to `wrangler`; it resolves the binary from `node_modules/.bin`, falling back to `wrangler` on `PATH` (override with `CF_JOBS_WRANGLER_BIN`).
+
 ## Runtime Validation
 
 The generated registry validates jobs at startup. It fails loudly for:

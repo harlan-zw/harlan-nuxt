@@ -10,5 +10,6 @@ export default defineNuxtConfig({
       analytics: 'QUEUE_ANALYTICS',
     },
     jobsDir: 'server/jobs',
+    tasksDir: 'server/tasks',
   },
 })

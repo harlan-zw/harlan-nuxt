@@ -47,16 +47,21 @@ export interface ModuleOptions {
    */
   registryAlias?: string
   /**
-   * Directories scanned at build/dev time for `defineScheduledTask` (and plain
-   * nitro `defineTask`) default exports. Each discovered file is registered in
-   * `nitro.tasks` keyed by its declared `name`; files that declare a `cron` are
-   * also wired into `nitro.scheduledTasks` and the Cloudflare cron triggers.
-   * Relative paths are resolved from the Nuxt root directory.
+   * Where to find `defineScheduledTask` (and plain nitro `defineTask`) default
+   * exports. Each discovered file is registered in `nitro.tasks` keyed by its
+   * declared `name`; files that declare a `cron` are also wired into
+   * `nitro.scheduledTasks` and the Cloudflare cron triggers.
+   *
+   * - `true` — auto-discover `server/tasks` in the app and **every extended
+   *   layer** (`nuxt.options._layers`). Adding a layer with scheduled tasks
+   *   then needs no host config change at all.
+   * - `string | string[]` — explicit dirs, resolved from the Nuxt root.
+   * - unset / `false` — disabled (opt-in; nothing is scanned or registered).
    *
    * This replaces hand-maintaining `nitro.tasks` + `nitro.scheduledTasks` +
    * `nitro.cloudflare.wrangler.triggers.crons` in `nuxt.config`.
    */
-  tasksDir?: string | string[]
+  tasksDir?: string | string[] | boolean
   /**
    * Glob pattern used inside each tasksDir. Defaults to `'**\/*.ts'`.
    */

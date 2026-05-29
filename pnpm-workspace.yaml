@@ -8,6 +8,7 @@ trustPolicyExclude:
 catalog:
   '@antfu/eslint-config': latest
   '@vitest/coverage-v8': 4.1.7
+  citty: ^0.1.6
   drizzle-orm: 1.0.0-rc.3
   eslint: latest
   eslint-plugin-harlanzw: latest

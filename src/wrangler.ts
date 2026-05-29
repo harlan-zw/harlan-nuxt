@@ -16,10 +16,21 @@ export interface WranglerQueueConsumer {
   deadLetterQueue?: string
 }
 
+export interface WranglerD1Database {
+  binding: string
+  /** `database_name` — the name passed to `wrangler d1 execute <name>`. */
+  databaseName?: string
+  databaseId?: string
+}
+
 export interface WranglerConfig {
   path: string
   producers: WranglerQueueProducer[]
   consumers: WranglerQueueConsumer[]
+  /** `[triggers] crons = [...]` — undefined when the file declares no triggers block. */
+  crons?: string[]
+  /** `[[d1_databases]]` entries — the binding/name the CLI queries for job state. */
+  d1Databases?: WranglerD1Database[]
 }
 
 const WRANGLER_FILES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml']
@@ -117,11 +128,125 @@ function parseJsoncQueues(source: string): { producers: WranglerQueueProducer[],
   }
 }
 
+const ARRAY_STRING_RE = /(['"])(.*?)\1/g
+
+function parseStringArrayLiteral(raw: string): string[] {
+  return [...raw.matchAll(ARRAY_STRING_RE)].map(m => m[2]!)
+}
+
+function parseTomlCrons(source: string): string[] | undefined {
+  // `[triggers]` table with `crons = ["...", "..."]` (may span lines).
+  const header = /^\s*\[triggers\]\s*$/m.exec(source)
+  if (!header)
+    return undefined
+  const rest = source.slice(header.index + header[0].length)
+  // Stop at the next table header.
+  const next = /^\s*\[/m.exec(rest)
+  const body = next ? rest.slice(0, next.index) : rest
+  const cronsMatch = body.match(/crons\s*=\s*\[([\s\S]*?)\]/)
+  if (!cronsMatch)
+    return undefined
+  return parseStringArrayLiteral(cronsMatch[1]!)
+}
+
+function parseJsoncCrons(source: string): string[] | undefined {
+  const stripped = stripJsoncComments(source)
+  let parsed: { triggers?: { crons?: unknown } } = {}
+  try {
+    parsed = JSON.parse(stripped)
+  }
+  catch {
+    return undefined
+  }
+  const crons = parsed.triggers?.crons
+  if (!Array.isArray(crons))
+    return undefined
+  return crons.filter((c): c is string => typeof c === 'string')
+}
+
+// `[ \t]` rather than `\s` keeps these linear (no unicode-whitespace backtracking).
+const D1_BLOCK_RE = /^[ \t]*\[\[[ \t]*d1_databases[ \t]*\]\][ \t]*$/gm
+const TOML_TABLE_HEADER_RE = /^[ \t]*\[/m
+// key = "value"  (quoted string only; trailing comments after the close quote are ignored)
+const TOML_STRING_KV_RE = /^([a-z_]+)[ \t]*=[ \t]*(["'])(.*?)\2/i
+
+function parseTomlD1Databases(source: string): WranglerD1Database[] {
+  const out: WranglerD1Database[] = []
+  for (const block of source.matchAll(D1_BLOCK_RE)) {
+    const slice = source.slice(block.index + block[0].length)
+    const next = TOML_TABLE_HEADER_RE.exec(slice)
+    const body = next ? slice.slice(0, next.index) : slice
+    const entry: Record<string, string> = {}
+    for (const line of body.split('\n')) {
+      const kv = line.trim().match(TOML_STRING_KV_RE)
+      if (kv)
+        entry[camelCase(kv[1]!)] = kv[3]!
+    }
+    if (entry.binding)
+      out.push({ binding: entry.binding, databaseName: entry.databaseName, databaseId: entry.databaseId })
+  }
+  return out
+}
+
+function parseJsoncD1Databases(source: string): WranglerD1Database[] {
+  let parsed: { d1_databases?: unknown[] } = {}
+  try {
+    parsed = JSON.parse(stripJsoncComments(source))
+  }
+  catch {
+    return []
+  }
+  const list = Array.isArray(parsed.d1_databases) ? parsed.d1_databases : []
+  return list
+    .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object' && typeof (d as { binding?: unknown }).binding === 'string')
+    .map(d => ({
+      binding: String(d.binding),
+      databaseName: typeof d.database_name === 'string' ? d.database_name : undefined,
+      databaseId: typeof d.database_id === 'string' ? d.database_id : undefined,
+    }))
+}
+
 export function parseWranglerConfig(path: string): WranglerConfig {
   const source = readFileSync(path, 'utf8')
   const isJson = path.endsWith('.jsonc') || path.endsWith('.json')
   const parsed = isJson ? parseJsoncQueues(source) : parseTomlQueueBlocks(source)
-  return { path, producers: parsed.producers, consumers: parsed.consumers }
+  const crons = isJson ? parseJsoncCrons(source) : parseTomlCrons(source)
+  const d1Databases = isJson ? parseJsoncD1Databases(source) : parseTomlD1Databases(source)
+  return { path, producers: parsed.producers, consumers: parsed.consumers, crons, d1Databases }
+}
+
+export interface CronCrossCheckResult {
+  /** Crons a task needs that the wrangler file's `triggers.crons` is missing. */
+  missing: string[]
+  /** Crons declared in the wrangler file that no task uses (stale triggers). */
+  extra: string[]
+}
+
+/**
+ * Compare the derived cron union (from `defineScheduledTask`) against the crons
+ * declared in an external wrangler config. `missing` is the drift that silently
+ * stops scheduled tasks from firing on deploy.
+ */
+export function crossCheckCrons(wranglerCrons: readonly string[] | undefined, derived: readonly string[]): CronCrossCheckResult {
+  if (!wranglerCrons)
+    return { missing: [...derived], extra: [] }
+  const have = new Set(wranglerCrons)
+  const need = new Set(derived)
+  return {
+    missing: derived.filter(c => !have.has(c)),
+    extra: wranglerCrons.filter(c => !need.has(c)),
+  }
+}
+
+export function renderSuggestedCronsToml(crons: readonly string[]): string {
+  return [
+    '# Suggested wrangler.toml cron triggers for nuxt-cf-jobs scheduled tasks.',
+    '# Generated; merge into your existing wrangler config.',
+    '',
+    '[triggers]',
+    `crons = [${crons.map(c => `"${c}"`).join(', ')}]`,
+    '',
+  ].join('\n')
 }
 
 export interface WranglerCrossCheckIssue {

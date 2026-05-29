@@ -82,6 +82,9 @@
       ]
     }
   },
+  "bin": {
+    "cf-jobs": "./dist/cli/index.mjs"
+  },
   "files": [
     "dist"
   ],
@@ -103,6 +106,7 @@
   "dependencies": {
     "@nuxt/kit": "catalog:nuxt",
     "@nuxt/schema": "catalog:nuxt",
+    "citty": "catalog:",
     "drizzle-orm": "catalog:"
   },
   "devDependencies": {
