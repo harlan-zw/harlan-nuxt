@@ -6,3 +6,4 @@ dist
 .wrangler
 *.tsbuildinfo
 .idea
+eslint-typegen.d.ts

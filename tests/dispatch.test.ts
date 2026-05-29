@@ -3,8 +3,6 @@ import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it, vi } from 'vitest'
 import {
   assertJobDefinitions,
-  assertJobQueueBindings,
-  buildJobPayload,
   cfFailedJobs,
   cfJobBatches,
   cfJobs,
@@ -34,22 +32,28 @@ import {
   parseDurableJobContinuation,
   prepareDurableJob,
   prepareRegisteredDurableJob,
-  processRegisteredQueueBatch,
-  registerRegisteredQueueConsumer,
   releaseDurableJob,
   releaseStaleReservedDurableJobs,
-  resolveCloudflareQueueName,
   resolveJobBackoff,
   resolveJobMaxAttempts,
   resolveJobRetryDelay,
-  resolveLogicalQueueName,
   resolveQueueBindingName,
-  resolveQueueJobType,
   runDurableJobMessage,
   serializeDurableJobContinuation,
   validateJobDefinitions,
-  validateJobQueueBindings,
 } from '#cf-jobs/server'
+// Module-private helpers (not on the public `#cf-jobs/server` surface) imported
+// from their own module paths for white-box testing.
+import { buildJobPayload } from '../src/runtime/server/payload'
+import {
+  assertJobQueueBindings,
+  processRegisteredQueueBatch,
+  registerRegisteredQueueConsumer,
+  resolveCloudflareQueueName,
+  resolveLogicalQueueName,
+  resolveQueueJobType,
+  validateJobQueueBindings,
+} from '../src/runtime/server/queue'
 
 describe('nuxt-cf-jobs dispatch kernel', () => {
   it('dispatches a job by _task name and strips the task envelope', async () => {
@@ -1293,7 +1297,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('uses the shouldSendToDlq helper to decide when attempts exhausted', async () => {
-    const { shouldSendToDlq, createDlqPublisher } = await import('#cf-jobs/server')
+    const { shouldSendToDlq, createDlqPublisher } = await import('../src/runtime/server/queue')
     expect(shouldSendToDlq({ attempts: 3, maxAttempts: 3 })).toBe(true)
     expect(shouldSendToDlq({ attempts: 2, maxAttempts: 3 })).toBe(false)
     expect(shouldSendToDlq({ attempts: 2 })).toBe(false)
@@ -1411,7 +1415,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('validates wrangler consumer config against job definitions', async () => {
-    const { validateQueueConsumerConfig } = await import('#cf-jobs/server')
+    const { validateQueueConsumerConfig } = await import('../src/runtime/server/queue')
     const jobs = [
       defineJob({
         name: 'demo/loud',
@@ -1434,7 +1438,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('retries transient 429 errors when sending to a queue', async () => {
-    const { withSendBackpressure } = await import('#cf-jobs/server')
+    const { withSendBackpressure } = await import('../src/runtime/server/queue')
     let calls = 0
     const result = await withSendBackpressure(async () => {
       calls++
@@ -1450,7 +1454,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('does not retry non-transient errors when sending', async () => {
-    const { withSendBackpressure } = await import('#cf-jobs/server')
+    const { withSendBackpressure } = await import('../src/runtime/server/queue')
     let calls = 0
     await expect(withSendBackpressure(async () => {
       calls++

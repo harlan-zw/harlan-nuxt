@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  buildJobPayload,
-  createDevQueueRuntime,
-  defineJob,
-  defineJobRegistry,
-  processRegisteredQueueBatch,
-} from '../src/runtime/server'
+import { defineJob, defineJobRegistry } from '../src/runtime/server'
+import { createDevQueueRuntime } from '../src/runtime/server/dev'
+import { buildJobPayload } from '../src/runtime/server/payload'
+import { processRegisteredQueueBatch } from '../src/runtime/server/queue'
 
 describe('createDevQueueRuntime', () => {
   it('injects an in-memory queue binding and drains via the cloudflare:queue hook', async () => {

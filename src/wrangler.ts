@@ -1,3 +1,4 @@
+import type { ModuleOptions } from './types'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -338,4 +339,130 @@ export function renderSuggestedWranglerToml(expectations: readonly ModuleQueueEx
     lines.push('')
   }
   return lines.join('\n')
+}
+
+/**
+ * Derive the per-queue expectations the cross-check works against from the
+ * module's `queues` map. A string value is the binding name; an object may pin
+ * an explicit `queueName` (otherwise the logical key is the fallback).
+ */
+export function buildQueueExpectations(queues: ModuleOptions['queues'] | undefined): ModuleQueueExpectation[] {
+  const expectations: ModuleQueueExpectation[] = []
+  for (const [logical, config] of Object.entries(queues ?? {})) {
+    const binding = typeof config === 'string' ? config : config?.binding
+    if (!binding)
+      continue
+    const explicitQueueName = typeof config === 'object' && !!config?.queueName
+    const cfQueueName = explicitQueueName ? (config as { queueName: string }).queueName : logical
+    expectations.push({ logical, binding, cfQueueName, explicitQueueName })
+  }
+  return expectations
+}
+
+/**
+ * Read `[[queues.producers]]` / `[[queues.consumers]]` declared inline via
+ * `nitro.cloudflare.wrangler` (or `nitro.cloudflare.deploy.configuration`),
+ * normalizing snake_case consumer keys to the camelCase `WranglerQueueConsumer`
+ * shape. Returns undefined when nitro declares no queues.
+ */
+export function normalizeNitroQueues(nitroOptions: unknown): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } | undefined {
+  const cf = (nitroOptions as { cloudflare?: { wrangler?: { queues?: { producers?: unknown[], consumers?: unknown[] } }, deploy?: { configuration?: { queues?: { producers?: unknown[], consumers?: unknown[] } } } } })?.cloudflare
+  const queues = cf?.wrangler?.queues ?? cf?.deploy?.configuration?.queues
+  if (!queues)
+    return undefined
+  const producers: WranglerQueueProducer[] = []
+  const consumers: WranglerQueueConsumer[] = []
+  for (const p of queues.producers ?? []) {
+    if (!p || typeof p !== 'object')
+      continue
+    const obj = p as { binding?: unknown, queue?: unknown }
+    if (typeof obj.binding === 'string' && typeof obj.queue === 'string')
+      producers.push({ binding: obj.binding, queue: obj.queue })
+  }
+  for (const c of queues.consumers ?? []) {
+    if (!c || typeof c !== 'object')
+      continue
+    const obj = c as Record<string, unknown>
+    if (typeof obj.queue !== 'string')
+      continue
+    const consumer: WranglerQueueConsumer = { queue: obj.queue }
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'queue') {
+        continue
+      }(consumer as unknown as Record<string, unknown>)[camelCase(k)] = v
+    }
+    consumers.push(consumer)
+  }
+  return { producers, consumers }
+}
+
+/**
+ * Merge file-parsed wrangler queues with nitro-config queues into one view.
+ * Producers dedupe on `binding::queue`, consumers on `queue`; nitro entries win
+ * on collision. Returns undefined when neither source declares anything.
+ */
+export function mergeWranglerSources(
+  fileWrangler: WranglerConfig | undefined,
+  nitroQueues: { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } | undefined,
+  fallbackPath: string,
+): WranglerConfig | undefined {
+  if (!fileWrangler && !nitroQueues)
+    return undefined
+  const producerKey = (p: WranglerQueueProducer) => `${p.binding}::${p.queue}`
+  const consumerKey = (c: WranglerQueueConsumer) => c.queue
+  const producers = new Map<string, WranglerQueueProducer>()
+  const consumers = new Map<string, WranglerQueueConsumer>()
+  for (const p of fileWrangler?.producers ?? [])
+    producers.set(producerKey(p), p)
+  for (const c of fileWrangler?.consumers ?? [])
+    consumers.set(consumerKey(c), c)
+  for (const p of nitroQueues?.producers ?? [])
+    producers.set(producerKey(p), p)
+  for (const c of nitroQueues?.consumers ?? [])
+    consumers.set(consumerKey(c), c)
+  return {
+    path: fileWrangler?.path ?? `${fallbackPath} (nitro.cloudflare.deploy.configuration)`,
+    producers: [...producers.values()],
+    consumers: [...consumers.values()],
+  }
+}
+
+export interface ReconcileQueuesInput {
+  /** The module's `cfJobs.queues` map. */
+  queues: ModuleOptions['queues'] | undefined
+  /** Parsed external wrangler config, if one was found. */
+  fileWrangler?: WranglerConfig
+  /** Raw `nuxt.options.nitro` — inline queue declarations are read from it. */
+  nitroOptions?: unknown
+  /** Path shown in the merged config when only nitro-config queues exist. */
+  fallbackPath: string
+}
+
+export interface ReconcileQueuesResult {
+  /** Expectations derived from the module `queues` map. Empty → nothing to check. */
+  expectations: ModuleQueueExpectation[]
+  /** Suggested `[[queues.*]]` TOML the user can diff against their config. */
+  suggestedToml: string
+  /** File + nitro-config queues merged into one view, or undefined when neither exists. */
+  merged: WranglerConfig | undefined
+  /** Drift between `merged` and `expectations`. Empty when aligned (or no merged source). */
+  issues: WranglerCrossCheckIssue[]
+}
+
+/**
+ * Pure build-time reconciliation of declared `queues` against the wrangler file
+ * + `nitro.cloudflare` queues. Returns everything `module.ts` needs to emit the
+ * suggested-TOML template and log drift, with no Nuxt or IO dependency so the
+ * merge/normalize/cross-check logic is unit testable on plain objects.
+ */
+export function reconcileQueues(input: ReconcileQueuesInput): ReconcileQueuesResult {
+  const expectations = buildQueueExpectations(input.queues)
+  const suggestedToml = renderSuggestedWranglerToml(expectations)
+  const merged = mergeWranglerSources(
+    input.fileWrangler,
+    normalizeNitroQueues(input.nitroOptions),
+    input.fallbackPath,
+  )
+  const issues = crossCheckWrangler(merged, expectations)
+  return { expectations, suggestedToml, merged, issues }
 }

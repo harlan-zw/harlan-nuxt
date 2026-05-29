@@ -15,6 +15,7 @@ Both linked via `link:../../pkg/nuxt-cf-jobs` (or deeper). Changes here ship to 
   - `prepareDurableJob`, `enqueueDurableJob`
   - `getDurableJobContinuationsForStage`, `parseDurableJobContinuation`, `serializeDurableJobContinuation`
   - `createQueuePublisher`, `resolveQueueBindingName`, `resolveJobRetryDelay`, `resolveJobMaxAttempts`
+- Imports the drizzle table defs from the **`nuxt-cf-jobs/schema`** subpath in `database/main/schema.ts` (a drizzle-kit context where the `#cf-jobs/*` nuxt alias doesn't resolve and pulling `./server` would drag `nitropack/runtime`).
 - Also uses `#cf-jobs/app` (`jobRegistry`, `jobs`, `JobName`, `JobPayload`).
 - Passes `cfJobs.defaultQueue` (supported in `ModuleOptions`).
 
@@ -27,7 +28,8 @@ Both linked via `link:../../pkg/nuxt-cf-jobs` (or deeper). Changes here ship to 
 
 ## Implications for changes
 
-- **Internal helpers in `runtime/server/*` are public.** gscdump imports lifecycle/dispatch helpers individually. Don't delete or rename without grepping both sites.
-- **The `#cf-jobs/server` alias is the contract.** Subpath exports (`/durable`, `/d1`, etc.) exist but consumers use the umbrella alias.
+- **The public surface is curated in `runtime/server/index.ts`, not `export *`.** The barrel re-exports the durable/outbox, d1, dispatch, policy, registry, scheduled, schema, testing and types modules wholesale (gscdump imports those lifecycle/dispatch helpers individually — don't delete/rename without grepping both sites). `queue.ts` is the exception: only `resolveQueueBindingName`, `resolveNitroTaskEnv`, `createJobQueue`, `defineCfJobsQueues`, `exponentialBackoff` and the `CF_QUEUE_MAX_*` constants are public; its transport/binding/DLQ/consumer helpers are module-private. `dev.ts`, `payload.ts`, `internal.ts` are internal-only. Tests of private helpers import them from the module path (`../src/runtime/server/queue`), not the barrel.
+- **`exports` map = `.`, `./server`, `./d1`, `./schema`.** `./server` (the curated umbrella) is the contract for in-nitro consumers; `./d1` and `./schema` exist only for non-nuxt contexts (drizzle-kit config, the `cf-jobs` CLI's migration path) where the `#cf-jobs/*` alias is dead. The old `./durable`, `./queue`, `./scheduled`, `./testing` subpaths were removed (0 consumers; all reachable via `./server`) — **SemVer-breaking, note in the next release**.
 - **`jobsDir` must keep supporting `string[]` with relative paths from app root** (nuxtseo layers).
 - Auto-imports were narrowed to `defineJob` only — both consumers already use explicit imports from `#cf-jobs/server`, so this is safe.
+- Build-time wrangler/queue reconciliation lives in `wrangler.ts` (`reconcileQueues`, `buildQueueExpectations`, `normalizeNitroQueues`, `mergeWranglerSources`); `module.ts` is thin wiring over it. Keep new merge/normalize/cross-check logic there so it stays unit-testable (`tests/wrangler-reconcile.test.ts`).
