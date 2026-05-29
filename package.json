@@ -1,7 +1,7 @@
 {
   "name": "nuxt-cf-jobs",
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt module for typed Cloudflare queue jobs.",
   "author": {
@@ -75,7 +75,8 @@
     "@nuxt/kit": "catalog:nuxt",
     "@nuxt/schema": "catalog:nuxt",
     "citty": "catalog:",
-    "drizzle-orm": "catalog:"
+    "drizzle-orm": "catalog:",
+    "magicast": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

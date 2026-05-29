@@ -1,8 +1,10 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
-import { addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, resolveFiles, updateTemplates, useLogger } from '@nuxt/kit'
+import { addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, resolveFiles, updateTemplates, useLogger } from '@nuxt/kit'
+import { extractJobMeta } from './build/extract-job-meta'
 import { cfJobsAppExportNames } from './runtime/server/app'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
 import {
@@ -45,22 +47,32 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'defineJob', from: resolver.resolve('./runtime/server/registry') },
       { name: 'defineScheduledTask', from: resolver.resolve('./runtime/server/scheduled') },
     ])
+    // Data-only runtime `.ts`: the registry value module the `#cf-jobs/app`
+    // alias resolves to. It holds AST-extracted routing metadata + lazy
+    // `load()` thunks and the app wiring — no hand-written types.
     const registryTemplate = addTemplate({
       filename: 'cf-jobs/registry.ts',
       write: true,
       getContents: async () => generateRegistryTemplate(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs')),
     })
-    addTemplate({
-      filename: 'cf-jobs/registry.d.ts',
-      write: true,
-      getContents: async () => generateRegistryTypesTemplate(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs')),
-    })
     nuxt.options.alias[options.registryAlias ?? '#cf-jobs/app'] = registryTemplate.dst
+
+    // Types are emitted as a separate `declare module '#cf-jobs/app'`
+    // augmentation: a sibling `registry.d.ts` would be shadowed by the `.ts`
+    // (TS resolves `.ts` over `.d.ts`), but an augmentation MERGES into the
+    // resolved module, so the type-only aliases (`JobName`, `JobPayload`, …)
+    // become importable from `#cf-jobs/app` without touching the value module.
+    const typesTemplate = addTypeTemplate({
+      filename: 'cf-jobs/registry-augmentation.d.ts',
+      getContents: async () => generateRegistryTypesTemplate(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs')),
+    }, { nuxt: true, nitro: true })
 
     nuxt.hooks.hook('builder:watch' as never, (async (_event: string, path: string) => {
       if (!isWatchedJobPath(path, options, nuxt.options.rootDir))
         return
-      await updateTemplates({ filter: template => template.dst === registryTemplate.dst })
+      // HMR: a job file edit can change AST-extracted metadata (queue, etc.) and
+      // the derived types, so refresh both the value module and the augmentation.
+      await updateTemplates({ filter: template => template.dst === registryTemplate.dst || template.dst === typesTemplate.dst })
     }) as never)
 
     if (options.defaultQueue && !options.queues[options.defaultQueue])
@@ -221,20 +233,45 @@ function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, template
 export async function generateRegistryTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {
   const files = await resolveJobFiles(options, rootDir)
   assertUniqueGeneratedJobNames(files, options, rootDir)
-  // Bundled `.ts`: rollup resolves nuxt `#aliases` and extensionless paths
-  // inside each job source file, and `nitropack/runtime` is available because
-  // the file is part of the nitro graph.
-  const imports = files.map((file, index) => {
-    return `import job${index} from ${JSON.stringify(toImportPath(templateDir, file).replace(/\.ts$/, ''))}`
-  })
-  const jobItems = files.map((_, index) => `job${index}`).join(', ')
+
+  // Build a data-only entry per job: static routing metadata read from the
+  // source's `defineJob({...})` call (no module evaluation) plus a lazy
+  // `load()` dynamic import. Rollup code-splits each `import()`, so a worker
+  // only evaluates the one job it dispatches — not the whole batch.
+  const entryLines = await Promise.all(files.map(async (file) => {
+    const name = toJobName(file, options, rootDir)
+    const importPath = toImportPath(templateDir, file).replace(/\.ts$/, '')
+    const meta = extractJobMeta(await readFile(file, 'utf8').catch(() => ''))
+    const fields = [`name: ${JSON.stringify(name)}`]
+    if (meta.queue !== undefined)
+      fields.push(`queue: ${JSON.stringify(meta.queue)}`)
+    if (meta.jobType !== undefined)
+      fields.push(`jobType: ${JSON.stringify(meta.jobType)}`)
+    if (meta.maxAttempts !== undefined)
+      fields.push(`maxAttempts: ${meta.maxAttempts}`)
+    if (meta.tries !== undefined)
+      fields.push(`tries: ${meta.tries}`)
+    if (meta.unique !== undefined)
+      fields.push(`unique: ${meta.unique}`)
+    if (meta.hasInput)
+      fields.push(`hasInput: true`)
+    if (meta.hasUniqueId)
+      fields.push(`hasUniqueId: true`)
+    fields.push(`load: () => import(${JSON.stringify(importPath)}).then(m => m.default)`)
+    return `  { ${fields.join(', ')} },`
+  }))
+
+  // Emitted as plain JS (no `as const` / type syntax): the nitro server rollup
+  // parses this file as JavaScript and rejects TS-only syntax. Types come from
+  // the separate `declare module` augmentation, not this value module.
   return [
     '/* This file is generated by nuxt-cf-jobs. Do not edit directly. */',
     `import { useRuntimeConfig } from 'nitropack/runtime'`,
     `import { createGeneratedCfJobsApp } from 'nuxt-cf-jobs/server'`,
-    ...imports,
     '',
-    `export const jobs = [${jobItems}] as const`,
+    'export const jobs = [',
+    ...entryLines,
+    ']',
     `export const app = createGeneratedCfJobsApp(jobs, useRuntimeConfig, ${options.defaultQueue ? JSON.stringify(options.defaultQueue) : 'undefined'})`,
     '',
     'export const {',
@@ -244,33 +281,38 @@ export async function generateRegistryTemplate(options: ModuleOptions, rootDir: 
   ].join('\n')
 }
 
+/**
+ * Emits a `declare module '#cf-jobs/app'` augmentation. The data-only runtime
+ * `registry.ts` carries no hand-written types; this augmentation MERGES the
+ * type-only aliases into that module so consumers can `import type { JobName,
+ * JobPayload } from '#cf-jobs/app'`. Types are derived from each job's *full*
+ * default-export type via `typeof import(...)` — purely type-level, so no
+ * handler module is loaded to compute them.
+ */
 export async function generateRegistryTypesTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {
   const files = await resolveJobFiles(options, rootDir)
   assertUniqueGeneratedJobNames(files, options, rootDir)
   const jobTypeLines = files.map((file) => {
-    return `  typeof import(${JSON.stringify(toImportPath(templateDir, file).replace(/\.ts$/, ''))})['default'],`
+    return `    typeof import(${JSON.stringify(toImportPath(templateDir, file).replace(/\.ts$/, ''))})['default'],`
   })
   return [
     '/* This file is generated by nuxt-cf-jobs. Do not edit directly. */',
-    `import type { JobMessageByName, JobMessageByQueue, JobNameOf, JobPayloadByName, JobPayloadOf, JobQueueByName, QueueNameOf, QueueConsumerOptions } from 'nuxt-cf-jobs/server'`,
-    `export type { QueueConsumerOptions }`,
+    `import type { JobMessageByName, JobMessageByQueue, JobNameOf, JobPayloadOf, JobQueueByName, QueueNameOf } from 'nuxt-cf-jobs/server'`,
     '',
-    'export declare const jobs: readonly [',
+    `declare module '#cf-jobs/app' {`,
+    `  export type { QueueConsumerOptions } from 'nuxt-cf-jobs/server'`,
+    '  type Jobs = readonly [',
     ...jobTypeLines,
-    ']',
-    'export declare const app: ReturnType<typeof import(\'nuxt-cf-jobs/server\').createCfJobsApp<typeof jobs>>',
-    '',
-    'export type Jobs = typeof jobs',
-    'export type JobsByName = { readonly [Job in Jobs[number] as Job[\'name\']]: Job }',
-    'export type JobName = keyof JobsByName & JobNameOf<Jobs>',
-    'export type JobDefinitionOf<Name extends JobName> = JobsByName[Name]',
-    'export type QueueName = QueueNameOf<Jobs>',
-    'export type JobPayload<Name extends JobName> = JobPayloadOf<JobDefinitionOf<Name>>',
-    'export type JobQueue<Name extends JobName> = JobQueueByName<Jobs, Name>',
-    'export type JobMessage<Name extends JobName> = JobMessageByName<Jobs, Name>',
-    'export type QueueMessage<Queue extends QueueName> = JobMessageByQueue<Jobs, Queue>',
-    '',
-    ...cfJobsAppExportNames.map(name => `export declare const ${name}: typeof app.${name}`),
+    '  ]',
+    '  type JobsByName = { readonly [Job in Jobs[number] as Job[\'name\']]: Job }',
+    '  export type JobName = keyof JobsByName & JobNameOf<Jobs>',
+    '  export type JobDefinitionOf<Name extends JobName> = JobsByName[Name]',
+    '  export type QueueName = QueueNameOf<Jobs>',
+    '  export type JobPayload<Name extends JobName> = JobPayloadOf<JobDefinitionOf<Name>>',
+    '  export type JobQueue<Name extends JobName> = JobQueueByName<Jobs, Name>',
+    '  export type JobMessage<Name extends JobName> = JobMessageByName<Jobs, Name>',
+    '  export type QueueMessage<Queue extends QueueName> = JobMessageByQueue<Jobs, Queue>',
+    '}',
     '',
   ].join('\n')
 }

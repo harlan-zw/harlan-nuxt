@@ -105,7 +105,8 @@ export interface DurableJobFailureRepository {
 }
 
 export interface DurableJobRegistryLike<Env = unknown, Db = unknown, Logger = unknown> {
-  getHandler?: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined
+  /** May resolve asynchronously for lazily-loaded jobs. Unused on the producer path. */
+  getHandler?: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
   getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
   getJobRoute?: (name: string) => DurableJobRoute<string> | undefined
 }

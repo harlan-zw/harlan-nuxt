@@ -10,8 +10,20 @@ import type {
 import { parseJobInput } from './registry'
 
 export interface JobRegistryLike<Env, Db, Logger> {
-  getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined
+  /** May resolve asynchronously for lazily-loaded jobs; callers must await. */
+  getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
+  /**
+   * Returns the definition for routing/validation. For lazy entries this is
+   * static routing metadata typed as a full definition (its `handle`/`input` are
+   * absent at runtime); dispatch prefers `loadJobDefinition` for the real module.
+   */
   getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
+  /**
+   * Loads the full definition (handler, `input`, `middleware`, `failed`) for a
+   * lazy entry. Preferred at dispatch so payload validation + failure hooks see
+   * the real module. Falls back to `getJobDefinition`/`getHandler` when absent.
+   */
+  loadJobDefinition?: (name: string) => Promise<JobDefinition<string, unknown, string, Env, Db, Logger> | undefined>
 }
 
 export interface DispatchContextInput<Job extends DispatchableJob> {
@@ -40,8 +52,13 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
     return { success: false, error: 'No _task in payload', handlerNotFound: true }
   }
 
-  const definition = opts.registry.getJobDefinition?.(taskName)
-  const handler = definition?.handle ?? opts.registry.getHandler(taskName)
+  // Prefer the fully-loaded definition (carries `input`/`middleware`/`failed`/
+  // `handle`); fall back to static metadata + a separate handler lookup for
+  // registries that don't implement lazy loading.
+  const definition = opts.registry.loadJobDefinition
+    ? await opts.registry.loadJobDefinition(taskName)
+    : opts.registry.getJobDefinition?.(taskName)
+  const handler = definition?.handle ?? await opts.registry.getHandler(taskName)
   if (!handler) {
     return { success: false, error: `No handler for task: ${taskName}`, handlerNotFound: true }
   }

@@ -10,6 +10,7 @@ import type {
   AnyJobDefinition,
   JobNameOf,
   JobPayloadByName,
+  LazyJobEntry,
 } from './registry'
 import type { QueueBindingsConfig } from './types'
 import { prepareRegisteredDurableJob } from './outbox'
@@ -144,6 +145,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     jobs: materialized,
     jobRegistry,
     getHandler: jobRegistry.getHandler,
+    loadJobDefinition: jobRegistry.loadJobDefinition,
     getJobDefinition: jobRegistry.getJobDefinition,
     getJobQueue: jobRegistry.getJobQueue,
     getJobRoute: jobRegistry.getJobRoute,
@@ -163,13 +165,17 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
  * `any` param + cast) to the strictly-typed injectable. Keeping this here means
  * the template emits only dynamic data, and the cast is type-checked in source.
  */
-export function createGeneratedCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
+export function createGeneratedCfJobsApp<const Jobs extends readonly LazyJobEntry[]>(
   jobs: Jobs,
 
   useRuntimeConfig: (...args: any[]) => any,
   defaultQueue?: string,
 ) {
-  return createCfJobsApp(jobs, { useRuntimeConfig: useRuntimeConfig as UseRuntimeConfigFn, defaultQueue })
+  // Lazy entries carry static routing metadata + a `load()` thunk instead of an
+  // eager `handle`; the registry resolves handlers on demand. The precise
+  // per-job payload/queue types reach consumers via the generated `#cf-jobs/app`
+  // `.d.ts` augmentation, so the runtime cast here is intentional.
+  return createCfJobsApp(jobs as unknown as readonly AnyJobDefinition[], { useRuntimeConfig: useRuntimeConfig as UseRuntimeConfigFn, defaultQueue })
 }
 
 export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
@@ -177,9 +183,8 @@ export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
 
 /**
  * Authoritative list of `createCfJobsApp` members re-exported by the generated
- * `#cf-jobs/app` module. The build-time templates (`generateRegistryTemplate` /
- * `generateRegistryTypesTemplate`) map over this so the runtime destructure, the
- * `.d.ts` declarations, and the app's return shape can't drift apart.
+ * `#cf-jobs/app` module. `generateRegistryTemplate` maps over this so the runtime
+ * destructure and the app's return shape can't drift apart.
  *
  * `jobs` is exported separately by the template (as a `const` tuple), so it is
  * intentionally absent here.
@@ -187,6 +192,7 @@ export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
 export const cfJobsAppExportNames = [
   'jobRegistry',
   'getHandler',
+  'loadJobDefinition',
   'getJobDefinition',
   'getJobQueue',
   'getJobRoute',
@@ -203,8 +209,9 @@ export type QueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger
   = CfJobsQueueConsumerOptions<Env, Db, Logger>
 
 function isJobDefinition(value: unknown): value is AnyJobDefinition {
-  return !!value
-    && typeof value === 'object'
-    && typeof (value as AnyJobDefinition).name === 'string'
-    && typeof (value as AnyJobDefinition).handle === 'function'
+  if (!value || typeof value !== 'object' || typeof (value as AnyJobDefinition).name !== 'string')
+    return false
+  // Eager defs expose `handle`; lazy entries expose `load`.
+  return typeof (value as AnyJobDefinition).handle === 'function'
+    || typeof (value as LazyJobEntry).load === 'function'
 }

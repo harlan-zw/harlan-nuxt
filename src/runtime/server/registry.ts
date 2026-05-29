@@ -3,6 +3,54 @@ import { buildJobPayload } from './payload'
 
 export type JobPayloadMap = Record<string, unknown>
 export type AnyJobDefinition = JobDefinition<string, any, string, any, any, any>
+
+/**
+ * A build-time registry entry that defers loading the handler module. The
+ * static routing fields are AST-extracted from the job's `defineJob({...})`
+ * call so the producer/consumer can route, validate queues and resolve attempts
+ * WITHOUT importing (and evaluating) the handler — `load()` pulls the full
+ * definition only when a handler/`input`/`failed` is actually needed (dispatch,
+ * or a producer of a job that declares `input`/`unique`). This is what keeps a
+ * worker from evaluating all job modules to run one job.
+ */
+export interface LazyJobEntry<Name extends string = string, Queue extends string = string> {
+  name: Name
+  queue?: Queue
+  jobType?: string
+  maxAttempts?: number
+  tries?: number
+  unique?: boolean
+  /** Whether the source `defineJob` declares an `input` schema (AST flag). */
+  hasInput?: boolean
+  /** Whether the source `defineJob` declares a `uniqueId` fn (AST flag). */
+  hasUniqueId?: boolean
+  load: () => Promise<AnyJobDefinition>
+}
+
+/** Either an eagerly-constructed definition or a lazily-loaded entry. */
+export type RegistryEntry = AnyJobDefinition | LazyJobEntry
+
+export function isLazyJobEntry(entry: RegistryEntry): entry is LazyJobEntry {
+  return typeof (entry as LazyJobEntry).load === 'function'
+    && typeof (entry as AnyJobDefinition).handle !== 'function'
+}
+
+/** Static routing metadata shared by eager defs and lazy entries. */
+export type JobStaticDefinition = Pick<
+  AnyJobDefinition,
+  'name' | 'queue' | 'jobType' | 'maxAttempts' | 'tries' | 'unique'
+>
+
+function toStaticDefinition(entry: RegistryEntry): JobStaticDefinition {
+  return {
+    name: entry.name,
+    queue: entry.queue as string,
+    jobType: entry.jobType,
+    maxAttempts: entry.maxAttempts,
+    tries: entry.tries,
+    unique: entry.unique,
+  }
+}
 export type JobPayloadOf<Job extends AnyJobDefinition>
   = Job extends JobDefinition<string, infer Payload, string, any, any, any>
     ? Payload extends object ? Payload : never
@@ -104,15 +152,16 @@ export function validateJobDefinitions(
       continue
     }
 
-    const definition = job as Partial<AnyJobDefinition>
+    const definition = job as Partial<AnyJobDefinition> & Partial<LazyJobEntry>
     const name = typeof definition.name === 'string' && definition.name.length > 0
       ? definition.name
       : '<unknown>'
 
+    // Lazy entries carry `load` instead of `handle`; either satisfies the shape.
     if (
       typeof definition.name !== 'string'
       || definition.name.length === 0
-      || typeof definition.handle !== 'function'
+      || (typeof definition.handle !== 'function' && typeof definition.load !== 'function')
     ) {
       issues.push({ name, reason: 'invalid-definition' })
     }
@@ -144,45 +193,83 @@ export function defineJobRegistry<
 >(jobs: Jobs) {
   assertJobDefinitions(jobs)
 
-  const handlers = new Map<string, JobHandler<unknown, unknown, unknown, unknown>>(
-    jobs.map(job => [job.name, job.handle as JobHandler<unknown, unknown, unknown, unknown>]),
-  )
+  // Entries are typed as `AnyJobDefinition[]` for the precise method signatures,
+  // but at runtime the generated app passes lazy entries (metadata + `load`);
+  // treat them as `RegistryEntry` for the lazy-aware branches below.
+  const entries = jobs as readonly RegistryEntry[]
+  const byName = new Map<string, RegistryEntry>(entries.map(job => [job.name, job]))
+  // Caches the loaded full definition of a lazy entry (one import per job).
+  const loaded = new Map<string, Promise<AnyJobDefinition>>()
 
+  function loadJobDefinition(name: string): Promise<AnyJobDefinition | undefined> {
+    const entry = byName.get(name)
+    if (!entry)
+      return Promise.resolve(undefined)
+    if (!isLazyJobEntry(entry))
+      return Promise.resolve(entry)
+    let pending = loaded.get(name)
+    if (!pending) {
+      pending = entry.load()
+      loaded.set(name, pending)
+    }
+    return pending
+  }
+
+  // Never loads a module. Eager defs are returned whole (they already hold
+  // `input`/`unique`/`uniqueId` in memory, so producer-side validation + dedup
+  // keep working); lazy entries return static routing metadata only — typed as a
+  // full definition for callers, but `handle`/`input` are absent at runtime (the
+  // real module materializes at dispatch via `loadJobDefinition`).
   function getJobDefinition<Name extends JobNameOf<Jobs>>(name: Name): JobDefinitionByName<Jobs, Name> | undefined
   function getJobDefinition(name: string): AnyJobDefinition | undefined
   function getJobDefinition(name: string) {
-    return jobs.find(job => job.name === name)
+    const entry = byName.get(name)
+    if (!entry)
+      return undefined
+    return (isLazyJobEntry(entry) ? toStaticDefinition(entry) : entry) as AnyJobDefinition
   }
 
   function getJobQueue<Name extends JobNameOf<Jobs>>(name: Name): JobQueueByName<Jobs, Name> | undefined
   function getJobQueue(name: string): string | undefined
   function getJobQueue(name: string) {
-    return jobs.find(job => job.name === name)?.queue
+    return byName.get(name)?.queue
+  }
+
+  // Sync for eager defs (tests / direct use), async for lazy entries. Callers
+  // (`dispatchRegisteredJob`) await it, which is a no-op on the sync path.
+  function getHandler(name: string): JobHandler<unknown, unknown, unknown, unknown> | Promise<JobHandler<unknown, unknown, unknown, unknown> | undefined> | undefined {
+    const entry = byName.get(name)
+    if (!entry)
+      return undefined
+    if (!isLazyJobEntry(entry))
+      return entry.handle as JobHandler<unknown, unknown, unknown, unknown>
+    return loadJobDefinition(name).then(def => def?.handle as JobHandler<unknown, unknown, unknown, unknown> | undefined)
   }
 
   return {
     jobs,
-    handlers,
-    getHandler(name: string) {
-      return handlers.get(name)
-    },
+    getHandler,
+    loadJobDefinition,
     getJobDefinition,
     getJobQueue,
     buildPayload<Name extends JobNameOf<Jobs>>(
       name: Name,
       payload: JobPayloadByName<Jobs, Name>,
     ): { _task: Name } & JobPayloadByName<Jobs, Name> {
-      const definition = jobs.find(job => job.name === name)
-      if (!definition)
+      const entry = byName.get(name)
+      if (!entry)
         throw new Error(`Unknown task: ${name}`)
+      // Eager defs validate via their `input` schema; lazy entries have no schema
+      // here (it lives in the unloaded module), so validation defers to dispatch.
+      const definition = isLazyJobEntry(entry) ? toStaticDefinition(entry) : entry
       return buildJobMessage(definition as JobDefinitionByName<Jobs, Name>, payload) as { _task: Name } & JobPayloadByName<Jobs, Name>
     },
     getJobRoute(name: string) {
-      const job = jobs.find(job => job.name === name)
-      return job ? { queue: job.queue, jobType: job.jobType ?? job.name } : undefined
+      const entry = byName.get(name)
+      return entry ? { queue: entry.queue as string, jobType: entry.jobType ?? entry.name } : undefined
     },
     validate(expectedTasks: readonly string[]) {
-      const registered = new Set(handlers.keys())
+      const registered = new Set(byName.keys())
       const expected = new Set(expectedTasks)
       return {
         missing: expectedTasks.filter(task => !registered.has(task)),

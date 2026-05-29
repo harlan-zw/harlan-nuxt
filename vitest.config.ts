@@ -4,6 +4,10 @@ export default {
   resolve: {
     alias: {
       '#cf-jobs/server': fileURLToPath(new URL('./src/runtime/server/index.ts', import.meta.url)),
+      // `nitropack/runtime` is only resolvable inside a built nitro app; stub it
+      // so barrel-importing unit tests (which transitively pull `scheduled.ts`)
+      // can load.
+      'nitropack/runtime': fileURLToPath(new URL('./tests/stubs/nitropack-runtime.ts', import.meta.url)),
     },
   },
   test: {
