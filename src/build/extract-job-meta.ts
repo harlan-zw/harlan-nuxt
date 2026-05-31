@@ -7,6 +7,8 @@ import { parseModule } from 'magicast'
  * is the expected literal kind. Non-literal or computed values are left undefined.
  */
 export interface JobStaticMeta {
+  /** Only if the `defineJob` arg has a string-literal `name`. */
+  name?: string
   /** Only if the `defineJob` arg has a string-literal `queue`. */
   queue?: string
   /** Only if the arg has a string-literal `jobType`. */
@@ -123,6 +125,10 @@ export function extractJobMeta(code: string): JobStaticMeta {
     const value = prop.value
 
     switch (name) {
+      case 'name':
+        if (isNode(value) && value.type === 'StringLiteral' && typeof value.value === 'string')
+          meta.name = value.value
+        break
       case 'queue':
         if (isNode(value) && value.type === 'StringLiteral' && typeof value.value === 'string')
           meta.queue = value.value

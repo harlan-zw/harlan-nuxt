@@ -1,4 +1,6 @@
-import { resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { generateRegistryTemplate, generateRegistryTypesTemplate } from '../src/module'
 
@@ -52,6 +54,19 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).toContain(`queue: "default"`)
     expect(out).toContain(`name: "analytics/rollup-rebuild"`)
     expect(out).toContain(`queue: "analytics"`)
+  })
+
+  it('keys the entry by the declared defineJob name, falling back to the file path', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-name-'))
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    // Declared name differs from the file path; a sibling omits `name`.
+    writeFileSync(join(root, 'server/jobs/reconcile-stripe-customer.ts'), `export default defineJob({ name: 'pro:reconcile-stripe-customer', queue: 'default', handle() {} })`)
+    writeFileSync(join(root, 'server/jobs/plain.ts'), `export default defineJob({ queue: 'default', handle() {} })`)
+
+    const out = await generateRegistryTemplate(options, root, join(root, '.nuxt/cf-jobs'))
+    expect(out).toContain(`name: "pro:reconcile-stripe-customer"`)
+    expect(out).not.toContain(`name: "reconcile-stripe-customer"`)
+    expect(out).toContain(`name: "plain"`)
   })
 
   it('does not use the legacy lazy-loader shape or globalThis bridge', async () => {

@@ -26,11 +26,24 @@ describe('extractJobMeta', () => {
     const code = `export const x = defineJob({ name: 'a/b', queue: 'c', unique: true, input: someSchema, uniqueId: (p) => p.id })`
     const meta = extractJobMeta(code)
     expect(meta).toEqual({
+      name: 'a/b',
       queue: 'c',
       unique: true,
       hasInput: true,
       hasUniqueId: true,
     })
+  })
+
+  it('reads a string-literal name (namespaced) and leaves it undefined otherwise', () => {
+    expect(extractJobMeta(`export default defineJob({ name: 'pro:reconcile-stripe-customer', queue: 'billing' })`)).toEqual({
+      name: 'pro:reconcile-stripe-customer',
+      queue: 'billing',
+      hasInput: false,
+      hasUniqueId: false,
+    })
+    // Non-literal (computed/identifier) name is ignored, so the registry falls
+    // back to the file-path name.
+    expect(extractJobMeta(`export default defineJob({ name: NAME, queue: 'q' })`).name).toBeUndefined()
   })
 
   it('leaves queue undefined when missing', () => {

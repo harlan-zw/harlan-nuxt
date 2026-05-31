@@ -237,16 +237,19 @@ function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, template
 
 export async function generateRegistryTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {
   const files = await resolveJobFiles(options, rootDir)
-  assertUniqueGeneratedJobNames(files, options, rootDir)
+  await assertUniqueGeneratedJobNames(files, options, rootDir)
 
   // Build a data-only entry per job: static routing metadata read from the
   // source's `defineJob({...})` call (no module evaluation) plus a lazy
   // `load()` dynamic import. Rollup code-splits each `import()`, so a worker
   // only evaluates the one job it dispatches — not the whole batch.
   const entryLines = await Promise.all(files.map(async (file) => {
-    const name = toJobName(file, options, rootDir)
-    const importPath = toImportPath(templateDir, file).replace(TS_EXTENSION_RE, '')
     const meta = extractJobMeta(await readFile(file, 'utf8').catch(() => ''))
+    // The registry key is the declared `defineJob({ name })` when present, else
+    // the file path. The `#cf-jobs/app` type augmentation keys off `Job['name']`
+    // (the declared literal), so honouring it here keeps runtime + types aligned.
+    const name = meta.name ?? toJobName(file, options, rootDir)
+    const importPath = toImportPath(templateDir, file).replace(TS_EXTENSION_RE, '')
     const fields = [`name: ${JSON.stringify(name)}`]
     if (meta.queue !== undefined)
       fields.push(`queue: ${JSON.stringify(meta.queue)}`)
@@ -335,11 +338,14 @@ async function resolveJobFiles(options: ModuleOptions, rootDir: string): Promise
   return files.flat()
 }
 
-function assertUniqueGeneratedJobNames(files: string[], options: ModuleOptions, rootDir: string): void {
+async function assertUniqueGeneratedJobNames(files: string[], options: ModuleOptions, rootDir: string): Promise<void> {
   const seen = new Map<string, string>()
   const duplicates: string[] = []
   for (const file of files) {
-    const name = toJobName(file, options, rootDir)
+    // Resolve the same way as the registry entry: declared `name` wins, file path
+    // is the fallback. Collisions are checked on the actual runtime key.
+    const meta = extractJobMeta(await readFile(file, 'utf8').catch(() => ''))
+    const name = meta.name ?? toJobName(file, options, rootDir)
     const previous = seen.get(name)
     if (previous)
       duplicates.push(`${name} (${previous}, ${file})`)
