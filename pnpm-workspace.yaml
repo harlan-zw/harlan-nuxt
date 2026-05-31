@@ -7,10 +7,11 @@ trustPolicyExclude:
 
 catalog:
   '@antfu/eslint-config': latest
+  '@nuxt/test-utils': ^4.0.3
   '@vitest/coverage-v8': 4.1.7
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
-  eslint: latest
+  eslint: ^10.4.1
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
   magicast: ^0.5.3

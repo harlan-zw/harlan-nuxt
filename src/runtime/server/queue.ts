@@ -12,6 +12,7 @@ export { CF_QUEUE_MAX_DELAY_SECONDS } from './internal'
 export const CF_QUEUE_MAX_BATCH_SIZE = 100
 export const CF_QUEUE_MAX_BATCH_BYTES = 256 * 1024
 export const CF_QUEUE_MAX_MESSAGE_BYTES = 128 * 1024
+const TRANSIENT_QUEUE_ERROR_RE = /\b(?:429|rate limit|too many requests|backpressure)\b/i
 
 function chunkBatch<T>(items: readonly T[], size: number): T[][] {
   if (items.length <= size)
@@ -36,7 +37,7 @@ function isTransientQueueError(error: unknown): boolean {
   if (code === 429 || code === 503 || code === 502 || code === 500)
     return true
   const message = (error as { message?: string } | null)?.message ?? ''
-  return /\b(429|rate limit|too many requests|backpressure)\b/i.test(message)
+  return TRANSIENT_QUEUE_ERROR_RE.test(message)
 }
 
 export async function withSendBackpressure<R>(

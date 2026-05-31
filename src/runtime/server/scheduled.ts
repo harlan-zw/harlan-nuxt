@@ -1,5 +1,4 @@
 import type { Task } from 'nitropack/types'
-import { defineTask } from 'nitropack/runtime'
 
 export interface ScheduledTaskDefinition<RT = unknown> {
   /**
@@ -28,8 +27,12 @@ export interface ScheduledTaskDefinition<RT = unknown> {
  * triggers — no central list to keep in sync.
  */
 export function defineScheduledTask<RT = unknown>(def: ScheduledTaskDefinition<RT>): Task<RT> {
-  return defineTask<RT>({
-    meta: { name: def.name, description: def.description },
-    run: def.run,
-  })
+  // Inlined from nitropack's `defineTask` (a validate-and-return identity) so
+  // this module never imports `nitropack/runtime`. That keeps the whole
+  // `nuxt-cf-jobs/server` barrel loadable in plain vitest with no stub. nitro
+  // consumes the returned `{ meta, run }` object directly; it does not require
+  // its own `defineTask` wrapper around it.
+  if (typeof def.run !== 'function')
+    throw new TypeError('Scheduled task must implement a `run` method!')
+  return { meta: { name: def.name, description: def.description }, run: def.run } as Task<RT>
 }

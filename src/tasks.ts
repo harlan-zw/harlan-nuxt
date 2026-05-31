@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { resolveFiles } from '@nuxt/kit'
 
+const TASK_HANDLER_EXTENSION_RE = /\.[cm]?tsx?$/
+
 export interface DiscoveredTask {
   /** Declared task name (nitro registers `nitro.tasks[name]`). */
   name: string
@@ -101,7 +103,7 @@ export async function collectTasks(options: ModuleOptions, rootDir: string): Pro
         skipped.push(file)
       continue
     }
-    tasks.push({ name, crons, file, handler: file.replace(/\.[cm]?tsx?$/, '') })
+    tasks.push({ name, crons, file, handler: file.replace(TASK_HANDLER_EXTENSION_RE, '') })
   }
 
   return { tasks, unnamed, skipped }

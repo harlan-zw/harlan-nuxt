@@ -30,6 +30,8 @@ import {
 } from './queries'
 import { color, humanizeSeconds, nextCronRun, relativeTime, table, truncate } from './render'
 
+const CONFIRM_YES_RE = /^y(?:es)?$/i
+
 const sharedArgs = {
   'cwd': { type: 'string', description: 'Project directory (default: current dir)' },
   'config': { type: 'string', description: 'Path to wrangler config (default: auto-detect)' },
@@ -68,7 +70,7 @@ async function confirm(message: string, skip: boolean): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr })
   const answer = await rl.question(`${message} ${color.dim('[y/N]')} `)
   rl.close()
-  return /^y(?:es)?$/i.test(answer.trim())
+  return CONFIRM_YES_RE.test(answer.trim())
 }
 
 const status = defineCommand({

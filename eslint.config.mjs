@@ -23,7 +23,7 @@ export default antfu({
     'style/max-statements-per-line': 'off',
   },
 }, {
-  files: ['**/test/**/*.ts', '**/test/**/*.js'],
+  files: ['**/test/**/*.ts', '**/test/**/*.js', '**/tests/**/*.ts', '**/tests/**/*.js'],
   rules: {
     'ts/no-unsafe-function-type': 'off',
     'no-console': 'off',

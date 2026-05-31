@@ -2,7 +2,9 @@
 // are re-exported wholesale; `queue` is curated to its publishable helpers only
 // (the consumer/transport internals stay module-private), and `dev` / `payload`
 // / `internal` are deliberately omitted — they are implementation detail reached
-// from their own module paths, never the umbrella.
+// from their own module paths, never the umbrella. `testing` is published on its
+// own `#cf-jobs/testing` subpath (nitropack-free, test-only) so importing the
+// harness never drags this barrel's `scheduled` → `nitropack/runtime` edge.
 export * from './app'
 export * from './d1'
 export * from './dispatch'
@@ -23,5 +25,4 @@ export type { JobQueuePublisher, QueueSource } from './queue'
 export * from './registry'
 export * from './scheduled'
 export * from './schema'
-export * from './testing'
 export * from './types'

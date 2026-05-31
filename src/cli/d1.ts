@@ -15,6 +15,8 @@ import { promisify } from 'node:util'
 import { findWranglerConfig, parseWranglerConfig } from '../wrangler'
 
 const execFileAsync = promisify(execFile)
+const JSON_START_RE = /[[{]/
+const TRAILING_SEMICOLON_RE = /;\s*$/
 
 export interface D1Target {
   /** `database_name` (or id) passed to `wrangler d1 execute <database>`. */
@@ -95,7 +97,7 @@ function extractJson(stdout: string): unknown {
     return JSON.parse(trimmed)
   }
   catch {
-    const start = trimmed.search(/[[{]/)
+    const start = trimmed.search(JSON_START_RE)
     const end = Math.max(trimmed.lastIndexOf(']'), trimmed.lastIndexOf('}'))
     if (start === -1 || end <= start)
       return undefined
@@ -163,6 +165,6 @@ export async function execD1<T = Record<string, unknown>>(target: D1Target, sql:
 export async function execD1Batch<T = Record<string, unknown>>(target: D1Target, sqls: string[]): Promise<T[][]> {
   if (sqls.length === 0)
     return []
-  const entries = await runD1<T>(target, sqls.map(s => s.trim().replace(/;\s*$/, '')).join(';\n'))
+  const entries = await runD1<T>(target, sqls.map(s => s.trim().replace(TRAILING_SEMICOLON_RE, '')).join(';\n'))
   return sqls.map((_, i) => entries[i]?.results ?? [])
 }

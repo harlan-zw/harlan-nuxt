@@ -38,7 +38,9 @@ describe('lazy registry entries', () => {
 
   it('dispatches a lazy job through the loaded handler', async () => {
     const ran: unknown[] = []
-    const handle = vi.fn(async (payload: unknown) => { ran.push(payload) })
+    const handle = vi.fn(async (payload: unknown) => {
+      ran.push(payload)
+    })
     const { entry, load } = lazyEntry('webhook/send', 'webhook', handle)
     const registry = defineJobRegistry([entry])
 

@@ -9,13 +9,9 @@ import {
   claimDurableJob,
   completeDurableJob,
   createD1DurableJobRepository,
-  createFakeQueue,
-  createFakeQueueEnv,
   createJobQueue,
   createJobTraceId,
   createJobUniqueKey,
-  createQueueBatch,
-  createQueueMessage,
   createQueuePublisher,
   d1DurableJobMigrationSql,
   defineJob,
@@ -42,6 +38,12 @@ import {
   serializeDurableJobContinuation,
   validateJobDefinitions,
 } from '#cf-jobs/server'
+import {
+  createFakeQueue,
+  createFakeQueueEnv,
+  createQueueBatch,
+  createQueueMessage,
+} from '#cf-jobs/testing'
 // Module-private helpers (not on the public `#cf-jobs/server` surface) imported
 // from their own module paths for white-box testing.
 import { buildJobPayload } from '../src/runtime/server/payload'
@@ -1202,7 +1204,9 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   it('chunks createJobQueue sendBatch to the Cloudflare 100-message limit', async () => {
     const fake = createFakeQueueEnv<{ _task: 'demo/chunked', i: number }>('QUEUE_DEFAULT')
     const batches: number[] = []
-    fake.queue.sendBatch = async (batch) => { batches.push(batch.length) }
+    fake.queue.sendBatch = async (batch) => {
+      batches.push(batch.length)
+    }
     const job = defineJob({
       name: 'demo/chunked',
       queue: 'default',
@@ -1709,18 +1713,17 @@ function createFakeD1() {
     },
     prepare(query: string) {
       this.queries.push(query)
-      const owner = this
       return {
         bind(...values: unknown[]) {
-          owner.bindings.push(values)
+          db.bindings.push(values)
           return this
         },
         async run() {
-          return owner.nextRun
+          return db.nextRun
         },
         async first<Result>() {
-          const value = owner.nextFirst
-          owner.nextFirst = null
+          const value = db.nextFirst
+          db.nextFirst = null
           return value as Result | null
         },
         async all<Result>() {

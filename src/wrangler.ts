@@ -35,6 +35,16 @@ export interface WranglerConfig {
 }
 
 const WRANGLER_FILES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml']
+const JSONC_BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g
+const JSONC_LINE_COMMENT_RE = /(^|[^:"'\\])\/\/.*$/gm
+const SNAKE_CASE_RE = /_([a-z])/g
+const QUEUE_BLOCK_RE = /^\s*\[\[\s*queues\.(producers|consumers)\s*\]\]\s*$/gm
+const TOML_QUEUE_STOP_RE = /^\s*\[[^\]]+\]\]?\s*$/m
+const TOML_KEY_RE = /^[a-z_]+$/i
+const TOML_NUMBER_RE = /^-?\d+(?:\.\d+)?$/
+const TOML_TRIGGERS_HEADER_RE = /^\s*\[triggers\]\s*$/m
+const TOML_HEADER_RE = /^\s*\[/m
+const TOML_CRONS_RE = /crons\s*=\s*\[([\s\S]*?)\]/
 
 export function findWranglerConfig(rootDir: string): string | undefined {
   for (const name of WRANGLER_FILES) {
@@ -48,40 +58,55 @@ export function findWranglerConfig(rootDir: string): string | undefined {
 function stripJsoncComments(source: string): string {
   // remove /* ... */ blocks and // line comments outside strings (best-effort)
   return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:"'\\])\/\/.*$/gm, (_match, prefix) => prefix)
+    .replace(JSONC_BLOCK_COMMENT_RE, '')
+    .replace(JSONC_LINE_COMMENT_RE, (_match, prefix) => prefix)
 }
 
 function camelCase(key: string): string {
-  return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
+  return key.replace(SNAKE_CASE_RE, (_, c) => c.toUpperCase())
+}
+
+function stripTomlInlineComment(raw: string): string {
+  let quote: string | undefined
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]
+    if ((char === '"' || char === '\'') && raw[i - 1] !== '\\') {
+      quote = quote === char ? undefined : quote ?? char
+      continue
+    }
+    if (char === '#' && quote === undefined)
+      return raw.slice(0, i)
+  }
+  return raw
 }
 
 function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } {
   const producers: WranglerQueueProducer[] = []
   const consumers: WranglerQueueConsumer[] = []
-  const blockRe = /^\s*\[\[\s*queues\.(producers|consumers)\s*\]\]\s*$/gm
   const matches: Array<{ kind: 'producers' | 'consumers', index: number }> = []
-  let m: RegExpExecArray | null
-  while ((m = blockRe.exec(source)) !== null)
+  QUEUE_BLOCK_RE.lastIndex = 0
+  for (let m = QUEUE_BLOCK_RE.exec(source); m !== null; m = QUEUE_BLOCK_RE.exec(source))
     matches.push({ kind: m[1] as 'producers' | 'consumers', index: m.index + m[0].length })
 
-  const stopRe = /^\s*\[[^\]]+\]\]?\s*$/m
   for (let i = 0; i < matches.length; i++) {
     const start = matches[i]!.index
     const end = i + 1 < matches.length ? matches[i + 1]!.index - (matches[i + 1]?.kind.length ?? 0) : source.length
     const slice = source.slice(start, end)
-    const nextHeader = stopRe.exec(slice)
+    const nextHeader = TOML_QUEUE_STOP_RE.exec(slice)
     const body = nextHeader ? slice.slice(0, nextHeader.index) : slice
     const entry: Record<string, string | number> = {}
     for (const line of body.split('\n')) {
-      const kv = line.match(/^\s*([a-z_]+)\s*=\s*(.+?)\s*(?:#.*)?$/i)
-      if (!kv)
+      const separator = line.indexOf('=')
+      if (separator === -1)
         continue
-      const key = camelCase(kv[1]!)
-      const raw = kv[2]!.trim()
+      const rawKey = line.slice(0, separator).trim()
+      if (!TOML_KEY_RE.test(rawKey))
+        continue
+      const key = camelCase(rawKey)
+      const raw = stripTomlInlineComment(line.slice(separator + 1)).trim()
       if (raw.startsWith('"') || raw.startsWith('\''))
         entry[key] = raw.slice(1, -1)
-      else if (/^-?\d+(?:\.\d+)?$/.test(raw))
+      else if (TOML_NUMBER_RE.test(raw))
         entry[key] = Number(raw)
       else
         entry[key] = raw
@@ -93,7 +118,8 @@ function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProduce
       for (const [k, v] of Object.entries(entry)) {
         if (k === 'queue') {
           continue
-        }(consumer as unknown as Record<string, unknown>)[k] = v
+        }
+        ;(consumer as unknown as Record<string, unknown>)[k] = v
       }
       consumers.push(consumer)
     }
@@ -105,8 +131,12 @@ function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProduce
 function parseJsoncQueues(source: string): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } {
   const stripped = stripJsoncComments(source)
   let parsed: { queues?: { producers?: unknown[], consumers?: unknown[] } } = {}
-  try { parsed = JSON.parse(stripped) }
-  catch { return { producers: [], consumers: [] } }
+  try {
+    parsed = JSON.parse(stripped)
+  }
+  catch {
+    return { producers: [], consumers: [] }
+  }
   const queues = parsed.queues ?? {}
   const producers = Array.isArray(queues.producers) ? queues.producers : []
   const consumers = Array.isArray(queues.consumers) ? queues.consumers : []
@@ -121,7 +151,8 @@ function parseJsoncQueues(source: string): { producers: WranglerQueueProducer[],
         for (const [k, v] of Object.entries(c)) {
           if (k === 'queue') {
             continue
-          }(out as unknown as Record<string, unknown>)[camelCase(k)] = v
+          }
+          ;(out as unknown as Record<string, unknown>)[camelCase(k)] = v
         }
         return out
       })
@@ -137,14 +168,14 @@ function parseStringArrayLiteral(raw: string): string[] {
 
 function parseTomlCrons(source: string): string[] | undefined {
   // `[triggers]` table with `crons = ["...", "..."]` (may span lines).
-  const header = /^\s*\[triggers\]\s*$/m.exec(source)
+  const header = TOML_TRIGGERS_HEADER_RE.exec(source)
   if (!header)
     return undefined
   const rest = source.slice(header.index + header[0].length)
   // Stop at the next table header.
-  const next = /^\s*\[/m.exec(rest)
+  const next = TOML_HEADER_RE.exec(rest)
   const body = next ? rest.slice(0, next.index) : rest
-  const cronsMatch = body.match(/crons\s*=\s*\[([\s\S]*?)\]/)
+  const cronsMatch = body.match(TOML_CRONS_RE)
   if (!cronsMatch)
     return undefined
   return parseStringArrayLiteral(cronsMatch[1]!)
@@ -389,7 +420,8 @@ export function normalizeNitroQueues(nitroOptions: unknown): { producers: Wrangl
     for (const [k, v] of Object.entries(obj)) {
       if (k === 'queue') {
         continue
-      }(consumer as unknown as Record<string, unknown>)[camelCase(k)] = v
+      }
+      ;(consumer as unknown as Record<string, unknown>)[camelCase(k)] = v
     }
     consumers.push(consumer)
   }
