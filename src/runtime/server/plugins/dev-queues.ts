@@ -23,8 +23,17 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
 
   const runtime = createDevQueueRuntime({
     queues,
-    onBatch: async (payload) => {
-      await nitroApp.hooks.callHook('cloudflare:queue', payload)
+    onBatch: async (payload: { batch: unknown, env?: Record<string, unknown> }) => {
+      // The in-process runtime's env carries only the queue bindings, but the
+      // consumer also needs the base Cloudflare bindings (D1/KV/…). In dev those
+      // live on the task-env shim (`globalThis.__env__`), so merge them in
+      // (queue bindings win) — otherwise the consumer's `createContext` throws on
+      // a missing binding (e.g. the D1 database) the moment a job actually runs.
+      const baseEnv = (globalThis as { __env__?: Record<string, unknown> }).__env__ ?? {}
+      await nitroApp.hooks.callHook('cloudflare:queue', {
+        ...payload,
+        env: { ...baseEnv, ...(payload.env ?? {}) },
+      })
     },
     onError(error) {
       console.error('[nuxt-cf-jobs] dev queue error:', error)
