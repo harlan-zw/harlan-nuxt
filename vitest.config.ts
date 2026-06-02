@@ -4,9 +4,13 @@ import { configDefaults, defineConfig } from 'vitest/config'
 const alias = {
   '#cf-jobs/server': fileURLToPath(new URL('./src/runtime/server/index.ts', import.meta.url)),
   '#cf-jobs/testing': fileURLToPath(new URL('./src/runtime/server/testing.ts', import.meta.url)),
-  // No `nitropack/runtime` stub needed: the `nuxt-cf-jobs/server` barrel is
-  // nitropack-free (scheduled.ts inlines defineTask), so barrel-importing unit
-  // tests load in plain vitest with no stub.
+  // The `nuxt-cf-jobs/server` barrel is nitropack-free (scheduled.ts inlines
+  // defineTask), so barrel-importing unit tests don't need this. But the dev
+  // nitro plugin (`plugins/dev-queues.ts`) imports `nitropack/runtime` directly,
+  // which vite can't resolve outside a built nitro app. Alias it to the test
+  // stub so that plugin loads under happy-dom; tests that exercise behaviour
+  // `vi.mock('nitropack/runtime', …)` to inject their own runtime config.
+  'nitropack/runtime': fileURLToPath(new URL('./tests/stubs/nitropack-runtime.ts', import.meta.url)),
 }
 
 export default defineConfig({

@@ -8,3 +8,9 @@ export function defineTask<T = unknown>(def: T): T {
 export function useRuntimeConfig(): unknown {
   return { cfJobs: { queues: {} } }
 }
+
+// Nitro plugins call `defineNitroPlugin(setup)` at module load; the stub just
+// returns the setup fn so tests can invoke it with a fake NitroApp.
+export function defineNitroPlugin<T>(setup: T): T {
+  return setup
+}
