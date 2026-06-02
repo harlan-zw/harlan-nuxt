@@ -73,6 +73,20 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     source: QueueSource | undefined,
     job: Job,
   ): ReturnType<typeof createJobQueue<Job>>
+  // Read runtime config safely from a (possibly synthetic) queue source.
+  // nitro's `useRuntimeConfig(event)` derefs `event.context.nitro.runtimeConfig`
+  // unconditionally, so the synthetic `{ context: { cloudflare: { env } } }`
+  // source built for scheduled tasks / queue consumers (no `context.nitro`) makes
+  // it throw `Cannot read properties of undefined (reading 'runtimeConfig')`. The
+  // `.cfJobs.queues` map every caller wants is build-time static and identical in
+  // the shared eventless config, so read it eventlessly unless `source` is a real
+  // h3 event. The env (bindings) is always resolved separately from the source.
+  function readRuntimeConfig(source?: unknown): CfJobsRuntimeConfig {
+    const isH3Event = !!source && typeof source === 'object' && 'context' in source
+      && !!(source as { context?: { nitro?: unknown } }).context?.nitro
+    return isH3Event ? useRuntimeConfig(source as never) : useRuntimeConfig()
+  }
+
   function getQueue(sourceOrJob: unknown, maybeJob?: unknown) {
     const isJobOnly = maybeJob === undefined && isJobDefinition(sourceOrJob)
     const job = (isJobOnly ? sourceOrJob : maybeJob) as AnyJobDefinition
@@ -82,18 +96,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
         const env = resolveNitroTaskEnv()
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
-    // `runtimeConfig` is only read for `.cfJobs.queues` (build-time static, present
-    // in the shared eventless config), so the env-specific runtime config is never
-    // required here. Only forward `resolvedSource` to nitro's `useRuntimeConfig`
-    // when it's a REAL h3 event (`context.nitro` populated); nitro derefs
-    // `event.context.nitro.runtimeConfig` unconditionally and would throw on the
-    // synthetic `{ context: { cloudflare: { env } } }` source built for scheduled
-    // tasks / queue consumers. The env (bindings) is resolved separately by
-    // `createJobQueue` from `resolvedSource.context.cloudflare.env`.
-    const isH3Event = !!resolvedSource && typeof resolvedSource === 'object'
-      && 'context' in resolvedSource
-      && !!(resolvedSource as { context?: { nitro?: unknown } }).context?.nitro
-    const runtimeConfig = isH3Event ? useRuntimeConfig(resolvedSource as never) : useRuntimeConfig()
+    const runtimeConfig = readRuntimeConfig(resolvedSource)
     return createJobQueue(resolvedSource, runtimeConfig.cfJobs.queues, job)
   }
 
@@ -132,13 +135,13 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     const ready: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger> = {
       ...opts,
       registry: jobRegistry,
-      queues: (source?: QueueSource) => useRuntimeConfig(source as never).cfJobs.queues,
+      queues: (source?: QueueSource) => readRuntimeConfig(source).cfJobs.queues,
     }
     let warned = false
     nitroApp.hooks.hook('cloudflare:queue', async (payload: RegisteredQueueConsumerPayload<Env>) => {
       if (!warned) {
         warned = true
-        logQueueWarnings(useRuntimeConfig(runtimeConfigSource(payload.env) as never).cfJobs.queues)
+        logQueueWarnings(readRuntimeConfig(runtimeConfigSource(payload.env)).cfJobs.queues)
       }
       await processRegisteredQueueBatch(payload, ready)
     })

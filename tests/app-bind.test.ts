@@ -77,4 +77,29 @@ describe('createCfJobsApp (statically-injected jobs + useRuntimeConfig)', () => 
       delete (globalThis as { __env__?: unknown }).__env__
     }
   })
+
+  // Regression: the queue-consumer path also forwarded the synthetic
+  // `runtimeConfigSource(env)` to `useRuntimeConfig` (first-batch logQueueWarnings
+  // + the `queues(source)` resolver in processRegisteredQueueBatch), throwing the
+  // same error and failing every batch — including the one that runs crawl jobs.
+  it('queue consumer first batch does not crash with nitro-faithful useRuntimeConfig', async () => {
+    const nitroUseRuntimeConfig = (event?: { context: { nitro: { runtimeConfig?: unknown } } }) => {
+      if (!event)
+        return runtimeConfig
+      return (event.context.nitro.runtimeConfig ?? runtimeConfig) as typeof runtimeConfig
+    }
+    const app = createCfJobsApp(
+      [defineJob({ name: 'x', queue: 'default', handle: vi.fn() })],
+      { useRuntimeConfig: nitroUseRuntimeConfig as never },
+    )
+    let hook: ((payload: unknown) => Promise<void>) | undefined
+    const nitroApp = { hooks: { hook: (_n: string, h: (p: unknown) => Promise<void>) => { hook = h } } }
+    app.registerQueueConsumer(nitroApp, { createContext: () => ({} as never) })
+
+    const payload = {
+      env: { JOBS: { send: vi.fn() } },
+      batch: { queue: 'default', messages: [], ackAll: vi.fn(), retryAll: vi.fn() },
+    }
+    await expect(hook!(payload)).resolves.toBeUndefined()
+  })
 })
