@@ -39,5 +39,17 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
     }
   })
 
+  // Requests get the in-process queue runtime via the hook above, but scheduled
+  // tasks, fan-outs and hook listeners enqueue through `getQueue(job)`, which has
+  // no `H3Event` and resolves bindings via `resolveNitroTaskEnv()` →
+  // `globalThis.__env__`. Without mirroring the runtime there, those jobs enqueue
+  // to nothing in dev and silently never run. Expose the same queue bindings on
+  // the task-env shim so task/listener-triggered jobs process in dev too. Any
+  // real binding already on the shim wins, matching the request precedence above.
+  // (This plugin is only registered in dev — see module.ts — so it never touches
+  // production env.)
+  const taskEnvHost = globalThis as { __env__?: Record<string, unknown> }
+  taskEnvHost.__env__ = { ...runtime.env, ...(taskEnvHost.__env__ ?? {}) }
+
   nitroApp.hooks.hook('close', () => runtime.dispose())
 })
