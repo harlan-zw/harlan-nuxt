@@ -82,9 +82,18 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
         const env = resolveNitroTaskEnv()
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
-    const runtimeConfig = resolvedSource && typeof resolvedSource === 'object' && 'context' in resolvedSource
-      ? useRuntimeConfig(resolvedSource as never)
-      : useRuntimeConfig()
+    // `runtimeConfig` is only read for `.cfJobs.queues` (build-time static, present
+    // in the shared eventless config), so the env-specific runtime config is never
+    // required here. Only forward `resolvedSource` to nitro's `useRuntimeConfig`
+    // when it's a REAL h3 event (`context.nitro` populated); nitro derefs
+    // `event.context.nitro.runtimeConfig` unconditionally and would throw on the
+    // synthetic `{ context: { cloudflare: { env } } }` source built for scheduled
+    // tasks / queue consumers. The env (bindings) is resolved separately by
+    // `createJobQueue` from `resolvedSource.context.cloudflare.env`.
+    const isH3Event = !!resolvedSource && typeof resolvedSource === 'object'
+      && 'context' in resolvedSource
+      && !!(resolvedSource as { context?: { nitro?: unknown } }).context?.nitro
+    const runtimeConfig = isH3Event ? useRuntimeConfig(resolvedSource as never) : useRuntimeConfig()
     return createJobQueue(resolvedSource, runtimeConfig.cfJobs.queues, job)
   }
 
