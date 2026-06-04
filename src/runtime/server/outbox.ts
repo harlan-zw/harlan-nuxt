@@ -725,6 +725,41 @@ export interface RunDurableJobMessageOptions<
    * Omit to keep retrying every throw (the transport/DLQ then decides terminal).
    */
   maxAttemptsOf?: (job: StoredJob) => number | undefined
+  /**
+   * Per-job scope created right after claim: `wrapDispatch` wraps the handler run
+   * (e.g. AsyncLocalStorage telemetry), `onSettled` observes every terminal/
+   * released outcome (e.g. write a run-log row). Both close over the same scope so
+   * the wrapper's collected data is available to the observer.
+   */
+  createJobScope?: (storedJob: StoredJob) => DurableJobScope<StoredJob>
+  /**
+   * Decide whether a THROWN error is terminal (→ `failed_jobs`) vs released for
+   * retry. Overrides the default `attempts >= maxAttemptsOf` so callers can, e.g.,
+   * never fail on transient infra errors. `maxAttempts` is `maxAttemptsOf`'s value.
+   */
+  isPermanentFailure?: (input: { error: unknown, storedJob: StoredJob, attempts: number, maxAttempts: number | undefined }) => boolean
+  /**
+   * Dispatch the job payload's `then`/`catch`/`finally` continuations after a
+   * terminal outcome: `then`+`finally` on success, `catch`+`finally` on terminal
+   * failure, none on a release/retry.
+   */
+  dispatchContinuations?: (input: { storedJob: StoredJob, stage: DurableJobContinuationStage }) => void | Promise<void>
+}
+
+export interface DurableJobSettlement<StoredJob> {
+  storedJob: StoredJob
+  status: RunDurableJobMessageResult['status']
+  /** Wall-clock ms from claim to settle. */
+  durationMs: number
+  /** True when the job reached a terminal failure (not a release/retry). */
+  permanent: boolean
+  /** The error for failed/released/exhausted outcomes (raw, for the caller to classify). */
+  error?: unknown
+}
+
+export interface DurableJobScope<StoredJob> {
+  wrapDispatch?: (run: () => Promise<DispatchResult>) => Promise<DispatchResult>
+  onSettled?: (settlement: DurableJobSettlement<StoredJob>) => void | Promise<void>
 }
 
 /**
@@ -792,16 +827,30 @@ export async function runDurableJobMessage<
     }
   }
 
+  // Per-job scope (telemetry wrapper + settlement observer) + wall-clock timing.
+  const scope = opts.createJobScope?.(storedJob)
+  const startedMs = Date.now()
+  const settle = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
+    await scope?.onSettled?.({ storedJob, status, durationMs: Date.now() - startedMs, permanent, error })
+  }
+  const continuations = async (...stages: DurableJobContinuationStage[]): Promise<void> => {
+    for (const stage of stages)
+      await opts.dispatchContinuations?.({ storedJob, stage })
+  }
+
   try {
-    const dispatch = await dispatchRegisteredJob({
+    const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
       registry: opts.registry,
       job,
       createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
     })
+    const dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())
 
     if (!dispatch.success) {
       if (opts.failDispatchFailure !== false)
         await failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed')
+      await settle('dispatch-failed', true, dispatch.error)
+      await continuations('catch', 'finally')
       opts.message.ack()
       return { status: 'dispatch-failed', dispatch, error: dispatch.error }
     }
@@ -811,11 +860,14 @@ export async function runDurableJobMessage<
       // (and, for `release`, silently drop the job instead of redelivering it).
       if (dispatch.control.action === 'failed') {
         await failDurableJob(opts.lifecycle, storedJob, dispatch.control.error ?? 'Job failed via ctx.fail()')
+        await settle('failed', true, dispatch.control.error)
+        await continuations('catch', 'finally')
         opts.message.ack()
         return { status: 'failed', dispatch }
       }
       const delaySeconds = dispatch.control.delaySeconds ?? 0
       await releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: dispatch.control.error })
+      await settle('released', false, dispatch.control.error)
       opts.message.retry({ delaySeconds })
       return { status: 'released', dispatch }
     }
@@ -827,16 +879,23 @@ export async function runDurableJobMessage<
       ? { ...(result && typeof result === 'object' ? result : {}), ...reportedStats }
       : result
     await completeDurableJob(opts.lifecycle, storedJob, completeWith)
+    await settle('completed', false)
+    await continuations('then', 'finally')
     opts.message.ack()
     return { status: 'completed', dispatch }
   }
   catch (error) {
-    // Laravel worker model: at the attempt cap, fail (→ failed_jobs) instead of
-    // releasing for another try. `job.attempts` already counts this run (claim
-    // incremented it).
+    // Terminal-failure decision: the caller's predicate (e.g. "never fail on
+    // transient infra errors") wins; default is the Laravel cap attempts >= max.
+    // `job.attempts` already counts this run (claim incremented it).
     const maxAttempts = opts.maxAttemptsOf?.(storedJob)
-    if (typeof maxAttempts === 'number' && job.attempts >= maxAttempts) {
+    const permanent = opts.isPermanentFailure
+      ? opts.isPermanentFailure({ error, storedJob, attempts: job.attempts, maxAttempts })
+      : (typeof maxAttempts === 'number' && job.attempts >= maxAttempts)
+    if (permanent) {
       await failDurableJob(opts.lifecycle, storedJob, describeCause(error))
+      await settle('exhausted', true, error)
+      await continuations('catch', 'finally')
       opts.message.ack()
       return { status: 'exhausted', error: jobErrors.handlerThrew(error) }
     }
@@ -847,6 +906,7 @@ export async function runDurableJobMessage<
       delaySeconds,
       error: describeCause(error),
     })
+    await settle('errored', false, error)
     opts.message.retry({ delaySeconds })
     return { status: 'errored', error: jobErrors.handlerThrew(error) }
   }

@@ -68,7 +68,7 @@ function ctxFactory(control: JobControlResult): JobContext<unknown, unknown, unk
   }
 }
 
-async function setup(handlers: Handlers, extra: { metricsSink?: { record: (e: JobMetricsEvent) => void }, onBatchProgress?: (p: unknown) => void, onLog?: (e: { stage: string, taskName?: string, jobId?: string, error?: string }) => void } = {}) {
+async function setup(handlers: Handlers, extra: Record<string, unknown> = {}) {
   const d1 = createSqliteD1()
   const { messages, binding } = createQueueBinding()
   const runtime = createDurableJobsRuntime({
@@ -339,6 +339,65 @@ describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
     // onFinish enqueued exactly once → exactly one 'finish' row (jobs: member0 + finish)
     expect(rows(d1, 'jobs')).toBe(2)
     expect(rows(d1, 'failed_jobs')).toBe(1)
+  })
+})
+
+describe('gscdump-parity hooks', () => {
+  it('wrapDispatch wraps the run; onSettled + then/finally continuations fire on success', async () => {
+    const order: string[] = []
+    const settled: Array<{ status: string, permanent: boolean, hasDuration: boolean }> = []
+    const conts: string[] = []
+    const { runtime } = await setup(
+      { work: async () => { order.push('run') }, finish: async () => {} },
+      {
+        createJobScope: () => ({
+          wrapDispatch: async (run: () => Promise<unknown>) => { order.push('before'); const r = await run(); order.push('after'); return r },
+          onSettled: (s: { status: string, permanent: boolean, durationMs: number }) => { settled.push({ status: s.status, permanent: s.permanent, hasDuration: typeof s.durationMs === 'number' }) },
+        }),
+        dispatchContinuations: ({ stage }: { stage: string }) => { conts.push(stage) },
+      },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    await runtime.consumeMessage(msg(jobIds[0]!))
+
+    expect(order).toEqual(['before', 'run', 'after'])
+    expect(settled).toEqual([{ status: 'completed', permanent: false, hasDuration: true }])
+    expect(conts).toEqual(['then', 'finally'])
+  })
+
+  it('isPermanentFailure decides retry vs terminal; catch/finally continuations on terminal', async () => {
+    const conts: string[] = []
+    // transient errors are never permanent → always released for retry
+    const { d1, runtime } = await setup(
+      { boom: async () => { throw new Error('TRANSIENT: rate limited') } },
+      {
+        isPermanentFailure: ({ error }: { error: unknown }) => !/TRANSIENT/.test(String(error)),
+        dispatchContinuations: ({ stage }: { stage: string }) => { conts.push(stage) },
+      },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'boom', payload: {} } })
+    d1._db.prepare('UPDATE jobs SET max_attempts = 1 WHERE id = ?').run(jobIds[0]!) // at the cap
+
+    const m = msg(jobIds[0]!)
+    const r = await runtime.consumeMessage(m)
+    expect(r.run.status).toBe('errored') // transient → retried, NOT exhausted, despite attempts >= max
+    expect(m.retry).toHaveBeenCalled()
+    expect(conts).toEqual([]) // no continuations on a retry
+    expect(rows(d1, 'failed_jobs')).toBe(0)
+  })
+
+  it('maxBatchCpuMs defers remaining messages', async () => {
+    const ran: string[] = []
+    const { runtime } = await setup(
+      { work: async () => { ran.push('x') } },
+      { maxBatchCpuMs: -1, cpuGuardRetryDelaySeconds: 9 }, // budget already blown
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'work', payload: {} } })
+    const m = { body: { jobId: jobIds[0]! }, attempts: 1, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs', messages: [m] })
+
+    expect(ran).toEqual([]) // never dispatched — deferred by the guard
+    expect(m.retry).toHaveBeenCalledWith({ delaySeconds: 9 })
   })
 })
 

@@ -185,6 +185,18 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   isDlqQueue?: (queue: string) => boolean
   isDuplicate?: (id: string | undefined) => boolean
   onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+  // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
+  createJobScope?: RunDurableJobMessageOptions<unknown, DispatchableJob>['createJobScope']
+  isPermanentFailure?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isPermanentFailure']
+  dispatchContinuations?: RunDurableJobMessageOptions<unknown, DispatchableJob>['dispatchContinuations']
+  /**
+   * Soft batch CPU budget (ms). Before each message, if the batch has run longer
+   * than this, the remaining messages are retried instead of processed — so a
+   * heavy batch can't blow the Worker CPU limit mid-message.
+   */
+  maxBatchCpuMs?: number
+  /** Delay (s) for messages deferred by the CPU guard. Default 5. */
+  cpuGuardRetryDelaySeconds?: number
 }
 
 function defaultIsDlqQueue(queue: string): boolean {
@@ -229,7 +241,15 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
     return
   }
 
+  const batchStartedMs = Date.now()
+  const cpuBudget = opts.maxBatchCpuMs
   for (const message of opts.batch.messages) {
+    // CPU guard: defer the rest of the batch once we've burned the budget.
+    if (cpuBudget != null && Date.now() - batchStartedMs > cpuBudget) {
+      message.retry({ delaySeconds: opts.cpuGuardRetryDelaySeconds ?? 5 })
+      continue
+    }
+
     const body = (message.body ?? {}) as Record<string, unknown>
     const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
     if (jobId) {
@@ -243,6 +263,9 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         retryDelaySeconds: opts.retryDelaySeconds,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
+        createJobScope: opts.createJobScope,
+        isPermanentFailure: opts.isPermanentFailure,
+        dispatchContinuations: opts.dispatchContinuations,
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
@@ -307,6 +330,17 @@ export interface CreateDurableJobsRuntimeOptions<
   dedup?: Set<string>
   /** Diagnostic log sink for DLQ / dropped lightweight messages. */
   onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+  // ── per-job hooks (durable path) ──
+  /** Per-job scope: wrap dispatch (e.g. telemetry) + observe each settlement. */
+  createJobScope?: RunDurableJobMessageOptions<unknown, DispatchableJob>['createJobScope']
+  /** Decide whether a thrown error is terminal (default: attempts >= max). */
+  isPermanentFailure?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isPermanentFailure']
+  /** Dispatch then/catch/finally payload continuations after a terminal outcome. */
+  dispatchContinuations?: RunDurableJobMessageOptions<unknown, DispatchableJob>['dispatchContinuations']
+  /** Soft per-batch CPU budget (ms); remaining messages are deferred once exceeded. */
+  maxBatchCpuMs?: number
+  /** Delay (s) for CPU-guard-deferred messages. Default 5. */
+  cpuGuardRetryDelaySeconds?: number
 }
 
 const DEFAULT_DEDUP_CAPACITY = 1024
@@ -407,6 +441,9 @@ export function createDurableJobsRuntime<
       createJobContext: opts.createJobContext,
       retryDelaySeconds: opts.retryDelaySeconds,
       maxAttemptsOf: stored => stored.max_attempts,
+      createJobScope: opts.createJobScope,
+      isPermanentFailure: opts.isPermanentFailure,
+      dispatchContinuations: opts.dispatchContinuations,
       dispatchOnFinish,
       onBatchProgress: opts.onBatchProgress,
     }),
@@ -422,6 +459,11 @@ export function createDurableJobsRuntime<
       isDlqQueue: opts.isDlqQueue,
       isDuplicate,
       onLog: opts.onLog,
+      createJobScope: opts.createJobScope,
+      isPermanentFailure: opts.isPermanentFailure,
+      dispatchContinuations: opts.dispatchContinuations,
+      maxBatchCpuMs: opts.maxBatchCpuMs,
+      cpuGuardRetryDelaySeconds: opts.cpuGuardRetryDelaySeconds,
     }),
     prune: pruneOpts => pruneDurableJobs(repository, pruneOpts),
   }
