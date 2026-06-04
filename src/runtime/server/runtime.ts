@@ -7,15 +7,20 @@ import type {
   DurableJobContinuation,
   DurableJobRecord,
   EnqueueDurableJobResult,
+  PruneDurableJobsOptions,
+  PruneDurableJobsResult,
   QueuePublisher,
   RunDurableJobMessageOptions,
   RunDurableJobMessageResult,
 } from './outbox'
-import type { DispatchableJob, JobDefinition, JobHandler } from './types'
+import type { DispatchableJob, JobDefinition, JobHandler, QueueBatch, QueueMessage } from './types'
 import { createD1DurableBatchStore, createJobBatch, settleBatchMember } from './batch'
 import { createD1DurableJobRepository } from './d1'
+import { dispatchRegisteredJob } from './dispatch'
+import { formatJobError } from './errors'
 import { metricsSinkToRepoHooks } from './metrics'
-import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, runDurableJobMessage } from './outbox'
+import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
+import { resolveJobRetryDelay } from './policy'
 
 // ============================================
 // Consumer loop: claim → run → settle → progress
@@ -88,7 +93,169 @@ export async function runDurableJobBatchMessage<
 }
 
 // ============================================
-// Runtime factory: one call → enqueue / batch / consume
+// Lightweight (non-durable `_task`) message
+// ============================================
+//
+// A `{ _task }` payload has no `jobs` row — it dispatches directly, deduped per
+// isolate (durable messages are deduped by `claimJob`). Mirrors the durable
+// path's control handling minus the persistence.
+
+export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logger = unknown> {
+  message: Pick<QueueMessage, 'id' | 'body' | 'attempts' | 'ack' | 'retry'>
+  registry: DurableJobsRuntimeRegistry<Env, Db, Logger>
+  createJobContext: ConsumerContextFactory<Env, Db, Logger>
+  /** Per-isolate dedup of at-least-once redeliveries. Return true to drop. */
+  isDuplicate?: (id: string | undefined) => boolean
+  /** Diagnostic sink for dropped/invalid messages (no throw). */
+  onLog?: (event: { stage: string, taskName?: string, error?: string }) => void
+}
+
+export type RunLightweightMessageResult
+  = | { status: 'invalid' | 'duplicate' | 'dispatch-failed' | 'released' | 'completed' | 'errored' }
+
+export async function runLightweightMessage<Env, Db, Logger>(
+  opts: RunLightweightMessageOptions<Env, Db, Logger>,
+): Promise<RunLightweightMessageResult> {
+  const { message, registry, createJobContext } = opts
+  const body = (message.body ?? {}) as Record<string, unknown>
+  const taskName = typeof body._task === 'string' ? body._task : ''
+  const definition = taskName ? registry.getJobDefinition?.(taskName) : undefined
+  if (!definition) {
+    opts.onLog?.({ stage: 'invalid_payload', taskName, error: taskName ? `No handler for task: ${taskName}` : 'No _task in payload' })
+    message.ack()
+    return { status: 'invalid' }
+  }
+
+  if (opts.isDuplicate?.(message.id)) {
+    message.ack()
+    return { status: 'duplicate' }
+  }
+
+  const job: DispatchableJob = {
+    id: `${taskName}:${typeof body.jobId === 'string' ? body.jobId : crypto.randomUUID()}`,
+    queue: definition.queue ?? '',
+    payload: body,
+    attempts: message.attempts,
+    batchId: null,
+    siteId: typeof body.siteId === 'string' ? body.siteId : null,
+    userId: typeof body.userId === 'number' ? body.userId : null,
+  }
+
+  try {
+    const dispatch = await dispatchRegisteredJob({
+      registry,
+      job,
+      createContext: ({ control }) => createJobContext({ job, storedJob: job, taskName, payload: job.payload, control }),
+    })
+    if (!dispatch.success) {
+      opts.onLog?.({ stage: 'invalid_payload', taskName, error: dispatch.error ? formatJobError(dispatch.error) : 'invalid payload' })
+      message.ack()
+      return { status: 'dispatch-failed' }
+    }
+    if (dispatch.control?.action === 'released') {
+      message.retry({ delaySeconds: dispatch.control.delaySeconds ?? 0 })
+      return { status: 'released' }
+    }
+    message.ack()
+    return { status: 'completed' }
+  }
+  catch (error) {
+    // Rely on CF max_retries → DLQ for terminal exhaustion.
+    const delaySeconds = resolveJobRetryDelay(definition, message.attempts)
+    opts.onLog?.({ stage: 'unexpected', taskName, error: error instanceof Error ? error.message : String(error) })
+    message.retry({ delaySeconds })
+    return { status: 'errored' }
+  }
+}
+
+// ============================================
+// Full queue-batch consumer (DLQ + durable + lightweight)
+// ============================================
+
+export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger> {
+  batch: QueueBatch
+  repository: D1DurableJobRepository<Queue>
+  store: DurableBatchStore
+  registry: DurableJobsRuntimeRegistry<Env, Db, Logger>
+  createJobContext: ConsumerContextFactory<Env, Db, Logger>
+  dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
+  onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
+  retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
+  /** Defaults to a `-dlq` suffix check. */
+  isDlqQueue?: (queue: string) => boolean
+  isDuplicate?: (id: string | undefined) => boolean
+  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+}
+
+function defaultIsDlqQueue(queue: string): boolean {
+  return queue.includes('-dlq')
+}
+
+/**
+ * Process one CF queue batch end-to-end — the loop both apps hand-roll:
+ * - a DLQ-queue batch settles each durable member (failed) so a CF-exhausted
+ *   message can't hang its batch;
+ * - `{ jobId }` envelopes take the durable path (claim → run → settle + progress);
+ * - `{ _task }` payloads take the lightweight path.
+ */
+export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
+  opts: ConsumeQueueBatchOptions<Queue, Env, Db, Logger>,
+): Promise<void> {
+  const isDlq = opts.isDlqQueue ?? defaultIsDlqQueue
+
+  if (isDlq(opts.batch.queue)) {
+    for (const message of opts.batch.messages) {
+      const body = (message.body ?? {}) as Record<string, unknown>
+      const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
+      opts.onLog?.({ stage: 'dlq', queue: opts.batch.queue, taskName: typeof body._task === 'string' ? body._task : undefined, jobId })
+      if (jobId) {
+        // Laravel's "exhausted → failed_jobs" transition. CF has given up on this
+        // message, so move the row to failed_jobs (terminal): it leaves `jobs`
+        // (no leak, an outbox sweep can't re-dispatch it) and becomes
+        // retry/forget/prune-able. Then settle so the batch can't hang. All
+        // best-effort — a raced claim/settle is recovered by reclaim/recovery.
+        const claimed = await opts.repository.claimJob(jobId).catch(() => null)
+        if (claimed)
+          await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)').catch(() => {})
+        await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
+          .then(r => r.progress && opts.onBatchProgress ? opts.onBatchProgress(r.progress) : undefined)
+          .catch(() => {})
+      }
+      message.ack()
+    }
+    return
+  }
+
+  for (const message of opts.batch.messages) {
+    const body = (message.body ?? {}) as Record<string, unknown>
+    const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
+    if (jobId) {
+      await runDurableJobBatchMessage({
+        message,
+        lifecycle: opts.repository,
+        registry: opts.registry,
+        store: opts.store,
+        toDispatchableJob: opts.repository.toDispatchableJob,
+        createJobContext: opts.createJobContext,
+        retryDelaySeconds: opts.retryDelaySeconds,
+        dispatchOnFinish: opts.dispatchOnFinish,
+        onBatchProgress: opts.onBatchProgress,
+      })
+    }
+    else {
+      await runLightweightMessage({
+        message,
+        registry: opts.registry,
+        createJobContext: opts.createJobContext,
+        isDuplicate: opts.isDuplicate,
+        onLog: opts.onLog,
+      })
+    }
+  }
+}
+
+// ============================================
+// Runtime factory: one call → enqueue / batch / consume / prune
 // ============================================
 
 export interface DurableJobsRuntimeRegistry<Env = unknown, Db = unknown, Logger = unknown> {
@@ -124,6 +291,36 @@ export interface CreateDurableJobsRuntimeOptions<
   /** Per-throw retry backoff for the consumer. */
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
+  /** Classify a queue as a dead-letter queue (defaults to a `-dlq` suffix check). */
+  isDlqQueue?: (queue: string) => boolean
+  /**
+   * Per-isolate dedup set for the lightweight `_task` path. Pass a module-level
+   * Set so redeliveries dedup across invocations (durable jobs are claim-guarded,
+   * so they don't need this).
+   */
+  dedup?: Set<string>
+  /** Diagnostic log sink for DLQ / dropped lightweight messages. */
+  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+}
+
+const DEFAULT_DEDUP_CAPACITY = 1024
+
+function makeIsDuplicate(seen: Set<string> | undefined): ((id: string | undefined) => boolean) | undefined {
+  if (!seen)
+    return undefined
+  return (id) => {
+    if (!id)
+      return false
+    if (seen.has(id))
+      return true
+    seen.add(id)
+    if (seen.size > DEFAULT_DEDUP_CAPACITY) {
+      const first = seen.values().next().value
+      if (first !== undefined)
+        seen.delete(first)
+    }
+    return false
+  }
 }
 
 export interface DurableJobsRuntime<Queue extends string = string> {
@@ -134,8 +331,12 @@ export interface DurableJobsRuntime<Queue extends string = string> {
   enqueue: (record: DurableJobRecord<Queue>, opts?: { delaySeconds?: number }) => Promise<EnqueueDurableJobResult>
   /** Register + dispatch a batch; `onFinish` fires once every member settles. */
   createBatch: (opts: Omit<CreateJobBatchOptions<string, Record<string, unknown>, Queue>, 'store' | 'repository' | 'publisher'>) => Promise<CreateJobBatchResult>
-  /** Run one queue message end-to-end (lifecycle + batch settle + progress). */
+  /** Run one durable queue message end-to-end (lifecycle + batch settle + progress). */
   consumeMessage: (message: ConsumerMessage) => Promise<RunDurableJobBatchMessageResult>
+  /** Process a whole CF queue batch (DLQ + durable + lightweight) — the consumer entrypoint. */
+  consumeBatch: (batch: QueueBatch) => Promise<void>
+  /** Prune terminal rows (completed jobs / finished batches / failed jobs). */
+  prune: (opts: PruneDurableJobsOptions) => Promise<PruneDurableJobsResult>
 }
 
 /**
@@ -169,6 +370,8 @@ export function createDurableJobsRuntime<
     await enqueueDurableJob(repository, publisher, record as DurableJobRecord<Queue>)
   }
 
+  const isDuplicate = makeIsDuplicate(opts.dedup)
+
   return {
     repository,
     store,
@@ -191,5 +394,19 @@ export function createDurableJobsRuntime<
       dispatchOnFinish,
       onBatchProgress: opts.onBatchProgress,
     }),
+    consumeBatch: batch => consumeQueueBatch({
+      batch,
+      repository,
+      store,
+      registry: opts.registry,
+      createJobContext: opts.createJobContext,
+      dispatchOnFinish,
+      onBatchProgress: opts.onBatchProgress,
+      retryDelaySeconds: opts.retryDelaySeconds,
+      isDlqQueue: opts.isDlqQueue,
+      isDuplicate,
+      onLog: opts.onLog,
+    }),
+    prune: pruneOpts => pruneDurableJobs(repository, pruneOpts),
   }
 }

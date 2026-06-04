@@ -7,6 +7,7 @@ import {
   failedJobsSql,
   flushSql,
   forgetSql,
+  pruneSql,
   retrySql,
   sqlString,
   summarizeBackpressure,
@@ -56,6 +57,16 @@ describe('cli queries', () => {
     expect(flushSql('billing')).toBe(`DELETE FROM failed_jobs WHERE queue = 'billing'`)
     expect(clearSql({ state: 'reserved' })).toContain('reserved_at IS NOT NULL')
     expect(clearSql({})).toContain('completed_at IS NULL AND failed_at IS NULL')
+  })
+
+  it('prune deletes terminal rows past retention, jobs before batches (FK order)', () => {
+    const sql = pruneSql({ completedHours: 24, failedHours: 168, batchesHours: 72 })
+    expect(sql).toContain('DELETE FROM jobs WHERE completed_at IS NOT NULL AND completed_at <= unixepoch() - 86400')
+    expect(sql).toContain('DELETE FROM failed_jobs WHERE failed_at <= unixepoch() - 604800')
+    expect(sql).toContain('DELETE FROM job_batches WHERE finished_at IS NOT NULL AND finished_at <= unixepoch() - 259200')
+    // jobs + failed_jobs pruned before job_batches (the FK target)
+    expect(sql.indexOf('FROM jobs')).toBeLessThan(sql.indexOf('FROM job_batches'))
+    expect(sql.indexOf('FROM failed_jobs')).toBeLessThan(sql.indexOf('FROM job_batches'))
   })
 
   it('honours custom table names', () => {

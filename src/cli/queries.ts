@@ -167,6 +167,37 @@ export function flushSql(queue: string | undefined, t: TableNames = defaultTable
   return `DELETE FROM ${t.failed} ${queue ? `WHERE queue = ${sqlString(queue)}` : ''}`.trimEnd()
 }
 
+/** Delete soft-completed jobs older than `hours` (artisan-style retention prune). */
+export function pruneCompletedJobsSql(hours: number, t: TableNames = defaultTableNames): string {
+  return `DELETE FROM ${t.jobs} WHERE completed_at IS NOT NULL AND completed_at <= unixepoch() - ${sqlInt(hours * 3600)}`
+}
+
+/** Delete failed jobs older than `hours` (artisan queue:prune-failed --hours). */
+export function pruneFailedJobsSql(hours: number, t: TableNames = defaultTableNames): string {
+  return `DELETE FROM ${t.failed} WHERE failed_at <= unixepoch() - ${sqlInt(hours * 3600)}`
+}
+
+/** Delete finished batches older than `hours` (artisan queue:prune-batches --hours). */
+export function pruneFinishedBatchesSql(hours: number, t: TableNames = defaultTableNames): string {
+  return `DELETE FROM ${t.batches} WHERE finished_at IS NOT NULL AND finished_at <= unixepoch() - ${sqlInt(hours * 3600)}`
+}
+
+/**
+ * Combined retention prune across all three tables. Member jobs (completed +
+ * failed) are pruned BEFORE finished batches so the `jobs.batch_id` FK can't be
+ * violated where D1 enforces it.
+ */
+export function pruneSql(
+  opts: { completedHours: number, failedHours: number, batchesHours: number },
+  t: TableNames = defaultTableNames,
+): string {
+  return [
+    pruneCompletedJobsSql(opts.completedHours, t),
+    pruneFailedJobsSql(opts.failedHours, t),
+    pruneFinishedBatchesSql(opts.batchesHours, t),
+  ].join(';\n')
+}
+
 /** Delete live (not-yet-completed) jobs, optionally scoped to a queue/state. */
 export function clearSql(filters: { queue?: string, state?: JobState } = {}, t: TableNames = defaultTableNames): string {
   return `DELETE FROM ${t.jobs}

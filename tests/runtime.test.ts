@@ -146,3 +146,101 @@ describe('createDurableJobsRuntime — failed member', () => {
     expect(events.map(e => e.status).sort()).toEqual(['completed', 'failed'])
   })
 })
+
+describe('runDurableJobMessage control handling (lifecycle fix)', () => {
+  it('ctx.fail() persists to failed_jobs, settles, and records a failed metric', async () => {
+    const events: JobMetricsEvent[] = []
+    const { d1, runtime } = await setup(
+      { stop: async (_p, ctx) => { await ctx.fail('deliberate') }, finish: async () => {} },
+      { metricsSink: { record: e => void events.push(e) } },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('stop', {})], onFinish: { name: 'finish', payload: {} } })
+
+    const r = await runtime.consumeMessage(msg(jobIds[0]!))
+    expect(r.run.status).toBe('failed')
+    expect(r.settled?.batchComplete).toBe(true)
+    expect(rows(d1, 'failed_jobs')).toBe(1)
+    expect(rows(d1, 'jobs')).toBe(1) // only the durably-enqueued onFinish 'finish' remains
+    expect(events.map(e => e.status)).toEqual(['failed'])
+  })
+
+  it('ctx.release() redelivers the message (retry) instead of dropping it', async () => {
+    const m = msg('will-be-set')
+    const { d1, runtime } = await setup({ flaky: async (_p, ctx) => { await ctx.release(7) } })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('flaky', {})], onFinish: { name: 'flaky', payload: {} } })
+    m.body.jobId = jobIds[0]!
+
+    const r = await runtime.consumeMessage(m)
+    expect(r.run.status).toBe('released')
+    expect(r.settled).toBeNull() // not terminal → batch not settled
+    expect(m.retry).toHaveBeenCalledWith({ delaySeconds: 7 })
+    expect(m.ack).not.toHaveBeenCalled()
+    // released, not dropped: row survives with its reservation cleared
+    const row = d1._db.prepare('SELECT reserved_at, completed_at, failed_at FROM jobs WHERE id = ?').get(jobIds[0]!) as { reserved_at: number | null, completed_at: number | null, failed_at: number | null }
+    expect(row).toMatchObject({ reserved_at: null, completed_at: null, failed_at: null })
+  })
+})
+
+describe('consumeBatch', () => {
+  it('routes a lightweight _task message and dedups redeliveries', async () => {
+    const ran: number[] = []
+    const dedup = new Set<string>()
+    const d1 = createSqliteD1()
+    const { binding } = createQueueBinding()
+    const runtime = createDurableJobsRuntime({
+      db: d1,
+      env: { Q: binding },
+      registry: createRegistry({ light: async p => void ran.push(p.n as number) }),
+      resolveQueueBinding: () => 'Q',
+      createJobContext: ({ control }) => ctxFactory(control),
+      dedup,
+    })
+    await runtime.repository.migrate()
+
+    const m1 = { id: 'm1', body: { _task: 'light', n: 1 }, attempts: 1, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs', messages: [m1] })
+    expect(ran).toEqual([1])
+    expect(m1.ack).toHaveBeenCalled()
+
+    // same message id redelivered → deduped (handler not run again)
+    const m1b = { id: 'm1', body: { _task: 'light', n: 1 }, attempts: 2, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs', messages: [m1b] })
+    expect(ran).toEqual([1])
+    expect(m1b.ack).toHaveBeenCalled()
+  })
+
+  it('settles a durable member off a DLQ batch so it cannot hang', async () => {
+    const { d1, runtime } = await setup({ work: async () => {}, finish: async () => {} })
+    const { jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {}), await prepare('work', {})],
+      onFinish: { name: 'finish', payload: {} },
+    })
+    // first member completes normally; second lands in the DLQ
+    await runtime.consumeBatch({ queue: 'jobs', messages: [msg(jobIds[0]!)] })
+    const dlqMsg = { body: { jobId: jobIds[1]! }, attempts: 5, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs-dlq', messages: [dlqMsg] })
+
+    expect(dlqMsg.ack).toHaveBeenCalled()
+    // both members settled → batch finished → onFinish enqueued 'finish' durably
+    const batch = d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches').get() as { pending_jobs: number, finished_at: number | null }
+    expect(batch.pending_jobs).toBe(0)
+    expect(batch.finished_at).toBeTypeOf('number')
+    // DLQ'd member moved to failed_jobs (Laravel exhausted→failed); jobs holds the
+    // completed member0 + the durably-enqueued 'finish'.
+    expect(rows(d1, 'failed_jobs')).toBe(1)
+    expect(rows(d1, 'jobs')).toBe(2)
+  })
+})
+
+describe('runtime.prune', () => {
+  it('prunes completed rows past their cutoff', async () => {
+    const { d1, runtime } = await setup({ work: async () => {} })
+    const rec = await prepare('work', {})
+    await runtime.repository.insertJob(rec)
+    d1._db.prepare('UPDATE jobs SET completed_at = ? WHERE id = ?').run(Math.floor(Date.now() / 1000) - 100_000, rec.id)
+
+    const result = await runtime.prune({ completedBefore: Math.floor(Date.now() / 1000) })
+    expect(result.completedJobs).toBe(1)
+    expect(rows(d1, 'jobs')).toBe(0)
+  })
+})

@@ -782,8 +782,17 @@ export async function runDurableJobMessage<
     }
 
     if (dispatch.control?.handled) {
-      opts.message.ack()
-      return { status: dispatch.control.action === 'failed' ? 'failed' : 'released', dispatch }
+      // Persist the control outcome — an ack alone would leave the row reserved
+      // (and, for `release`, silently drop the job instead of redelivering it).
+      if (dispatch.control.action === 'failed') {
+        await failDurableJob(opts.lifecycle, storedJob, dispatch.control.error ?? 'Job failed via ctx.fail()')
+        opts.message.ack()
+        return { status: 'failed', dispatch }
+      }
+      const delaySeconds = dispatch.control.delaySeconds ?? 0
+      await releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: dispatch.control.error })
+      opts.message.retry({ delaySeconds })
+      return { status: 'released', dispatch }
     }
 
     await completeDurableJob(opts.lifecycle, storedJob, await opts.completeResult?.({ job: storedJob, dispatch }))

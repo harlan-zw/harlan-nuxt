@@ -57,6 +57,7 @@ export const cfJobs = sqliteTable('jobs', {
   index('idx_jobs_batch').on(t.batchId),
   index('idx_jobs_trace').on(t.traceId),
   index('idx_jobs_sync_dedup').on(t.siteId, t.jobType),
+  index('idx_jobs_completed_at').on(t.completedAt).where(sql`completed_at IS NOT NULL`),
   uniqueIndex('idx_jobs_unique_active').on(t.uniqueKey).where(sql`unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
 ])
 

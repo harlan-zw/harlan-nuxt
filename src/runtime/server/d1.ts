@@ -139,6 +139,8 @@ export const d1DurableJobMigrationSql = [
   'CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs (batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_trace ON jobs (trace_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_sync_dedup ON jobs (site_id, job_type)',
+  // Partial index backing pruneCompletedJobs (completed_at IS NOT NULL AND <= ?).
+  'CREATE INDEX IF NOT EXISTS idx_jobs_completed_at ON jobs (completed_at) WHERE completed_at IS NOT NULL',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_unique_active ON jobs (unique_key) WHERE unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_queue ON failed_jobs (queue)',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_site ON failed_jobs (site_id)',

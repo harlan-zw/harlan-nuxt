@@ -24,6 +24,7 @@ import {
   failedJobsSql,
   flushSql,
   forgetSql,
+  pruneSql,
   retrySql,
   staleReservedSql,
   summarizeBackpressure,
@@ -277,6 +278,35 @@ const clear = defineCommand({
   },
 })
 
+const prune = defineCommand({
+  meta: { name: 'prune', description: 'Delete terminal rows past retention (artisan queue:prune-batches + queue:prune-failed)' },
+  args: {
+    ...sharedArgs,
+    'completed-hours': { type: 'string', description: 'Completed-jobs retention in hours', default: '24' },
+    'failed-hours': { type: 'string', description: 'Failed-jobs retention in hours', default: '168' },
+    'batches-hours': { type: 'string', description: 'Finished-batches retention in hours', default: '72' },
+    'yes': { type: 'boolean', alias: 'y', description: 'Skip confirmation', default: false },
+  },
+  async run({ args }) {
+    const { target, tables } = context(args as SharedArgs)
+    const hours = {
+      completedHours: Number(args['completed-hours']),
+      failedHours: Number(args['failed-hours']),
+      batchesHours: Number(args['batches-hours']),
+    }
+    if (Object.values(hours).some(h => !Number.isFinite(h) || h < 0)) {
+      process.stderr.write(`${color.red('✗')} --*-hours must be non-negative numbers.\n`)
+      process.exitCode = 1
+      return
+    }
+    const scope = `completed >${hours.completedHours}h, failed >${hours.failedHours}h, batches >${hours.batchesHours}h`
+    if (!(await confirm(`Prune ${scope} (${target.remote ? 'remote' : 'local'})?`, args.yes)))
+      return
+    await execD1(target, `${pruneSql(hours, tables)};`)
+    process.stdout.write(`${color.green('✓')} Pruned ${scope}.\n`)
+  },
+})
+
 const migrate = defineCommand({
   meta: { name: 'migrate', description: 'Create the job tables/indexes in D1' },
   args: {
@@ -353,7 +383,7 @@ const main: CommandDef = defineCommand({
     description: 'Inspect and manage nuxt-cf-jobs durable jobs in Cloudflare D1',
   },
   args: sharedArgs,
-  subCommands: { status, jobs, failed, retry, forget, flush, clear, migrate, schedule, tasks },
+  subCommands: { status, jobs, failed, retry, forget, flush, clear, prune, migrate, schedule, tasks },
   async run({ args, rawArgs }) {
     // No subcommand → default to the status overview.
     if (rawArgs.length === 0 || rawArgs.every(a => a.startsWith('-')))
