@@ -1,6 +1,7 @@
 import type {
   DurableJobFailureRepository,
   DurableJobLifecycle,
+  DurableJobPruneRepository,
   DurableJobRecord,
   DurableJobRecoveryRepository,
   DurableJobRepository,
@@ -104,6 +105,7 @@ export type D1DurableJobRepository<Queue extends string = string>
     & DurableJobRecoveryRepository<Queue, D1DurableJobRecord<Queue>>
     & DurableJobLifecycle<D1DurableJobRecord<Queue>>
     & DurableJobFailureRepository
+    & DurableJobPruneRepository
     & {
       migrate: () => Promise<void>
       insertJobs: (
@@ -150,6 +152,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 ): D1DurableJobRepository<Queue> {
   const jobsTable = opts.jobsTable ?? 'jobs'
   const failedJobsTable = opts.failedJobsTable ?? 'failed_jobs'
+  const batchesTable = opts.batchesTable ?? 'job_batches'
 
   const insertJobSql = `
     INSERT OR IGNORE INTO ${jobsTable} (
@@ -396,7 +399,56 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         userId: job.user_id,
       }
     },
+
+    async pruneCompletedJobs(query) {
+      // Only soft-completed rows (completed_at IS NOT NULL) — never in-flight ones.
+      return await pruneInChunks(db, jobsTable, 'completed_at IS NOT NULL AND completed_at <= ?', query)
+    },
+
+    async pruneFailedJobs(query) {
+      // failed_jobs.failed_at is always set; the predicate is just the age cutoff.
+      return await pruneInChunks(db, failedJobsTable, 'failed_at <= ?', query)
+    },
+
+    async pruneFinishedBatches(query) {
+      // Only terminal batches (finished_at IS NOT NULL) — an in-flight batch lingers.
+      return await pruneInChunks(db, batchesTable, 'finished_at IS NOT NULL AND finished_at <= ?', query)
+    },
   }
+}
+
+const DEFAULT_PRUNE_CHUNK = 1000
+
+/**
+ * Chunked DELETE so a large backlog never exceeds D1's per-statement row cap.
+ * `whereClause` is a SQL predicate ending in a single `?` for the `before` cutoff;
+ * it is composed from a fixed table name + fixed literal, never user input. Loops
+ * until a chunk deletes fewer than the chunk size, summing the total removed.
+ */
+async function pruneInChunks(
+  db: D1DatabaseLike,
+  table: string,
+  whereClause: string,
+  query: { before: number, limit?: number },
+): Promise<number> {
+  const chunk = Math.max(1, query.limit ?? DEFAULT_PRUNE_CHUNK)
+  const sql = `
+    DELETE FROM ${table}
+    WHERE id IN (
+      SELECT id FROM ${table}
+      WHERE ${whereClause}
+      LIMIT ?
+    )
+  `
+  let total = 0
+  for (;;) {
+    const result = await db.prepare(sql).bind(query.before, chunk).run()
+    const changes = result.meta?.changes ?? 0
+    total += changes
+    if (changes < chunk)
+      break
+  }
+  return total
 }
 
 function currentUnixSeconds(): number {

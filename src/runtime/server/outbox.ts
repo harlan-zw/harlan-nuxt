@@ -172,6 +172,73 @@ export interface DurableJobRecoveryRepository<
   releaseStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
 }
 
+export interface PruneDurableJobsQuery {
+  /** Unix-seconds cutoff: terminal rows with a timestamp at or before this are deleted. */
+  before: number
+  /**
+   * Max rows deleted per statement. Implementations chunk the delete in a loop
+   * (D1 caps rows touched per statement), so the full backlog older than `before`
+   * is removed regardless of this value. Defaults to the implementation's chunk size.
+   */
+  limit?: number
+}
+
+/**
+ * Pruning the three terminal-row tables (Laravel `queue:prune-batches` /
+ * `queue:prune-failed` parity). Each method deletes only rows that are genuinely
+ * terminal (completed / failed / finished) and older than `before`, returning the
+ * total deleted. In-flight rows (`completed_at`/`failed_at`/`finished_at` IS NULL)
+ * are never touched.
+ */
+export interface DurableJobPruneRepository {
+  /** Delete `jobs` rows with `completed_at <= before` (soft-completed, kept for observability). */
+  pruneCompletedJobs: (query: PruneDurableJobsQuery) => Promise<number>
+  /** Delete `job_batches` rows with `finished_at <= before` (terminal batches). */
+  pruneFinishedBatches: (query: PruneDurableJobsQuery) => Promise<number>
+  /** Delete `failed_jobs` rows with `failed_at <= before`. */
+  pruneFailedJobs: (query: PruneDurableJobsQuery) => Promise<number>
+}
+
+export interface PruneDurableJobsOptions {
+  /** Cutoff for `completeJob`-soft-completed `jobs` rows. Omit to skip. */
+  completedBefore?: number
+  /** Cutoff for terminal `job_batches` rows. Omit to skip. */
+  finishedBatchesBefore?: number
+  /** Cutoff for `failed_jobs` rows. Omit to skip. */
+  failedBefore?: number
+  /** Per-statement chunk size forwarded to each prune method. */
+  limit?: number
+}
+
+export interface PruneDurableJobsResult {
+  completedJobs: number
+  finishedBatches: number
+  failedJobs: number
+}
+
+/**
+ * Convenience over {@link DurableJobPruneRepository} that prunes all three tables
+ * with independent cutoffs. Ordering matters: `jobs.batch_id` FKs `job_batches(id)`,
+ * so member jobs (completed + failed) are pruned BEFORE their batches — otherwise a
+ * batch delete can violate the FK where D1 enforces it. A cutoff left `undefined`
+ * skips that table (the corresponding count is 0).
+ */
+export async function pruneDurableJobs(
+  repository: DurableJobPruneRepository,
+  opts: PruneDurableJobsOptions,
+): Promise<PruneDurableJobsResult> {
+  const completedJobs = typeof opts.completedBefore === 'number'
+    ? await repository.pruneCompletedJobs({ before: opts.completedBefore, limit: opts.limit })
+    : 0
+  const failedJobs = typeof opts.failedBefore === 'number'
+    ? await repository.pruneFailedJobs({ before: opts.failedBefore, limit: opts.limit })
+    : 0
+  const finishedBatches = typeof opts.finishedBatchesBefore === 'number'
+    ? await repository.pruneFinishedBatches({ before: opts.finishedBatchesBefore, limit: opts.limit })
+    : 0
+  return { completedJobs, failedJobs, finishedBatches }
+}
+
 export interface PrepareDurableJobOptions<
   Name extends string,
   Payload extends object,
