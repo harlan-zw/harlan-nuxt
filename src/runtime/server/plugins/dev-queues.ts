@@ -54,9 +54,16 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
 
   nitroApp.hooks.hook('request', (event: RequestEventLike) => {
     const existing = event.context.cloudflare?.env
+    // The in-process dev queue bindings MUST win over miniflare's native queue
+    // producer bindings (nitro-cloudflare-dev instantiates `existing.QUEUE_*`
+    // from the wrangler config). If native wins, a request-path `.send()` routes
+    // to miniflare's native queue, whose consumer is NOT wired to nitro's
+    // `cloudflare:queue` hook — so durable jobs enqueue but never get claimed and
+    // the batch silently never drains. Native non-queue bindings (D1/KV/R2) are
+    // preserved: `runtime.env` only ever contains queue bindings.
     event.context.cloudflare = {
       ...(event.context.cloudflare ?? {}),
-      env: existing ? { ...runtime.env, ...existing } : runtime.env,
+      env: existing ? { ...existing, ...runtime.env } : runtime.env,
     }
     // Mirror nuxt-dev's NATIVE bindings (D1/KV/R2/…) onto the task-env shim too,
     // so the ASYNC queue consumer (`onBatch` → `cloudflare:queue`, which runs
