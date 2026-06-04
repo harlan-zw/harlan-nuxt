@@ -413,8 +413,18 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async pruneFinishedBatches(query) {
-      // Only terminal batches (finished_at IS NOT NULL) — an in-flight batch lingers.
-      return await pruneInChunks(db, batchesTable, 'finished_at IS NOT NULL AND finished_at <= ?', query)
+      // Only terminal batches (finished_at IS NOT NULL), AND only once no `jobs`
+      // row still references them — `jobs.batch_id` FKs `job_batches(id)`, so
+      // deleting a batch with a lingering (not-yet-pruned) completed member would
+      // violate the FK where D1 enforces it. This makes the prune FK-safe even
+      // when completed-jobs retention is set LONGER than batch retention; such a
+      // batch is simply pruned on a later run once its members age out.
+      return await pruneInChunks(
+        db,
+        batchesTable,
+        `finished_at IS NOT NULL AND finished_at <= ? AND NOT EXISTS (SELECT 1 FROM ${jobsTable} WHERE ${jobsTable}.batch_id = ${batchesTable}.id)`,
+        query,
+      )
     },
   }
 }

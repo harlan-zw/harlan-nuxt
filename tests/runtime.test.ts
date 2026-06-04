@@ -49,7 +49,9 @@ function createRegistry(handlers: Handlers) {
   return {
     getHandler: (name: string) => handlers[name],
     getJobDefinition: (name: string) => def(name),
-    getJobRoute: (name: string) => ({ queue: 'q', jobType: name }),
+    // Only known tasks route — an unknown onFinish continuation then fails to
+    // prepare, exercising the dispatchOnFinish error path.
+    getJobRoute: (name: string) => (name in handlers ? { queue: 'q', jobType: name } : undefined),
   }
 }
 
@@ -66,7 +68,7 @@ function ctxFactory(control: JobControlResult): JobContext<unknown, unknown, unk
   }
 }
 
-async function setup(handlers: Handlers, extra: { metricsSink?: { record: (e: JobMetricsEvent) => void }, onBatchProgress?: (p: unknown) => void } = {}) {
+async function setup(handlers: Handlers, extra: { metricsSink?: { record: (e: JobMetricsEvent) => void }, onBatchProgress?: (p: unknown) => void, onLog?: (e: { stage: string, taskName?: string, jobId?: string, error?: string }) => void } = {}) {
   const d1 = createSqliteD1()
   const { messages, binding } = createQueueBinding()
   const runtime = createDurableJobsRuntime({
@@ -268,5 +270,63 @@ describe('runtime.prune', () => {
     const result = await runtime.prune({ completedBefore: Math.floor(Date.now() / 1000) })
     expect(result.completedJobs).toBe(1)
     expect(rows(d1, 'jobs')).toBe(0)
+  })
+
+  // Codex review (Area 4): independent cutoffs must not violate the FK.
+  it('keeps a finished batch while a member job still references it (FK-safe)', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const old = now - 100_000
+    const { d1, runtime } = await setup({ work: async () => {} })
+    await runtime.store.insertBatch({ id: 'b1', totalJobs: 1, pendingJobs: 0 })
+    d1._db.prepare('UPDATE job_batches SET finished_at = ? WHERE id = ?').run(old, 'b1')
+    const rec = await prepare('work', {})
+    await runtime.repository.insertJob(rec)
+    d1._db.prepare('UPDATE jobs SET batch_id = ?, completed_at = ? WHERE id = ?').run('b1', old, rec.id)
+
+    // batch retention shorter than completed-jobs retention → member lingers
+    let r = await runtime.prune({ finishedBatchesBefore: now })
+    expect(r.finishedBatches).toBe(0) // not pruned while the member references it
+    expect(rows(d1, 'job_batches')).toBe(1)
+
+    // once the member is pruned, the batch becomes prunable
+    r = await runtime.prune({ completedBefore: now, finishedBatchesBefore: now })
+    expect(r.completedJobs).toBe(1)
+    expect(r.finishedBatches).toBe(1)
+    expect(rows(d1, 'job_batches')).toBe(0)
+  })
+})
+
+describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
+  it('does not double-settle when a DLQ message is delivered twice', async () => {
+    const { d1, runtime } = await setup({ work: async () => {}, finish: async () => {} })
+    const { jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {}), await prepare('work', {})],
+      onFinish: { name: 'finish', payload: {} },
+    })
+    await runtime.consumeBatch({ queue: 'jobs', messages: [msg(jobIds[0]!)] }) // member0 completes → pending 2→1
+
+    const dlq = () => ({ queue: 'jobs-dlq', messages: [{ body: { jobId: jobIds[1]! }, attempts: 5, ack: vi.fn(), retry: vi.fn() }] })
+    await runtime.consumeBatch(dlq()) // first: claim+fail+settle → pending 1→0, onFinish fires
+    await runtime.consumeBatch(dlq()) // duplicate: claim misses → MUST skip settle
+
+    const batch = d1._db.prepare('SELECT pending_jobs FROM job_batches').get() as { pending_jobs: number }
+    expect(batch.pending_jobs).toBe(0) // not -1
+    // onFinish enqueued exactly once → exactly one 'finish' row (jobs: member0 + finish)
+    expect(rows(d1, 'jobs')).toBe(2)
+    expect(rows(d1, 'failed_jobs')).toBe(1)
+  })
+})
+
+describe('onFinish failure (Codex review Area 5)', () => {
+  it('logs and does not throw when the onFinish continuation cannot be enqueued', async () => {
+    const logs: Array<{ stage: string }> = []
+    const { runtime } = await setup({ work: async () => {} }, { onLog: e => logs.push(e) })
+    // 'ghost' has no route → prepareDurableJob throws inside dispatchOnFinish
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'ghost', payload: {} } })
+
+    const r = await runtime.consumeMessage(msg(jobIds[0]!))
+    expect(r.run.status).toBe('completed')
+    expect(r.settled?.batchComplete).toBe(true) // batch still finishes
+    expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
   })
 })

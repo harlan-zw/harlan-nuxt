@@ -209,17 +209,20 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
       const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
       opts.onLog?.({ stage: 'dlq', queue: opts.batch.queue, taskName: typeof body._task === 'string' ? body._task : undefined, jobId })
       if (jobId) {
-        // Laravel's "exhausted → failed_jobs" transition. CF has given up on this
-        // message, so move the row to failed_jobs (terminal): it leaves `jobs`
-        // (no leak, an outbox sweep can't re-dispatch it) and becomes
-        // retry/forget/prune-able. Then settle so the batch can't hang. All
-        // best-effort — a raced claim/settle is recovered by reclaim/recovery.
+        // Laravel's "exhausted → failed_jobs" transition. Claim FIRST: only when
+        // the claim succeeds do WE own the terminal transition, so we failJob
+        // (move out of `jobs` — no leak, no sweep re-dispatch) and settle exactly
+        // once. A claim MISS means the row is already terminal, which means the
+        // path that made it terminal (the consumer's fail/exhausted branch, or a
+        // duplicate DLQ delivery) already settled it — settling again would
+        // double-decrement `pending_jobs` and fire onFinish early.
         const claimed = await opts.repository.claimJob(jobId).catch(() => null)
-        if (claimed)
+        if (claimed) {
           await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)').catch(() => {})
-        await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
-          .then(r => r.progress && opts.onBatchProgress ? opts.onBatchProgress(r.progress) : undefined)
-          .catch(() => {})
+          await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
+            .then(r => r.progress && opts.onBatchProgress ? opts.onBatchProgress(r.progress) : undefined)
+            .catch(() => {})
+        }
       }
       message.ack()
     }
@@ -366,11 +369,20 @@ export function createDurableJobsRuntime<
   )
 
   // Default onFinish: enqueue the continuation durably (survives an isolate
-  // recycle, same guarantee the batch members get).
-  const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = async ({ continuation }) => {
+  // recycle, same guarantee the batch members get). This fires AFTER the batch is
+  // already settled + the member message acked, so a throw here can't be retried —
+  // it would silently drop the continuation (and break a parent-batch chain). So
+  // it must never throw: a failed enqueue is logged via onLog and left for the
+  // app's own backstop (e.g. a reconcile cron) to recover.
+  const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
-    const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry })
-    await enqueueDurableJob(repository, publisher, record as DurableJobRecord<Queue>)
+    try {
+      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry })
+      await enqueueDurableJob(repository, publisher, record as DurableJobRecord<Queue>)
+    }
+    catch (error) {
+      opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   const isDuplicate = makeIsDuplicate(opts.dedup)
