@@ -699,7 +699,7 @@ export interface RunDurableJobMessageOptions<
   message: Pick<QueueMessage<Message>, 'body' | 'ack' | 'retry'>
   lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailOptions>, 'claimJob' | 'resolveClaimMiss' | 'completeJob' | 'failJob' | 'releaseJob'>
   registry: {
-    getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined
+    getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
   }
   toDispatchableJob: (job: StoredJob) => Job
@@ -710,6 +710,8 @@ export interface RunDurableJobMessageOptions<
     payload: Record<string, unknown>
     control: JobControlResult
   }) => JobContext<Env, Db, Logger> | Promise<JobContext<Env, Db, Logger>>
+  // (registry.getHandler below may resolve async for lazily-loaded jobs;
+  // dispatchRegisteredJob awaits it.)
   getJobId?: (message: Message) => string | undefined
   retryDelaySeconds?: number | ((input: { error: unknown, job: StoredJob }) => number)
   failDispatchFailure?: boolean

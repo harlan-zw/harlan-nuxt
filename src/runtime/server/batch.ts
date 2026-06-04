@@ -248,6 +248,7 @@ export async function createJobBatch<
 export interface BatchProgress {
   batchId: string
   name: string | null
+  siteId: string | null
   completed: number
   total: number
   failed: number
@@ -294,6 +295,7 @@ function toProgress(batch: DurableBatchRecord): BatchProgress {
   return {
     batchId: batch.id,
     name: batch.name,
+    siteId: batch.siteId,
     completed: batch.totalJobs - batch.pendingJobs,
     total: batch.totalJobs,
     failed: batch.failedJobs,
