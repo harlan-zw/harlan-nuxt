@@ -7,6 +7,7 @@ import type {
   JobHandler,
   JobMiddleware,
 } from './types'
+import { jobErrors } from './errors'
 import { parseJobInput } from './registry'
 
 export interface JobRegistryLike<Env, Db, Logger> {
@@ -49,7 +50,7 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
   const taskName = payload._task
 
   if (typeof taskName !== 'string' || taskName.length === 0) {
-    return { success: false, error: 'No _task in payload', handlerNotFound: true }
+    return { success: false, error: jobErrors.noTask() }
   }
 
   // Prefer the fully-loaded definition (carries `input`/`middleware`/`failed`/
@@ -60,18 +61,13 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
     : opts.registry.getJobDefinition?.(taskName)
   const handler = definition?.handle ?? await opts.registry.getHandler(taskName)
   if (!handler) {
-    return { success: false, error: `No handler for task: ${taskName}`, handlerNotFound: true }
+    return { success: false, error: jobErrors.handlerNotFound(taskName) }
   }
 
   const { _task, _continuations, ...cleanPayload } = payload
   const parsedPayload = parseJobInput(definition as never, cleanPayload)
   if (!parsedPayload.success) {
-    return {
-      success: false,
-      error: `Invalid payload for task: ${taskName}`,
-      invalidPayload: true,
-      validationError: parsedPayload.error,
-    }
+    return { success: false, error: jobErrors.invalidPayload(taskName, parsedPayload.error) }
   }
 
   const control: JobControlResult = { handled: false }

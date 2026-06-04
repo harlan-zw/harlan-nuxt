@@ -3,6 +3,7 @@ import type { DurableJobContinuations, DurableJobContinuationStage } from './out
 import type { AnyJobDefinition, JobNameOf, JobPayloadByName } from './registry'
 import type { CloudflareQueue, DispatchResult, JobContext, QueueBatch, QueueBindingsConfig, QueueMessage } from './types'
 import { dispatchRegisteredJob } from './dispatch'
+import { formatJobError, jobErrors } from './errors'
 import { resolveCloudflareQueueName } from './queue'
 
 export interface FakeQueuedMessage<T> {
@@ -289,7 +290,7 @@ export function createJobTestHarness<
     }).catch((error: unknown) => {
       // Record unhandled throws as a failed run so `assertFailed` sees them too,
       // then re-propagate (matching `dispatchSync`).
-      const failure: InlineRunResult = { success: false, released: false, failed: true, error: String(error) }
+      const failure: InlineRunResult = { success: false, released: false, failed: true, error: jobErrors.handlerThrew(error, taskName) }
       runLog.push({ name: taskName, result: failure })
       throw error
     })
@@ -438,7 +439,7 @@ export function createJobTestHarness<
         }
         else {
           summary.failed++
-          await opts.onFailed?.(record, result.error, result)
+          await opts.onFailed?.(record, result.error ? formatJobError(result.error) : undefined, result)
         }
       }
 

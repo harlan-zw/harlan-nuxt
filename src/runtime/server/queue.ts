@@ -3,6 +3,7 @@ import type { DurableJobFailureRepository } from './outbox'
 import type { AnyJobDefinition, JobMessageOf, JobPayloadOf } from './registry'
 import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendOptions } from './types'
 import { dispatchRegisteredJob } from './dispatch'
+import { formatJobError } from './errors'
 import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
 import { clampDelay, resolveJobMaxAttempts, resolveJobRetryDelay } from './policy'
 import { buildJobMessage } from './registry'
@@ -769,8 +770,8 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
         taskName,
         definition,
         job,
-        error: result.error,
-        validationError: result.validationError,
+        error: result.error ? formatJobError(result.error) : undefined,
+        validationError: result.error?._tag === 'invalid-payload' ? result.error.cause : undefined,
       })
       input.message.ack()
       return

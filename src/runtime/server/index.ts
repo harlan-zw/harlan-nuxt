@@ -8,6 +8,7 @@
 export * from './app'
 export * from './d1'
 export * from './dispatch'
+export * from './errors'
 export * from './outbox'
 export * from './policy'
 export {
@@ -23,6 +24,7 @@ export {
 } from './queue'
 export type { JobQueuePublisher, QueueSource } from './queue'
 export * from './registry'
+export * from './result'
 export * from './scheduled'
 export * from './schema'
 export * from './types'

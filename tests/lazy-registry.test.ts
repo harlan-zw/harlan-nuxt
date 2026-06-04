@@ -65,7 +65,7 @@ describe('lazy registry entries', () => {
       createContext: () => ({}) as never,
     })
 
-    expect(result.handlerNotFound).toBe(true)
+    expect(result.error?._tag).toBe('handler-not-found')
     expect(load).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,7 @@
+import type { JobError } from './errors'
 import type { SendBackpressureOptions } from './queue'
 import type { AnyJobDefinition, JobNameOf, JobPayloadByName, JobQueueByName } from './registry'
+import type { Result } from './result'
 import type {
   CloudflareQueue,
   DispatchableJob,
@@ -12,10 +14,12 @@ import type {
   QueueSendOptions,
 } from './types'
 import { dispatchRegisteredJob } from './dispatch'
+import { describeCause, formatJobError, jobErrors, jobErrorToException } from './errors'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
 import { CF_QUEUE_MAX_MESSAGE_BYTES, sendBatchChunked, withSendBackpressure } from './queue'
 import { parseJobInput } from './registry'
+import { err, ok, unwrapResult } from './result'
 
 function byteLength(value: string): number {
   return typeof Buffer !== 'undefined' ? Buffer.byteLength(value, 'utf8') : new TextEncoder().encode(value).byteLength
@@ -190,30 +194,43 @@ export interface PrepareDurableJobOptions<
   continuations?: DurableJobContinuations<string, Record<string, unknown>, Queue>
 }
 
-export async function prepareDurableJob<
+/**
+ * Errors-as-values core: builds a durable outbox record or returns a typed
+ * `JobError` for every modelled failure (bad payload, unroutable task, oversized
+ * message, invalid continuation). `prepareDurableJob` is the throwing wrapper over
+ * this for call sites that prefer exceptions.
+ */
+export async function prepareDurableJobResult<
   const Name extends string,
   Payload extends object,
   Queue extends string,
->(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<DurableJobRecord<Queue>> {
+>(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<Result<DurableJobRecord<Queue>, JobError>> {
   const now = opts.now ?? Math.floor(Date.now() / 1000)
   const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'unique' | 'uniqueId'> | undefined
+
   const route = resolveDurableJobRoute(opts.name, opts.route, definition, opts.registry)
+  if (!route)
+    return err(jobErrors.noRoute(opts.name))
+
   const parsedPayload = parseJobInput(definition as never, opts.payload)
   if (!parsedPayload.success)
-    throw new Error(`Invalid payload for task: ${opts.name}`)
+    return err(jobErrors.invalidPayload(opts.name, parsedPayload.error))
 
   const continuations = normalizeDurableJobContinuations(opts.continuations)
-  validateDurableJobContinuations(opts.registry, continuations)
+  const continuationError = validateDurableJobContinuations(opts.registry, continuations)
+  if (continuationError)
+    return err(continuationError)
 
   const uniqueKey = definition?.unique
     ? await createJobUniqueKey(opts.name, parsedPayload.data, definition.uniqueId as never)
     : undefined
   const payload = buildJobPayload(opts.name, parsedPayload.data as Payload)
   const serialized = JSON.stringify(continuations ? { ...payload, _continuations: continuations } : payload)
-  if (byteLength(serialized) > CF_QUEUE_MAX_MESSAGE_BYTES)
-    throw new Error(`Job payload exceeds Cloudflare Queue limit of ${CF_QUEUE_MAX_MESSAGE_BYTES} bytes for task: ${opts.name}`)
+  const bytes = byteLength(serialized)
+  if (bytes > CF_QUEUE_MAX_MESSAGE_BYTES)
+    return err(jobErrors.payloadTooLarge(opts.name, bytes, CF_QUEUE_MAX_MESSAGE_BYTES))
 
-  return {
+  return ok({
     id: opts.id ?? crypto.randomUUID(),
     queue: route.queue as Queue,
     jobType: route.jobType,
@@ -228,7 +245,15 @@ export async function prepareDurableJob<
     maxAttempts: resolveJobMaxAttempts(definition) ?? opts.defaultMaxAttempts ?? 3,
     availableAt: now + (opts.delaySeconds ?? 0),
     createdAt: now,
-  }
+  })
+}
+
+export async function prepareDurableJob<
+  const Name extends string,
+  Payload extends object,
+  Queue extends string,
+>(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<DurableJobRecord<Queue>> {
+  return unwrapResult(await prepareDurableJobResult(opts), jobErrorToException)
 }
 
 export async function prepareRegisteredDurableJob<
@@ -262,7 +287,7 @@ function resolveDurableJobRoute<
   route: DurableJobRoute<Queue> | undefined,
   definition: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType'> | undefined,
   registry: DurableJobRegistryLike | undefined,
-): DurableJobRoute<Queue | string> {
+): DurableJobRoute<Queue | string> | undefined {
   if (route)
     return route
 
@@ -273,7 +298,7 @@ function resolveDurableJobRoute<
   if (definition)
     return { queue: definition.queue, jobType: definition.jobType ?? definition.name }
 
-  throw new Error(`No route for task: ${name}`)
+  return undefined
 }
 
 export function normalizeDurableJobContinuations<
@@ -296,27 +321,33 @@ export function normalizeDurableJobContinuations<
   return Object.keys(normalized).length > 0 ? normalized : undefined
 }
 
+/**
+ * Validates continuations against the registry, returning the first `JobError`
+ * found or `undefined` when they are all routable and well-typed.
+ */
 export function validateDurableJobContinuations(
   registry: DurableJobRegistryLike | undefined,
   continuations: DurableJobContinuations<string, Record<string, unknown>, string> | undefined,
-): void {
+): JobError | undefined {
   if (!registry || !continuations)
-    return
+    return undefined
 
   for (const stage of ['then', 'catch', 'finally'] as const) {
     for (const continuation of continuations[stage] ?? []) {
       const definition = registry.getJobDefinition?.(continuation.name)
       if (!definition)
-        throw new Error(`No handler for continuation task: ${continuation.name}`)
+        return jobErrors.unknownContinuation(continuation.name)
 
       const parsed = parseJobInput(definition, continuation.payload)
       if (!parsed.success)
-        throw new Error(`Invalid payload for continuation task: ${continuation.name}`)
+        return jobErrors.invalidContinuation(continuation.name, parsed.error)
 
       if (continuation.queue && definition.queue !== continuation.queue)
-        throw new Error(`Continuation task "${continuation.name}" is registered on queue "${definition.queue}", not "${continuation.queue}"`)
+        return jobErrors.continuationQueueMismatch(continuation.name, definition.queue, continuation.queue)
     }
   }
+
+  return undefined
 }
 
 export function getDurableJobContinuations<
@@ -494,6 +525,24 @@ export async function releaseStaleReservedDurableJobs<
   return await repository.releaseStaleReservedJobs?.(query) ?? 0
 }
 
+/**
+ * Outcome of {@link enqueueDurableJob}, discriminated on `status` so the three
+ * reachable states are explicit and the impossible ones (e.g. "not inserted but
+ * dispatched") are unrepresentable:
+ * - `enqueued`: row persisted and the queue message was sent.
+ * - `duplicate`: `insertJob` reported the row already existed (unique conflict);
+ *   nothing was dispatched.
+ * - `not-dispatched`: row persisted but the queue binding was missing, so the send
+ *   was skipped (no throw). The row is durable; an outbox sweep will redispatch it.
+ * - `dispatch-failed`: row persisted but the queue send threw. Also recoverable via
+ *   a sweep; `cause` is the raw (infra) throw.
+ */
+export type EnqueueDurableJobResult
+  = | { status: 'enqueued' }
+    | { status: 'duplicate' }
+    | { status: 'not-dispatched' }
+    | { status: 'dispatch-failed', cause: unknown }
+
 export async function enqueueDurableJob<
   Queue extends string,
   Record extends DurableJobRecord<Queue>,
@@ -502,19 +551,15 @@ export async function enqueueDurableJob<
   publisher: Pick<QueuePublisher<Queue>, 'send'>,
   record: Record,
   opts?: { delaySeconds?: number },
-): Promise<{ inserted: boolean, dispatched: boolean, error?: unknown }> {
+): Promise<EnqueueDurableJobResult> {
   const inserted = await repository.insertJob(record)
   if (!inserted)
-    return { inserted: false, dispatched: false }
+    return { status: 'duplicate' }
 
-  const dispatched = await publisher
+  return await publisher
     .send(record.queue, toQueueJobMessage(record), opts)
-    .catch(error => ({ error }))
-
-  if (typeof dispatched === 'object' && dispatched && 'error' in dispatched)
-    return { inserted: true, dispatched: false, error: dispatched.error }
-
-  return { inserted: true, dispatched }
+    .then((sent): EnqueueDurableJobResult => sent ? { status: 'enqueued' } : { status: 'not-dispatched' })
+    .catch((cause: unknown): EnqueueDurableJobResult => ({ status: 'dispatch-failed', cause }))
 }
 
 export interface SweepDurableJobsResult<Queue extends string> {
@@ -562,6 +607,7 @@ export type DurableJobMessageStatus
     | 'released'
     | 'failed'
     | 'completed'
+    | 'errored'
 
 export interface RunDurableJobMessageOptions<
   StoredJob,
@@ -593,11 +639,26 @@ export interface RunDurableJobMessageOptions<
   completeResult?: (input: { job: StoredJob, dispatch: DispatchResult }) => unknown | Promise<unknown>
 }
 
-export interface RunDurableJobMessageResult {
-  status: DurableJobMessageStatus
-  dispatch?: DispatchResult
-  error?: unknown
-}
+/**
+ * Outcome of {@link runDurableJobMessage}, discriminated on `status` so each
+ * variant carries exactly the data it can produce:
+ * - claim phase: `invalid-message` (no job id) or a `DurableJobClaimMiss`
+ *   (`already-resolved` / `in-flight` / `not-found`) — no dispatch happened.
+ * - `dispatch-failed`: the handler could not run; `error` is the typed `JobError`.
+ * - `failed` / `released`: the handler ran and called `ctx.fail()` / `ctx.release()`.
+ * - `completed`: the handler ran to completion.
+ * - `errored`: the handler threw an unexpected defect; the message is retried and
+ *   `error` carries the defect as a `handler-threw` `JobError` (`error.cause` is the
+ *   original throw). Distinct from `released` (a deliberate `ctx.release()`).
+ */
+export type RunDurableJobMessageResult
+  = | { status: 'invalid-message' }
+    | { status: DurableJobClaimMiss }
+    | { status: 'dispatch-failed', dispatch: DispatchResult, error?: JobError }
+    | { status: 'failed', dispatch: DispatchResult }
+    | { status: 'released', dispatch: DispatchResult }
+    | { status: 'completed', dispatch: DispatchResult }
+    | { status: 'errored', error: JobError }
 
 export async function runDurableJobMessage<
   StoredJob,
@@ -638,9 +699,9 @@ export async function runDurableJobMessage<
 
     if (!dispatch.success) {
       if (opts.failDispatchFailure !== false)
-        await failDurableJob(opts.lifecycle, storedJob, dispatch.error ?? 'Job dispatch failed')
+        await failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed')
       opts.message.ack()
-      return { status: 'dispatch-failed', dispatch }
+      return { status: 'dispatch-failed', dispatch, error: dispatch.error }
     }
 
     if (dispatch.control?.handled) {
@@ -658,9 +719,9 @@ export async function runDurableJobMessage<
       : opts.retryDelaySeconds ?? 0
     await releaseDurableJob(opts.lifecycle, storedJob, {
       delaySeconds,
-      error: error instanceof Error ? error.message : String(error),
+      error: describeCause(error),
     })
     opts.message.retry({ delaySeconds })
-    return { status: 'released', error }
+    return { status: 'errored', error: jobErrors.handlerThrew(error) }
   }
 }

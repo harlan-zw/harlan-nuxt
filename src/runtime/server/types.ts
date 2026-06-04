@@ -1,3 +1,5 @@
+import type { JobError } from './errors'
+
 export type QueueMessageContentType = 'text' | 'json' | 'bytes' | 'v8'
 
 export interface QueueSendOptions {
@@ -137,10 +139,14 @@ export interface DispatchableJob<Payload = Record<string, unknown>> {
 
 export interface DispatchResult {
   success: boolean
-  error?: string
-  handlerNotFound?: boolean
-  invalidPayload?: boolean
-  validationError?: unknown
+  /**
+   * Present when `success === false`: the typed reason the handler could not run
+   * (no `_task`, unknown handler, or invalid payload). Discriminate on
+   * `error._tag` instead of the old `handlerNotFound`/`invalidPayload` flags;
+   * `error.cause` carries what was previously `validationError`. Defects thrown by
+   * a handler that *did* run propagate as exceptions, they are not reported here.
+   */
+  error?: JobError
   control?: JobControlResult
 }
 

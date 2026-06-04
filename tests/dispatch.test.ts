@@ -104,7 +104,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       registry,
       job: { id: 'job_1', queue: 'default', attempts: 1, batchId: null, payload: {} },
       createContext,
-    })).resolves.toMatchObject({ success: false, handlerNotFound: true, error: 'No _task in payload' })
+    })).resolves.toMatchObject({ success: false, error: { _tag: 'no-task', message: 'No _task in payload' } })
 
     await expect(dispatchRegisteredJob({
       registry,
@@ -116,7 +116,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
         payload: buildJobPayload('missing/task', {}),
       },
       createContext,
-    })).resolves.toMatchObject({ success: false, handlerNotFound: true, error: 'No handler for task: missing/task' })
+    })).resolves.toMatchObject({ success: false, error: { _tag: 'handler-not-found', task: 'missing/task', message: 'No handler for task: missing/task' } })
 
     expect(createContext).not.toHaveBeenCalled()
   })
@@ -158,8 +158,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       createContext: vi.fn(),
     })).resolves.toMatchObject({
       success: false,
-      invalidPayload: true,
-      error: 'Invalid payload for task: demo/validated',
+      error: { _tag: 'invalid-payload', task: 'demo/validated', message: 'Invalid payload for task: demo/validated' },
     })
 
     await dispatchRegisteredJob({
@@ -846,7 +845,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
         inserted.push(job)
         return true
       },
-    }, publisher, record)).resolves.toEqual({ inserted: true, dispatched: true })
+    }, publisher, record)).resolves.toEqual({ status: 'enqueued' })
 
     expect(inserted).toEqual([record])
     expect(fake.messages).toEqual([{ body: { jobId: 'job_1', queue: 'default' }, opts: undefined }])
@@ -1196,7 +1195,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
         inserted.push(job)
         return true
       },
-    }, publisher, record)).resolves.toEqual({ inserted: true, dispatched: false, error })
+    }, publisher, record)).resolves.toEqual({ status: 'dispatch-failed', cause: error })
 
     expect(inserted).toEqual([record])
   })
