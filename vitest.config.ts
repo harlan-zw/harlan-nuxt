@@ -3,6 +3,7 @@ import { configDefaults, defineConfig } from 'vitest/config'
 
 const alias = {
   '#cf-jobs/server': fileURLToPath(new URL('./src/runtime/server/index.ts', import.meta.url)),
+  '#cf-jobs/cloudflare': fileURLToPath(new URL('./src/runtime/server/cloudflare.ts', import.meta.url)),
   '#cf-jobs/testing': fileURLToPath(new URL('./src/runtime/server/testing.ts', import.meta.url)),
   // The `nuxt-cf-jobs/server` barrel is nitropack-free (scheduled.ts inlines
   // defineTask), so barrel-importing unit tests don't need this. But the dev

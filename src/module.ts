@@ -48,6 +48,9 @@ export default defineNuxtModule<ModuleOptions>({
     const resolver = createResolver(import.meta.url)
 
     nuxt.options.alias['#cf-jobs/server'] = resolver.resolve('./runtime/server')
+    // Cloudflare Analytics Engine sink lives on its own subpath so its
+    // Workers-specific `writeDataPoint` shape never loads with the core barrel.
+    nuxt.options.alias['#cf-jobs/cloudflare'] = resolver.resolve('./runtime/server/cloudflare')
     addServerImports([
       { name: 'defineJob', from: resolver.resolve('./runtime/server/registry') },
       { name: 'defineScheduledTask', from: resolver.resolve('./runtime/server/scheduled') },

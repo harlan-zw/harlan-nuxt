@@ -10,6 +10,7 @@ export * from './batch'
 export * from './d1'
 export * from './dispatch'
 export * from './errors'
+export * from './metrics'
 export * from './outbox'
 export * from './policy'
 export {

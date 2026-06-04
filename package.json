@@ -1,7 +1,7 @@
 {
   "name": "nuxt-cf-jobs",
   "type": "module",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt module for typed Cloudflare queue jobs.",
   "author": {
@@ -23,6 +23,11 @@
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js",
       "default": "./dist/runtime/server/index.js"
+    },
+    "./cloudflare": {
+      "types": "./dist/runtime/server/cloudflare.d.ts",
+      "import": "./dist/runtime/server/cloudflare.js",
+      "default": "./dist/runtime/server/cloudflare.js"
     },
     "./d1": {
       "types": "./dist/runtime/server/d1.d.ts",
@@ -46,6 +51,9 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
+      ],
+      "cloudflare": [
+        "dist/runtime/server/cloudflare.d.ts"
       ],
       "d1": [
         "dist/runtime/server/d1.d.ts"
