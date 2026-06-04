@@ -1,11 +1,13 @@
 import type { BatchProgress, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
-import type { D1DatabaseLike, D1DurableJobRepository } from './d1'
+import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository } from './d1'
 import type { JobMetricsSink } from './metrics'
 import type {
   CreateJobBatchOptions,
   CreateJobBatchResult,
   DurableJobContinuation,
+  DurableJobContinuationStage,
   DurableJobRecord,
+  DurableJobScope,
   EnqueueDurableJobResult,
   PruneDurableJobsOptions,
   PruneDurableJobsResult,
@@ -186,9 +188,9 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   isDuplicate?: (id: string | undefined) => boolean
   onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
   // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
-  createJobScope?: RunDurableJobMessageOptions<unknown, DispatchableJob>['createJobScope']
-  isPermanentFailure?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isPermanentFailure']
-  dispatchContinuations?: RunDurableJobMessageOptions<unknown, DispatchableJob>['dispatchContinuations']
+  createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
+  isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
+  dispatchContinuations?: (input: { storedJob: D1DurableJobRecord<Queue>, stage: DurableJobContinuationStage }) => void | Promise<void>
   /**
    * Soft batch CPU budget (ms). Before each message, if the batch has run longer
    * than this, the remaining messages are retried instead of processed — so a
@@ -334,11 +336,11 @@ export interface CreateDurableJobsRuntimeOptions<
   onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
   // ── per-job hooks (durable path) ──
   /** Per-job scope: wrap dispatch (e.g. telemetry) + observe each settlement. */
-  createJobScope?: RunDurableJobMessageOptions<unknown, DispatchableJob>['createJobScope']
+  createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
   /** Decide whether a thrown error is terminal (default: attempts >= max). */
-  isPermanentFailure?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isPermanentFailure']
+  isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
   /** Dispatch then/catch/finally payload continuations after a terminal outcome. */
-  dispatchContinuations?: RunDurableJobMessageOptions<unknown, DispatchableJob>['dispatchContinuations']
+  dispatchContinuations?: (input: { storedJob: D1DurableJobRecord<Queue>, stage: DurableJobContinuationStage }) => void | Promise<void>
   /** Soft per-batch CPU budget (ms); remaining messages are deferred once exceeded. */
   maxBatchCpuMs?: number
   /** Delay (s) for CPU-guard-deferred messages. Default 5. */
