@@ -27,6 +27,7 @@ export {
 export type { JobQueuePublisher, QueueSource } from './queue'
 export * from './registry'
 export * from './result'
+export * from './runtime'
 export * from './scheduled'
 export * from './schema'
 export * from './types'
