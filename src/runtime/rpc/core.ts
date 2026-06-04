@@ -115,10 +115,28 @@ export type NuxtRpcError
     cause: ZodError
   }
   | {
+    // Transient transport failures with no HTTP response — all retryable
+    // except `aborted` (a deliberate cancellation, usually safe to ignore).
+    // Split out of `unknown` so callers can react without string-matching.
+    type: 'timeout' | 'connection' | 'aborted'
+    message: string
+    cause: unknown
+  }
+  | {
     type: 'unknown'
     message: string
     cause: unknown
   }
+
+/**
+ * Tagged outcome of an RPC call. The `*Safe` client methods return this
+ * instead of throwing, so an expected RPC failure shows up as a value with a
+ * fully-typed `NuxtRpcError` (discriminate on `error.type`) rather than a
+ * thrown `unknown`. Discriminate on `_tag`.
+ */
+export type NuxtRpcResult<TData>
+  = | { _tag: 'ok', data: TData }
+    | { _tag: 'err', error: NuxtRpcError }
 
 export interface NuxtRpcErrorEvent {
   operation: NuxtRpcOperationContext
@@ -142,39 +160,60 @@ export interface NuxtRpcSettledEvent {
 export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
   const { fetch, onError, onSettled, onSuccess } = options
 
-  async function query<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+  // Single place the success/error hooks fire and the timing is measured.
+  // `perform` does the fetch+parse; everything that can throw a domain error
+  // (body validation, network, response validation) runs inside it and is
+  // normalized to a tagged value. The outcome is decided BEFORE any hook fires,
+  // so a throwing `onSuccess` can't flip a success to an error. Hooks then run
+  // in isolation (see `notifyRpc*`), so `run` itself never throws — that's what
+  // lets `querySafe`/`executeSafe` honour their no-throw contract regardless of
+  // caller-supplied callbacks. The throwing `query`/`execute` wrappers re-throw
+  // the Err themselves for TanStack parity.
+  async function run<TData>(
+    context: NuxtRpcOperationContext,
+    silent: boolean | undefined,
+    perform: () => Promise<TData>,
+  ): Promise<NuxtRpcResult<TData>> {
+    const startedAt = Date.now()
+    let outcome: NuxtRpcResult<TData>
+    try {
+      outcome = { _tag: 'ok', data: await perform() }
+    }
+    catch (error) {
+      outcome = { _tag: 'err', error: normalizeNuxtRpcError(error, 'response-validation') }
+    }
+    const durationMs = Date.now() - startedAt
+    if (outcome._tag === 'ok')
+      await notifyRpcSuccess({ data: outcome.data, durationMs, onSettled, onSuccess, operation: context })
+    else
+      await notifyRpcError({ durationMs, error: outcome.error, onError, onSettled, operation: context, silent })
+    return outcome
+  }
+
+  function querySafe<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
     operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
     callOptions: NuxtRpcCallOptions = {},
-  ) {
-    const startedAt = Date.now()
+  ): Promise<NuxtRpcResult<z.output<TResponseSchema>>> {
     const context: NuxtRpcOperationContext = {
       kind: 'query',
       key: operation.key,
       method: 'GET',
       path: operation.path,
     }
-    try {
+    return run(context, callOptions.silent, async () => {
       const response = await fetch<z.output<TResponseSchema>>(operation.path, {
         ...(operation.query === undefined ? {} : { query: operation.query }),
       } as any)
-      const data = parseNuxtRpcResponse(operation.response, response)
-      await notifyRpcSuccess({ data, durationMs: Date.now() - startedAt, onSettled, onSuccess, operation: context })
-      return data
-    }
-    catch (error) {
-      const normalized = normalizeNuxtRpcError(error, 'response-validation')
-      await notifyRpcError({ durationMs: Date.now() - startedAt, error: normalized, onError, onSettled, operation: context, silent: callOptions.silent })
-      throw normalized
-    }
+      return parseNuxtRpcResponse(operation.response, response)
+    })
   }
 
-  async function execute<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
+  function executeSafe<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
     operation: NuxtRpcMutationOperation<TBodySchema, TResponseSchema>,
     ...args: TBodySchema extends z.ZodTypeAny
       ? [body: z.input<TBodySchema>, options?: NuxtRpcCallOptions]
       : [options?: NuxtRpcCallOptions]
-  ) {
-    const startedAt = Date.now()
+  ): Promise<NuxtRpcResult<z.output<TResponseSchema>>> {
     const context: NuxtRpcOperationContext = {
       kind: 'mutation',
       method: operation.method,
@@ -182,24 +221,39 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     }
     const body = operation.body ? args[0] : undefined
     const callOptions = (operation.body ? args[1] : args[0]) as NuxtRpcCallOptions | undefined
-    try {
+    return run(context, callOptions?.silent, async () => {
       const parsedBody = operation.body ? parseNuxtRpcBody(operation.body, body) : undefined
       const response = await fetch<z.output<TResponseSchema>>(operation.path, {
         method: operation.method,
         ...(operation.body == null ? {} : { body: parsedBody }),
       } as any)
-      const data = parseNuxtRpcResponse(operation.response, response)
-      await notifyRpcSuccess({ data, durationMs: Date.now() - startedAt, onSettled, onSuccess, operation: context })
-      return data
-    }
-    catch (error) {
-      const normalized = normalizeNuxtRpcError(error, 'response-validation')
-      await notifyRpcError({ durationMs: Date.now() - startedAt, error: normalized, onError, onSettled, operation: context, silent: callOptions?.silent })
-      throw normalized
-    }
+      return parseNuxtRpcResponse(operation.response, response)
+    })
   }
 
-  return { execute, query }
+  async function query<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+    operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
+    callOptions: NuxtRpcCallOptions = {},
+  ): Promise<z.output<TResponseSchema>> {
+    const result = await querySafe(operation, callOptions)
+    if (result._tag === 'err')
+      throw result.error
+    return result.data
+  }
+
+  async function execute<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
+    operation: NuxtRpcMutationOperation<TBodySchema, TResponseSchema>,
+    ...args: TBodySchema extends z.ZodTypeAny
+      ? [body: z.input<TBodySchema>, options?: NuxtRpcCallOptions]
+      : [options?: NuxtRpcCallOptions]
+  ): Promise<z.output<TResponseSchema>> {
+    const result = await executeSafe(operation, ...args)
+    if (result._tag === 'err')
+      throw result.error
+    return result.data
+  }
+
+  return { execute, executeSafe, query, querySafe }
 }
 
 export function formatNuxtRpcValidationIssues(error: ZodError): NuxtRpcValidationIssue[] {
@@ -212,6 +266,12 @@ export function toHumanNuxtRpcError(error: unknown): string {
     return firstIssueMessage(normalized.issues) ?? 'Some fields need attention.'
   if (normalized.type === 'response-validation')
     return 'The server returned data in an unexpected format.'
+  if (normalized.type === 'timeout')
+    return 'The request took too long. Try again.'
+  if (normalized.type === 'connection')
+    return 'Can\'t reach the server. Check your connection and try again.'
+  if (normalized.type === 'aborted')
+    return 'The request was cancelled.'
   if (normalized.type === 'fetch') {
     if (normalized.status === 401)
       return 'Please sign in again.'
@@ -224,6 +284,51 @@ export function toHumanNuxtRpcError(error: unknown): string {
     return normalized.statusMessage || normalized.message || 'The request failed.'
   }
   return normalized.message || 'Something went wrong.'
+}
+
+/**
+ * Coarse semantic axis over the failure modes — a projection of the precise
+ * tag/status, not a new fact. Use it when a call site reacts the same way to a
+ * whole class of failures (e.g. all `transient` → retry banner).
+ */
+export type NuxtRpcErrorCategory = 'transient' | 'auth' | 'validation' | 'client' | 'server' | 'unknown'
+
+export function rpcErrorCategory(error: NuxtRpcError): NuxtRpcErrorCategory {
+  switch (error.type) {
+    case 'timeout':
+    case 'connection':
+    case 'aborted':
+      return 'transient'
+    case 'request-validation':
+    case 'response-validation':
+      return 'validation'
+    case 'unknown':
+      return 'unknown'
+    case 'fetch':
+      if (error.status === 401 || error.status === 403)
+        return 'auth'
+      if (error.status != null && error.status >= 500)
+        return 'server'
+      return 'client'
+  }
+}
+
+/**
+ * True when retrying the same call could plausibly succeed: transient transport
+ * failures (except a deliberate `aborted`) and server-side `5xx` / `429`.
+ * Client `4xx` and validation failures are terminal — retrying won't help.
+ */
+export function isRetryableRpcError(error: NuxtRpcError): boolean {
+  if (error.type === 'timeout' || error.type === 'connection')
+    return true
+  if (error.type === 'fetch')
+    return error.status === 429 || (error.status != null && error.status >= 500)
+  return false
+}
+
+/** True for an authentication/authorization failure (HTTP `401` / `403`). */
+export function isAuthRpcError(error: NuxtRpcError): boolean {
+  return error.type === 'fetch' && (error.status === 401 || error.status === 403)
 }
 
 export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validation' | 'response-validation' = 'response-validation'): NuxtRpcError {
@@ -248,6 +353,20 @@ export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validati
     statusMessage?: string
   }
   const status = fetchLike.status ?? fetchLike.statusCode ?? fetchLike.response?.status
+  // Transient transport failures arrive with no HTTP response. Classify them
+  // before the `fetch` branch (which needs a status/response) so they don't
+  // fall through to `unknown`. Checked status-first so a real HTTP error is
+  // never misread as a network failure.
+  if (status == null && fetchLike.response == null) {
+    const transient = detectTransientErrorType(error)
+    if (transient != null) {
+      return {
+        type: transient,
+        message: fetchLike.message || transient,
+        cause: error,
+      }
+    }
+  }
   if (status != null || fetchLike.response != null || fetchLike.data !== undefined) {
     return {
       type: 'fetch',
@@ -266,6 +385,33 @@ export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validati
   }
 }
 
+// Classifies a responseless thrown error into a transient transport tag.
+// Grounded in ofetch 1.5.1: a `timeout` aborts the signal with an Error whose
+// `name === 'TimeoutError'` (surfaced as the FetchError's `cause`); a caller
+// abort surfaces as `AbortError`; an unreachable host surfaces as a `TypeError`
+// ("Failed to fetch" / undici "fetch failed" with a `cause.code` like
+// `ECONNREFUSED`). Returns undefined when the error isn't a known transient.
+function detectTransientErrorType(error: unknown): 'timeout' | 'connection' | 'aborted' | undefined {
+  const e = error as {
+    name?: string
+    code?: unknown
+    message?: string
+    cause?: { name?: string, code?: unknown }
+  }
+  const names = [e?.name, e?.cause?.name]
+  if (names.includes('TimeoutError') || e?.code === 23 || e?.cause?.code === 23)
+    return 'timeout'
+  if (names.includes('AbortError'))
+    return 'aborted'
+  const code = String(e?.cause?.code ?? e?.code ?? '').toUpperCase()
+  if (['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code))
+    return 'connection'
+  const message = (e?.message ?? '').toLowerCase()
+  if (message.includes('failed to fetch') || message.includes('fetch failed') || message.includes('network request failed'))
+    return 'connection'
+  return undefined
+}
+
 function parseNuxtRpcBody<TBodySchema extends z.ZodTypeAny>(schema: TBodySchema, body: unknown): z.output<TBodySchema> {
   try {
     return schema.parse(body)
@@ -275,7 +421,7 @@ function parseNuxtRpcBody<TBodySchema extends z.ZodTypeAny>(schema: TBodySchema,
   }
 }
 
-function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema> {
+export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema> {
   try {
     return schema.parse(response)
   }
@@ -288,7 +434,7 @@ function isNuxtRpcError(error: unknown): error is NuxtRpcError {
   return typeof error === 'object'
     && error != null
     && 'type' in error
-    && ['fetch', 'request-validation', 'response-validation', 'unknown'].includes((error as { type?: string }).type || '')
+    && ['fetch', 'request-validation', 'response-validation', 'timeout', 'connection', 'aborted', 'unknown'].includes((error as { type?: string }).type || '')
 }
 
 function formatNuxtRpcValidationIssue(issue: ZodIssue): NuxtRpcValidationIssue {
@@ -306,6 +452,21 @@ function firstIssueMessage(issues: NuxtRpcValidationIssue[]): string | undefined
   return issue.path ? `${issue.path}: ${issue.message}` : issue.message
 }
 
+// Lifecycle hooks are caller-supplied observers. A throwing/rejecting hook is
+// a caller bug, not part of the RPC outcome, so we run each in isolation: the
+// failure is reported (never swallowed silently) but cannot reject the call or
+// mask the normalized RPC error. Reported via `console.error` rather than a
+// rethrow — an uncaught throw on the SSR server would surface as an
+// `uncaughtException` and could take down the request.
+async function callRpcHook(invoke: () => void | Promise<void>): Promise<void> {
+  try {
+    await invoke()
+  }
+  catch (error) {
+    console.error('[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:', error)
+  }
+}
+
 async function notifyRpcSuccess(options: {
   operation: NuxtRpcOperationContext
   data: unknown
@@ -318,8 +479,8 @@ async function notifyRpcSuccess(options: {
     data: options.data,
     durationMs: options.durationMs,
   }
-  await options.onSuccess?.(event)
-  await options.onSettled?.(event)
+  await callRpcHook(() => options.onSuccess?.(event))
+  await callRpcHook(() => options.onSettled?.(event))
 }
 
 async function notifyRpcError(options: {
@@ -336,6 +497,6 @@ async function notifyRpcError(options: {
     durationMs: options.durationMs,
   }
   if (!options.silent)
-    await options.onError?.(event)
-  await options.onSettled?.(event)
+    await callRpcHook(() => options.onError?.(event))
+  await callRpcHook(() => options.onSettled?.(event))
 }

@@ -2,14 +2,16 @@ import type { MaybeRefOrGetter } from 'vue'
 import type { z } from 'zod'
 import type {
   NuxtRpcClientOptions,
+  NuxtRpcError,
   NuxtRpcQueryOperation,
 } from '../rpc/core'
-import type { KeysOf, UseNuxtQueryOptions } from './useNuxtQuery'
+import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
 import { computed, toValue } from 'vue'
 import { useNuxtApp } from '#app'
 import {
   createNuxtRpcClient,
   normalizeNuxtRpcError,
+  parseNuxtRpcResponse,
   serializeNuxtRpcKey,
 } from '../rpc/core'
 import { useNuxtQuery } from './useNuxtQuery'
@@ -31,19 +33,31 @@ export function useNuxtRpcQuery<
   options: UseNuxtRpcQueryOptions<z.output<TResponseSchema>, DefaultT> = {},
 ) {
   const resolved = () => toValue(operation)
-  return (useNuxtQuery as any)(() => resolved().path, {
+  const query = (useNuxtQuery as any)(() => resolved().path, {
     ...options,
     key: () => serializeNuxtRpcKey(resolved().key),
     query: computed(() => resolved().query),
-    transform: (payload: unknown) => {
-      try {
-        return resolved().response.parse(payload)
-      }
-      catch (error) {
-        throw normalizeNuxtRpcError(error, 'response-validation')
-      }
-    },
-  } as UseNuxtQueryOptions<z.output<TResponseSchema>>)
+    // Same parse-and-normalize the imperative client uses, so a successful
+    // payload that fails its schema surfaces an identical `NuxtRpcError`.
+    transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload),
+  } as UseNuxtQueryOptions<z.output<TResponseSchema>>) as NuxtQuery<DefaultT | z.output<TResponseSchema>, NuxtRpcError | undefined>
+
+  // `transform` only runs on a successful payload, so on an HTTP / timeout /
+  // network failure `useFetch` parks the *raw* `FetchError` in `error.value` —
+  // leaving the reactive path inconsistent with `querySafe`, which returns a
+  // tagged `NuxtRpcError`. Wrap `error` so every consumer sees one shape
+  // (`NuxtRpcError`) regardless of which path produced the failure.
+  // A *writable* computed: reads normalize the underlying error, writes pass
+  // straight through to the original ref. This preserves AsyncData's writable
+  // `error` contract — a consumer (or Nuxt's own refresh) clearing
+  // `error.value` still writes through and re-reads as cleared, rather than
+  // hitting a no-op setter on a readonly computed.
+  const rawError = query.error
+  query.error = computed({
+    get: () => (rawError.value == null ? undefined : normalizeNuxtRpcError(rawError.value)),
+    set: value => void (rawError.value = value),
+  }) as typeof query.error
+  return query
 }
 
 export interface UseNuxtRpcOptions {

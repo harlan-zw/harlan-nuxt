@@ -139,6 +139,146 @@ describe('useNuxtMutation onMutate + context', () => {
   })
 })
 
+describe('useNuxtMutation mutateSafe (errors-as-values)', () => {
+  it('returns an ok-tagged result on success without throwing', async () => {
+    const m = useNuxtMutation<{ id: string }, { ok: boolean }>({
+      mutation: async ({ id }) => ({ ok: id === 'a' }),
+      invalidates: ['pro-x-'],
+    })
+
+    const result = await m.mutateSafe({ id: 'a' })
+
+    expect(result).toEqual({ _tag: 'ok', data: { ok: true } })
+    expect(invalidateSpy).toHaveBeenCalledExactlyOnceWith('pro-x-')
+    expect(m.error.value).toBeNull()
+    expect(m.pending.value).toBe(false)
+  })
+
+  it('returns an err-tagged result on failure without throwing, even with no onError', async () => {
+    const boom = new Error('nope')
+    const m = useNuxtMutation({
+      mutation: async () => { throw boom },
+      invalidates: ['pro-x-'],
+    })
+
+    const result = await m.mutateSafe()
+
+    expect(result).toEqual({ _tag: 'err', error: boom })
+    expect(m.error.value).toBe(boom)
+    expect(m.pending.value).toBe(false)
+    expect(invalidateSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns an err-tagged result when onMutate throws', async () => {
+    const fn = vi.fn()
+    const boom = new Error('cant snapshot')
+    const m = useNuxtMutation({
+      onMutate: () => { throw boom },
+      mutation: fn,
+    })
+
+    const result = await m.mutateSafe()
+
+    expect(result).toEqual({ _tag: 'err', error: boom })
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  it('still fires onSettled + onError side-effects while returning the err value', async () => {
+    const onError = vi.fn()
+    const onSettled = vi.fn()
+    const boom = new Error('x')
+    const m = useNuxtMutation({
+      mutation: async () => { throw boom },
+      onError,
+      onSettled,
+    })
+
+    const result = await m.mutateSafe()
+
+    expect(result._tag).toBe('err')
+    expect(onError).toHaveBeenCalledWith(boom, undefined, undefined)
+    expect(onSettled).toHaveBeenCalledWith(undefined, boom, undefined, undefined)
+  })
+})
+
+describe('useNuxtMutation hook isolation', () => {
+  it('mutateSafe still resolves the err value when onError throws', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const boom = new Error('mutation failed')
+    const m = useNuxtMutation({
+      mutation: async () => { throw boom },
+      onError: () => { throw new Error('reporting hook blew up') },
+    })
+
+    const r = await m.mutateSafe()
+
+    expect(r).toEqual({ _tag: 'err', error: boom })
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('mutateSafe still resolves when onSettled throws', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const m = useNuxtMutation({
+      mutation: async () => { throw new Error('fail') },
+      onSettled: () => { throw new Error('settle blew up') },
+    })
+
+    const r = await m.mutateSafe()
+
+    expect(r._tag).toBe('err')
+    spy.mockRestore()
+  })
+
+  it('mutate() throws the rollback failure so the caller can observe it (not a clean resolve)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rollbackError = new Error('rollback failed')
+    const m = useNuxtMutation<void, void, { previous: string }>({
+      onMutate: () => ({ previous: 'snapshot' }),
+      mutation: async () => { throw new Error('mutation failed') },
+      onError: () => { throw rollbackError },
+    })
+
+    await expect(m.mutate()).rejects.toBe(rollbackError)
+    spy.mockRestore()
+  })
+
+  it('awaits an async onError so its rejection is captured, not left dangling', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const rollbackError = new Error('async rollback rejected')
+    const m = useNuxtMutation({
+      mutation: async () => { throw new Error('mutation failed') },
+      onError: async () => { throw rollbackError },
+    })
+
+    // mutate() (throwing variant) surfaces it; mutateSafe still resolves err.
+    await expect(m.mutate()).rejects.toBe(rollbackError)
+    const safe = useNuxtMutation({
+      mutation: async () => { throw new Error('x') },
+      onError: async () => { throw new Error('async reject') },
+    })
+    await expect(safe.mutateSafe()).resolves.toMatchObject({ _tag: 'err' })
+    spy.mockRestore()
+  })
+
+  it('a throwing onSuccess does not flip a successful mutateSafe to err, nor fire onError', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onError = vi.fn()
+    const m = useNuxtMutation<void, { ok: boolean }>({
+      mutation: async () => ({ ok: true }),
+      onSuccess: () => { throw new Error('success hook blew up') },
+      onError,
+    })
+
+    const r = await m.mutateSafe()
+
+    expect(r).toEqual({ _tag: 'ok', data: { ok: true } })
+    expect(onError).not.toHaveBeenCalled()
+    expect(m.pending.value).toBe(false)
+    spy.mockRestore()
+  })
+})
+
 describe('useNuxtMutation error path', () => {
   it('swallows the error and records it when onError is provided', async () => {
     const onError = vi.fn()

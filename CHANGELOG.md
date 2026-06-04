@@ -1,6 +1,10 @@
 # Changelog
 
 
+## v0.2.5...main
+
+[compare changes](https://github.com/harlan-zw/nuxt-use-query/compare/v0.2.5...main)
+
 ## v0.2.4...main
 
 [compare changes](https://github.com/harlan-zw/nuxt-use-query/compare/v0.2.4...main)
