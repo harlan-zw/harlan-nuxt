@@ -40,14 +40,6 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
     },
   })
 
-  nitroApp.hooks.hook('request', (event: RequestEventLike) => {
-    const existing = event.context.cloudflare?.env
-    event.context.cloudflare = {
-      ...(event.context.cloudflare ?? {}),
-      env: existing ? { ...runtime.env, ...existing } : runtime.env,
-    }
-  })
-
   // Requests get the in-process queue runtime via the hook above, but scheduled
   // tasks, fan-outs and hook listeners enqueue through `getQueue(job)`, which has
   // no `H3Event` and resolves bindings via `resolveNitroTaskEnv()` →
@@ -59,6 +51,22 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
   // production env.)
   const taskEnvHost = globalThis as { __env__?: Record<string, unknown> }
   taskEnvHost.__env__ = { ...runtime.env, ...(taskEnvHost.__env__ ?? {}) }
+
+  nitroApp.hooks.hook('request', (event: RequestEventLike) => {
+    const existing = event.context.cloudflare?.env
+    event.context.cloudflare = {
+      ...(event.context.cloudflare ?? {}),
+      env: existing ? { ...runtime.env, ...existing } : runtime.env,
+    }
+    // Mirror nuxt-dev's NATIVE bindings (D1/KV/R2/…) onto the task-env shim too,
+    // so the ASYNC queue consumer (`onBatch` → `cloudflare:queue`, which runs
+    // outside the request and reads `globalThis.__env__`) can reach them. Without
+    // this the consumer's env has only the dev queue bindings, and any job that
+    // touches D1 fails to claim — the batch silently never drains in dev. Queue
+    // bindings keep precedence over the native env.
+    if (existing)
+      taskEnvHost.__env__ = { ...taskEnvHost.__env__, ...existing, ...runtime.env }
+  })
 
   nitroApp.hooks.hook('close', () => runtime.dispose())
 })
