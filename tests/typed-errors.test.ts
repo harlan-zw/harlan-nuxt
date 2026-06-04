@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   defineJob,
   defineJobRegistry,
+  dispatchDurableJobBatch,
   enqueueDurableJob,
   err,
   formatJobError,
@@ -183,6 +184,31 @@ describe('enqueueDurableJob discriminated outcome', () => {
     }
     const result = await enqueueDurableJob({ insertJob: async () => true }, { send }, record)
     expect(result).toEqual({ status: 'dispatch-failed', cause })
+  })
+})
+
+describe('dispatchDurableJobBatch discriminated per-queue outcome', () => {
+  const records = [{ id: 'job_1', queue: 'default' as const }, { id: 'job_2', queue: 'slow' as const }]
+
+  it('reports sent / not-dispatched / failed per queue', async () => {
+    const cause = new Error('queue down')
+    const publisher = {
+      sendBatch: async (queue: 'default' | 'slow') => {
+        if (queue === 'slow')
+          throw cause
+        return true
+      },
+    }
+    const sent = await dispatchDurableJobBatch(publisher, records)
+    expect(sent).toEqual([
+      { queue: 'default', status: 'sent' },
+      { queue: 'slow', status: 'failed', cause },
+    ])
+  })
+
+  it('reports not-dispatched when the publisher returns false (binding missing)', async () => {
+    const result = await dispatchDurableJobBatch({ sendBatch: async () => false }, [records[0]!])
+    expect(result).toEqual([{ queue: 'default', status: 'not-dispatched' }])
   })
 })
 

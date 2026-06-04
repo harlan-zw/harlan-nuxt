@@ -1,5 +1,6 @@
 import type { D1DatabaseLike } from './d1'
 import type {
+  DispatchDurableJobBatchResult,
   DurableJobContinuation,
   DurableJobRecord,
   DurableJobRepository,
@@ -188,7 +189,7 @@ export interface CreateJobBatchOptions<
 export interface CreateJobBatchResult {
   batchId: string
   jobIds: string[]
-  dispatched: Array<{ queue: string, dispatched: boolean, error?: unknown }>
+  dispatched: Array<DispatchDurableJobBatchResult>
 }
 
 /**

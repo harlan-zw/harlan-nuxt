@@ -562,9 +562,21 @@ export async function enqueueDurableJob<
     .catch((cause: unknown): EnqueueDurableJobResult => ({ status: 'dispatch-failed', cause }))
 }
 
+/**
+ * Per-queue outcome of a durable batch dispatch, discriminated on `status`:
+ * - `sent`: the queue accepted the batch.
+ * - `not-dispatched`: the queue binding was missing, so the send was skipped (no
+ *   throw); the rows are durable and a sweep will redispatch them.
+ * - `failed`: the send threw; `cause` is the raw (infra) throw. Also sweep-recoverable.
+ */
+export type DispatchDurableJobBatchResult<Queue extends string = string>
+  = | { queue: Queue, status: 'sent' }
+    | { queue: Queue, status: 'not-dispatched' }
+    | { queue: Queue, status: 'failed', cause: unknown }
+
 export interface SweepDurableJobsResult<Queue extends string> {
   swept: number
-  dispatched: Array<{ queue: Queue, dispatched: boolean, error?: unknown }>
+  dispatched: Array<DispatchDurableJobBatchResult<Queue>>
 }
 
 export async function sweepDispatchableDurableJobs<Queue extends string>(
@@ -583,18 +595,16 @@ export async function dispatchDurableJobBatch<Queue extends string>(
   publisher: Pick<QueuePublisher<Queue>, 'sendBatch'>,
   records: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>,
   opts?: { delaySeconds?: number },
-): Promise<Array<{ queue: Queue, dispatched: boolean, error?: unknown }>> {
+): Promise<Array<DispatchDurableJobBatchResult<Queue>>> {
   const groups = groupQueueJobMessagesByQueue(records)
   return await Promise.all(
-    [...groups].map(async ([queue, messages]) => {
+    [...groups].map(async ([queue, messages]): Promise<DispatchDurableJobBatchResult<Queue>> => {
       try {
-        return {
-          queue,
-          dispatched: await publisher.sendBatch(queue, messages, opts),
-        }
+        const sent = await publisher.sendBatch(queue, messages, opts)
+        return sent ? { queue, status: 'sent' } : { queue, status: 'not-dispatched' }
       }
-      catch (error) {
-        return { queue, dispatched: false, error }
+      catch (cause) {
+        return { queue, status: 'failed', cause }
       }
     }),
   )

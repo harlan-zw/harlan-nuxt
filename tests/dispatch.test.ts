@@ -861,8 +861,8 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       { id: 'job_2', queue: 'default' },
       { id: 'job_3', queue: 'slow' },
     ])).resolves.toEqual([
-      { queue: 'default', dispatched: true },
-      { queue: 'slow', dispatched: true },
+      { queue: 'default', status: 'sent' },
+      { queue: 'slow', status: 'sent' },
     ])
 
     expect(fake.messages).toEqual([
@@ -886,8 +886,8 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       { id: 'job_1', queue: 'default' },
       { id: 'job_2', queue: 'slow' },
     ])).resolves.toEqual([
-      { queue: 'default', dispatched: true },
-      { queue: 'slow', dispatched: false, error },
+      { queue: 'default', status: 'sent' },
+      { queue: 'slow', status: 'failed', cause: error },
     ])
   })
 
@@ -1291,7 +1291,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
 
     await expect(sweepDispatchableDurableJobs(repository, publisher)).resolves.toEqual({
       swept: 2,
-      dispatched: [{ queue: 'default', dispatched: true }],
+      dispatched: [{ queue: 'default', status: 'sent' }],
     })
     expect(sent).toEqual([{ queue: 'default', messages: [
       { jobId: 'job_1', queue: 'default' },
