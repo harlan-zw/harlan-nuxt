@@ -33,6 +33,27 @@ export interface JobMetricsEvent {
   userId: number | null
   /** Present for `failed` / `released` (the release reason). */
   error?: string
+  // Execution stats reported via ctx.reportStats (completed jobs). Undefined when
+  // the handler reported none. Recorded as Analytics Engine doubles for sum/avg.
+  rowsFetched?: number
+  rowsInserted?: number
+  d1RowsRead?: number
+  d1RowsWritten?: number
+}
+
+const STAT_KEYS = ['rowsFetched', 'rowsInserted', 'd1RowsRead', 'd1RowsWritten'] as const
+
+/** Pull the numeric {@link JobRunStats} fields out of a completeJob result. */
+function readStats(result: unknown): Partial<Record<(typeof STAT_KEYS)[number], number>> {
+  if (!result || typeof result !== 'object')
+    return {}
+  const out: Partial<Record<(typeof STAT_KEYS)[number], number>> = {}
+  for (const k of STAT_KEYS) {
+    const v = (result as Record<string, unknown>)[k]
+    if (typeof v === 'number')
+      out[k] = v
+  }
+  return out
 }
 
 export interface JobMetricsSink {
@@ -73,8 +94,8 @@ export function metricsSinkToRepoHooks(
   sink: JobMetricsSink,
 ): Pick<D1DurableJobRepositoryOptions, 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'> {
   return {
-    onJobCompleted({ job, durationMs }) {
-      return sink.record(toEvent(job, 'completed', { durationMs }))
+    onJobCompleted({ job, durationMs, result }) {
+      return sink.record({ ...toEvent(job, 'completed', { durationMs }), ...readStats(result) })
     },
     onJobFailed({ job, error }) {
       return sink.record(toEvent(job, 'failed', { durationMs: job.duration_ms ?? null, error }))

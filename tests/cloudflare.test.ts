@@ -21,19 +21,19 @@ const event: JobMetricsEvent = {
 }
 
 describe('defaultJobDataPoint', () => {
-  it('uses queue as the single index, status/jobType as blobs, duration+attempts as doubles', () => {
-    expect(defaultJobDataPoint(event)).toEqual({
+  it('uses queue as the single index, status/jobType as blobs, duration+attempts+stats as doubles', () => {
+    expect(defaultJobDataPoint({ ...event, rowsFetched: 10, rowsInserted: 4, d1RowsRead: 7, d1RowsWritten: 3 })).toEqual({
       indexes: ['crawl'],
       blobs: ['crawl', 'crawl/site', 'completed', null],
-      doubles: [4200, 2],
+      doubles: [4200, 2, 10, 4, 7, 3],
     })
   })
 
-  it('emits the error blob and zero duration for a failed event', () => {
+  it('zero-fills missing duration + unreported stats', () => {
     expect(defaultJobDataPoint({ ...event, status: 'failed', durationMs: null, error: 'boom' })).toEqual({
       indexes: ['crawl'],
       blobs: ['crawl', 'crawl/site', 'failed', 'boom'],
-      doubles: [0, 2],
+      doubles: [0, 2, 0, 0, 0, 0],
     })
   })
 })

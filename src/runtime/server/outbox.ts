@@ -10,6 +10,7 @@ import type {
   JobControlResult,
   JobDefinition,
   JobHandler,
+  JobRunStats,
   QueueMessage,
   QueueSendOptions,
 } from './types'
@@ -780,11 +781,22 @@ export async function runDurableJobMessage<
   const storedJob = claimed.job
   const job = opts.toDispatchableJob(storedJob)
 
+  // Accumulate handler-reported execution stats (ctx.reportStats); merged into
+  // the completeJob result so they reach the row + the metrics sink. Summed so
+  // repeated calls add up.
+  const reportedStats: JobRunStats = {}
+  const reportStats = (s: JobRunStats): void => {
+    for (const k of ['rowsFetched', 'rowsInserted', 'd1RowsRead', 'd1RowsWritten'] as const) {
+      if (typeof s[k] === 'number')
+        reportedStats[k] = (reportedStats[k] ?? 0) + s[k]!
+    }
+  }
+
   try {
     const dispatch = await dispatchRegisteredJob({
       registry: opts.registry,
       job,
-      createContext: input => opts.createJobContext({ ...input, storedJob }),
+      createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
     })
 
     if (!dispatch.success) {
@@ -808,7 +820,13 @@ export async function runDurableJobMessage<
       return { status: 'released', dispatch }
     }
 
-    await completeDurableJob(opts.lifecycle, storedJob, await opts.completeResult?.({ job: storedJob, dispatch }))
+    const result = await opts.completeResult?.({ job: storedJob, dispatch })
+    const hasStats = Object.keys(reportedStats).length > 0
+    // Back-compat: with no reported stats, pass the result through untouched.
+    const completeWith = hasStats
+      ? { ...(result && typeof result === 'object' ? result : {}), ...reportedStats }
+      : result
+    await completeDurableJob(opts.lifecycle, storedJob, completeWith)
     opts.message.ack()
     return { status: 'completed', dispatch }
   }

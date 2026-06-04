@@ -272,14 +272,28 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async completeJob(job, result) {
-      const durationMs = result && typeof result === 'object' && 'durationMs' in result && typeof result.durationMs === 'number'
-        ? result.durationMs
-        : null
+      const stats = readResultStat(result)
+      // Reported durationMs wins; else derive from the reservation (Laravel-style
+      // wall-clock) so duration is populated even when the handler reports none.
+      const reportedDuration = stats('durationMs')
+      const durationMs = reportedDuration ?? (job.reserved_at != null ? (currentUnixSeconds() - job.reserved_at) * 1000 : null)
       await db.prepare(`
         UPDATE ${jobsTable}
-        SET completed_at = unixepoch(), reserved_at = NULL, duration_ms = COALESCE(?, duration_ms)
+        SET completed_at = unixepoch(), reserved_at = NULL,
+            duration_ms = COALESCE(?, duration_ms),
+            rows_fetched = COALESCE(?, rows_fetched),
+            rows_inserted = COALESCE(?, rows_inserted),
+            d1_rows_read = COALESCE(?, d1_rows_read),
+            d1_rows_written = COALESCE(?, d1_rows_written)
         WHERE id = ?
-      `).bind(durationMs, job.id).run()
+      `).bind(
+        durationMs,
+        stats('rowsFetched') ?? null,
+        stats('rowsInserted') ?? null,
+        stats('d1RowsRead') ?? null,
+        stats('d1RowsWritten') ?? null,
+        job.id,
+      ).run()
       fireHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
     },
 
@@ -465,6 +479,15 @@ async function pruneInChunks(
 
 function currentUnixSeconds(): number {
   return Math.floor(Date.now() / 1000)
+}
+
+/** Reader for numeric stat fields on a completeJob result (durationMs + JobRunStats). */
+function readResultStat(result: unknown): (key: 'durationMs' | 'rowsFetched' | 'rowsInserted' | 'd1RowsRead' | 'd1RowsWritten') => number | undefined {
+  const obj = result && typeof result === 'object' ? result as Record<string, unknown> : undefined
+  return (key) => {
+    const v = obj?.[key]
+    return typeof v === 'number' ? v : undefined
+  }
 }
 
 function fireHook(fn: () => void | Promise<void>): void {

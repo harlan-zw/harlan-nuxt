@@ -72,6 +72,18 @@ export interface JobControlResult {
   error?: string
 }
 
+/**
+ * Per-run execution stats a handler can report (rows touched, D1 reads/writes).
+ * Reported via {@link JobContext.reportStats}; the consumer persists them to the
+ * job row + forwards them to the metrics sink. Multiple calls accumulate (sum).
+ */
+export interface JobRunStats {
+  rowsFetched?: number
+  rowsInserted?: number
+  d1RowsRead?: number
+  d1RowsWritten?: number
+}
+
 export interface JobContext<Env, Db, Logger> {
   env: Env
   jobId: string
@@ -81,6 +93,12 @@ export interface JobContext<Env, Db, Logger> {
   log: Logger
   release: (delaySeconds: number) => Promise<void>
   fail: (error: string) => Promise<void>
+  /**
+   * Report execution stats (rows fetched/inserted, D1 reads/writes) for metrics +
+   * observability. Injected by the durable consumer; optional so plain handlers
+   * and hand-built contexts need not provide it.
+   */
+  reportStats?: (stats: JobRunStats) => void
 }
 
 export type JobHandler<Payload, Env, Db, Logger> = (

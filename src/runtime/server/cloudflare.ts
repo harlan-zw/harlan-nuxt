@@ -45,7 +45,16 @@ export function defaultJobDataPoint(event: JobMetricsEvent): AnalyticsEngineData
   return {
     indexes: [event.queue],
     blobs: [event.queue, event.jobType, event.status, event.error ?? null],
-    doubles: [event.durationMs ?? 0, event.attempts],
+    // doubles are positional — keep this order stable (the AE SQL API references
+    // double1..double6). duration, attempts, then the reported execution stats.
+    doubles: [
+      event.durationMs ?? 0,
+      event.attempts,
+      event.rowsFetched ?? 0,
+      event.rowsInserted ?? 0,
+      event.d1RowsRead ?? 0,
+      event.d1RowsWritten ?? 0,
+    ],
   }
 }
 
