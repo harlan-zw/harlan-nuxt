@@ -317,6 +317,8 @@ export interface CreateDurableJobsRuntimeOptions<
   metricsSink?: JobMetricsSink
   /** Notified after each batch settle. */
   onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
+  /** Override how a batch's onFinish continuation runs (default: durable enqueue). */
+  dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
   /** Per-throw retry backoff for the consumer. */
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
@@ -408,7 +410,7 @@ export function createDurableJobsRuntime<
   // it would silently drop the continuation (and break a parent-batch chain). So
   // it must never throw: a failed enqueue is logged via onLog and left for the
   // app's own backstop (e.g. a reconcile cron) to recover.
-  const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = async ({ continuation, batch }) => {
+  const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
       const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry })
@@ -417,7 +419,7 @@ export function createDurableJobsRuntime<
     catch (error) {
       opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: error instanceof Error ? error.message : String(error) })
     }
-  }
+  })
 
   const isDuplicate = makeIsDuplicate(opts.dedup)
 
