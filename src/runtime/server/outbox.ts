@@ -714,6 +714,14 @@ export interface RunDurableJobMessageOptions<
   retryDelaySeconds?: number | ((input: { error: unknown, job: StoredJob }) => number)
   failDispatchFailure?: boolean
   completeResult?: (input: { job: StoredJob, dispatch: DispatchResult }) => unknown | Promise<unknown>
+  /**
+   * Laravel worker model: a handler that throws is retried until `attempts`
+   * reaches the job's max, then failed (→ `failed_jobs`) instead of released for
+   * another try. Supply this to read the stored job's max so the consumer — not
+   * just the queue transport's `max_retries` — enforces the per-job attempt cap.
+   * Omit to keep retrying every throw (the transport/DLQ then decides terminal).
+   */
+  maxAttemptsOf?: (job: StoredJob) => number | undefined
 }
 
 /**
@@ -727,6 +735,8 @@ export interface RunDurableJobMessageOptions<
  * - `errored`: the handler threw an unexpected defect; the message is retried and
  *   `error` carries the defect as a `handler-threw` `JobError` (`error.cause` is the
  *   original throw). Distinct from `released` (a deliberate `ctx.release()`).
+ * - `exhausted`: the handler threw AND `attempts` reached `maxAttemptsOf` — the job
+ *   was failed (→ `failed_jobs`) rather than retried. Terminal.
  */
 export type RunDurableJobMessageResult
   = | { status: 'invalid-message' }
@@ -736,6 +746,7 @@ export type RunDurableJobMessageResult
     | { status: 'released', dispatch: DispatchResult }
     | { status: 'completed', dispatch: DispatchResult }
     | { status: 'errored', error: JobError }
+    | { status: 'exhausted', error: JobError }
 
 export async function runDurableJobMessage<
   StoredJob,
@@ -800,6 +811,15 @@ export async function runDurableJobMessage<
     return { status: 'completed', dispatch }
   }
   catch (error) {
+    // Laravel worker model: at the attempt cap, fail (→ failed_jobs) instead of
+    // releasing for another try. `job.attempts` already counts this run (claim
+    // incremented it).
+    const maxAttempts = opts.maxAttemptsOf?.(storedJob)
+    if (typeof maxAttempts === 'number' && job.attempts >= maxAttempts) {
+      await failDurableJob(opts.lifecycle, storedJob, describeCause(error))
+      opts.message.ack()
+      return { status: 'exhausted', error: jobErrors.handlerThrew(error) }
+    }
     const delaySeconds = typeof opts.retryDelaySeconds === 'function'
       ? opts.retryDelaySeconds({ error, job: storedJob })
       : opts.retryDelaySeconds ?? 0

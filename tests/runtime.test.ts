@@ -181,6 +181,32 @@ describe('runDurableJobMessage control handling (lifecycle fix)', () => {
   })
 })
 
+describe('maxAttempts (Laravel worker model)', () => {
+  it('retries a throwing job below the attempt cap (released, batch not settled)', async () => {
+    const { runtime } = await setup({ boom: async () => { throw new Error('transient') } })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'boom', payload: {} } })
+    const m = msg(jobIds[0]!) // default max_attempts 3, attempts→1 after claim < 3
+    const r = await runtime.consumeMessage(m)
+    expect(r.run.status).toBe('errored')
+    expect(r.settled).toBeNull()
+    expect(m.retry).toHaveBeenCalled()
+    expect(m.ack).not.toHaveBeenCalled()
+  })
+
+  it('fails (→ failed_jobs) + settles once attempts reach the cap', async () => {
+    const { d1, runtime } = await setup({ boom: async () => { throw new Error('persistent') }, finish: async () => {} })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'finish', payload: {} } })
+    d1._db.prepare('UPDATE jobs SET max_attempts = 1 WHERE id = ?').run(jobIds[0]!)
+    const m = msg(jobIds[0]!)
+    const r = await runtime.consumeMessage(m)
+    expect(r.run.status).toBe('exhausted')
+    expect(r.settled?.batchComplete).toBe(true)
+    expect(rows(d1, 'failed_jobs')).toBe(1)
+    expect(m.ack).toHaveBeenCalled()
+    expect(m.retry).not.toHaveBeenCalled()
+  })
+})
+
 describe('consumeBatch', () => {
   it('routes a lightweight _task message and dedups redeliveries', async () => {
     const ran: number[] = []

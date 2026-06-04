@@ -72,7 +72,7 @@ export async function runDurableJobBatchMessage<
 ): Promise<RunDurableJobBatchMessageResult> {
   const run = await runDurableJobMessage(opts)
 
-  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed'
+  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted'
   if (!terminal)
     return { run, settled: null }
 
@@ -238,6 +238,8 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         toDispatchableJob: opts.repository.toDispatchableJob,
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds,
+        // Honour the stored job's attempt cap (Laravel worker model).
+        maxAttemptsOf: stored => stored.max_attempts,
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
@@ -391,6 +393,7 @@ export function createDurableJobsRuntime<
       toDispatchableJob: repository.toDispatchableJob,
       createJobContext: opts.createJobContext,
       retryDelaySeconds: opts.retryDelaySeconds,
+      maxAttemptsOf: stored => stored.max_attempts,
       dispatchOnFinish,
       onBatchProgress: opts.onBatchProgress,
     }),
