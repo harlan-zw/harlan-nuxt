@@ -6,6 +6,7 @@
 // own `#cf-jobs/testing` subpath (nitropack-free, test-only) so importing the
 // harness never drags this barrel's `scheduled` → `nitropack/runtime` edge.
 export * from './app'
+export * from './batch'
 export * from './d1'
 export * from './dispatch'
 export * from './errors'
