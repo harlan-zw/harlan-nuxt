@@ -69,6 +69,14 @@ export interface D1DurableJobRepositoryOptions<Queue extends string = string> {
   jobsTable?: string
   failedJobsTable?: string
   batchesTable?: string
+  /**
+   * Laravel's `retry_after`: when set, `claimJob` also reclaims a reservation
+   * older than this many seconds (a dead worker that never acked/released), in
+   * one atomic statement — so a redelivered message re-runs instead of bouncing
+   * until DLQ. MUST be longer than the slowest job, or a still-running job can be
+   * double-claimed. Default unset = only unreserved rows are claimable.
+   */
+  reclaimAfterSeconds?: number
   /** Fire-and-forget hook invoked after a successful claim. Errors are swallowed. */
   onJobClaimed?: (input: { job: D1DurableJobRecord<Queue> }) => void
   /** Fire-and-forget hook invoked after `completeJob` writes succeed. Errors are swallowed. */
@@ -226,16 +234,20 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 
     async claimJob(id) {
       const now = currentUnixSeconds()
+      // `reclaimBefore`: reservations at or before this are treated as abandoned
+      // (Laravel `retry_after`). Unset → -1, which no real (positive) reserved_at
+      // satisfies, so only unreserved rows are claimable (prior behaviour).
+      const reclaimBefore = typeof opts.reclaimAfterSeconds === 'number' ? now - opts.reclaimAfterSeconds : -1
       const job = await db.prepare<D1DurableJobRecord<Queue>>(`
         UPDATE ${jobsTable}
         SET reserved_at = ?, attempts = attempts + 1
         WHERE id = ?
-          AND reserved_at IS NULL
+          AND (reserved_at IS NULL OR reserved_at <= ?)
           AND available_at <= ?
           AND completed_at IS NULL
           AND failed_at IS NULL
         RETURNING *
-      `).bind(now, id, now).first<D1DurableJobRecord<Queue>>()
+      `).bind(now, id, reclaimBefore, now).first<D1DurableJobRecord<Queue>>()
       if (job)
         fireHook(() => opts.onJobClaimed?.({ job }))
       return job
