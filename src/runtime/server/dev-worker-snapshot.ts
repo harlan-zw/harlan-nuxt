@@ -80,24 +80,32 @@ export async function snapshotDurableQueues(
   return [...byQueue.values()].sort((a, b) => a.queue.localeCompare(b.queue))
 }
 
+export interface RecentTerminalJobsQuery {
+  limit?: number
+  /** Only jobs that reached a terminal state at-or-after this unix second (event-stream cursor). */
+  sinceSeconds?: number
+}
+
 /** Most-recently terminal jobs (completed + failed), newest first. */
 export async function recentTerminalJobs(
   db: D1DatabaseLike,
-  limit: number = 12,
+  query: RecentTerminalJobsQuery = {},
   tables: DurableSnapshotTables = {},
 ): Promise<DurableJobOutcome[]> {
   const jobsTable = tables.jobs ?? 'jobs'
   const failedTable = tables.failedJobs ?? 'failed_jobs'
+  const limit = Math.max(1, query.limit ?? 12)
+  const since = query.sinceSeconds ?? 0
   const rows = await all<{ id: string, type: string, queue: string, durationMs: number | null, at: number, error: string | null, outcome: 'completed' | 'failed' }>(
     db.prepare(`
       SELECT id, job_type AS type, queue, duration_ms AS durationMs, completed_at AS at, NULL AS error, 'completed' AS outcome
-      FROM ${jobsTable} WHERE completed_at IS NOT NULL
+      FROM ${jobsTable} WHERE completed_at IS NOT NULL AND completed_at >= ?
       UNION ALL
       SELECT id, job_type AS type, queue, NULL AS durationMs, failed_at AS at, exception AS error, 'failed' AS outcome
-      FROM ${failedTable}
+      FROM ${failedTable} WHERE failed_at >= ?
       ORDER BY at DESC
       LIMIT ?
-    `).bind(Math.max(1, limit)),
+    `).bind(since, since, limit),
   )
   return rows.map(r => ({
     id: r.id,

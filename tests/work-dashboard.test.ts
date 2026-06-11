@@ -16,18 +16,21 @@ describe('formatMs', () => {
 })
 
 describe('renderWorkerDashboard', () => {
+  const nowSeconds = 1_700_000_000
   const base = {
     host: 'localhost:3030',
     uptimeSeconds: 133,
+    nowSeconds,
     sessionProcessed: 142,
     ratePerSec: 6,
+    inflight: { crawl: 2 },
     snapshot: [
-      { queue: 'crawl', ready: 0, reserved: 2, delayed: 0, completed: 84, failed: 1 },
-      { queue: 'reports', ready: 3, reserved: 0, delayed: 1, completed: 18, failed: 0 },
+      { queue: 'crawl', ready: 0, reserved: 2, delayed: 0, completed: 84, failed: 1, maxConcurrency: 4, maxBatchSize: 10 },
+      { queue: 'reports', ready: 3, reserved: 0, delayed: 1, completed: 18, failed: 0, maxConcurrency: 1, maxBatchSize: 10 },
     ],
     recent: [
-      { id: 's_abc12', type: 'crawl/site-scan', queue: 'crawl', outcome: 'completed' as const, durationMs: 142, error: null },
-      { id: 'r_99x', type: 'reports/weekly', queue: 'reports', outcome: 'failed' as const, durationMs: null, error: 'timeout\nat foo' },
+      { id: 's_abc12', type: 'crawl/site-scan', queue: 'crawl', outcome: 'completed' as const, durationMs: 142, error: null, at: nowSeconds - 12 },
+      { id: 'r_99x', type: 'reports/weekly', queue: 'reports', outcome: 'failed' as const, durationMs: null, error: 'timeout\nat foo', at: nowSeconds - 120 },
     ],
   }
 
@@ -41,17 +44,20 @@ describe('renderWorkerDashboard', () => {
     expect(out).toContain('~6/s')
   })
 
-  it('renders the per-queue table and the recent outcomes', () => {
+  it('renders per-queue lanes and a recent table with relative time', () => {
     const out = renderWorkerDashboard(base)
     expect(out).toContain('QUEUE')
-    expect(out).toContain('crawl')
-    expect(out).toContain('reports')
-    // recent tail: a completed duration and a failed (first line of the error only)
+    expect(out).toContain('LANES')
+    expect(out).toContain('2/4') // crawl: 2 in-flight lanes of its budget 4
     expect(out).toContain('crawl/site-scan')
     expect(out).toContain('142ms')
+    // recent is a real table with an AGO column showing relative time
+    expect(out).toContain('AGO')
+    expect(out).toContain('12s ago')
+    expect(out).toContain('2m ago')
     expect(out).toContain('reports/weekly')
     expect(out).toContain('timeout')
-    expect(out).not.toContain('at foo') // multi-line error is trimmed to the first line
+    expect(out).not.toContain('at foo') // multi-line error trimmed to the first line
   })
 
   it('shows placeholders when nothing has run yet', () => {

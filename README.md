@@ -350,24 +350,43 @@ pnpm cf-jobs work --interval 1000         # idle poll interval in ms (backs off 
 
 So a client connects to your WebSocket, enqueues a job (the request returns immediately, job persisted in D1), then `cf-jobs work` picks it up a tick later and runs it. Because the worker drives a dev-only endpoint (`POST /__cf-jobs/work`) that fires your app's registered `cloudflare:queue` consumer **in the dev process**, the job runs with the app's real context and an in-memory WebSocket broadcast reaches the connected client, exactly as it would in production via a Durable Object.
 
-On a TTY it shows a **live dashboard** (repainted each tick) so you can watch jobs flow through: per-queue ready/processing/done/failed, plus a tail of recent outcomes with durations. Pass `--no-watch` for the append-only line log, or `--json` for one machine-readable line per active tick (CI/scripts).
+On a TTY it shows a **live dashboard** (repainted each tick) so you can watch jobs flow through: per-queue ready/lanes/done/failed, plus a table of recent outcomes with how long ago they ran and how long they took. Pass `--no-watch` for the append-only line log, or `--json` for one machine-readable line per interval (CI/scripts).
 
 ```
 cf-jobs work · localhost:3030 · up 2m13s · 142 done · 1 failed · ~6/s
 
-QUEUE         READY  PROC  DONE  FAIL
-crawl             0     2    84     1
-reports           3     0    18     0
+QUEUE        READY  LANES  DONE  FAIL
+crawl           24    3/4    84     1
+reports          0    0/1    18     0
 
 recent
-✓ crawl/site-scan      s_abc12   142ms
-✓ crawl/site-scan      s_abc13    98ms
-✗ reports/weekly       r_99x     timeout
+  JOB              QUEUE    AGO      TOOK / ERROR
+✓ crawl/site-scan  crawl    12s ago  142ms
+✓ crawl/site-scan  crawl    18s ago  98ms
+✗ reports/weekly   reports  2m ago   DataForSEO 401 Unauthorized
 ```
 
 **No flag or restart needed to switch modes.** While `cf-jobs work` is running, its polling tells the dev server to stop auto-running durable jobs and leave them in D1 for the worker (the poll refreshes a short in-process lease — no pid file, no env var). Stop the worker and, once the lease lapses (~15s), the dev queue resumes running jobs immediately as before. So you opt into the realistic out-of-band lifecycle simply by starting the worker, and opt out by stopping it.
 
-Concurrency matches your queue config: each logical queue drains in batches of its wrangler `max_batch_size`, with up to `max_concurrency` batches in flight (default: serial, batch of 10). A queue declaring `{ maxConcurrency: 4, maxBatchSize: 10 }` drains 10-at-a-time, 4 batches concurrent, like its production consumer.
+**One poller, demand-driven fan-out.** A single `cf-jobs work` process reads a cheap per-queue demand snapshot each interval and opens concurrent drain *lanes* sized to each queue's wrangler `max_concurrency` (`LANES` = in-flight / budget). Each lane is **self-sustaining**: the moment a batch response returns with more work, it pulls the next one — throughput is gated by how fast the dev server drains, not by the poll clock. A long job in one queue occupies one of its lanes and never stalls the others, and an idle system backs the snapshot poll off automatically. So a queue with `{ maxConcurrency: 4, maxBatchSize: 10 }` drains 10-at-a-time across 4 concurrent lanes, like its production consumer.
+
+### Agent monitoring (`cf-jobs watch`)
+
+`cf-jobs watch` is a **read-only** companion for agents (or any tooling) that need to observe jobs in real time and react to failures. It streams one NDJSON event per terminal job to stdout, with the **full untruncated exception** on failures so an agent can read the stack and fix the issue:
+
+```bash
+cf-jobs watch                    # every completed/failed job as it happens
+cf-jobs watch --failures-only    # only failures (full stack traces)
+cf-jobs watch --queue crawl      # one queue
+cf-jobs watch --backfill 300     # also replay the last 5 minutes on start
+```
+
+```json
+{"ts":"2026-06-11T07:16:03.000Z","event":"failed","id":"j1","queue":"crawl","type":"crawl/site-scan","error":"Error: boom\n    at handler (x.ts:1:1)\n    at run (x.ts:2:2)"}
+{"ts":"2026-06-11T07:16:05.000Z","event":"completed","id":"j2","queue":"crawl","type":"crawl/site-scan","durationMs":142}
+```
+
+Unlike `work`, `watch` never drains and never holds the lease (`lease=0`), so it's pure observation: it doesn't change which process runs your jobs. Run it alongside `cf-jobs work` (or on its own while jobs auto-run) and tail the stream.
 
 Three things to know:
 

@@ -379,15 +379,42 @@ const tasks = defineCommand({
   },
 })
 
+export interface QueueSnapshot {
+  queue: string
+  ready: number
+  reserved: number
+  delayed: number
+  completed: number
+  failed: number
+  /** Wrangler consumer config the worker fans out against (present on the live endpoint). */
+  maxConcurrency?: number
+  maxBatchSize?: number
+}
+
+export interface RecentJob {
+  id: string
+  type: string
+  queue: string
+  outcome: 'completed' | 'failed'
+  durationMs: number | null
+  error: string | null
+  /** Unix seconds the job reached its terminal state. */
+  at: number
+}
+
 export interface WorkerDashboardState {
   host: string
   uptimeSeconds: number
+  /** Unix seconds at render time, for relative "ago" rendering. */
+  nowSeconds: number
   /** Jobs the worker has driven this session. */
   sessionProcessed: number
   /** Rolling jobs/sec. */
   ratePerSec: number
-  snapshot: Array<{ queue: string, ready: number, reserved: number, delayed: number, completed: number, failed: number }>
-  recent: Array<{ id: string, type: string, queue: string, outcome: 'completed' | 'failed', durationMs: number | null, error: string | null }>
+  /** In-flight drain lanes per queue (live fan-out). */
+  inflight: Record<string, number>
+  snapshot: QueueSnapshot[]
+  recent: RecentJob[]
 }
 
 /** Throughput: whole numbers bare (`6`), otherwise one decimal (`2.4`), rounded above 10. */
@@ -432,14 +459,18 @@ export function renderWorkerDashboard(s: WorkerDashboardState): string {
   }
   else {
     lines.push(table(
-      ['QUEUE', 'READY', 'PROC', 'DONE', 'FAIL'],
-      s.snapshot.map(q => [
-        q.queue,
-        q.ready > 0 ? color.yellow(q.ready) : '0',
-        q.reserved > 0 ? color.cyan(q.reserved) : '0',
-        q.completed,
-        q.failed > 0 ? color.red(q.failed) : '0',
-      ]),
+      ['QUEUE', 'READY', 'LANES', 'DONE', 'FAIL'],
+      s.snapshot.map((q) => {
+        const lanes = s.inflight[q.queue] ?? 0
+        const budget = q.maxConcurrency ?? 1
+        return [
+          q.queue,
+          q.ready > 0 ? color.yellow(q.ready) : '0',
+          lanes > 0 ? color.cyan(`${lanes}/${budget}`) : color.dim(`0/${budget}`),
+          q.completed,
+          q.failed > 0 ? color.red(q.failed) : '0',
+        ]
+      }),
       [false, true, true, true, true],
     ))
   }
@@ -450,13 +481,19 @@ export function renderWorkerDashboard(s: WorkerDashboardState): string {
     lines.push(color.dim('  (nothing yet)'))
   }
   else {
-    for (const j of s.recent) {
-      const icon = j.outcome === 'completed' ? color.green('✓') : color.red('✗')
-      const tail = j.outcome === 'completed'
-        ? formatMs(j.durationMs)
-        : color.red(truncate((j.error ?? '').split('\n')[0], 32))
-      lines.push(`${icon} ${truncate(j.type, 24).padEnd(24)} ${color.dim(truncate(j.id, 12).padEnd(12))} ${tail}`)
-    }
+    lines.push(table(
+      ['', 'JOB', 'QUEUE', 'AGO', 'TOOK / ERROR'],
+      s.recent.map(j => [
+        j.outcome === 'completed' ? color.green('✓') : color.red('✗'),
+        truncate(j.type, 24),
+        truncate(j.queue, 14),
+        relativeTime(j.at, s.nowSeconds),
+        j.outcome === 'completed'
+          ? formatMs(j.durationMs)
+          : color.red(truncate((j.error ?? '').split('\n')[0], 36)),
+      ]),
+      [false, false, false, false, false],
+    ))
   }
 
   return lines.join('\n')
@@ -468,8 +505,56 @@ interface WorkTickResult {
   remaining: number
   error?: string
   ambiguousBindings?: string[]
-  snapshot?: WorkerDashboardState['snapshot']
-  recent?: WorkerDashboardState['recent']
+  snapshot?: QueueSnapshot[]
+  recent?: RecentJob[]
+}
+
+export interface LanePlan {
+  queue: string
+  /** How many new drain lanes to fire this round. */
+  fire: number
+  /** Messages per drain call (the queue's wrangler `max_batch_size`). */
+  batchSize: number
+}
+
+/**
+ * Demand-driven fan-out: for each queue with ready work and a free lane, decide how
+ * many concurrent per-batch drains to fire. One poller, sized to each queue's
+ * `maxConcurrency`, so a long job in one queue never starves the others.
+ */
+export function planDrainLanes(
+  snapshot: QueueSnapshot[],
+  inflight: Record<string, number>,
+  opts: { onlyQueue?: string } = {},
+): LanePlan[] {
+  const plans: LanePlan[] = []
+  for (const q of snapshot) {
+    if (opts.onlyQueue && q.queue !== opts.onlyQueue)
+      continue
+    if (q.ready <= 0)
+      continue
+    const budget = Math.max(1, q.maxConcurrency ?? 1)
+    const batchSize = Math.max(1, q.maxBatchSize ?? 10)
+    // Don't open more lanes than there's work for, nor exceed the queue's budget.
+    const wanted = Math.min(budget, Math.ceil(q.ready / batchSize))
+    const fire = Math.max(0, wanted - (inflight[q.queue] ?? 0))
+    if (fire > 0)
+      plans.push({ queue: q.queue, fire, batchSize })
+  }
+  return plans
+}
+
+/** New terminal jobs not yet emitted, oldest-first (chronological), for the agent stream. */
+export function selectNewTerminalJobs(recent: RecentJob[], seen: ReadonlySet<string>): RecentJob[] {
+  return recent.filter(j => !seen.has(j.id)).sort((a, b) => a.at - b.at)
+}
+
+/** One NDJSON event line for an agent: failures carry the FULL untruncated error. */
+export function formatWatchEvent(job: RecentJob): string {
+  const ts = new Date(job.at * 1000).toISOString()
+  return job.outcome === 'completed'
+    ? JSON.stringify({ ts, event: 'completed', id: job.id, queue: job.queue, type: job.type, durationMs: job.durationMs })
+    : JSON.stringify({ ts, event: 'failed', id: job.id, queue: job.queue, type: job.type, error: job.error })
 }
 
 const TRAILING_SLASH_RE = /\/+$/
@@ -481,127 +566,258 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function fetchTick(endpoint: string): Promise<WorkTickResult | null> {
-  return await fetch(endpoint, { method: 'POST' })
+const WORK_ENDPOINT = '/__cf-jobs/work'
+
+function buildUrl(base: string, params: Record<string, string>): string {
+  return `${base}${WORK_ENDPOINT}?${new URLSearchParams(params)}`
+}
+
+async function fetchTick(url: string): Promise<WorkTickResult | null> {
+  return await fetch(url, { method: 'POST' })
     .then(r => r.json() as Promise<WorkTickResult>)
     .catch((): WorkTickResult | null => null)
 }
 
-interface WorkLoopOptions {
-  endpoint: string
+function hostOf(base: string): string {
+  try {
+    return new URL(base).host
+  }
+  catch {
+    return base
+  }
+}
+
+interface SchedulerContext {
   base: string
+  host: string
   interval: number
+  onlyQueue?: string
+  db?: string
+  recent: number
+  once: boolean
+  json: boolean
+  watch: boolean
   stopped: () => boolean
 }
 
-/** Append-only line log: one `✓ ran N` per active tick. Used for --once, --json, or non-TTY. */
-async function runLog(opts: WorkLoopOptions & { once: boolean, json: boolean }): Promise<void> {
-  const { endpoint, base, interval, once, json, stopped } = opts
-  const maxInterval = Math.max(interval, 5000)
-  let warnedAmbiguous = false
-  let idle = interval
-  if (!once)
-    process.stderr.write(`${color.dim(`cf-jobs work → ${endpoint} (Ctrl-C to stop)`)}\n`)
-
-  for (;;) {
-    if (stopped())
-      break
-    const tick = await fetchTick(endpoint)
-
-    if (!tick || tick.error) {
-      process.stderr.write(tick
-        ? `${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding found on the dev server env' : tick.error}\n`
-        : `${color.yellow('…')} dev server unreachable at ${base}\n`)
-      if (once) {
-        process.exitCode = 1
-        break
-      }
-      await sleep(maxInterval)
-      continue
-    }
-
-    if (tick.ambiguousBindings && !warnedAmbiguous) {
-      warnedAmbiguous = true
-      process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${tick.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
-    }
-
-    if (tick.processed > 0) {
-      idle = interval
-      if (json) {
-        process.stdout.write(`${JSON.stringify(tick)}\n`)
-      }
-      else {
-        const detail = tick.byQueue && Object.keys(tick.byQueue).length
-          ? ` ${color.dim(`(${Object.entries(tick.byQueue).map(([q, n]) => `${q}:${n}`).join(', ')})`)}`
-          : ''
-        const waiting = tick.remaining > 0 ? color.dim(` — ${tick.remaining} waiting`) : ''
-        process.stdout.write(`${color.green('✓')} ran ${tick.processed}${detail}${waiting}\n`)
-      }
-    }
-
-    if (once) {
-      if (tick.processed === 0 && tick.remaining === 0)
-        break
-      continue // drain as fast as the dev server allows
-    }
-
-    if (tick.processed === 0) {
-      await sleep(idle)
-      idle = Math.min(maxInterval, idle * 2)
-    }
-    else {
-      await sleep(interval)
-    }
-  }
-}
-
-/** Live repainting dashboard: per-queue table + recent outcomes, refreshed every tick. */
-async function runDashboard(opts: WorkLoopOptions): Promise<void> {
-  const { endpoint, base, interval, stopped } = opts
-  let host = base
-  try {
-    host = new URL(base).host
-  }
-  catch {}
+/**
+ * The lane scheduler: ONE poller that reads a cheap demand snapshot each interval
+ * and fans out concurrent per-queue batch drains sized to each queue's
+ * maxConcurrency. Lanes run async (never awaited in the loop) so a slow queue
+ * never blocks the others. Renders the live dashboard (watch), a JSON line per
+ * interval (--json), or a per-lane log (--no-watch).
+ */
+async function runScheduler(ctx: SchedulerContext): Promise<void> {
+  const inflight: Record<string, number> = {}
+  const rateWindow: Array<{ t: number, n: number }> = []
   const startedAt = Date.now()
   let sessionProcessed = 0
-  const rateWindow: Array<{ t: number, n: number }> = []
+  let warnedAmbiguous = false
+  let idle = ctx.interval
+  const maxIdleInterval = Math.max(ctx.interval, 3000)
   const repaint = (frame: string) => process.stdout.write(`${CLEAR_FROM_HOME}${frame}`)
 
-  process.stdout.write(CURSOR_HIDE)
+  // A self-sustaining lane: pulls a batch, and as soon as the response returns with
+  // work, pulls the next one immediately — throughput is gated by how fast the
+  // server drains, NOT by the snapshot poll clock. It closes when a batch comes
+  // back empty (or errors); the snapshot loop reopens it if the queue refills.
+  const openLane = (queue: string, batchSize: number) => {
+    inflight[queue] = (inflight[queue] ?? 0) + 1
+    const params: Record<string, string> = { queue, limit: String(batchSize) }
+    if (ctx.db)
+      params.db = ctx.db
+    const url = buildUrl(ctx.base, params)
+    void (async () => {
+      try {
+        while (!ctx.stopped()) {
+          const res = await fetchTick(url)
+          if (!res || res.error)
+            break
+          if (res.processed > 0) {
+            sessionProcessed += res.processed
+            rateWindow.push({ t: Date.now(), n: res.processed })
+            if (!ctx.watch && !ctx.json)
+              process.stdout.write(`${color.green('✓')} ${queue} ran ${res.processed}\n`)
+          }
+          if (res.processed === 0)
+            break // drained — close the lane; the next snapshot reopens it on demand
+        }
+      }
+      finally {
+        inflight[queue] = Math.max(0, (inflight[queue] ?? 1) - 1)
+      }
+    })()
+  }
+
+  if (ctx.watch)
+    process.stdout.write(CURSOR_HIDE)
+  else if (!ctx.once && !ctx.json)
+    process.stderr.write(`${color.dim(`cf-jobs work → ${ctx.host} (Ctrl-C to stop)`)}\n`)
+
   try {
     for (;;) {
-      if (stopped())
+      if (ctx.stopped())
         break
-      const tick = await fetchTick(endpoint)
+
+      const snapParams: Record<string, string> = { drain: '0', snapshot: '1', recent: String(ctx.recent) }
+      if (ctx.onlyQueue)
+        snapParams.queue = ctx.onlyQueue
+      if (ctx.db)
+        snapParams.db = ctx.db
+      const snap = await fetchTick(buildUrl(ctx.base, snapParams))
       const now = Date.now()
 
-      if (!tick || tick.error) {
-        repaint(`${tick ? `${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : tick.error}` : `${color.yellow('…')} dev server unreachable at ${host}`}\n\n${color.dim('Ctrl-C to stop')}`)
-        await sleep(interval)
+      if (!snap || snap.error) {
+        const msg = snap
+          ? `${color.red('✖')} ${snap.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : snap.error}`
+          : `${color.yellow('…')} dev server unreachable at ${ctx.host}`
+        if (ctx.watch)
+          repaint(`${msg}\n\n${color.dim('Ctrl-C to stop')}`)
+        else
+          process.stderr.write(`${msg}\n`)
+        if (ctx.once && snap?.error) {
+          process.exitCode = 1
+          break
+        }
+        await sleep(ctx.watch ? ctx.interval : Math.max(ctx.interval, 2000))
         continue
       }
 
-      sessionProcessed += tick.processed
-      rateWindow.push({ t: now, n: tick.processed })
+      if (snap.ambiguousBindings && !warnedAmbiguous) {
+        warnedAmbiguous = true
+        process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${snap.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
+      }
+
+      const snapshot = snap.snapshot ?? []
+      for (const plan of planDrainLanes(snapshot, inflight, { onlyQueue: ctx.onlyQueue })) {
+        for (let i = 0; i < plan.fire; i++)
+          openLane(plan.queue, plan.batchSize)
+      }
+
       while (rateWindow.length > 0 && now - rateWindow[0]!.t > 10_000)
         rateWindow.shift()
       const spanSec = Math.max(1, (now - (rateWindow[0]?.t ?? now)) / 1000)
+      const ratePerSec = rateWindow.reduce((s, e) => s + e.n, 0) / spanSec
 
-      repaint(`${renderWorkerDashboard({
-        host,
-        uptimeSeconds: Math.floor((now - startedAt) / 1000),
-        sessionProcessed,
-        ratePerSec: rateWindow.reduce((s, e) => s + e.n, 0) / spanSec,
-        snapshot: tick.snapshot ?? [],
-        recent: tick.recent ?? [],
-      })}\n\n${color.dim('Ctrl-C to stop')}`)
-      await sleep(interval)
+      if (ctx.watch) {
+        repaint(`${renderWorkerDashboard({
+          host: ctx.host,
+          uptimeSeconds: Math.floor((now - startedAt) / 1000),
+          nowSeconds: Math.floor(now / 1000),
+          sessionProcessed,
+          ratePerSec,
+          inflight: { ...inflight },
+          snapshot,
+          recent: snap.recent ?? [],
+        })}\n\n${color.dim('Ctrl-C to stop')}`)
+      }
+      else if (ctx.json) {
+        process.stdout.write(`${JSON.stringify({ sessionProcessed, inflight, snapshot })}\n`)
+      }
+
+      const readySum = snapshot.reduce((n, q) => n + (ctx.onlyQueue && q.queue !== ctx.onlyQueue ? 0 : q.ready), 0)
+      const lanes = Object.values(inflight).reduce((a, b) => a + b, 0)
+
+      if (ctx.once) {
+        if (readySum === 0 && lanes === 0)
+          break
+        await sleep(Math.min(ctx.interval, 150))
+        continue
+      }
+
+      // The snapshot poll is demand discovery + dashboard refresh, not throughput
+      // (lanes self-sustain off their own responses). So poll at the base cadence
+      // while there's anything happening, and back off toward ~3s when fully idle
+      // — no busy-spinning an empty system. The watch dashboard keeps the base
+      // cadence so uptime/relative-time stay live to the eye.
+      const active = readySum > 0 || lanes > 0
+      idle = active ? ctx.interval : Math.min(maxIdleInterval, idle * 2)
+      await sleep(ctx.watch ? ctx.interval : idle)
     }
   }
   finally {
-    process.stdout.write(`${CURSOR_SHOW}\n`)
+    if (ctx.watch)
+      process.stdout.write(`${CURSOR_SHOW}\n`)
   }
+}
+
+interface WatchContext {
+  base: string
+  host: string
+  interval: number
+  onlyQueue?: string
+  db?: string
+  failuresOnly: boolean
+  backfillSeconds: number
+  stopped: () => boolean
+}
+
+/**
+ * Read-only agent observer: emits one NDJSON line per terminal job (full,
+ * untruncated error on failures) so an agent can watch the queues and fix issues
+ * as they surface. Does NOT drain and does NOT hold the worker lease (`lease=0`),
+ * so it never changes execution — pure observation.
+ */
+async function runWatch(ctx: WatchContext): Promise<void> {
+  const seen = new Set<string>()
+  // Start from now minus the backfill window (default 0 -> only new events).
+  let sinceSeconds = Math.max(0, Math.floor(Date.now() / 1000) - ctx.backfillSeconds)
+  let warned = false
+
+  for (;;) {
+    if (ctx.stopped())
+      break
+    const params: Record<string, string> = { drain: '0', lease: '0', snapshot: '1', since: String(sinceSeconds) }
+    if (ctx.db)
+      params.db = ctx.db
+    const res = await fetchTick(buildUrl(ctx.base, params))
+
+    if (!res || res.error) {
+      if (!warned) {
+        warned = true
+        process.stderr.write(res
+          ? `${color.red('✖')} ${res.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : res.error}\n`
+          : `${color.yellow('…')} dev server unreachable at ${ctx.host}\n`)
+      }
+      await sleep(Math.max(ctx.interval, 1000))
+      continue
+    }
+    warned = false
+
+    let recent = res.recent ?? []
+    if (ctx.onlyQueue)
+      recent = recent.filter(j => j.queue === ctx.onlyQueue)
+    if (ctx.failuresOnly)
+      recent = recent.filter(j => j.outcome === 'failed')
+
+    for (const job of selectNewTerminalJobs(recent, seen)) {
+      seen.add(job.id)
+      process.stdout.write(`${formatWatchEvent(job)}\n`)
+      // Advance the cursor (1s overlap; dedup by id guards re-emit).
+      sinceSeconds = Math.max(sinceSeconds, job.at - 1)
+    }
+    if (seen.size > 5000) {
+      for (const id of seen) {
+        seen.delete(id)
+        if (seen.size <= 4000)
+          break
+      }
+    }
+    await sleep(ctx.interval)
+  }
+}
+
+function withSignals(run: (stopped: () => boolean) => Promise<void>): Promise<void> {
+  let stopped = false
+  const stop = () => {
+    stopped = true
+  }
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
+  return run(() => stopped).finally(() => {
+    process.off('SIGINT', stop)
+    process.off('SIGTERM', stop)
+  })
 }
 
 const work = defineCommand({
@@ -611,44 +827,56 @@ const work = defineCommand({
   },
   args: {
     url: { type: 'string', description: 'Dev server base URL', default: 'http://localhost:3000' },
-    interval: { type: 'string', description: 'Poll interval (ms) when idle; backs off up to 5s', default: '500' },
+    interval: { type: 'string', description: 'Scheduler poll interval (ms)', default: '500' },
     queue: { type: 'string', description: 'Only drain this logical queue' },
-    limit: { type: 'string', description: 'Max jobs claimed per tick', default: '100' },
     db: { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
     once: { type: 'boolean', description: 'Drain everything ready now, then exit', default: false },
     watch: { type: 'boolean', description: 'Live repainting dashboard (default on a TTY)', default: true },
     recent: { type: 'string', description: 'Rows in the dashboard "recent" list', default: '12' },
-    json: { type: 'boolean', description: 'Emit one JSON line per active tick (implies --no-watch)', default: false },
+    json: { type: 'boolean', description: 'Emit one JSON line per interval (implies --no-watch)', default: false },
   },
   async run({ args }) {
     const base = args.url.replace(TRAILING_SLASH_RE, '')
-    const params = new URLSearchParams({ limit: String(Number(args.limit) || 100) })
-    if (args.queue)
-      params.set('queue', args.queue)
-    if (args.db)
-      params.set('db', args.db)
-    const interval = Math.max(50, Number(args.interval) || 500)
-    const watch = args.watch && !args.json && !args.once && process.stdout.isTTY === true
-    if (watch) {
-      params.set('snapshot', '1')
-      params.set('recent', String(Number(args.recent) || 12))
-    }
-    const endpoint = `${base}/__cf-jobs/work?${params}`
+    await withSignals(stopped => runScheduler({
+      base,
+      host: hostOf(base),
+      interval: Math.max(50, Number(args.interval) || 500),
+      onlyQueue: args.queue,
+      db: args.db,
+      recent: Math.max(1, Number(args.recent) || 12),
+      once: args.once,
+      json: args.json,
+      watch: args.watch && !args.json && !args.once && process.stdout.isTTY === true,
+      stopped,
+    }))
+  },
+})
 
-    let stopped = false
-    const stop = () => {
-      stopped = true
-    }
-    process.on('SIGINT', stop)
-    process.on('SIGTERM', stop)
-
-    if (watch)
-      await runDashboard({ endpoint, base, interval, stopped: () => stopped })
-    else
-      await runLog({ endpoint, base, interval, once: args.once, json: args.json, stopped: () => stopped })
-
-    process.off('SIGINT', stop)
-    process.off('SIGTERM', stop)
+const watch = defineCommand({
+  meta: {
+    name: 'watch',
+    description: 'Stream durable job outcomes as NDJSON for agents (read-only; full exceptions on failures). Does not drain or affect execution.',
+  },
+  args: {
+    'url': { type: 'string', description: 'Dev server base URL', default: 'http://localhost:3000' },
+    'interval': { type: 'string', description: 'Poll interval (ms)', default: '500' },
+    'queue': { type: 'string', description: 'Only emit events for this logical queue' },
+    'db': { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
+    'failures-only': { type: 'boolean', description: 'Only emit failed jobs (with full stack)', default: false },
+    'backfill': { type: 'string', description: 'Replay terminal jobs from the last N seconds on start', default: '0' },
+  },
+  async run({ args }) {
+    const base = args.url.replace(TRAILING_SLASH_RE, '')
+    await withSignals(stopped => runWatch({
+      base,
+      host: hostOf(base),
+      interval: Math.max(50, Number(args.interval) || 500),
+      onlyQueue: args.queue,
+      db: args.db,
+      failuresOnly: args['failures-only'],
+      backfillSeconds: Math.max(0, Number(args.backfill) || 0),
+      stopped,
+    }))
   },
 })
 
@@ -658,7 +886,7 @@ const main: CommandDef = defineCommand({
     description: 'Inspect and manage nuxt-cf-jobs durable jobs in Cloudflare D1',
   },
   args: sharedArgs,
-  subCommands: { status, jobs, failed, retry, forget, flush, clear, prune, migrate, schedule, tasks, work },
+  subCommands: { status, jobs, failed, retry, forget, flush, clear, prune, migrate, schedule, tasks, work, watch },
   async run({ args, rawArgs }) {
     // No subcommand → default to the status overview.
     if (rawArgs.length === 0 || rawArgs.every(a => a.startsWith('-')))

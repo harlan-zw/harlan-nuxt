@@ -115,7 +115,7 @@ describe('recentTerminalJobs', () => {
     const badId = await seed(repo, 'q', 'bad-job')
     await fail(repo, badId, 'kaboom\nstack line')
 
-    const recent = await recentTerminalJobs(d1, 10)
+    const recent = await recentTerminalJobs(d1, { limit: 10 })
     expect(recent).toHaveLength(2)
 
     const ok = recent.find(r => r.id === okId)!
@@ -132,6 +132,6 @@ describe('recentTerminalJobs', () => {
     for (let i = 0; i < 5; i++)
       await complete(repo, await seed(repo, 'q', `t${i}`), 10)
 
-    expect(await recentTerminalJobs(d1, 3)).toHaveLength(3)
+    expect(await recentTerminalJobs(d1, { limit: 3 })).toHaveLength(3)
   })
 })
