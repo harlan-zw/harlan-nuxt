@@ -3,7 +3,7 @@ import type { ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
-import { addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, resolveFiles, updateTemplates, useLogger } from '@nuxt/kit'
+import { addServerHandler, addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, resolveFiles, updateTemplates, useLogger } from '@nuxt/kit'
 import { extractJobMeta } from './build/extract-job-meta'
 import { cfJobsAppExportNames } from './runtime/server/app'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
@@ -92,8 +92,17 @@ export default defineNuxtModule<ModuleOptions>({
       defaultQueue: nuxt.options.runtimeConfig.cfJobs?.defaultQueue ?? options.defaultQueue,
     }
 
-    if (nuxt.options.dev)
+    if (nuxt.options.dev) {
       addServerPlugin(resolver.resolve('./runtime/server/plugins/dev-queues'))
+      // Dev-only worker endpoint driven by `cf-jobs work`: drains durable jobs
+      // out-of-band through the app's consumer so WebSockets see live progress.
+      // Never registered outside dev — it's an unauthenticated job executor.
+      addServerHandler({
+        route: '/__cf-jobs/work',
+        method: 'post',
+        handler: resolver.resolve('./runtime/server/handlers/dev-work'),
+      })
+    }
 
     if (options.validateWrangler !== false)
       runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), (nuxt.options as { nitro?: unknown }).nitro)

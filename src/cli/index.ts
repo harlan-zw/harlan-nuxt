@@ -377,13 +377,125 @@ const tasks = defineCommand({
   },
 })
 
+interface WorkTickResult {
+  processed: number
+  byQueue?: Record<string, number>
+  remaining: number
+  error?: string
+  ambiguousBindings?: string[]
+}
+
+const TRAILING_SLASH_RE = /\/+$/
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+const work = defineCommand({
+  meta: {
+    name: 'work',
+    description: 'Dev worker: drive a running `nuxt dev` server to drain durable jobs out-of-band so WebSockets observe live progress (nuxt dev only — NOT a production worker)',
+  },
+  args: {
+    url: { type: 'string', description: 'Dev server base URL', default: 'http://localhost:3000' },
+    interval: { type: 'string', description: 'Poll interval (ms) when idle; backs off up to 5s', default: '500' },
+    queue: { type: 'string', description: 'Only drain this logical queue' },
+    limit: { type: 'string', description: 'Max jobs claimed per tick', default: '100' },
+    db: { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
+    once: { type: 'boolean', description: 'Drain everything ready now, then exit', default: false },
+    json: { type: 'boolean', description: 'Emit one JSON line per active tick', default: false },
+  },
+  async run({ args }) {
+    const base = args.url.replace(TRAILING_SLASH_RE, '')
+    const params = new URLSearchParams({ limit: String(Number(args.limit) || 100) })
+    if (args.queue)
+      params.set('queue', args.queue)
+    if (args.db)
+      params.set('db', args.db)
+    const endpoint = `${base}/__cf-jobs/work?${params}`
+    const baseInterval = Math.max(50, Number(args.interval) || 500)
+    const maxInterval = Math.max(baseInterval, 5000)
+
+    let stopped = false
+    const stop = () => {
+      stopped = true
+    }
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+
+    if (!args.once)
+      process.stderr.write(`${color.dim(`cf-jobs work → ${endpoint} (Ctrl-C to stop)`)}\n`)
+
+    let warnedAmbiguous = false
+    let idle = baseInterval
+    for (;;) {
+      if (stopped)
+        break
+      const tick = await fetch(endpoint, { method: 'POST' })
+        .then(r => r.json() as Promise<WorkTickResult>)
+        .catch((error: unknown): WorkTickResult | null => {
+          process.stderr.write(`${color.yellow('…')} dev server unreachable at ${base} (${error instanceof Error ? error.message : String(error)})\n`)
+          return null
+        })
+
+      if (!tick || tick.error) {
+        if (tick?.error)
+          process.stderr.write(`${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding found on the dev server env' : tick.error}\n`)
+        if (args.once) {
+          process.exitCode = 1
+          break
+        }
+        await sleep(maxInterval)
+        continue
+      }
+
+      if (tick.ambiguousBindings && !warnedAmbiguous) {
+        warnedAmbiguous = true
+        process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${tick.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
+      }
+
+      if (tick.processed > 0) {
+        idle = baseInterval
+        if (args.json) {
+          process.stdout.write(`${JSON.stringify(tick)}\n`)
+        }
+        else {
+          const detail = tick.byQueue && Object.keys(tick.byQueue).length
+            ? ` ${color.dim(`(${Object.entries(tick.byQueue).map(([q, n]) => `${q}:${n}`).join(', ')})`)}`
+            : ''
+          const waiting = tick.remaining > 0 ? color.dim(` — ${tick.remaining} waiting`) : ''
+          process.stdout.write(`${color.green('✓')} ran ${tick.processed}${detail}${waiting}\n`)
+        }
+      }
+
+      if (args.once) {
+        // Nothing ready and nothing left → fully drained.
+        if (tick.processed === 0 && tick.remaining === 0)
+          break
+        continue // drain as fast as the dev server allows
+      }
+
+      if (tick.processed === 0) {
+        await sleep(idle)
+        idle = Math.min(maxInterval, idle * 2)
+      }
+      else {
+        await sleep(baseInterval)
+      }
+    }
+
+    process.off('SIGINT', stop)
+    process.off('SIGTERM', stop)
+  },
+})
+
 const main: CommandDef = defineCommand({
   meta: {
     name: 'cf-jobs',
     description: 'Inspect and manage nuxt-cf-jobs durable jobs in Cloudflare D1',
   },
   args: sharedArgs,
-  subCommands: { status, jobs, failed, retry, forget, flush, clear, prune, migrate, schedule, tasks },
+  subCommands: { status, jobs, failed, retry, forget, flush, clear, prune, migrate, schedule, tasks, work },
   async run({ args, rawArgs }) {
     // No subcommand → default to the status overview.
     if (rawArgs.length === 0 || rawArgs.every(a => a.startsWith('-')))

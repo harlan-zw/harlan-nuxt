@@ -25,7 +25,7 @@ Typed Cloudflare Queue jobs for Nuxt, with Laravel-style ergonomics.
 - 🗄️ **Durable D1 jobs**: persist a record before enqueue so work survives restarts and delivery gaps, with retry, release, and DLQ.
 - ⏰ **Scheduled tasks**: co-locate a cron with its handler; `nitro.tasks`, `scheduledTasks`, and Cloudflare `triggers.crons` are derived from it.
 - 🧪 **Laravel-style testing**: run handlers inline, fake the queue, drain the outbox, or drive the whole `queue:work` loop on a virtual clock.
-- 🛠️ **`cf-jobs` CLI**: `artisan queue:*`-style status, retry, flush, and migrate against local or remote D1.
+- 🛠️ **`cf-jobs` CLI**: `artisan queue:*`-style status, retry, flush, and migrate against local or remote D1, plus a `work` dev worker that runs durable jobs out-of-band so WebSockets stream live progress in `nuxt dev`.
 
 ## Install
 
@@ -330,6 +330,32 @@ pnpm cf-jobs migrate                      # create the job tables/indexes in D1
 Every command accepts `--config <wrangler path>`, `--db <binding>`, `--remote`, `--json`, and `--jobs-table` / `--failed-table` overrides. `status` flags queues whose oldest ready job is lagging and reservations stuck for more than five minutes (a crashed or timed-out consumer). Run `cf-jobs <command> --help` for the full argument list.
 
 `cf-jobs` shells out to `wrangler`, resolving the binary from `node_modules/.bin` and falling back to `wrangler` on `PATH` (override with `CF_JOBS_WRANGLER_BIN`).
+
+### Dev worker (`cf-jobs work`)
+
+In production the queue consumer is a separate Worker invocation, so a running job is naturally decoupled from the request that enqueued it. Under `nuxt dev` everything shares one process, so a durable job dispatched on a request can run to completion inside that same request, before a client has a chance to observe it. That hides the asynchronous behaviour you actually want to test, most painfully a WebSocket streaming live job progress: the job finishes before the socket is even connected.
+
+`cf-jobs work` restores that decoupling. It is a long-running dev worker that drains durable jobs **out-of-band**, on its own clock, by driving the running dev server:
+
+```bash
+# in one terminal
+pnpm nuxt dev
+
+# in another: poll the dev server, run whatever durable jobs are ready
+pnpm cf-jobs work
+pnpm cf-jobs work --queue sync-critical   # only one logical queue
+pnpm cf-jobs work --once                  # drain everything ready now, then exit (handy in scripts/CI)
+pnpm cf-jobs work --interval 1000         # idle poll interval in ms (backs off to 5s); default 500
+```
+
+So a client connects to your WebSocket, enqueues a job (the request returns immediately, job persisted in D1), then `cf-jobs work` picks it up a tick later and runs it. Because the worker drives a dev-only endpoint (`POST /__cf-jobs/work`) that fires your app's registered `cloudflare:queue` consumer **in the dev process**, the job runs with the app's real context and an in-memory WebSocket broadcast reaches the connected client, exactly as it would in production via a Durable Object.
+
+Concurrency matches your queue config: each logical queue drains in batches of its wrangler `max_batch_size`, with up to `max_concurrency` batches in flight (default: serial, batch of 10). A queue declaring `{ maxConcurrency: 4, maxBatchSize: 10 }` drains 10-at-a-time, 4 batches concurrent, like its production consumer.
+
+Two things to know:
+
+- This is a **`nuxt dev` companion, not a production worker.** It assumes one process, so the request that runs the job shares memory (and thus WebSocket maps) with the rest of the dev server. Under multi-isolate setups (e.g. `wrangler dev`) the broadcast can land in a different isolate. The `/__cf-jobs/work` endpoint is registered only in dev and is an unauthenticated job executor, so it is never built into a deployment.
+- Unlike the D1-querying commands above, `work` talks HTTP to the running dev server. It takes `--url` (default `http://localhost:3000`), `--db <binding>` to disambiguate when several D1 bindings exist, and `--json` to emit one machine-readable line per active tick.
 
 ## Runtime Validation
 
