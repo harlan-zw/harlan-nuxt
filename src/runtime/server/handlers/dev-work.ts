@@ -1,12 +1,17 @@
+import type { H3Event } from 'h3'
+import { defineEventHandler, getQuery } from 'h3'
 // @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
-import { defineEventHandler, getQuery, useNitroApp, useRuntimeConfig } from 'nitropack/runtime'
+import { useNitroApp, useRuntimeConfig } from 'nitropack/runtime'
 import { createD1DurableJobRepository } from '../d1'
-import { findD1Binding, resolveQueueWorkerConfig, runDevWorkerTick } from '../dev-worker'
+import { findD1Binding, markWorkerActive, resolveQueueWorkerConfig, runDevWorkerTick } from '../dev-worker'
+import { recentTerminalJobs, snapshotDurableQueues } from '../dev-worker-snapshot'
 import { findDispatchableDurableJobs } from '../outbox'
 
-interface RequestEventLike {
-  context?: { cloudflare?: { env?: Record<string, unknown> } }
+/** Nitro's `useNitroApp()` typing doesn't declare the runtime `cloudflare:queue` hook, so narrow to what we call. */
+interface QueueConsumerHost {
+  hooks: { callHook: (name: string, payload: unknown) => Promise<unknown> }
 }
+interface CfJobsRuntimeConfig { cfJobs?: { queues?: Record<string, string | { maxConcurrency?: number, maxBatchSize?: number }> } }
 
 /**
  * Dev-only worker endpoint. Registered ONLY when `nuxt.options.dev` (see
@@ -16,9 +21,13 @@ interface RequestEventLike {
  * consumer IN THIS dev process, so an already-connected WebSocket sees live
  * progress. See `dev-worker.ts` for the rationale.
  */
-export default defineEventHandler(async (event: RequestEventLike) => {
+export default defineEventHandler(async (event: H3Event) => {
   if (!import.meta.dev)
     return { processed: 0, byQueue: {}, remaining: 0, error: 'dev-only' }
+
+  // This poll is the worker's heartbeat: refresh the lease so the dev queue keeps
+  // deferring auto-dispatch to us (see the dev-queues plugin) for the next ~15s.
+  markWorkerActive()
 
   const query = getQuery(event)
   const limit = clampInt(query.limit, 100, 1, 1000)
@@ -31,8 +40,8 @@ export default defineEventHandler(async (event: RequestEventLike) => {
     return { processed: 0, byQueue: {}, remaining: 0, error: 'no-d1-binding' }
 
   const repo = createD1DurableJobRepository(d1.db)
-  const nitroApp = useNitroApp()
-  const queues = (useRuntimeConfig().cfJobs?.queues ?? {}) as Record<string, string | { maxConcurrency?: number, maxBatchSize?: number }>
+  const nitroApp = useNitroApp() as unknown as QueueConsumerHost
+  const queues = (useRuntimeConfig() as CfJobsRuntimeConfig).cfJobs?.queues ?? {}
 
   const result = await runDevWorkerTick({
     findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
@@ -53,11 +62,24 @@ export default defineEventHandler(async (event: RequestEventLike) => {
     },
   }, { limit, queue: onlyQueue })
 
-  return d1.ambiguous ? { ...result, d1Binding: d1.binding, ambiguousBindings: d1.ambiguous } : result
+  const base = d1.ambiguous ? { ...result, d1Binding: d1.binding, ambiguousBindings: d1.ambiguous } : result
+
+  // `?snapshot=1` (the `--watch` dashboard) asks for the live D1 view too. Read-only
+  // and best-effort: if the snapshot queries fail (e.g. tables not migrated yet),
+  // still return the tick result so draining never breaks on a reporting error.
+  if (pickString(query.snapshot) !== '1')
+    return base
+  const recentLimit = clampInt(query.recent, 12, 1, 50)
+  return await Promise.all([
+    snapshotDurableQueues(d1.db),
+    recentTerminalJobs(d1.db, recentLimit),
+  ])
+    .then(([snapshot, recent]) => ({ ...base, snapshot, recent }))
+    .catch(() => base)
 })
 
-function resolveEnv(event: RequestEventLike): Record<string, unknown> {
-  const fromEvent = event.context?.cloudflare?.env
+function resolveEnv(event: H3Event): Record<string, unknown> {
+  const fromEvent = (event.context.cloudflare as { env?: Record<string, unknown> } | undefined)?.env
   const fromGlobal = (globalThis as { __env__?: Record<string, unknown> }).__env__
   return { ...(fromGlobal ?? {}), ...(fromEvent ?? {}) }
 }

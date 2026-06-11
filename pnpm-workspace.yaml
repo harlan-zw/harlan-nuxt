@@ -14,7 +14,9 @@ catalog:
   eslint: ^10.4.1
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
+  h3: ^1.15.4
   magicast: ^0.5.3
+  nitropack: ^2.13.4
   unbuild: ^3.6.1
   wrangler: ^4.95.0
 

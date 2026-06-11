@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   chunk,
   findD1Binding,
+  isWorkerActive,
+  markWorkerActive,
   resolveQueueWorkerConfig,
   runDevWorkerTick,
   runWithConcurrency,
@@ -80,6 +82,29 @@ describe('findD1Binding', () => {
 
   it('returns undefined when no binding looks like D1', () => {
     expect(findD1Binding({ KV: { get() {} } })).toBeUndefined()
+  })
+})
+
+describe('worker lease (markWorkerActive / isWorkerActive)', () => {
+  it('is inactive when no recent poll', () => {
+    // A far-future clock outlives any lease set by other tests.
+    expect(isWorkerActive(1_000_000_000_000)).toBe(false)
+  })
+
+  it('stays active within the lease window and expires at the boundary', () => {
+    const t0 = 5_000_000
+    markWorkerActive(15_000, t0)
+    expect(isWorkerActive(t0)).toBe(true)
+    expect(isWorkerActive(t0 + 14_999)).toBe(true)
+    expect(isWorkerActive(t0 + 15_000)).toBe(false)
+    expect(isWorkerActive(t0 + 99_999)).toBe(false)
+  })
+
+  it('a later poll extends the window (heartbeat)', () => {
+    const t0 = 9_000_000
+    markWorkerActive(15_000, t0)
+    markWorkerActive(15_000, t0 + 10_000) // refreshed before expiry
+    expect(isWorkerActive(t0 + 20_000)).toBe(true) // would have lapsed at t0+15_000 without the refresh
   })
 })
 

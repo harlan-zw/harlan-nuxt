@@ -81,6 +81,30 @@ describe('createDevQueueRuntime', () => {
     vi.useRealTimers()
   })
 
+  it('skips auto-dispatch while shouldAutoDispatch() returns false (deferred to the worker)', async () => {
+    let active = true
+    const onBatch = vi.fn()
+    const runtime = createDevQueueRuntime({
+      queues: { default: 'JOBS' },
+      onBatch,
+      shouldAutoDispatch: () => !active,
+    })
+    const queue = runtime.env.JOBS as { send: (m: unknown) => Promise<void> }
+
+    // Worker active → enqueue does not auto-fire the consumer.
+    await queue.send({ _task: 'noop' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(onBatch).not.toHaveBeenCalled()
+
+    // Worker gone → enqueues auto-run again.
+    active = false
+    await queue.send({ _task: 'noop' })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(onBatch).toHaveBeenCalledTimes(1)
+
+    runtime.dispose()
+  })
+
   it('retries up to maxAttempts when message.retry() is called', async () => {
     const calls: number[] = []
     const runtime = createDevQueueRuntime({

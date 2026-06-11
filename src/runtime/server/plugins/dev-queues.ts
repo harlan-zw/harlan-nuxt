@@ -1,6 +1,7 @@
 // @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
 import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
 import { createDevQueueRuntime } from '../dev'
+import { isWorkerActive } from '../dev-worker'
 
 interface NitroAppLike {
   hooks: {
@@ -38,6 +39,11 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
     onError(error) {
       console.error('[nuxt-cf-jobs] dev queue error:', error)
     },
+    // While `cf-jobs work` is polling, defer auto-dispatch: durable rows stay in
+    // D1 for the worker to drain out-of-band (so a connected WebSocket observes
+    // live progress). The worker's poll refreshes the lease; when it stops, the
+    // lease lapses and auto-dispatch resumes on its own.
+    shouldAutoDispatch: () => !isWorkerActive(),
   })
 
   // Requests get the in-process queue runtime via the hook above, but scheduled

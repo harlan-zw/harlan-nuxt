@@ -9,6 +9,7 @@
 import type { ArgsDef, CommandDef } from 'citty'
 import type { ModuleOptions } from '../types'
 import type { JobState } from './queries'
+import type { renderWorkerDashboard } from './render'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { defineCommand, runMain } from 'citty'
@@ -383,12 +384,140 @@ interface WorkTickResult {
   remaining: number
   error?: string
   ambiguousBindings?: string[]
+  snapshot?: Parameters<typeof renderWorkerDashboard>[0]['snapshot']
+  recent?: Parameters<typeof renderWorkerDashboard>[0]['recent']
 }
 
 const TRAILING_SLASH_RE = /\/+$/
+const CURSOR_HIDE = '[?25l'
+const CURSOR_SHOW = '[?25h'
+const CLEAR_FROM_HOME = '[H[0J'
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function fetchTick(endpoint: string): Promise<WorkTickResult | null> {
+  return await fetch(endpoint, { method: 'POST' })
+    .then(r => r.json() as Promise<WorkTickResult>)
+    .catch((): WorkTickResult | null => null)
+}
+
+interface WorkLoopOptions {
+  endpoint: string
+  base: string
+  interval: number
+  stopped: () => boolean
+}
+
+/** Append-only line log: one `✓ ran N` per active tick. Used for --once, --json, or non-TTY. */
+async function runLog(opts: WorkLoopOptions & { once: boolean, json: boolean }): Promise<void> {
+  const { endpoint, base, interval, once, json, stopped } = opts
+  const maxInterval = Math.max(interval, 5000)
+  let warnedAmbiguous = false
+  let idle = interval
+  if (!once)
+    process.stderr.write(`${color.dim(`cf-jobs work → ${endpoint} (Ctrl-C to stop)`)}\n`)
+
+  for (;;) {
+    if (stopped())
+      break
+    const tick = await fetchTick(endpoint)
+
+    if (!tick || tick.error) {
+      process.stderr.write(tick
+        ? `${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding found on the dev server env' : tick.error}\n`
+        : `${color.yellow('…')} dev server unreachable at ${base}\n`)
+      if (once) {
+        process.exitCode = 1
+        break
+      }
+      await sleep(maxInterval)
+      continue
+    }
+
+    if (tick.ambiguousBindings && !warnedAmbiguous) {
+      warnedAmbiguous = true
+      process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${tick.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
+    }
+
+    if (tick.processed > 0) {
+      idle = interval
+      if (json) {
+        process.stdout.write(`${JSON.stringify(tick)}\n`)
+      }
+      else {
+        const detail = tick.byQueue && Object.keys(tick.byQueue).length
+          ? ` ${color.dim(`(${Object.entries(tick.byQueue).map(([q, n]) => `${q}:${n}`).join(', ')})`)}`
+          : ''
+        const waiting = tick.remaining > 0 ? color.dim(` — ${tick.remaining} waiting`) : ''
+        process.stdout.write(`${color.green('✓')} ran ${tick.processed}${detail}${waiting}\n`)
+      }
+    }
+
+    if (once) {
+      if (tick.processed === 0 && tick.remaining === 0)
+        break
+      continue // drain as fast as the dev server allows
+    }
+
+    if (tick.processed === 0) {
+      await sleep(idle)
+      idle = Math.min(maxInterval, idle * 2)
+    }
+    else {
+      await sleep(interval)
+    }
+  }
+}
+
+/** Live repainting dashboard: per-queue table + recent outcomes, refreshed every tick. */
+async function runDashboard(opts: WorkLoopOptions): Promise<void> {
+  const { endpoint, base, interval, stopped } = opts
+  let host = base
+  try {
+    host = new URL(base).host
+  }
+  catch {}
+  const startedAt = Date.now()
+  let sessionProcessed = 0
+  const rateWindow: Array<{ t: number, n: number }> = []
+  const repaint = (frame: string) => process.stdout.write(`${CLEAR_FROM_HOME}${frame}`)
+
+  process.stdout.write(CURSOR_HIDE)
+  try {
+    for (;;) {
+      if (stopped())
+        break
+      const tick = await fetchTick(endpoint)
+      const now = Date.now()
+
+      if (!tick || tick.error) {
+        repaint(`${tick ? `${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : tick.error}` : `${color.yellow('…')} dev server unreachable at ${host}`}\n\n${color.dim('Ctrl-C to stop')}`)
+        await sleep(interval)
+        continue
+      }
+
+      sessionProcessed += tick.processed
+      rateWindow.push({ t: now, n: tick.processed })
+      while (rateWindow.length > 0 && now - rateWindow[0]!.t > 10_000)
+        rateWindow.shift()
+      const spanSec = Math.max(1, (now - (rateWindow[0]?.t ?? now)) / 1000)
+
+      repaint(`${renderWorkerDashboard({
+        host,
+        uptimeSeconds: Math.floor((now - startedAt) / 1000),
+        sessionProcessed,
+        ratePerSec: rateWindow.reduce((s, e) => s + e.n, 0) / spanSec,
+        snapshot: tick.snapshot ?? [],
+        recent: tick.recent ?? [],
+      })}\n\n${color.dim('Ctrl-C to stop')}`)
+      await sleep(interval)
+    }
+  }
+  finally {
+    process.stdout.write(`${CURSOR_SHOW}\n`)
+  }
 }
 
 const work = defineCommand({
@@ -403,7 +532,9 @@ const work = defineCommand({
     limit: { type: 'string', description: 'Max jobs claimed per tick', default: '100' },
     db: { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
     once: { type: 'boolean', description: 'Drain everything ready now, then exit', default: false },
-    json: { type: 'boolean', description: 'Emit one JSON line per active tick', default: false },
+    watch: { type: 'boolean', description: 'Live repainting dashboard (default on a TTY)', default: true },
+    recent: { type: 'string', description: 'Rows in the dashboard "recent" list', default: '12' },
+    json: { type: 'boolean', description: 'Emit one JSON line per active tick (implies --no-watch)', default: false },
   },
   async run({ args }) {
     const base = args.url.replace(TRAILING_SLASH_RE, '')
@@ -412,9 +543,13 @@ const work = defineCommand({
       params.set('queue', args.queue)
     if (args.db)
       params.set('db', args.db)
+    const interval = Math.max(50, Number(args.interval) || 500)
+    const watch = args.watch && !args.json && !args.once && process.stdout.isTTY === true
+    if (watch) {
+      params.set('snapshot', '1')
+      params.set('recent', String(Number(args.recent) || 12))
+    }
     const endpoint = `${base}/__cf-jobs/work?${params}`
-    const baseInterval = Math.max(50, Number(args.interval) || 500)
-    const maxInterval = Math.max(baseInterval, 5000)
 
     let stopped = false
     const stop = () => {
@@ -423,66 +558,10 @@ const work = defineCommand({
     process.on('SIGINT', stop)
     process.on('SIGTERM', stop)
 
-    if (!args.once)
-      process.stderr.write(`${color.dim(`cf-jobs work → ${endpoint} (Ctrl-C to stop)`)}\n`)
-
-    let warnedAmbiguous = false
-    let idle = baseInterval
-    for (;;) {
-      if (stopped)
-        break
-      const tick = await fetch(endpoint, { method: 'POST' })
-        .then(r => r.json() as Promise<WorkTickResult>)
-        .catch((error: unknown): WorkTickResult | null => {
-          process.stderr.write(`${color.yellow('…')} dev server unreachable at ${base} (${error instanceof Error ? error.message : String(error)})\n`)
-          return null
-        })
-
-      if (!tick || tick.error) {
-        if (tick?.error)
-          process.stderr.write(`${color.red('✖')} ${tick.error === 'no-d1-binding' ? 'no D1 binding found on the dev server env' : tick.error}\n`)
-        if (args.once) {
-          process.exitCode = 1
-          break
-        }
-        await sleep(maxInterval)
-        continue
-      }
-
-      if (tick.ambiguousBindings && !warnedAmbiguous) {
-        warnedAmbiguous = true
-        process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${tick.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
-      }
-
-      if (tick.processed > 0) {
-        idle = baseInterval
-        if (args.json) {
-          process.stdout.write(`${JSON.stringify(tick)}\n`)
-        }
-        else {
-          const detail = tick.byQueue && Object.keys(tick.byQueue).length
-            ? ` ${color.dim(`(${Object.entries(tick.byQueue).map(([q, n]) => `${q}:${n}`).join(', ')})`)}`
-            : ''
-          const waiting = tick.remaining > 0 ? color.dim(` — ${tick.remaining} waiting`) : ''
-          process.stdout.write(`${color.green('✓')} ran ${tick.processed}${detail}${waiting}\n`)
-        }
-      }
-
-      if (args.once) {
-        // Nothing ready and nothing left → fully drained.
-        if (tick.processed === 0 && tick.remaining === 0)
-          break
-        continue // drain as fast as the dev server allows
-      }
-
-      if (tick.processed === 0) {
-        await sleep(idle)
-        idle = Math.min(maxInterval, idle * 2)
-      }
-      else {
-        await sleep(baseInterval)
-      }
-    }
+    if (watch)
+      await runDashboard({ endpoint, base, interval, stopped: () => stopped })
+    else
+      await runLog({ endpoint, base, interval, once: args.once, json: args.json, stopped: () => stopped })
 
     process.off('SIGINT', stop)
     process.off('SIGTERM', stop)

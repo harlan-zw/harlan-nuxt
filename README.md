@@ -333,7 +333,7 @@ Every command accepts `--config <wrangler path>`, `--db <binding>`, `--remote`, 
 
 ### Dev worker (`cf-jobs work`)
 
-In production the queue consumer is a separate Worker invocation, so a running job is naturally decoupled from the request that enqueued it. Under `nuxt dev` everything shares one process, so a durable job dispatched on a request can run to completion inside that same request, before a client has a chance to observe it. That hides the asynchronous behaviour you actually want to test, most painfully a WebSocket streaming live job progress: the job finishes before the socket is even connected.
+In production the queue consumer is a separate Worker invocation, so a running job is naturally decoupled from the request that enqueued it. Under `nuxt dev` the in-memory dev queue runs a job the instant it's enqueued, in the same process, before a client has a chance to observe it. That hides the asynchronous behaviour you actually want to test, most painfully a WebSocket streaming live job progress: the job finishes before the socket is even connected.
 
 `cf-jobs work` restores that decoupling. It is a long-running dev worker that drains durable jobs **out-of-band**, on its own clock, by driving the running dev server:
 
@@ -350,11 +350,29 @@ pnpm cf-jobs work --interval 1000         # idle poll interval in ms (backs off 
 
 So a client connects to your WebSocket, enqueues a job (the request returns immediately, job persisted in D1), then `cf-jobs work` picks it up a tick later and runs it. Because the worker drives a dev-only endpoint (`POST /__cf-jobs/work`) that fires your app's registered `cloudflare:queue` consumer **in the dev process**, the job runs with the app's real context and an in-memory WebSocket broadcast reaches the connected client, exactly as it would in production via a Durable Object.
 
+On a TTY it shows a **live dashboard** (repainted each tick) so you can watch jobs flow through: per-queue ready/processing/done/failed, plus a tail of recent outcomes with durations. Pass `--no-watch` for the append-only line log, or `--json` for one machine-readable line per active tick (CI/scripts).
+
+```
+cf-jobs work · localhost:3030 · up 2m13s · 142 done · 1 failed · ~6/s
+
+QUEUE         READY  PROC  DONE  FAIL
+crawl             0     2    84     1
+reports           3     0    18     0
+
+recent
+✓ crawl/site-scan      s_abc12   142ms
+✓ crawl/site-scan      s_abc13    98ms
+✗ reports/weekly       r_99x     timeout
+```
+
+**No flag or restart needed to switch modes.** While `cf-jobs work` is running, its polling tells the dev server to stop auto-running durable jobs and leave them in D1 for the worker (the poll refreshes a short in-process lease — no pid file, no env var). Stop the worker and, once the lease lapses (~15s), the dev queue resumes running jobs immediately as before. So you opt into the realistic out-of-band lifecycle simply by starting the worker, and opt out by stopping it.
+
 Concurrency matches your queue config: each logical queue drains in batches of its wrangler `max_batch_size`, with up to `max_concurrency` batches in flight (default: serial, batch of 10). A queue declaring `{ maxConcurrency: 4, maxBatchSize: 10 }` drains 10-at-a-time, 4 batches concurrent, like its production consumer.
 
-Two things to know:
+Three things to know:
 
 - This is a **`nuxt dev` companion, not a production worker.** It assumes one process, so the request that runs the job shares memory (and thus WebSocket maps) with the rest of the dev server. Under multi-isolate setups (e.g. `wrangler dev`) the broadcast can land in a different isolate. The `/__cf-jobs/work` endpoint is registered only in dev and is an unauthenticated job executor, so it is never built into a deployment.
+- Deferral targets the **durable** path. While the worker holds the lease, a non-durable fire-and-forget `.send()` has no D1 row for the worker to find, so it won't run until you stop the worker. Use durable jobs (`enqueueDurableJob`) for anything you want the worker to drive.
 - Unlike the D1-querying commands above, `work` talks HTTP to the running dev server. It takes `--url` (default `http://localhost:3000`), `--db <binding>` to disambiguate when several D1 bindings exist, and `--json` to emit one machine-readable line per active tick.
 
 ## Runtime Validation

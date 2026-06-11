@@ -1,7 +1,7 @@
 {
   "name": "nuxt-cf-jobs",
   "type": "module",
-  "version": "0.6.3",
+  "version": "0.8.0",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt module for typed Cloudflare queue jobs.",
   "author": {
@@ -104,7 +104,9 @@
     "eslint": "catalog:",
     "eslint-plugin-harlanzw": "catalog:",
     "eslint-plugin-vue": "catalog:",
+    "h3": "catalog:",
     "happy-dom": "catalog:dev-test",
+    "nitropack": "catalog:",
     "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
     "unbuild": "catalog:",

@@ -34,6 +34,14 @@ export interface DevQueueRuntimeOptions {
   onBatch: (payload: DevQueueHookPayload) => Promise<void> | void
   onError?: (error: unknown) => void
   maxAttempts?: number
+  /**
+   * Gate for auto-dispatch: called before a message would be fired into the
+   * consumer. Return `false` to SKIP the auto-run and leave the work for an
+   * out-of-band drainer (`cf-jobs work`) — e.g. while a dev worker is active, so
+   * durable jobs run on the worker's clock instead of immediately on enqueue.
+   * Omit (default) to always auto-dispatch, the normal dev behaviour.
+   */
+  shouldAutoDispatch?: () => boolean
 }
 
 export function createDevQueueRuntime(opts: DevQueueRuntimeOptions): DevQueueRuntime {
@@ -113,6 +121,13 @@ export function createDevQueueRuntime(opts: DevQueueRuntimeOptions): DevQueueRun
         .then(() => opts.onBatch({ batch, env }))
         .catch(error => opts.onError?.(error))
     }
+
+    // Defer to an out-of-band drainer (e.g. `cf-jobs work`) when asked: the durable
+    // row is already persisted, so the worker will claim and run it from D1. The
+    // in-memory message is dropped (non-durable fire-and-forget jobs won't run in
+    // this mode — acceptable: deferral targets the durable path).
+    if (opts.shouldAutoDispatch && !opts.shouldAutoDispatch())
+      return
 
     if (delayMs === 0) {
       queueMicrotask(fire)

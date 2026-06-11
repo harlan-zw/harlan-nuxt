@@ -56,6 +56,31 @@ export interface DevWorkerTickOptions {
   queue?: string
 }
 
+// --- Worker-active lease ------------------------------------------------------
+// The dev queue must NOT auto-run a job (microtask dispatch) while `cf-jobs work`
+// is draining out-of-band, or the job runs twice / before the worker sees it.
+// Rather than a pid/lockfile that two processes have to agree on a path for, we
+// lean on the fact that the worker already POLLS `/__cf-jobs/work` every tick:
+// each poll refreshes an in-process lease (`markWorkerActive`), and the dev-queues
+// plugin checks `isWorkerActive()` before auto-firing. The handler and the plugin
+// share this module instance in the one dev nitro process, so no fs/IPC is needed
+// and a stopped worker self-heals when the lease expires.
+
+let workerActiveUntil = 0
+
+/** Lease longer than the worker's max idle poll interval (5s) so it never lapses mid-run. */
+const DEFAULT_WORKER_LEASE_MS = 15_000
+
+/** Called on every worker poll — extends the window during which the dev queue defers. */
+export function markWorkerActive(ttlMs: number = DEFAULT_WORKER_LEASE_MS, now: number = Date.now()): void {
+  workerActiveUntil = now + ttlMs
+}
+
+/** True while a recent worker poll keeps the lease alive — dev queue should defer auto-dispatch. */
+export function isWorkerActive(now: number = Date.now()): boolean {
+  return now < workerActiveUntil
+}
+
 /** Derive per-queue sizing from a `cfJobs.queues` entry (string binding or options object). */
 export function resolveQueueWorkerConfig(
   entry: string | { maxConcurrency?: number, maxBatchSize?: number } | undefined,
