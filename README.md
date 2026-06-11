@@ -381,7 +381,7 @@ cf-jobs watch --queue crawl      # one queue
 cf-jobs watch --backfill 300     # also replay the last 5 minutes on start
 ```
 
-```json
+```
 {"ts":"2026-06-11T07:16:03.000Z","event":"failed","id":"j1","queue":"crawl","type":"crawl/site-scan","error":"Error: boom\n    at handler (x.ts:1:1)\n    at run (x.ts:2:2)"}
 {"ts":"2026-06-11T07:16:05.000Z","event":"completed","id":"j2","queue":"crawl","type":"crawl/site-scan","durationMs":142}
 ```

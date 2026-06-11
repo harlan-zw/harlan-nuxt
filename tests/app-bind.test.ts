@@ -93,7 +93,9 @@ describe('createCfJobsApp (statically-injected jobs + useRuntimeConfig)', () => 
       { useRuntimeConfig: nitroUseRuntimeConfig as never },
     )
     let hook: ((payload: unknown) => Promise<void>) | undefined
-    const nitroApp = { hooks: { hook: (_n: string, h: (p: unknown) => Promise<void>) => { hook = h } } }
+    const nitroApp = { hooks: { hook: (_n: string, h: (p: unknown) => Promise<void>) => {
+      hook = h
+    } } }
     app.registerQueueConsumer(nitroApp, { createContext: () => ({} as never) })
 
     const payload = {

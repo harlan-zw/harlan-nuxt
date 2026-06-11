@@ -1,4 +1,4 @@
-import type { ModuleOptions } from './types'
+import type { ModuleOptions, QueueBindingOptions } from './types'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -487,6 +487,36 @@ export interface ReconcileQueuesResult {
  * suggested-TOML template and log drift, with no Nuxt or IO dependency so the
  * merge/normalize/cross-check logic is unit testable on plain objects.
  */
+/**
+ * Fill each queue's `maxConcurrency` / `maxBatchSize` from its wrangler
+ * `[[queues.consumers]]` entry when the module option leaves them unset. This is
+ * what lets the dev worker (`cf-jobs work`) fan out at the SAME per-queue
+ * concurrency the production consumer uses, without duplicating the numbers into
+ * `cfJobs.queues`. A value declared on the module option always wins; queues with
+ * no matching consumer (or no concurrency on it) pass through unchanged.
+ */
+export function enrichQueuesWithConsumerConfig(
+  queues: ModuleOptions['queues'],
+  expectations: readonly ModuleQueueExpectation[],
+  consumers: readonly WranglerQueueConsumer[],
+): ModuleOptions['queues'] {
+  const cfNameByLogical = new Map(expectations.map(e => [e.logical, e.cfQueueName]))
+  const consumerByQueue = new Map(consumers.map(c => [c.queue, c]))
+  const out: Record<string, string | QueueBindingOptions> = {}
+  for (const [logical, config] of Object.entries(queues)) {
+    const consumer = consumerByQueue.get(cfNameByLogical.get(logical) ?? logical)
+    if (!consumer || (consumer.maxConcurrency === undefined && consumer.maxBatchSize === undefined)) {
+      out[logical] = config
+      continue
+    }
+    const opts: QueueBindingOptions = typeof config === 'string' ? { binding: config } : { ...config }
+    opts.maxConcurrency ??= consumer.maxConcurrency
+    opts.maxBatchSize ??= consumer.maxBatchSize
+    out[logical] = opts
+  }
+  return out
+}
+
 export function reconcileQueues(input: ReconcileQueuesInput): ReconcileQueuesResult {
   const expectations = buildQueueExpectations(input.queues)
   const suggestedToml = renderSuggestedWranglerToml(expectations)

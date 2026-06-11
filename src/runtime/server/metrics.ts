@@ -133,6 +133,7 @@ export function combineMetricsSinks(...sinks: JobMetricsSink[]): JobMetricsSink 
  * engine binding exists. Pass your own `log` to route elsewhere.
  */
 export function createConsoleMetricsSink(
+  // eslint-disable-next-line no-console -- debug is the intended default sink for dev metrics
   log: (event: JobMetricsEvent) => void = event => console.debug('[cf-jobs:metric]', event),
 ): JobMetricsSink {
   return { record: log }

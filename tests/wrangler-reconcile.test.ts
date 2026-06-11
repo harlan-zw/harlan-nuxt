@@ -1,10 +1,39 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildQueueExpectations,
+  enrichQueuesWithConsumerConfig,
   mergeWranglerSources,
   normalizeNitroQueues,
   reconcileQueues,
 } from '../src/wrangler'
+
+describe('enrichQueuesWithConsumerConfig', () => {
+  const queues = { billing: { binding: 'Q_BILLING', queueName: 'nuxtseo-billing' }, crawl: 'Q_CRAWL' }
+  const expectations = buildQueueExpectations(queues)
+
+  it('fills maxConcurrency / maxBatchSize from the matching wrangler consumer', () => {
+    const out = enrichQueuesWithConsumerConfig(queues, expectations, [
+      { queue: 'nuxtseo-billing', maxConcurrency: 5, maxBatchSize: 10 },
+      { queue: 'crawl', maxConcurrency: 2 },
+    ])
+    expect(out.billing).toMatchObject({ binding: 'Q_BILLING', maxConcurrency: 5, maxBatchSize: 10 })
+    // a bare-string queue is upgraded to an object only when there's config to add
+    expect(out.crawl).toMatchObject({ binding: 'Q_CRAWL', maxConcurrency: 2 })
+  })
+
+  it('never overrides a value the module option already declares', () => {
+    const declared = { crawl: { binding: 'Q_CRAWL', maxConcurrency: 8 } }
+    const out = enrichQueuesWithConsumerConfig(declared, buildQueueExpectations(declared), [
+      { queue: 'crawl', maxConcurrency: 2, maxBatchSize: 10 },
+    ])
+    expect(out.crawl).toMatchObject({ maxConcurrency: 8, maxBatchSize: 10 }) // kept 8, filled batch
+  })
+
+  it('passes queues through unchanged when there is no consumer or no concurrency', () => {
+    expect(enrichQueuesWithConsumerConfig(queues, expectations, []).crawl).toBe('Q_CRAWL')
+    expect(enrichQueuesWithConsumerConfig(queues, expectations, [{ queue: 'crawl' }]).crawl).toBe('Q_CRAWL')
+  })
+})
 
 describe('buildQueueExpectations', () => {
   it('treats a string value as the binding name and the logical key as the cf queue name', () => {

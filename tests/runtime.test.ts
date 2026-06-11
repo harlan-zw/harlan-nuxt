@@ -16,7 +16,10 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
       const stmt = db.prepare(query)
       let bound: unknown[] = []
       const api: D1PreparedStatementLike<T> = {
-        bind(...values) { bound = values; return api },
+        bind(...values) {
+          bound = values
+          return api
+        },
         async run() { return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } } },
         async first<R = T>() { return (stmt.get(...(bound as never[])) ?? null) as R | null },
         async all<R = T>() { return { results: stmt.all(...(bound as never[])) as R[] } },
@@ -63,8 +66,16 @@ function ctxFactory(control: JobControlResult): JobContext<unknown, unknown, unk
     jobId: 'x',
     batchId: null,
     attempt: 1,
-    async release(delaySeconds) { control.handled = true; control.action = 'released'; control.delaySeconds = delaySeconds },
-    async fail(error) { control.handled = true; control.action = 'failed'; control.error = error },
+    async release(delaySeconds) {
+      control.handled = true
+      control.action = 'released'
+      control.delaySeconds = delaySeconds
+    },
+    async fail(error) {
+      control.handled = true
+      control.action = 'failed'
+      control.error = error
+    },
   }
 }
 
@@ -193,7 +204,9 @@ describe('runDurableJobMessage control handling (lifecycle fix)', () => {
 
   it('ctx.release() redelivers the message (retry) instead of dropping it', async () => {
     const m = msg('will-be-set')
-    const { d1, runtime } = await setup({ flaky: async (_p, ctx) => { await ctx.release(7) } })
+    const { d1, runtime } = await setup({ flaky: async (_p, ctx) => {
+      await ctx.release(7)
+    } })
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('flaky', {})], onFinish: { name: 'flaky', payload: {} } })
     m.body.jobId = jobIds[0]!
 
@@ -210,7 +223,9 @@ describe('runDurableJobMessage control handling (lifecycle fix)', () => {
 
 describe('maxAttempts (Laravel worker model)', () => {
   it('retries a throwing job below the attempt cap (released, batch not settled)', async () => {
-    const { runtime } = await setup({ boom: async () => { throw new Error('transient') } })
+    const { runtime } = await setup({ boom: async () => {
+      throw new Error('transient')
+    } })
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'boom', payload: {} } })
     const m = msg(jobIds[0]!) // default max_attempts 3, attempts→1 after claim < 3
     const r = await runtime.consumeMessage(m)
@@ -221,7 +236,9 @@ describe('maxAttempts (Laravel worker model)', () => {
   })
 
   it('fails (→ failed_jobs) + settles once attempts reach the cap', async () => {
-    const { d1, runtime } = await setup({ boom: async () => { throw new Error('persistent') }, finish: async () => {} })
+    const { d1, runtime } = await setup({ boom: async () => {
+      throw new Error('persistent')
+    }, finish: async () => {} })
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'finish', payload: {} } })
     d1._db.prepare('UPDATE jobs SET max_attempts = 1 WHERE id = ?').run(jobIds[0]!)
     const m = msg(jobIds[0]!)
@@ -351,7 +368,12 @@ describe('gscdump-parity hooks', () => {
       { work: async () => { order.push('run') }, finish: async () => {} },
       {
         createJobScope: () => ({
-          wrapDispatch: async (run: () => Promise<unknown>) => { order.push('before'); const r = await run(); order.push('after'); return r },
+          wrapDispatch: async (run: () => Promise<unknown>) => {
+            order.push('before')
+            const r = await run()
+            order.push('after')
+            return r
+          },
           onSettled: (s: { status: string, permanent: boolean, durationMs: number }) => { settled.push({ status: s.status, permanent: s.permanent, hasDuration: typeof s.durationMs === 'number' }) },
         }),
         dispatchContinuations: ({ stage }: { stage: string }) => { conts.push(stage) },

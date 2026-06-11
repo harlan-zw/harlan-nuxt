@@ -6,7 +6,6 @@ import {
   createD1DurableJobRepository,
   createJobBatch,
   createParentJobBatch,
-  d1DurableJobMigrationSql,
   prepareDurableJob,
   settleBatchMember,
 } from '#cf-jobs/server'
@@ -239,7 +238,9 @@ describe('settleBatchMember', () => {
     await repo.failJob(claimed!, 'boom')
 
     let fired = 0
-    const res = await settleBatchMember({ store, jobId: jobIds[0], failed: true, dispatchOnFinish: async () => { fired++ } })
+    const res = await settleBatchMember({ store, jobId: jobIds[0], failed: true, dispatchOnFinish: async () => {
+      fired++
+    } })
     expect(res.batchComplete).toBe(true)
     expect(fired).toBe(1)
   })

@@ -9,6 +9,7 @@ import { cfJobsAppExportNames } from './runtime/server/app'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
 import {
   crossCheckCrons,
+  enrichQueuesWithConsumerConfig,
   findWranglerConfig,
   parseWranglerConfig,
   reconcileQueues,
@@ -86,9 +87,27 @@ export default defineNuxtModule<ModuleOptions>({
     if (options.defaultQueue && !options.queues[options.defaultQueue])
       useLogger('nuxt-cf-jobs').warn(`cfJobs.defaultQueue="${options.defaultQueue}" is not a key of cfJobs.queues`)
 
+    // In dev, fill each queue's lane budget (max_concurrency / max_batch_size) from
+    // the wrangler consumer config so `cf-jobs work` fans out at the real per-queue
+    // concurrency without the app duplicating it into `cfJobs.queues`. Prod is
+    // unaffected (the real consumer reads wrangler directly).
+    let runtimeQueues = options.queues
+    if (nuxt.options.dev) {
+      const wranglerPath = options.wranglerPath
+        ? resolve(nuxt.options.rootDir, options.wranglerPath)
+        : findWranglerConfig(nuxt.options.rootDir)
+      const { expectations, merged } = reconcileQueues({
+        queues: options.queues,
+        fileWrangler: wranglerPath ? parseWranglerConfig(wranglerPath) : undefined,
+        nitroOptions: (nuxt.options as { nitro?: unknown }).nitro,
+        fallbackPath: wranglerPath ?? nuxt.options.rootDir,
+      })
+      runtimeQueues = enrichQueuesWithConsumerConfig(options.queues, expectations, merged?.consumers ?? [])
+    }
+
     nuxt.options.runtimeConfig.cfJobs = {
       ...(nuxt.options.runtimeConfig.cfJobs ?? {}),
-      queues: nuxt.options.runtimeConfig.cfJobs?.queues ?? options.queues,
+      queues: nuxt.options.runtimeConfig.cfJobs?.queues ?? runtimeQueues,
       defaultQueue: nuxt.options.runtimeConfig.cfJobs?.defaultQueue ?? options.defaultQueue,
     }
 
