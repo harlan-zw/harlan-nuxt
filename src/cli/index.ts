@@ -9,9 +9,10 @@
 import type { ArgsDef, CommandDef } from 'citty'
 import type { ModuleOptions } from '../types'
 import type { JobState } from './queries'
-import type { renderWorkerDashboard } from './render'
+import { realpathSync } from 'node:fs'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 import { defineCommand, runMain } from 'citty'
 import { d1DurableJobMigrationSql } from '../runtime/server/d1'
 import { collectTasks } from '../tasks'
@@ -378,14 +379,97 @@ const tasks = defineCommand({
   },
 })
 
+export interface WorkerDashboardState {
+  host: string
+  uptimeSeconds: number
+  /** Jobs the worker has driven this session. */
+  sessionProcessed: number
+  /** Rolling jobs/sec. */
+  ratePerSec: number
+  snapshot: Array<{ queue: string, ready: number, reserved: number, delayed: number, completed: number, failed: number }>
+  recent: Array<{ id: string, type: string, queue: string, outcome: 'completed' | 'failed', durationMs: number | null, error: string | null }>
+}
+
+/** Throughput: whole numbers bare (`6`), otherwise one decimal (`2.4`), rounded above 10. */
+function formatRate(rate: number): string {
+  if (rate >= 10)
+    return String(Math.round(rate))
+  return Number.isInteger(rate) ? String(rate) : rate.toFixed(1)
+}
+
+/** Compact job duration: 142ms, 1.2s, 45s. */
+export function formatMs(ms: number | null): string {
+  if (ms == null)
+    return '—'
+  if (ms < 1000)
+    return `${Math.round(ms)}ms`
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`
+}
+
+/**
+ * Render the full `cf-jobs work --watch` frame. Defined in the CLI entry module
+ * (not `render.ts`) on purpose: rollup only traces the default `status` command
+ * as live, so a helper reached solely through the `work` subcommand gets
+ * tree-shaken out of the bundle while its call site survives — a runtime
+ * `ReferenceError`. Keeping it entry-local with the `work` command avoids that.
+ */
+export function renderWorkerDashboard(s: WorkerDashboardState): string {
+  const failedTotal = s.snapshot.reduce((n, q) => n + q.failed, 0)
+  const lines: string[] = []
+
+  lines.push([
+    color.bold('cf-jobs work'),
+    s.host,
+    `up ${humanizeSeconds(s.uptimeSeconds)}`,
+    `${s.sessionProcessed} done`,
+    failedTotal > 0 ? color.red(`${failedTotal} failed`) : '0 failed',
+    `~${formatRate(s.ratePerSec)}/s`,
+  ].join(` ${color.dim('·')} `))
+  lines.push('')
+
+  if (s.snapshot.length === 0) {
+    lines.push(color.dim('no durable jobs yet'))
+  }
+  else {
+    lines.push(table(
+      ['QUEUE', 'READY', 'PROC', 'DONE', 'FAIL'],
+      s.snapshot.map(q => [
+        q.queue,
+        q.ready > 0 ? color.yellow(q.ready) : '0',
+        q.reserved > 0 ? color.cyan(q.reserved) : '0',
+        q.completed,
+        q.failed > 0 ? color.red(q.failed) : '0',
+      ]),
+      [false, true, true, true, true],
+    ))
+  }
+
+  lines.push('')
+  lines.push(color.dim('recent'))
+  if (s.recent.length === 0) {
+    lines.push(color.dim('  (nothing yet)'))
+  }
+  else {
+    for (const j of s.recent) {
+      const icon = j.outcome === 'completed' ? color.green('✓') : color.red('✗')
+      const tail = j.outcome === 'completed'
+        ? formatMs(j.durationMs)
+        : color.red(truncate((j.error ?? '').split('\n')[0], 32))
+      lines.push(`${icon} ${truncate(j.type, 24).padEnd(24)} ${color.dim(truncate(j.id, 12).padEnd(12))} ${tail}`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
 interface WorkTickResult {
   processed: number
   byQueue?: Record<string, number>
   remaining: number
   error?: string
   ambiguousBindings?: string[]
-  snapshot?: Parameters<typeof renderWorkerDashboard>[0]['snapshot']
-  recent?: Parameters<typeof renderWorkerDashboard>[0]['recent']
+  snapshot?: WorkerDashboardState['snapshot']
+  recent?: WorkerDashboardState['recent']
 }
 
 const TRAILING_SLASH_RE = /\/+$/
@@ -582,8 +666,26 @@ const main: CommandDef = defineCommand({
   },
 })
 
-runMain(main).catch((error: unknown) => {
-  const message = error instanceof D1ResolutionError || error instanceof Error ? error.message : String(error)
-  process.stderr.write(`${color.red('✖')} ${message}\n`)
-  process.exitCode = 1
-})
+export { main }
+
+/** True only when this file is the process entry (the `cf-jobs` bin), not when imported (tests). */
+function isCliEntry(): boolean {
+  const invoked = process.argv[1]
+  if (!invoked)
+    return false
+  try {
+    // realpath both sides so the pnpm `.bin/cf-jobs` symlink resolves to the dist file.
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url))
+  }
+  catch {
+    return false
+  }
+}
+
+if (isCliEntry()) {
+  runMain(main).catch((error: unknown) => {
+    const message = error instanceof D1ResolutionError || error instanceof Error ? error.message : String(error)
+    process.stderr.write(`${color.red('✖')} ${message}\n`)
+    process.exitCode = 1
+  })
+}
