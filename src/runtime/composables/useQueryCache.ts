@@ -1,7 +1,7 @@
 import type { QueryCache } from '../cache'
 import { refreshNuxtData, useNuxtApp } from '#app'
-import { createQueryCache } from '../cache'
-import { listActiveNuxtDataKeys, readNuxtData, writeNuxtData } from '../nuxt-data'
+import { createQueryCache, markQueryFetched } from '../cache'
+import { listActiveNuxtDataKeys, listPayloadDataKeys, readNuxtData, readQueryMeta, writeNuxtData, writeQueryMeta } from '../nuxt-data'
 
 // Resolve the per-Nuxt-app query cache. Attached lazily to `useNuxtApp()` so
 // each SSR request has its own — no shared state across requests in a Node
@@ -17,8 +17,44 @@ export function useQueryCache(): QueryCache {
   if (cache == null) {
     cache = createQueryCache()
     nuxt[CACHE_KEY] = cache
+    // Only on the client (SSR builds the payload it reads), and only at first
+    // creation so a later `markQueryFetched` is never clobbered.
+    if (import.meta.client)
+      seedCacheFromPayload(cache, nuxt)
   }
   return cache
+}
+
+/**
+ * Seed `lastFetched` from the SSR payload at hydration. The timestamp map
+ * isn't serialized across SSR→client, so without this every SSR-populated
+ * query reads as stale on first client mount and refetches data the payload
+ * already holds — `getCachedData` returns `undefined` and `useFetch` hits the
+ * network again. Stamping each payload key with the hydration moment makes
+ * `isQueryStale` honour each query's `staleTime` against the server's data, so
+ * `getCachedData` serves the payload instead. `staleTime: 0` queries still
+ * refetch (now − now ≥ 0), matching TanStack's always-stale default.
+ *
+ * Prefers the server's exact per-key fetch timestamp (stashed in the payload by
+ * `serializeQueryCacheToPayload`) so a short `staleTime` isn't fooled by the
+ * SSR→hydration gap; falls back to `now` for any key without a recorded stamp.
+ */
+export function seedCacheFromPayload(cache: QueryCache, nuxt: unknown, now: number = Date.now()): void {
+  const meta = readQueryMeta(nuxt)
+  for (const key of listPayloadDataKeys(nuxt))
+    markQueryFetched(cache, key, meta?.[key] ?? now)
+}
+
+/**
+ * Serialize the per-request `lastFetched` map into the payload so the client
+ * can seed exact timestamps. Called from the server render hook; a no-op when
+ * the cache was never created (no queries ran).
+ */
+export function serializeQueryCacheToPayload(nuxt: unknown): void {
+  const cache = (nuxt as Record<string, unknown>)[CACHE_KEY] as QueryCache | undefined
+  if (cache == null || cache.lastFetched.size === 0)
+    return
+  writeQueryMeta(nuxt, Object.fromEntries(cache.lastFetched))
 }
 
 /**

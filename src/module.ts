@@ -1,5 +1,5 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
-import { addImports, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addImports, addPlugin, createResolver, defineNuxtModule } from '@nuxt/kit'
 
 // `nuxt-use-query` — TanStack-Query-shaped wrapper over Nuxt's `useFetch` /
 // `useAsyncData`. Built on Nuxt primitives (refreshNuxtData, clearNuxtData,
@@ -48,6 +48,10 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'defineNuxtRpcQuery', from: rpcCore },
       { name: 'serializeNuxtRpcKey', from: rpcCore },
     ])
+
+    // Serializes the per-request `lastFetched` map into the payload so the
+    // client seeds exact fetch timestamps (see runtime/plugin.ts).
+    addPlugin(resolver.resolve('./runtime/plugin'))
 
     if (options.contracts?.enabled) {
       nuxt.hook('build:before', async () => {

@@ -19,6 +19,7 @@ import { useNuxtQuery } from 'nuxt-use-query/query'
 import {
   getQueryData,
   invalidateNuxtQueries,
+  seedCacheFromPayload,
   setQueryData,
   useQueryCache,
 } from 'nuxt-use-query/query-cache'
@@ -259,6 +260,29 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
 
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-3' })
     expect(echoCalls.mock.calls.length).toBe(callsAfterFirst)
+  })
+
+  it('a hydration-seeded payload key is served by getCachedData (no refetch) with staleTime > 0', async () => {
+    // Simulate SSR → client hydration: the payload carries the server's data
+    // but the per-app `lastFetched` map is empty (it isn't serialized). Seeding
+    // it (what `useQueryCache` does on client cache creation) must make the
+    // first mount read the payload instead of hitting the endpoint again.
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    const nuxt = useNuxtApp() as unknown as { payload: { data: Record<string, unknown> } }
+    nuxt.payload.data['hydrated-key'] = { call: 0, fromPayload: true }
+    seedCacheFromPayload(cache, nuxt)
+
+    const q = await useNuxtQuery<{ call: number, fromPayload?: boolean }>('/api/echo-env', {
+      key: 'hydrated-key',
+      staleTime: 60_000,
+    })
+
+    // Served from the seeded payload — the endpoint was never hit.
+    expect(echoCalls.mock.calls.length).toBe(0)
+    expect(q.data.value?.fromPayload).toBe(true)
   })
 
   it('invalidateNuxtQueries with no prefix refreshes every active key', async () => {
