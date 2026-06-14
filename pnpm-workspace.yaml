@@ -7,13 +7,14 @@ packages:
   - playground
 
 catalog:
-  '@vitest/coverage-v8': 4.1.7
+  '@vitest/coverage-v8': 4.1.8
   '@vueuse/core': ^14.3.0
   bumpp: ^11.1.0
   consola: ^3.4.2
-  eslint-plugin-harlanzw: ^0.15.1
+  eslint-plugin-harlanzw: ^0.17.0
   nitropack: ^2.13.4
-  oxc-parser: 0.132.0
+  nuxt: ^4.4.8
+  oxc-parser: 0.135.0
   oxc-walker: 1.0.0
   pathe: ^2.0.3
   unbuild: ^3.6.1
@@ -21,25 +22,25 @@ catalog:
 
 catalogs:
   dev-build:
-    '@arethetypeswrong/cli': ^0.18.2
+    '@arethetypeswrong/cli': ^0.18.3
     typescript: ^6.0.3
-    vue-tsc: ^3.3.1
+    vue-tsc: ^3.3.4
   dev-lint:
     '@antfu/eslint-config': ^9.0.0
-    eslint: ^10.4.0
+    eslint: ^10.5.0
   dev-test:
     '@nuxt/test-utils': ^4.0.3
-    '@vue/test-utils': ^2.4.10
-    happy-dom: ^20.9.0
-    vitest: ^4.1.7
+    '@vue/test-utils': ^2.4.11
+    happy-dom: ^20.10.3
+    vitest: ^4.1.8
   nuxt:
-    '@nuxt/kit': ^4.4.6
+    '@nuxt/kit': ^4.4.8
     '@nuxt/module-builder': ^1.0.2
-    '@nuxt/schema': ^4.4.6
+    '@nuxt/schema': ^4.4.8
     nuxt: ^4.4.6
   vue:
-    vue: ^3.5.34
-    vue-router: ^5.0.7
+    vue: ^3.5.38
+    vue-router: ^5.1.0
 
 onlyBuiltDependencies:
   - '@parcel/watcher'
