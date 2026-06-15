@@ -146,6 +146,12 @@ const CARRIED_COLUMNS = 'id, queue, job_type, batch_id, user_id, site_id, partne
  * Move failed rows back into the active table with attempts reset and
  * availability set to now. `INSERT OR IGNORE` so a re-queued id (already active)
  * is left untouched; the DELETE always clears the failed record.
+ *
+ * NOTE: this only restores the `jobs` row — it does NOT dispatch a queue
+ * message, so under the dispatch-on-enqueue model the restored job won't re-run
+ * until something sends its `{ jobId, queue }` message. For a runtime "try
+ * again" that actually re-runs, use `redispatchFailedJob` (server/retry.ts),
+ * which reconstructs a fresh durable job from the stored `_task` envelope.
  */
 export function retrySql(opts: { id?: string, queue?: string, all?: boolean }, t: TableNames = defaultTableNames): string {
   if (!opts.id && !opts.queue && !opts.all)

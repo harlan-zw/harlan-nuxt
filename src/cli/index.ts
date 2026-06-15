@@ -7,15 +7,20 @@
  * `queue:retry` / `queue:forget` / `queue:flush` / `queue:clear`.
  */
 import type { ArgsDef, CommandDef } from 'citty'
+import type { D1DatabaseLike, D1PreparedStatementLike } from '../runtime/server/d1'
 import type { ModuleOptions } from '../types'
 import type { JobState } from './queries'
-import { realpathSync } from 'node:fs'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
+import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
+import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { defineCommand, runMain } from 'citty'
 import { d1DurableJobMigrationSql } from '../runtime/server/d1'
+import { recentTerminalJobs, snapshotDurableQueues } from '../runtime/server/dev-worker-snapshot'
 import { collectTasks } from '../tasks'
+import { findWranglerConfig, parseWranglerConfig } from '../wrangler'
 import { D1ResolutionError, execD1, execD1Batch, resolveD1Target } from './d1'
 import {
   activeJobsSql,
@@ -572,10 +577,34 @@ function buildUrl(base: string, params: Record<string, string>): string {
   return `${base}${WORK_ENDPOINT}?${new URLSearchParams(params)}`
 }
 
-async function fetchTick(url: string): Promise<WorkTickResult | null> {
-  return await fetch(url, { method: 'POST' })
+/**
+ * One POST to the work endpoint. Never throws and never hangs: an own
+ * AbortController is aborted by either the shutdown `signal` (so Ctrl-C / a
+ * scheduler exit drops the in-flight request immediately) or a per-request
+ * timeout (so a half-dead server that accepts the socket but never responds
+ * still resolves to `null`). The timeout uses an `unref`'d timer that's cleared
+ * once the request settles — so a long timeout can never keep the process alive
+ * past a request that already finished (unlike `AbortSignal.timeout`, which
+ * can't be cleared).
+ */
+async function fetchTick(url: string, opts: { signal?: AbortSignal, timeoutMs?: number } = {}): Promise<WorkTickResult | null> {
+  const { signal, timeoutMs = 0 } = opts
+  const controller = new AbortController()
+  const onAbort = () => controller.abort()
+  if (signal?.aborted)
+    controller.abort()
+  else
+    signal?.addEventListener('abort', onAbort, { once: true })
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined
+  timer?.unref?.()
+  return await fetch(url, { method: 'POST', signal: controller.signal })
     .then(r => r.json() as Promise<WorkTickResult>)
     .catch((): WorkTickResult | null => null)
+    .finally(() => {
+      if (timer)
+        clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+    })
 }
 
 function hostOf(base: string): string {
@@ -587,9 +616,85 @@ function hostOf(base: string): string {
   }
 }
 
+// --- Local D1 (dev) ----------------------------------------------------------
+// `cf-jobs work`/`watch` discover demand by reading the local miniflare D1
+// SQLite directly rather than polling the dev server, so an idle worker never
+// touches it. Both commands are dev-only (they drive a running `nuxt dev`), so a
+// local `.wrangler` database is expected.
+//
+// Defined entry-local (not a separate module) on purpose: rollup tree-shakes a
+// "pure" cross-module helper like `openLocalD1` out of the CLI bundle while its
+// call site survives — a runtime `ReferenceError`, the same trap documented on
+// `renderWorkerDashboard`. (Throwing helpers like `findLocalD1Sqlite` survive;
+// the connection-opening one doesn't.)
+//
+// Safe alongside the running dev server: we open `readOnly` and miniflare keeps
+// the database in WAL mode, so a separate read-only connection never blocks or
+// corrupts the writer. (The "no concurrent access" rule in `./d1` is about
+// parallel `wrangler d1 execute` *writers*, not read-only readers.)
+
+/** Where wrangler v3 persists each local D1 database (one `<hash>.sqlite` per binding, plus `metadata.sqlite`). */
+const D1_STATE_DIR = '.wrangler/state/v3/d1/miniflare-D1DatabaseObject'
+
+class LocalD1Error extends Error {}
+
+/**
+ * Locate the local D1 SQLite file under `.wrangler`. Errors (rather than falling
+ * back to the server) when none exists. `dbFile` overrides auto-detection when
+ * more than one binding's database is present.
+ */
+function findLocalD1Sqlite(cwd: string, dbFile?: string): string {
+  if (dbFile) {
+    const path = join(cwd, dbFile)
+    if (!existsSync(path))
+      throw new LocalD1Error(`--db-file not found: ${path}`)
+    return path
+  }
+  const dir = join(cwd, D1_STATE_DIR)
+  if (!existsSync(dir))
+    throw new LocalD1Error(`No local D1 database found at ${D1_STATE_DIR}. Start \`nuxt dev\` once to create it (cf-jobs work/watch read it directly).`)
+  const files = readdirSync(dir).filter(f => f.endsWith('.sqlite') && f !== 'metadata.sqlite')
+  if (files.length === 0)
+    throw new LocalD1Error(`No D1 database file in ${D1_STATE_DIR}. Start \`nuxt dev\` once to create it.`)
+  if (files.length > 1)
+    throw new LocalD1Error(`Multiple D1 databases in ${D1_STATE_DIR} (${files.join(', ')}). Pass --db-file <name> to choose one.`)
+  return join(dir, files[0]!)
+}
+
+/**
+ * Open the local D1 SQLite as a read-only {@link D1DatabaseLike}, so the runtime
+ * snapshot queries (`snapshotDurableQueues`, `recentTerminalJobs`) run unchanged
+ * against it. Returns a `close()` to release the file handle.
+ */
+function openLocalD1(path: string): { db: D1DatabaseLike, close: () => void } {
+  const sqlite = new DatabaseSync(path, { readOnly: true })
+  // Wait briefly rather than throw SQLITE_BUSY if a checkpoint is mid-flight.
+  sqlite.exec('PRAGMA busy_timeout = 2000')
+
+  const statement = <T>(query: string, bound: readonly unknown[]): D1PreparedStatementLike<T> => ({
+    bind: (...values: unknown[]) => statement<T>(query, values),
+    run: async () => {
+      const r = sqlite.prepare(query).run(...(bound as never[]))
+      return { success: true, meta: { changes: Number(r.changes) } }
+    },
+    first: async <R = T>() => (sqlite.prepare(query).get(...(bound as never[])) as R | undefined) ?? null,
+    all: async <R = T>() => ({ results: sqlite.prepare(query).all(...(bound as never[])) as R[] }),
+  })
+
+  const db: D1DatabaseLike = {
+    exec: async (query: string) => sqlite.exec(query),
+    prepare: <T>(query: string) => statement<T>(query, []),
+  }
+  return { db, close: () => sqlite.close() }
+}
+
 interface SchedulerContext {
   base: string
   host: string
+  /** App root — where `.wrangler` and the wrangler config live. */
+  cwd: string
+  /** Override local D1 sqlite file selection when multiple databases exist. */
+  dbFile?: string
   interval: number
   onlyQueue?: string
   db?: string
@@ -598,6 +703,47 @@ interface SchedulerContext {
   json: boolean
   watch: boolean
   stopped: () => boolean
+  signal: AbortSignal
+}
+
+/** Refresh the dev-server worker lease at least this often (well under its 15s TTL). */
+const LEASE_PING_MS = 10_000
+
+/**
+ * Per-queue lane sizing read from the wrangler consumer config. Best-effort: when
+ * the config is missing/unparseable, `planDrainLanes` falls back to Cloudflare's
+ * defaults (concurrency 1, batch 10), so an empty map is fine.
+ */
+function loadQueueSizing(cwd: string): Map<string, { maxConcurrency?: number, maxBatchSize?: number }> {
+  const sizing = new Map<string, { maxConcurrency?: number, maxBatchSize?: number }>()
+  const configPath = findWranglerConfig(cwd)
+  if (!configPath)
+    return sizing
+  try {
+    for (const c of parseWranglerConfig(configPath).consumers ?? [])
+      sizing.set(c.queue, { maxConcurrency: c.maxConcurrency, maxBatchSize: c.maxBatchSize })
+  }
+  catch {
+    // Malformed wrangler config — fan-out just uses safe defaults.
+  }
+  return sizing
+}
+
+/** Read the live demand snapshot straight from local D1, enriched with lane sizing. */
+async function readLocalSnapshot(
+  db: D1DatabaseLike,
+  sizing: Map<string, { maxConcurrency?: number, maxBatchSize?: number }>,
+  recentLimit: number,
+  sinceSeconds?: number,
+): Promise<{ snapshot: QueueSnapshot[], recent: RecentJob[] }> {
+  const [queues, recent] = await Promise.all([
+    snapshotDurableQueues(db),
+    recentTerminalJobs(db, { limit: recentLimit, sinceSeconds }),
+  ])
+  return {
+    snapshot: queues.map(q => ({ ...q, ...sizing.get(q.queue) })),
+    recent,
+  }
 }
 
 /**
@@ -608,14 +754,51 @@ interface SchedulerContext {
  * interval (--json), or a per-lane log (--no-watch).
  */
 async function runScheduler(ctx: SchedulerContext): Promise<void> {
+  const { db: localDb, close } = openLocalD1(findLocalD1Sqlite(ctx.cwd, ctx.dbFile))
+  const sizing = loadQueueSizing(ctx.cwd)
+  // Aborted on ANY scheduler exit (SIGINT or a normal/once return), so a lane
+  // blocked on a half-dead server that accepts but never responds is dropped
+  // immediately instead of pinning the process open until its timeout fires.
+  const localAbort = new AbortController()
+  const signal = AbortSignal.any([ctx.signal, localAbort.signal])
   const inflight: Record<string, number> = {}
   const rateWindow: Array<{ t: number, n: number }> = []
   const startedAt = Date.now()
   let sessionProcessed = 0
-  let warnedAmbiguous = false
+  let warnedSnapshot = false
+  let serverDown = false // drain/lease endpoint unreachable — discovery still works off local D1
+  let leaseAt = 0 // last dev-server lease refresh
   let idle = ctx.interval
   const maxIdleInterval = Math.max(ctx.interval, 3000)
   const repaint = (frame: string) => process.stdout.write(`${CLEAR_FROM_HOME}${frame}`)
+
+  // The dev server is hit ONLY to drain and to keep the lease — never to discover
+  // work (that's a local-D1 read). Track its reachability off those calls and
+  // announce transitions once instead of one line per poll.
+  const noteContact = (ok: boolean): void => {
+    if (signal.aborted || ok === !serverDown)
+      return // ignore aborted-request results during shutdown
+    serverDown = !ok
+    if (!ctx.watch && !ctx.json) {
+      process.stderr.write(ok
+        ? `${color.green('✓')} dev server reachable at ${ctx.host}\n`
+        : `${color.yellow('…')} dev server unreachable at ${ctx.host} — discovering from local D1; draining resumes when it returns\n`)
+    }
+  }
+
+  // Keep the dev-queues plugin deferring auto-dispatch to us: one cheap POST under
+  // the 15s lease TTL. Without it an idle worker would let the lease lapse and the
+  // dev server would start draining too (double execution).
+  const refreshLease = async (now: number): Promise<void> => {
+    if (now - leaseAt < LEASE_PING_MS)
+      return
+    leaseAt = now
+    const params: Record<string, string> = { drain: '0' }
+    if (ctx.db)
+      params.db = ctx.db
+    const res = await fetchTick(buildUrl(ctx.base, params), { signal, timeoutMs: 3000 })
+    noteContact(res !== null)
+  }
 
   // A self-sustaining lane: pulls a batch, and as soon as the response returns with
   // work, pulls the next one immediately — throughput is gated by how fast the
@@ -629,8 +812,11 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
     const url = buildUrl(ctx.base, params)
     void (async () => {
       try {
-        while (!ctx.stopped()) {
-          const res = await fetchTick(url)
+        while (!ctx.stopped() && !signal.aborted) {
+          // Draining real jobs can run long, so the timeout is generous; it only
+          // exists to unstick a stalled socket. Shutdown aborts via `signal`.
+          const res = await fetchTick(url, { signal, timeoutMs: 60_000 })
+          noteContact(res !== null)
           if (!res || res.error)
             break
           if (res.processed > 0) {
@@ -652,43 +838,32 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
   if (ctx.watch)
     process.stdout.write(CURSOR_HIDE)
   else if (!ctx.once && !ctx.json)
-    process.stderr.write(`${color.dim(`cf-jobs work → ${ctx.host} (Ctrl-C to stop)`)}\n`)
+    process.stderr.write(`${color.dim(`cf-jobs work → ${ctx.host} (discovery from local D1; Ctrl-C to stop)`)}\n`)
 
   try {
     for (;;) {
       if (ctx.stopped())
         break
 
-      const snapParams: Record<string, string> = { drain: '0', snapshot: '1', recent: String(ctx.recent) }
-      if (ctx.onlyQueue)
-        snapParams.queue = ctx.onlyQueue
-      if (ctx.db)
-        snapParams.db = ctx.db
-      const snap = await fetchTick(buildUrl(ctx.base, snapParams))
       const now = Date.now()
+      // Keep the lease warm so the dev server defers draining to us.
+      await refreshLease(now)
 
-      if (!snap || snap.error) {
-        const msg = snap
-          ? `${color.red('✖')} ${snap.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : snap.error}`
-          : `${color.yellow('…')} dev server unreachable at ${ctx.host}`
-        if (ctx.watch)
-          repaint(`${msg}\n\n${color.dim('Ctrl-C to stop')}`)
-        else
-          process.stderr.write(`${msg}\n`)
-        if (ctx.once && snap?.error) {
-          process.exitCode = 1
-          break
+      // Demand discovery is a pure local read — the dev server isn't touched.
+      let snapshot: QueueSnapshot[] = []
+      let recent: RecentJob[] = []
+      try {
+        ({ snapshot, recent } = await readLocalSnapshot(localDb, sizing, ctx.recent))
+      }
+      catch (e) {
+        if (!warnedSnapshot) {
+          warnedSnapshot = true
+          process.stderr.write(`${color.yellow('!')} could not read local D1 (migrations run yet?): ${(e as Error).message}\n`)
         }
-        await sleep(ctx.watch ? ctx.interval : Math.max(ctx.interval, 2000))
-        continue
       }
 
-      if (snap.ambiguousBindings && !warnedAmbiguous) {
-        warnedAmbiguous = true
-        process.stderr.write(`${color.yellow('!')} multiple D1 bindings (${snap.ambiguousBindings.join(', ')}); using the first. Pass --db to choose.\n`)
-      }
-
-      const snapshot = snap.snapshot ?? []
+      // Fire drain lanes for queues with ready work — the one thing only the dev
+      // server can do (run handlers in-process so live WebSockets see progress).
       for (const plan of planDrainLanes(snapshot, inflight, { onlyQueue: ctx.onlyQueue })) {
         for (let i = 0; i < plan.fire; i++)
           openLane(plan.queue, plan.batchSize)
@@ -700,6 +875,9 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
       const ratePerSec = rateWindow.reduce((s, e) => s + e.n, 0) / spanSec
 
       if (ctx.watch) {
+        const footer = serverDown
+          ? color.yellow(`dev server unreachable at ${ctx.host} — draining paused, discovery live`)
+          : color.dim('Ctrl-C to stop')
         repaint(`${renderWorkerDashboard({
           host: ctx.host,
           uptimeSeconds: Math.floor((now - startedAt) / 1000),
@@ -708,8 +886,8 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
           ratePerSec,
           inflight: { ...inflight },
           snapshot,
-          recent: snap.recent ?? [],
-        })}\n\n${color.dim('Ctrl-C to stop')}`)
+          recent,
+        })}\n\n${footer}`)
       }
       else if (ctx.json) {
         process.stdout.write(`${JSON.stringify({ sessionProcessed, inflight, snapshot })}\n`)
@@ -719,14 +897,19 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
       const lanes = Object.values(inflight).reduce((a, b) => a + b, 0)
 
       if (ctx.once) {
+        // Can't drain ready work without the dev server — don't spin forever.
+        if (serverDown && readySum > 0) {
+          process.exitCode = 1
+          break
+        }
         if (readySum === 0 && lanes === 0)
           break
         await sleep(Math.min(ctx.interval, 150))
         continue
       }
 
-      // The snapshot poll is demand discovery + dashboard refresh, not throughput
-      // (lanes self-sustain off their own responses). So poll at the base cadence
+      // The local read is demand discovery + dashboard refresh, not throughput
+      // (lanes self-sustain off their own responses). So read at the base cadence
       // while there's anything happening, and back off toward ~3s when fully idle
       // — no busy-spinning an empty system. The watch dashboard keeps the base
       // cadence so uptime/relative-time stay live to the eye.
@@ -736,17 +919,20 @@ async function runScheduler(ctx: SchedulerContext): Promise<void> {
     }
   }
   finally {
+    localAbort.abort() // drop any in-flight lane/lease request so the process can exit
+    close()
     if (ctx.watch)
       process.stdout.write(`${CURSOR_SHOW}\n`)
   }
 }
 
 interface WatchContext {
-  base: string
-  host: string
+  /** App root — where `.wrangler` lives. */
+  cwd: string
+  /** Override local D1 sqlite file selection when multiple databases exist. */
+  dbFile?: string
   interval: number
   onlyQueue?: string
-  db?: string
   failuresOnly: boolean
   backfillSeconds: number
   stopped: () => boolean
@@ -755,66 +941,87 @@ interface WatchContext {
 /**
  * Read-only agent observer: emits one NDJSON line per terminal job (full,
  * untruncated error on failures) so an agent can watch the queues and fix issues
- * as they surface. Does NOT drain and does NOT hold the worker lease (`lease=0`),
- * so it never changes execution — pure observation.
+ * as they surface. Reads the local D1 SQLite directly — it never touches the dev
+ * server (it neither drains nor holds the worker lease), so it works even while
+ * the server is restarting and adds zero load to it.
  */
 async function runWatch(ctx: WatchContext): Promise<void> {
+  const { db: localDb, close } = openLocalD1(findLocalD1Sqlite(ctx.cwd, ctx.dbFile))
   const seen = new Set<string>()
   // Start from now minus the backfill window (default 0 -> only new events).
   let sinceSeconds = Math.max(0, Math.floor(Date.now() / 1000) - ctx.backfillSeconds)
   let warned = false
 
-  for (;;) {
-    if (ctx.stopped())
-      break
-    const params: Record<string, string> = { drain: '0', lease: '0', snapshot: '1', since: String(sinceSeconds) }
-    if (ctx.db)
-      params.db = ctx.db
-    const res = await fetchTick(buildUrl(ctx.base, params))
+  try {
+    for (;;) {
+      if (ctx.stopped())
+        break
 
-    if (!res || res.error) {
-      if (!warned) {
-        warned = true
-        process.stderr.write(res
-          ? `${color.red('✖')} ${res.error === 'no-d1-binding' ? 'no D1 binding on the dev server env' : res.error}\n`
-          : `${color.yellow('…')} dev server unreachable at ${ctx.host}\n`)
+      let recent: RecentJob[] = []
+      try {
+        recent = await recentTerminalJobs(localDb, { sinceSeconds, limit: 500 })
+        warned = false
       }
-      await sleep(Math.max(ctx.interval, 1000))
-      continue
-    }
-    warned = false
-
-    let recent = res.recent ?? []
-    if (ctx.onlyQueue)
-      recent = recent.filter(j => j.queue === ctx.onlyQueue)
-    if (ctx.failuresOnly)
-      recent = recent.filter(j => j.outcome === 'failed')
-
-    for (const job of selectNewTerminalJobs(recent, seen)) {
-      seen.add(job.id)
-      process.stdout.write(`${formatWatchEvent(job)}\n`)
-      // Advance the cursor (1s overlap; dedup by id guards re-emit).
-      sinceSeconds = Math.max(sinceSeconds, job.at - 1)
-    }
-    if (seen.size > 5000) {
-      for (const id of seen) {
-        seen.delete(id)
-        if (seen.size <= 4000)
-          break
+      catch (e) {
+        if (!warned) {
+          warned = true
+          process.stderr.write(`${color.yellow('!')} could not read local D1 (migrations run yet?): ${(e as Error).message}\n`)
+        }
+        await sleep(Math.max(ctx.interval, 1000))
+        continue
       }
+
+      if (ctx.onlyQueue)
+        recent = recent.filter(j => j.queue === ctx.onlyQueue)
+      if (ctx.failuresOnly)
+        recent = recent.filter(j => j.outcome === 'failed')
+
+      for (const job of selectNewTerminalJobs(recent, seen)) {
+        seen.add(job.id)
+        process.stdout.write(`${formatWatchEvent(job)}\n`)
+        // Advance the cursor (1s overlap; dedup by id guards re-emit).
+        sinceSeconds = Math.max(sinceSeconds, job.at - 1)
+      }
+      if (seen.size > 5000) {
+        for (const id of seen) {
+          seen.delete(id)
+          if (seen.size <= 4000)
+            break
+        }
+      }
+      await sleep(ctx.interval)
     }
-    await sleep(ctx.interval)
+  }
+  finally {
+    close()
   }
 }
 
-function withSignals(run: (stopped: () => boolean) => Promise<void>): Promise<void> {
+/** Surface local-D1 setup failures (no `.wrangler` db yet, ambiguous file) as a clean line, not a stack trace. */
+function reportSetupErrors(run: Promise<void>): Promise<void> {
+  return run.catch((e: unknown) => {
+    if (!(e instanceof LocalD1Error))
+      throw e
+    process.stderr.write(`${color.red('✖')} ${e.message}\n`)
+    process.exitCode = 1
+  })
+}
+
+function withSignals(run: (stopped: () => boolean, signal: AbortSignal) => Promise<void>): Promise<void> {
+  const controller = new AbortController()
   let stopped = false
+  let hits = 0
   const stop = () => {
     stopped = true
+    controller.abort() // unblock any in-flight fetch immediately
+    // Second Ctrl-C is a hard escape hatch in case a loop is wedged outside an
+    // abortable await — never leave the user mashing ^C with no effect.
+    if (++hits >= 2)
+      process.exit(130)
   }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
-  return run(() => stopped).finally(() => {
+  return run(() => stopped, controller.signal).finally(() => {
     process.off('SIGINT', stop)
     process.off('SIGTERM', stop)
   })
@@ -826,20 +1033,23 @@ const work = defineCommand({
     description: 'Dev worker: drive a running `nuxt dev` server to drain durable jobs out-of-band so WebSockets observe live progress (nuxt dev only — NOT a production worker)',
   },
   args: {
-    url: { type: 'string', description: 'Dev server base URL', default: 'http://localhost:3000' },
-    interval: { type: 'string', description: 'Scheduler poll interval (ms)', default: '500' },
-    queue: { type: 'string', description: 'Only drain this logical queue' },
-    db: { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
-    once: { type: 'boolean', description: 'Drain everything ready now, then exit', default: false },
-    watch: { type: 'boolean', description: 'Live repainting dashboard (default on a TTY)', default: true },
-    recent: { type: 'string', description: 'Rows in the dashboard "recent" list', default: '12' },
-    json: { type: 'boolean', description: 'Emit one JSON line per interval (implies --no-watch)', default: false },
+    'url': { type: 'string', description: 'Dev server base URL (drain + lease target)', default: 'http://localhost:3000' },
+    'interval': { type: 'string', description: 'Scheduler poll interval (ms)', default: '500' },
+    'queue': { type: 'string', description: 'Only drain this logical queue' },
+    'db': { type: 'string', description: 'Dev server\'s D1 binding name for draining (default: auto-detect)' },
+    'db-file': { type: 'string', description: 'Local D1 sqlite file (relative to cwd) when multiple databases exist' },
+    'once': { type: 'boolean', description: 'Drain everything ready now, then exit', default: false },
+    'watch': { type: 'boolean', description: 'Live repainting dashboard (default on a TTY)', default: true },
+    'recent': { type: 'string', description: 'Rows in the dashboard "recent" list', default: '12' },
+    'json': { type: 'boolean', description: 'Emit one JSON line per interval (implies --no-watch)', default: false },
   },
   async run({ args }) {
     const base = args.url.replace(TRAILING_SLASH_RE, '')
-    await withSignals(stopped => runScheduler({
+    await reportSetupErrors(withSignals((stopped, signal) => runScheduler({
       base,
       host: hostOf(base),
+      cwd: process.cwd(),
+      dbFile: args['db-file'],
       interval: Math.max(50, Number(args.interval) || 500),
       onlyQueue: args.queue,
       db: args.db,
@@ -848,35 +1058,33 @@ const work = defineCommand({
       json: args.json,
       watch: args.watch && !args.json && !args.once && process.stdout.isTTY === true,
       stopped,
-    }))
+      signal,
+    })))
   },
 })
 
 const watch = defineCommand({
   meta: {
     name: 'watch',
-    description: 'Stream durable job outcomes as NDJSON for agents (read-only; full exceptions on failures). Does not drain or affect execution.',
+    description: 'Stream durable job outcomes as NDJSON for agents (read-only; full exceptions on failures). Reads local D1 directly — never touches the dev server.',
   },
   args: {
-    'url': { type: 'string', description: 'Dev server base URL', default: 'http://localhost:3000' },
     'interval': { type: 'string', description: 'Poll interval (ms)', default: '500' },
     'queue': { type: 'string', description: 'Only emit events for this logical queue' },
-    'db': { type: 'string', description: 'D1 binding name (default: auto-detect the only binding)' },
+    'db-file': { type: 'string', description: 'Local D1 sqlite file (relative to cwd) when multiple databases exist' },
     'failures-only': { type: 'boolean', description: 'Only emit failed jobs (with full stack)', default: false },
     'backfill': { type: 'string', description: 'Replay terminal jobs from the last N seconds on start', default: '0' },
   },
   async run({ args }) {
-    const base = args.url.replace(TRAILING_SLASH_RE, '')
-    await withSignals(stopped => runWatch({
-      base,
-      host: hostOf(base),
+    await reportSetupErrors(withSignals(stopped => runWatch({
+      cwd: process.cwd(),
+      dbFile: args['db-file'],
       interval: Math.max(50, Number(args.interval) || 500),
       onlyQueue: args.queue,
-      db: args.db,
       failuresOnly: args['failures-only'],
       backfillSeconds: Math.max(0, Number(args.backfill) || 0),
       stopped,
-    }))
+    })))
   },
 })
 
