@@ -8,33 +8,34 @@ trustPolicyExclude:
 catalog:
   '@antfu/eslint-config': latest
   '@nuxt/test-utils': ^4.0.3
-  '@vitest/coverage-v8': 4.1.7
+  '@vitest/coverage-v8': 4.1.8
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
-  eslint: ^10.4.1
+  eslint: ^10.5.0
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
-  h3: ^1.15.4
+  h3: 2.0.1-rc.22
   magicast: ^0.5.3
   nitropack: ^2.13.4
+  nuxt: ^4.4.8
   unbuild: ^3.6.1
-  wrangler: ^4.95.0
+  wrangler: ^4.100.0
 
 catalogs:
   dev-build:
-    '@types/node': ^25.9.1
+    '@types/node': ^25.9.3
     typescript: ^6.0.3
-    vue-tsc: ^3.3.2
+    vue-tsc: ^3.3.5
   dev-test:
-    happy-dom: ^20.9.0
-    vitest: ^4.1.7
+    happy-dom: ^20.10.3
+    vitest: ^4.1.8
   nuxt:
-    '@nuxt/kit': ^4.4.6
+    '@nuxt/kit': ^4.4.8
     '@nuxt/module-builder': ^1.0.2
-    '@nuxt/schema': ^4.4.6
+    '@nuxt/schema': ^4.4.8
     nuxt: ^4.4.6
   vue:
-    vue: ^3.5.35
+    vue: ^3.5.38
 
 onlyBuiltDependencies:
   - '@parcel/watcher'
