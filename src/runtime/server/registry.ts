@@ -1,8 +1,38 @@
-import type { JobBackoff, JobDefinition, JobFailedHandler, JobHandler, JobMiddleware, JobPayloadSchema } from './types'
+import type { CfJobsBroadcastEnvelope, CfJobsBroadcastMessage } from '../shared/broadcast'
+import type { JobBackoff, JobBroadcastDefinition, JobDefinition, JobFailedHandler, JobHandler, JobMiddleware, JobPayloadSchema } from './types'
 import { buildJobPayload } from './payload'
 
 export type JobPayloadMap = Record<string, unknown>
 export type AnyJobDefinition = JobDefinition<string, any, string, any, any, any>
+export interface JobDefinitionShape {
+  name: string
+  queue: string
+  handle: (payload: any, ...args: any[]) => any
+  broadcast?: (...args: any[]) => any
+}
+type JobBroadcastShape = Pick<JobDefinitionShape, 'name'> & Partial<Pick<JobDefinitionShape, 'broadcast'>>
+interface DefineJobBaseOptions<
+  Name extends string,
+  Payload extends object,
+  Queue extends string,
+  Env,
+  Db,
+  Logger,
+> {
+  name: Name
+  /** Logical queue name. Optional only when `cfJobs.defaultQueue` is configured. */
+  queue?: Queue
+  jobType?: string
+  input?: JobPayloadSchema<Payload>
+  handle: JobHandler<Payload, Env, Db, Logger>
+  failed?: JobFailedHandler<Payload, Env, Db, Logger>
+  middleware?: Array<JobMiddleware<Payload, Env, Db, Logger>>
+  tries?: number
+  maxAttempts?: number
+  backoff?: JobBackoff
+  unique?: boolean
+  uniqueId?: (payload: Payload) => string
+}
 
 /**
  * A build-time registry entry that defers loading the handler module. The
@@ -51,44 +81,72 @@ function toStaticDefinition(entry: RegistryEntry): JobStaticDefinition {
     unique: entry.unique,
   }
 }
-export type JobPayloadOf<Job extends AnyJobDefinition>
-  = Job extends JobDefinition<string, infer Payload, string, any, any, any>
+export type JobPayloadOf<Job extends Pick<JobDefinitionShape, 'handle'>>
+  = Job['handle'] extends (payload: infer Payload, ...args: any[]) => any
     ? Payload extends object ? Payload : never
     : never
-export type JobMessageOf<Job extends AnyJobDefinition>
-  = Job extends JobDefinition<infer Name, any, string, any, any, any>
+export type JobMessageOf<Job extends Pick<JobDefinitionShape, 'handle' | 'name'>>
+  = Job extends { name: infer Name extends string }
     ? { _task: Name } & JobPayloadOf<Job>
     : never
-export type JobNameOf<Jobs extends readonly AnyJobDefinition[]> = Jobs[number]['name']
+export type JobNameOf<Jobs extends readonly Pick<JobDefinitionShape, 'name'>[]> = Jobs[number]['name']
 export type JobDefinitionByName<
-  Jobs extends readonly AnyJobDefinition[],
+  Jobs extends readonly Pick<JobDefinitionShape, 'name'>[],
   Name extends JobNameOf<Jobs>,
 > = Extract<Jobs[number], { name: Name }>
 export type JobPayloadByName<
-  Jobs extends readonly AnyJobDefinition[],
+  Jobs extends readonly Pick<JobDefinitionShape, 'handle' | 'name'>[],
   Name extends JobNameOf<Jobs>,
-> = JobDefinitionByName<Jobs, Name> extends JobDefinition<Name, infer Payload, string, any, any, any>
-  ? Payload extends object ? Payload : never
-  : never
+> = JobPayloadOf<JobDefinitionByName<Jobs, Name>>
 export type JobQueueByName<
-  Jobs extends readonly AnyJobDefinition[],
+  Jobs extends readonly Pick<JobDefinitionShape, 'name' | 'queue'>[],
   Name extends JobNameOf<Jobs>,
-> = JobDefinitionByName<Jobs, Name> extends JobDefinition<Name, any, infer Queue, any, any, any>
+> = JobDefinitionByName<Jobs, Name> extends { queue: infer Queue extends string }
   ? Queue
   : never
 export type JobMessageByName<
-  Jobs extends readonly AnyJobDefinition[],
+  Jobs extends readonly Pick<JobDefinitionShape, 'handle' | 'name'>[],
   Name extends JobNameOf<Jobs>,
 > = { _task: Name } & JobPayloadByName<Jobs, Name>
-export type QueueNameOf<Jobs extends readonly AnyJobDefinition[]> = Jobs[number]['queue']
+export type QueueNameOf<Jobs extends readonly Pick<JobDefinitionShape, 'queue'>[]> = Jobs[number]['queue']
 export type JobMessageByQueue<
-  Jobs extends readonly AnyJobDefinition[],
+  Jobs extends readonly Pick<JobDefinitionShape, 'handle' | 'name' | 'queue'>[],
   Queue extends QueueNameOf<Jobs>,
 > = {
   [Name in JobNameOf<Jobs>]: JobQueueByName<Jobs, Name> extends Queue
     ? JobMessageByName<Jobs, Name>
     : never
 }[JobNameOf<Jobs>]
+type JobBroadcastReturnOf<Job extends Partial<Pick<JobDefinitionShape, 'broadcast'>>>
+  = Job extends { broadcast: (...args: any[]) => infer Result }
+    ? Awaited<Result>
+    : never
+type JobBroadcastMessageFromResult<Result>
+  = Exclude<Result, false | null | undefined> extends infer Clean
+    ? Clean extends readonly (infer Item)[]
+      ? Extract<Item, CfJobsBroadcastMessage>
+      : Extract<Clean, CfJobsBroadcastMessage>
+    : never
+type JobBroadcastDataOf<Message>
+  = Message extends { data?: infer Data } ? Data : unknown
+export type JobBroadcastMessageOf<Job extends Partial<Pick<JobDefinitionShape, 'broadcast'>>>
+  = JobBroadcastMessageFromResult<JobBroadcastReturnOf<Job>>
+export type JobBroadcastEnvelopeOf<Job extends Partial<Pick<JobDefinitionShape, 'broadcast'>>>
+  = JobBroadcastMessageOf<Job> extends infer Message
+    ? Message extends CfJobsBroadcastMessage
+      ? CfJobsBroadcastEnvelope<JobBroadcastDataOf<Message>> & { event: Message['event'] }
+      : never
+    : never
+export type JobBroadcastMessageByName<
+  Jobs extends readonly JobBroadcastShape[],
+  Name extends JobNameOf<Jobs>,
+> = JobBroadcastMessageOf<JobDefinitionByName<Jobs, Name>>
+export type JobBroadcastEnvelopeByName<
+  Jobs extends readonly JobBroadcastShape[],
+  Name extends JobNameOf<Jobs>,
+> = JobBroadcastEnvelopeOf<JobDefinitionByName<Jobs, Name>>
+export type BroadcastMessageOf<Jobs extends readonly Partial<Pick<JobDefinitionShape, 'broadcast'>>[]> = JobBroadcastMessageOf<Jobs[number]>
+export type BroadcastEnvelopeOf<Jobs extends readonly Partial<Pick<JobDefinitionShape, 'broadcast'>>[]> = JobBroadcastEnvelopeOf<Jobs[number]>
 
 export interface JobDefinitionValidationIssue {
   name: string
@@ -102,22 +160,24 @@ export function defineJob<
   Env = unknown,
   Db = unknown,
   Logger = unknown,
->(opts: {
-  name: Name
-  /** Logical queue name. Optional only when `cfJobs.defaultQueue` is configured. */
-  queue?: Queue
-  jobType?: string
-  input?: JobPayloadSchema<Payload>
-  handle: JobHandler<Payload, Env, Db, Logger>
-  failed?: JobFailedHandler<Payload, Env, Db, Logger>
-  middleware?: Array<JobMiddleware<Payload, Env, Db, Logger>>
-  tries?: number
-  maxAttempts?: number
-  backoff?: JobBackoff
-  unique?: boolean
-  uniqueId?: (payload: Payload) => string
-}): JobDefinition<Name, Payload, Queue, Env, Db, Logger> {
-  return opts as JobDefinition<Name, Payload, Queue, Env, Db, Logger>
+  const Broadcast extends JobBroadcastDefinition<Payload, Env> = JobBroadcastDefinition<Payload, Env>,
+>(
+  opts: DefineJobBaseOptions<Name, Payload, Queue, Env, Db, Logger>
+    & { broadcast: Broadcast & JobBroadcastDefinition<Payload, Env> },
+): JobDefinition<Name, Payload, Queue, Env, Db, Logger> & { broadcast: Broadcast }
+export function defineJob<
+  const Name extends string,
+  Payload extends object,
+  const Queue extends string = string,
+  Env = unknown,
+  Db = unknown,
+  Logger = unknown,
+>(
+  opts: DefineJobBaseOptions<Name, Payload, Queue, Env, Db, Logger>
+    & { broadcast?: JobBroadcastDefinition<Payload, Env> },
+): JobDefinition<Name, Payload, Queue, Env, Db, Logger>
+export function defineJob(opts: any): any {
+  return opts
 }
 
 export function parseJobInput<Payload>(

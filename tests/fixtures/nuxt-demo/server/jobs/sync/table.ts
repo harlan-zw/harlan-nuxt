@@ -9,4 +9,15 @@ export default defineJob({
     table: string
     priority?: 'low' | 'normal'
   }) {},
+  broadcast({ payload, status }) {
+    return {
+      channel: `tenant:${payload.siteId}`,
+      event: 'sync.table.updated',
+      data: {
+        siteId: payload.siteId,
+        table: payload.table,
+        status,
+      },
+    } as const
+  },
 })

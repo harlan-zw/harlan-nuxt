@@ -11,8 +11,7 @@ import {
   cfJobBatchChannel,
   cfJobChannel,
   cfJobQueueChannel,
-  cfJobSiteChannel,
-  cfJobUserChannel,
+  cfJobsChannel,
   isCfJobsBroadcastChannel,
 } from '../../shared/broadcast'
 
@@ -20,8 +19,7 @@ export {
   cfJobBatchChannel,
   cfJobChannel,
   cfJobQueueChannel,
-  cfJobSiteChannel,
-  cfJobUserChannel,
+  cfJobsChannel,
 }
 export type {
   CfJobsBroadcastBatchProgressEvent,
@@ -33,6 +31,7 @@ export type CfJobsBroadcastStatus = 'idle' | 'connecting' | 'open' | 'closed'
 export type CfJobWatchStatus = 'idle' | 'queued' | 'running' | 'retrying' | 'completed' | 'failed'
 
 export type CfJobsBroadcastListener = (event: CfJobsBroadcastEnvelope) => void
+export type CfJobsChannelEvent<T> = T extends CfJobsBroadcastEnvelope ? T : CfJobsBroadcastEnvelope<T>
 
 export interface UseCfJobsBroadcastOptions {
   /** Defaults to `runtimeConfig.public.cfJobs.broadcast.route` or `/__cf-jobs/ws`. */
@@ -101,7 +100,7 @@ export function useCfJobsBroadcast(options: UseCfJobsBroadcastOptions = {}): CfJ
 
 export function useCfJobsChannel<T = unknown>(
   channel: MaybeRefOrGetter<string | null | undefined>,
-  onEvent: (event: CfJobsBroadcastEnvelope<T>) => void,
+  onEvent: (event: CfJobsChannelEvent<T>) => void,
   options: UseCfJobsChannelOptions = {},
 ): UseCfJobsChannelReturn {
   const status = ref<CfJobsBroadcastStatus>('idle')
@@ -121,7 +120,7 @@ export function useCfJobsChannel<T = unknown>(
     detach()
     if (!next || !isCfJobsBroadcastChannel(next))
       return
-    stopListen = bus.listen(next, event => onEvent(event as CfJobsBroadcastEnvelope<T>))
+    stopListen = bus.listen(next, event => onEvent(event as CfJobsChannelEvent<T>))
     stopStatusWatch = watch(bus.status, s => (status.value = s), { immediate: true })
   }
 

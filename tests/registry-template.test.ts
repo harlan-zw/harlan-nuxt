@@ -36,18 +36,31 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).not.toMatch(/import\(".*\.ts"\)/)
   })
 
-  it('builds the app from a lazy metadata array and types the exported facade', async () => {
+  it('builds the app from a lazy metadata array and re-exports the facade', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/export const jobs = \[/)
     expect(out).not.toContain('as const')
+    expect(out).toContain('@type {import(\'nuxt-cf-jobs/server\').CfJobsApp<readonly [')
     expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*useRuntimeConfig,/)
-    expect(out).toContain(`import type { CfJobsApp } from 'nuxt-cf-jobs/server'`)
-    expect(out).toContain('const typedApp = app as unknown as CfJobsApp<Jobs>')
-    expect(out).toContain('export function loadJobDefinition<Name extends LocalJobName>')
-    expect(out).toContain('} = typedApp')
+    // Every facade helper (incl. loadJobDefinition) is destructured straight off
+    // the runtime app — no hand-written typed wrapper.
+    expect(out).toContain('} = app')
+    expect(out).toContain('loadJobDefinition,')
     expect(out).toContain('registerQueueConsumer,')
     expect(out).toContain('createDurableRuntime,')
     expect(out).toContain('jobRegistry,')
+  })
+
+  it('emits plain JavaScript only (no TypeScript syntax)', async () => {
+    // The registry is a generated runtime module; TS syntax here breaks builds
+    // whose buildDir lives under node_modules (esbuild skips node_modules, so the
+    // .ts reaches rollup untranspiled). Type precision must stay in comments or .d.ts.
+    const out = await generateRegistryTemplate(options, rootDir, templateDir)
+    expect(out).not.toContain('import type')
+    expect(out).not.toMatch(/^type \w/m)
+    expect(out).not.toContain(' as unknown as ')
+    expect(out).not.toMatch(/:\s*Promise</)
+    expect(out).not.toMatch(/<Name extends/)
   })
 
   it('inlines AST-extracted routing metadata (name + literal queue)', async () => {
@@ -84,7 +97,8 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/^import type /m)
     expect(out).toContain(`declare module '#cf-jobs/app' {`)
-    // No standalone value re-declarations — those come from the runtime .ts.
+    // Runtime values come from the plain JS template; precision is added with
+    // JSDoc on `app`, not value re-declarations in the augmentation.
     expect(out).not.toContain('export declare const jobs')
     expect(out).not.toContain('export declare const app')
   })
@@ -96,7 +110,7 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
 
   it('exports type aliases derived from the full job def tuple', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
-    for (const t of ['JobName', 'JobDefinitionOf', 'QueueName', 'JobPayload', 'JobQueue', 'JobMessage', 'QueueMessage'])
+    for (const t of ['JobName', 'JobDefinitionOf', 'QueueName', 'JobPayload', 'JobQueue', 'JobMessage', 'QueueMessage', 'JobBroadcastMessage', 'JobBroadcastEnvelope', 'BroadcastMessage', 'BroadcastEnvelope'])
       expect(out).toMatch(new RegExp(`export type ${t}\\b`))
     expect(out).toMatch(/typeof import\(".*"\)\['default'\]/)
   })

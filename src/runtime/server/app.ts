@@ -198,6 +198,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     })
     const registry: DurableJobsRuntimeRegistry<Env, Db, Logger> = {
       getHandler: name => jobRegistry.getHandler(name) as ReturnType<DurableJobsRuntimeRegistry<Env, Db, Logger>['getHandler']>,
+      loadJobDefinition: name => jobRegistry.loadJobDefinition(name) as ReturnType<NonNullable<DurableJobsRuntimeRegistry<Env, Db, Logger>['loadJobDefinition']>>,
       getJobDefinition: name => jobRegistry.getJobDefinition(name) as ReturnType<NonNullable<DurableJobsRuntimeRegistry<Env, Db, Logger>['getJobDefinition']>>,
       getJobRoute: name => jobRegistry.getJobRoute(name),
     }

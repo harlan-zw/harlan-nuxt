@@ -6,7 +6,7 @@ const siteEvents = ref<unknown[]>([])
 
 const job = useCfJob<{ message: string }>(jobId)
 const batch = useCfJobBatch(batchId)
-const site = useCfJobsChannel(cfJobSiteChannel(siteId.value), (event) => {
+const site = useCfJobsChannel(cfJobsChannel('site', siteId.value), (event) => {
   siteEvents.value.push(event)
 })
 

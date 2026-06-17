@@ -1,4 +1,4 @@
-import type { JobDefinitionOf, JobName, JobPayload, JobQueue } from '#cf-jobs/app'
+import type { BroadcastEnvelope, JobBroadcastEnvelope, JobBroadcastMessage, JobDefinitionOf, JobName, JobPayload, JobQueue } from '#cf-jobs/app'
 import {
   buildJobPayload,
   loadJobDefinition,
@@ -25,12 +25,27 @@ buildJobPayload(analyticsJobName, analyticsPayload)
 
 type SyncDefinition = JobDefinitionOf<'sync/table'>
 type SyncQueue = JobQueue<'sync/table'>
+type SyncBroadcastMessage = JobBroadcastMessage<'sync/table'>
+type SyncBroadcastEnvelope = JobBroadcastEnvelope<'sync/table'>
 
 const syncQueue: SyncQueue = 'default'
 const lazySyncDefinition: Promise<SyncDefinition | undefined> = loadJobDefinition('sync/table')
+const syncBroadcastMessage: SyncBroadcastMessage = {
+  channel: 'tenant:site_1',
+  event: 'sync.table.updated',
+  data: { siteId: 'site_1', table: 'pages', status: 'completed' },
+}
+const syncBroadcastEnvelope: SyncBroadcastEnvelope = {
+  channel: 'tenant:site_1',
+  event: 'sync.table.updated',
+  data: { siteId: 'site_1', table: 'pages', status: 'failed' },
+}
+const anyBroadcastEnvelope: BroadcastEnvelope = syncBroadcastEnvelope
 
 void syncQueue
 void lazySyncDefinition
+void syncBroadcastMessage
+void anyBroadcastEnvelope
 
 // @ts-expect-error unknown job names are rejected.
 const missingJobName: JobName = 'sync/missing'

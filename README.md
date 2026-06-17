@@ -62,7 +62,7 @@ Create default-exported jobs under `server/jobs`:
 
 ```ts
 // server/jobs/sync/table.ts
-import { defineJob } from '#cf-jobs/server'
+import { cfJobsChannel, defineJob } from '#cf-jobs/server'
 
 export default defineJob({
   name: 'sync/table',
@@ -74,6 +74,17 @@ export default defineJob({
     priority?: 'low' | 'normal'
   }, ctx) {
     ctx.log.info('syncing table', payload.table)
+  },
+  broadcast({ payload, status }) {
+    return {
+      channel: cfJobsChannel('site', payload.siteId),
+      event: 'sync.table.updated',
+      data: {
+        siteId: payload.siteId,
+        table: payload.table,
+        status,
+      },
+    } as const
   },
 })
 ```
@@ -105,7 +116,7 @@ const message = buildJobPayload(name, payload)
 const definition = getJobDefinition(name)
 ```
 
-TypeScript rejects unknown job names and invalid payload shapes wherever the payload type can be inferred from the job definition.
+TypeScript rejects unknown job names and invalid payload shapes wherever the payload type can be inferred from the job definition. If a job declares `broadcast`, the generated app registry also exposes `JobBroadcastMessage<'sync/table'>`, `JobBroadcastEnvelope<'sync/table'>`, `BroadcastMessage`, and `BroadcastEnvelope`.
 
 ## Send Jobs
 
@@ -177,8 +188,6 @@ export default defineNitroPlugin((nitroApp) => {
 registerQueueConsumer(nitroApp, {
   createContext,
   getJobId: ({ payload }) => String(payload.jobId),
-  getSiteId: payload => typeof payload.siteId === 'string' ? payload.siteId : null,
-  getUserId: payload => typeof payload.userId === 'number' ? payload.userId : null,
   retryDelaySeconds: () => 30,
   onInvalidPayload: input => console.warn(input.error),
   onDispatchError: input => console.error(input.error),
@@ -287,7 +296,7 @@ export default defineNuxtConfig({
 
 ## Broadcasting
 
-Broadcasting follows the same shape as Laravel Echo: clients subscribe to named channels and receive event envelopes. The built-in channels are `job:<id>`, `batch:<id>`, `site:<id>`, `user:<id>`, and `queue:<name>`.
+Broadcasting follows the same shape as Laravel Echo: clients subscribe to named channels and receive event envelopes. The built-in channels are `job:<id>`, `batch:<id>`, and `queue:<name>`. Use `cfJobsChannel(scope, id)` or your own helper for app-defined channels such as `team:<id>` or `site:<id>`.
 
 Enable the Nitro WebSocket endpoint:
 
@@ -359,7 +368,7 @@ const { state, result, error } = useCfJob(jobId)
 
 const { progress, finished } = useCfJobBatch('batch_123')
 
-useCfJobsChannel(cfJobSiteChannel('site_1'), (event) => {
+useCfJobsChannel(cfJobsChannel('site', 'site_1'), (event) => {
   if (event.event === 'lighthouse.completed')
     console.log(event.data)
 })
@@ -369,9 +378,9 @@ useCfJobsChannel(cfJobSiteChannel('site_1'), (event) => {
 Publish app-specific events on the same transport from any server code:
 
 ```ts
-import { cfJobSiteChannel, publishCfJobsBroadcast } from '#cf-jobs/server'
+import { cfJobsChannel, publishCfJobsBroadcast } from '#cf-jobs/server'
 
-await publishCfJobsBroadcast(env, cfJobSiteChannel(siteId), 'lighthouse.completed', {
+await publishCfJobsBroadcast(env, cfJobsChannel('site', siteId), 'lighthouse.completed', {
   score: 98,
 })
 ```

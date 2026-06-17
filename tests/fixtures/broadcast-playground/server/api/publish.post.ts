@@ -1,7 +1,7 @@
 import {
   cfJobBatchChannel,
   cfJobChannel,
-  cfJobSiteChannel,
+  cfJobsChannel,
   publishCfJobsBroadcast,
 } from '#cf-jobs/server'
 
@@ -32,7 +32,6 @@ export default defineEventHandler(async (event) => {
     const sent = await publishCfJobsBroadcast(env, channel, 'batch.progress', {
       batchId: body.batchId ?? 'playground-batch',
       name: 'playground',
-      siteId: 'playground-site',
       completed: 1,
       total: 1,
       failed: 0,
@@ -42,7 +41,7 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body.kind === 'site') {
-    const channel = cfJobSiteChannel(body.siteId ?? 'playground-site')
+    const channel = cfJobsChannel('site', body.siteId ?? 'playground-site')
     const sent = await publishCfJobsBroadcast(env, channel, 'playground.site', {
       ok: true,
       siteId: body.siteId ?? 'playground-site',
@@ -59,8 +58,6 @@ export default defineEventHandler(async (event) => {
     attempts: 1,
     durationMs: 12,
     batchId: null,
-    siteId: null,
-    userId: null,
     result: { message: 'done' },
   })
   return { sent, channel, event: 'job.completed' }

@@ -1,3 +1,4 @@
+import type { CfJobsBroadcastJobStatus, CfJobsBroadcastMessage } from '../shared/broadcast'
 import type { JobError } from './errors'
 
 export type QueueMessageContentType = 'text' | 'json' | 'bytes' | 'v8'
@@ -122,6 +123,37 @@ export type JobMiddleware<Payload, Env, Db, Logger> = (
 
 export type JobBackoff = number | number[] | ((attempt: number) => number)
 
+export interface JobBroadcastContext<Payload, Env> {
+  env: Env | undefined
+  jobName: string
+  jobId: string
+  queue: string
+  jobType: string
+  status: CfJobsBroadcastJobStatus
+  attempts: number
+  maxAttempts: number | null
+  batchId: string | null
+  payload: Payload
+  durationMs?: number | null
+  error?: string
+  result?: unknown
+  rowsFetched?: number
+  rowsInserted?: number
+  d1RowsRead?: number
+  d1RowsWritten?: number
+}
+
+export type JobBroadcastResult
+  = CfJobsBroadcastMessage
+    | readonly CfJobsBroadcastMessage[]
+    | false
+    | null
+    | undefined
+
+export type JobBroadcastDefinition<Payload, Env> = (
+  context: JobBroadcastContext<Payload, Env>,
+) => JobBroadcastResult | Promise<JobBroadcastResult>
+
 export type JobPayloadParseResult<Payload>
   = | { success: true, data: Payload }
     | { success: false, error: unknown }
@@ -137,6 +169,7 @@ export interface JobDefinition<Name extends string, Payload, Queue extends strin
   input?: JobPayloadSchema<Payload>
   handle: JobHandler<Payload, Env, Db, Logger>
   failed?: JobFailedHandler<Payload, Env, Db, Logger>
+  broadcast?: JobBroadcastDefinition<Payload, Env>
   middleware?: Array<JobMiddleware<Payload, Env, Db, Logger>>
   tries?: number
   maxAttempts?: number

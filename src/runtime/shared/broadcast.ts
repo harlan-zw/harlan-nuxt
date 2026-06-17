@@ -10,7 +10,15 @@ export interface CfJobsBroadcastEnvelope<T = unknown> {
   data: T
 }
 
+export interface CfJobsBroadcastMessage<T = unknown> {
+  channel?: string
+  channels?: string[]
+  event: string
+  data?: T
+}
+
 export interface CfJobsBroadcastJobEvent {
+  jobName: string | null
   jobId: string
   queue: string
   jobType: string
@@ -19,8 +27,6 @@ export interface CfJobsBroadcastJobEvent {
   maxAttempts?: number | null
   durationMs?: number | null
   batchId: string | null
-  siteId: string | null
-  userId: number | null
   error?: string
   result?: unknown
   rowsFetched?: number
@@ -32,7 +38,6 @@ export interface CfJobsBroadcastJobEvent {
 export interface CfJobsBroadcastBatchProgressEvent {
   batchId: string
   name: string | null
-  siteId: string | null
   completed: number
   total: number
   failed: number
@@ -46,7 +51,7 @@ export type CfJobsBroadcastClientCommand
 
 const CHANNEL_RE = /^[\w.:@/-]+$/
 
-export function cfJobsChannel(scope: 'job' | 'batch' | 'site' | 'user' | 'queue', id: string | number): string {
+export function cfJobsChannel(scope: string, id: string | number): string {
   return `${scope}:${String(id)}`
 }
 
@@ -56,14 +61,6 @@ export function cfJobChannel(jobId: string): string {
 
 export function cfJobBatchChannel(batchId: string): string {
   return cfJobsChannel('batch', batchId)
-}
-
-export function cfJobSiteChannel(siteId: string): string {
-  return cfJobsChannel('site', siteId)
-}
-
-export function cfJobUserChannel(userId: string | number): string {
-  return cfJobsChannel('user', userId)
 }
 
 export function cfJobQueueChannel(queue: string): string {

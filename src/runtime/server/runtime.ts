@@ -293,6 +293,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
 export interface DurableJobsRuntimeRegistry<Env = unknown, Db = unknown, Logger = unknown> {
   /** May resolve async for lazily-loaded jobs (dispatchRegisteredJob awaits it). */
   getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
+  loadJobDefinition?: (name: string) => Promise<JobDefinition<string, unknown, string, Env, Db, Logger> | undefined>
   getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
   getJobRoute?: (name: string) => { queue: string, jobType: string } | undefined
 }
@@ -455,7 +456,7 @@ export function createDurableJobsRuntime<
   const broadcastOptions = resolveBroadcastOptions(opts.broadcast)
   const lifecycleHooks = composeLifecycleHooks(
     opts.metricsSink ? metricsSinkToRepoHooks(opts.metricsSink) : undefined,
-    broadcastOptions ? createCfJobsBroadcastRepositoryHooks<Queue>(opts.env, broadcastOptions) : undefined,
+    broadcastOptions ? createCfJobsBroadcastRepositoryHooks<Queue, Env, Db, Logger>(opts.env, broadcastOptions, { registry: opts.registry }) : undefined,
   )
   const onBatchProgress = composeBatchProgress(
     broadcastOptions ? createCfJobsBroadcastBatchProgressHandler(opts.env, broadcastOptions) : undefined,
