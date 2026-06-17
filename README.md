@@ -327,10 +327,14 @@ await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
 
 ## Server Fetch Telemetry
 
-Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It logs:
+Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
 
 - `slow fetch` when a completed server fetch exceeds `slowFetchThreshold`.
-- `fetch waterfall` when one incoming request performs multiple mostly sequential fetches and the request fetch span exceeds `waterfallThreshold`.
+- `fetch timeout` when a server fetch is aborted by the configured timeout.
+- `fetch waterfall` when one incoming request performs multiple mostly sequential fetches and the request fetch span exceeds `waterfallThreshold`. The warning includes request metrics and an aligned timeline of tracked `$fetch` calls.
+- `duplicate fetch` when one incoming request repeats the same internal GET at least `duplicateFetchThreshold` times.
+- `nested fetch` when internal Nitro fetches chain at least `nestedFetchDepthThreshold` levels deep.
+- `recursive fetch` when an internal Nitro fetch calls a route already in its request stack.
 
 ```ts
 export default defineNuxtConfig({
@@ -338,25 +342,36 @@ export default defineNuxtConfig({
   nuxtUseQuery: {
     telemetry: {
       enabled: true,
+      timeout: 20_000,
+      duplicateFetchThreshold: 2,
+      nestedFetchDepthThreshold: 3,
+      recursiveFetchWarning: true,
       slowFetchThreshold: 3_000,
       waterfallMinFetches: 2,
       waterfallThreshold: 3_000,
+      console: true,
       debug: false,
     },
   },
 })
 ```
 
-Use `telemetry: true` for the defaults. Set `debug: true` to also log per-fetch timing and per-request summaries.
+Use `telemetry: true` for the defaults. Set `timeout: false` to disable the default timeout, or pass `timeout` per `$fetch` call to override it. Set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false` to disable those specific internal-fetch warnings. Set `debug: true` to also log per-fetch timing and per-request summaries, including the per-request timeline. Set `console: false` to keep hook events enabled while suppressing package console output, including slow fetch, timeout, waterfall, duplicate, nested, and recursive warnings.
 
 Telemetry also emits hook events so apps can send data to their own logger/APM without parsing console output.
+
+During SSR, fetches made through `useFetch`, `useRequestFetch`, Nitro `event.$fetch`, and the default `useNuxtRpc()` client are attributed to the active request and included in the request summary. A raw app-side `$fetch('/api/...')` still emits the fetch hook, but Nuxt may not expose request context to that global call, so `event.request` and summary attribution can be absent. Use `useRequestFetch()` or the default `useNuxtRpc()` fetcher when request attribution matters.
 
 For server `$fetch` telemetry, attach Nitro hooks from a server plugin:
 
 ```ts
 import { defineNitroPlugin } from 'nitropack/runtime'
 import {
+  formatDuplicateFetchTelemetryEvent,
+  formatFetchTimeoutTelemetryEvent,
   formatFetchWaterfallTelemetryEvent,
+  formatNestedFetchTelemetryEvent,
+  formatRecursiveFetchTelemetryEvent,
   formatSlowFetchTelemetryEvent,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
 } from 'nuxt-use-query/telemetry'
@@ -366,8 +381,24 @@ export default defineNitroPlugin((nitroApp) => {
     console.warn(formatSlowFetchTelemetryEvent(event))
   })
 
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchTimeout, (event) => {
+    console.warn(formatFetchTimeoutTelemetryEvent(event))
+  })
+
   nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchWaterfall, (event) => {
     console.warn(formatFetchWaterfallTelemetryEvent(event))
+  })
+
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchDuplicate, (event) => {
+    console.warn(formatDuplicateFetchTelemetryEvent(event))
+  })
+
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchNested, (event) => {
+    console.warn(formatNestedFetchTelemetryEvent(event))
+  })
+
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchRecursive, (event) => {
+    console.warn(formatRecursiveFetchTelemetryEvent(event))
   })
 })
 ```

@@ -1,7 +1,11 @@
 interface TelemetryStore {
+  duplicates: unknown[]
   fetches: unknown[]
+  nested: unknown[]
+  recursive: unknown[]
   slowFetches: unknown[]
   summaries: unknown[]
+  timeouts: unknown[]
   waterfalls: unknown[]
 }
 
@@ -11,9 +15,13 @@ type FixtureGlobal = typeof globalThis & {
 
 function emptyTelemetryStore(): TelemetryStore {
   return {
+    duplicates: [],
     fetches: [],
+    nested: [],
+    recursive: [],
     slowFetches: [],
     summaries: [],
+    timeouts: [],
     waterfalls: [],
   }
 }

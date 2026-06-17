@@ -1,23 +1,49 @@
-import type { FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchWaterfallTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
+import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchTimeoutTelemetryEvent, FetchWaterfallTelemetryEvent, NestedFetchTelemetryEvent, RecursiveFetchTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
 import { consola } from 'consola'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from 'nitropack/runtime'
 import {
   callTelemetryHook,
   createFetchTelemetryState,
   endFetchTelemetry,
+  formatDuplicateFetchTelemetryEvent,
   formatFetchSummaryTelemetryEvent,
   formatFetchTelemetryEvent,
+  formatFetchTimeoutTelemetryEvent,
   formatFetchWaterfallTelemetryEvent,
+  formatNestedFetchTelemetryEvent,
+  formatRecursiveFetchTelemetryEvent,
   formatSlowFetchTelemetryEvent,
   isFetchWaterfall,
   normalizeFetchTelemetryOptions,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
+  recordFetchTelemetry,
   startFetchTelemetry,
   summarizeFetchTelemetry,
 } from '../../telemetry'
 
 const STATE_KEY = '__nuxtUseQueryFetchTelemetry'
 const WRAPPED_KEY = '__nuxtUseQueryFetchTelemetryWrapped'
+const INTERNAL_FETCH_STACK_HEADER = 'x-nuxt-use-query-fetch-stack'
+const SENSITIVE_QUERY_KEY_PARTS = [
+  'access-key',
+  'access_key',
+  'accesskey',
+  'apikey',
+  'api-key',
+  'api_key',
+  'auth',
+  'cookie',
+  'csrf',
+  'jwt',
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+  'session',
+  'signature',
+  'sig',
+  'token',
+]
 
 type FetchLike = ((request: unknown, opts?: Record<string, unknown>) => Promise<unknown>) & {
   [WRAPPED_KEY]?: boolean
@@ -46,7 +72,7 @@ export default defineNitroPlugin((nitroApp) => {
   globalThis.$fetch = wrapFetch(original, () => {
     const event = safeEvent()
     return event ? getEventState(event) : undefined
-  }) as typeof globalThis.$fetch
+  }, true) as typeof globalThis.$fetch
 
   nitroApp.hooks.hook('request', (event) => {
     const fetchEvent = event as { $fetch?: FetchLike }
@@ -54,7 +80,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (!fetcher || fetcher[WRAPPED_KEY]) {
       return
     }
-    fetchEvent.$fetch = wrapFetch(fetcher, () => getEventState(event))
+    fetchEvent.$fetch = wrapFetch(fetcher, () => getEventState(event), true)
   })
 
   nitroApp.hooks.hook('afterResponse', (event) => {
@@ -74,7 +100,7 @@ export default defineNitroPlugin((nitroApp) => {
     }
     callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSummary, summaryEvent)
 
-    if (options.debug) {
+    if (options.console && options.debug) {
       logger.debug(formatFetchSummaryTelemetryEvent(summaryEvent))
     }
 
@@ -85,27 +111,28 @@ export default defineNitroPlugin((nitroApp) => {
         thresholdMs: options.waterfallThreshold,
       }
       callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchWaterfall, waterfallEvent)
-      logger.warn(formatFetchWaterfallTelemetryEvent(waterfallEvent))
+      if (options.console)
+        logger.warn(formatFetchWaterfallTelemetryEvent(waterfallEvent))
     }
   })
 
-  function wrapFetch(fetcher: FetchLike, resolveState: () => FetchTelemetryState | undefined): FetchLike {
+  function wrapFetch(fetcher: FetchLike, resolveState: () => FetchTelemetryState | undefined, applyDefaultTimeout: boolean): FetchLike {
     if (fetcher[WRAPPED_KEY])
       return fetcher
 
     const wrapped = ((request: unknown, opts?: Record<string, unknown>) => {
-      return trackFetch(request, opts, resolveState, () => fetcher.call(globalThis, request, opts))
+      return trackFetch(request, opts, resolveState, fetchOpts => fetcher.call(globalThis, request, fetchOpts), applyDefaultTimeout)
     }) as FetchLike
 
     if (typeof fetcher.raw === 'function') {
       wrapped.raw = (request, opts) => {
-        return trackFetch(request, opts, resolveState, () => fetcher.raw!.call(fetcher, request, opts))
+        return trackFetch(request, opts, resolveState, fetchOpts => fetcher.raw!.call(fetcher, request, fetchOpts), applyDefaultTimeout)
       }
     }
 
     if (typeof fetcher.create === 'function') {
       wrapped.create = (...args) => {
-        return wrapFetch(fetcher.create!.apply(fetcher, args), resolveState)
+        return wrapFetch(fetcher.create!.apply(fetcher, withCreatedFetchTimeout(args)), resolveState, false)
       }
     }
 
@@ -120,20 +147,26 @@ export default defineNitroPlugin((nitroApp) => {
     request: unknown,
     opts: Record<string, unknown> | undefined,
     resolveState: () => FetchTelemetryState | undefined,
-    invoke: () => Promise<T>,
+    invoke: (opts: Record<string, unknown> | undefined) => Promise<T>,
+    applyDefaultTimeout: boolean,
   ): Promise<T> {
+    const resolved = resolveFetchOptions(opts, applyDefaultTimeout)
     const state = resolveState()
+    const internalFetch = state ? trackInternalFetch(request, resolved.opts, state) : undefined
+    const fetchOptions = internalFetch
+      ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack)
+      : resolved.opts
     const startedAt = Date.now()
     if (state)
       startFetchTelemetry(state, startedAt)
 
     try {
-      const result = await invoke()
-      reportFetch(request, opts, startedAt, true, state)
+      const result = await invoke(fetchOptions)
+      reportFetch(request, fetchOptions, startedAt, true, state, resolved.timeoutMs)
       return result
     }
     catch (error) {
-      reportFetch(request, opts, startedAt, false, state)
+      reportFetch(request, fetchOptions, startedAt, false, state, resolved.timeoutMs, error)
       throw error
     }
   }
@@ -144,6 +177,8 @@ export default defineNitroPlugin((nitroApp) => {
     startedAt: number,
     ok: boolean,
     state: FetchTelemetryState | undefined,
+    timeoutMs: number | undefined,
+    error?: unknown,
   ): void {
     const endedAt = Date.now()
     const durationMs = state
@@ -152,28 +187,154 @@ export default defineNitroPlugin((nitroApp) => {
     const method = describeMethod(request, opts)
     const url = describeRequest(request)
     const displayUrl = shortUrl(url)
+    const timelineUrl = state
+      ? describeTimelineRequest(request, opts, state)
+      : displayUrl
     const event: FetchTelemetryEvent = {
       durationMs,
+      ...(error !== undefined ? { error } : {}),
       method,
       ok,
       request: state?.request,
       server: true,
       url: displayUrl,
     }
+    if (state) {
+      recordFetchTelemetry(state, {
+        durationMs,
+        endedAt,
+        method,
+        ok,
+        startedAt,
+        url: timelineUrl,
+      })
+    }
     callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetch, event)
 
-    if (options.debug) {
+    if (options.console && options.debug) {
       logger.debug(formatFetchTelemetryEvent(event))
     }
 
-    if (options.slowFetchThreshold > 0 && durationMs >= options.slowFetchThreshold) {
+    if (!ok && timeoutMs != null && isFetchTimeoutError(error, durationMs, timeoutMs)) {
+      const timeoutEvent: FetchTimeoutTelemetryEvent = {
+        ...event,
+        timeoutMs,
+      }
+      callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchTimeout, timeoutEvent)
+      if (options.console)
+        logger.warn(formatFetchTimeoutTelemetryEvent(timeoutEvent))
+    }
+
+    if (ok && options.slowFetchThreshold > 0 && durationMs >= options.slowFetchThreshold) {
       const slowEvent: SlowFetchTelemetryEvent = {
         ...event,
         thresholdMs: options.slowFetchThreshold,
       }
       callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, slowEvent)
-      logger.warn(formatSlowFetchTelemetryEvent(slowEvent))
+      if (options.console)
+        logger.warn(formatSlowFetchTelemetryEvent(slowEvent))
     }
+  }
+
+  function trackInternalFetch(
+    request: unknown,
+    opts: Record<string, unknown> | undefined,
+    state: FetchTelemetryState,
+  ): { stack: string[] } | undefined {
+    const target = resolveInternalFetchTarget(request, opts, state)
+    if (!target)
+      return undefined
+
+    const stack = state.internalFetchStack.length > 0
+      ? state.internalFetchStack
+      : state.request ? [state.request] : []
+    const nextStack = [...stack, target.key]
+    const depth = nextStack.length
+
+    if (options.recursiveFetchWarning && stack.includes(target.key)) {
+      const event: RecursiveFetchTelemetryEvent = {
+        depth,
+        method: target.method,
+        request: state.request,
+        server: true,
+        stack: redactFetchStack(nextStack),
+        url: target.url,
+      }
+      callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchRecursive, event)
+      if (options.console)
+        logger.warn(formatRecursiveFetchTelemetryEvent(event))
+    }
+
+    if (options.nestedFetchDepthThreshold !== false && depth >= options.nestedFetchDepthThreshold) {
+      const event: NestedFetchTelemetryEvent = {
+        depth,
+        method: target.method,
+        request: state.request,
+        server: true,
+        stack: redactFetchStack(nextStack),
+        threshold: options.nestedFetchDepthThreshold,
+        url: target.url,
+      }
+      callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchNested, event)
+      if (options.console)
+        logger.warn(formatNestedFetchTelemetryEvent(event))
+    }
+
+    if (target.method === 'GET' && options.duplicateFetchThreshold !== false) {
+      const count = (state.duplicateFetchCounts[target.key] ?? 0) + 1
+      state.duplicateFetchCounts[target.key] = count
+      if (count >= options.duplicateFetchThreshold && !state.reportedDuplicateFetches[target.key]) {
+        state.reportedDuplicateFetches[target.key] = true
+        const event: DuplicateFetchTelemetryEvent = {
+          count,
+          method: target.method,
+          request: state.request,
+          server: true,
+          threshold: options.duplicateFetchThreshold,
+          url: target.url,
+        }
+        callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchDuplicate, event)
+        if (options.console)
+          logger.warn(formatDuplicateFetchTelemetryEvent(event))
+      }
+    }
+
+    return { stack: nextStack }
+  }
+
+  function resolveFetchOptions(opts: Record<string, unknown> | undefined, applyDefaultTimeout: boolean): {
+    opts: Record<string, unknown> | undefined
+    timeoutMs: number | undefined
+  } {
+    const explicitTimeout = readFetchTimeout(opts?.timeout)
+    if (explicitTimeout != null) {
+      return {
+        opts,
+        timeoutMs: explicitTimeout === false ? undefined : explicitTimeout,
+      }
+    }
+    if (!applyDefaultTimeout || options.timeout === false)
+      return { opts, timeoutMs: undefined }
+    return {
+      opts: {
+        ...(opts ?? {}),
+        timeout: options.timeout,
+      },
+      timeoutMs: options.timeout,
+    }
+  }
+
+  function withCreatedFetchTimeout(args: unknown[]): unknown[] {
+    if (options.timeout === false)
+      return args
+    const [defaults, ...rest] = args
+    if (defaults && typeof defaults === 'object' && !Array.isArray(defaults)) {
+      const current = defaults as Record<string, unknown>
+      if (readFetchTimeout(current.timeout) != null)
+        return args
+      return [{ ...current, timeout: options.timeout }, ...rest]
+    }
+    return [{ timeout: options.timeout }, ...args]
   }
 })
 
@@ -202,13 +363,31 @@ function getEventState(event: any): FetchTelemetryState | undefined {
     return undefined
   const state = (ctx[STATE_KEY] ??= createFetchTelemetryState()) as FetchTelemetryState
   state.request ??= describeEvent(event)
+  state.origin ??= describeEventOrigin(event)
+  if (state.internalFetchStack.length === 0)
+    state.internalFetchStack = readIncomingFetchStack(event) ?? [describeEventFetchKey(event)]
   return state
 }
 
 function describeEvent(event: any): string {
   const method = event?.method ?? 'GET'
   const path = event?.path ?? event?.node?.req?.url ?? ''
-  return `${method} ${path}`.trim()
+  return `${method} ${redactSensitiveQueryValues(String(path))}`.trim()
+}
+
+function describeEventFetchKey(event: any): string {
+  const method = String(event?.method ?? 'GET').toUpperCase()
+  const path = normalizeInternalPath(event?.path ?? event?.node?.req?.url ?? '/')
+  return `${method} ${path}`
+}
+
+function describeEventOrigin(event: any): string | undefined {
+  const headers = event?.node?.req?.headers as Record<string, string | string[] | undefined> | undefined
+  const host = headerValue(headers, 'x-forwarded-host') ?? headerValue(headers, 'host')
+  if (!host)
+    return undefined
+  const proto = headerValue(headers, 'x-forwarded-proto') ?? 'http'
+  return `${proto.split(',')[0]}://${host.split(',')[0]}`
 }
 
 function describeMethod(request: unknown, opts: Record<string, unknown> | undefined): string {
@@ -230,4 +409,199 @@ function describeRequest(request: unknown): string {
 
 function shortUrl(url: string): string {
   return url.replace(/^https?:\/\//, '').replace(/\?.*$/, '').slice(0, 120)
+}
+
+function describeTimelineRequest(
+  request: unknown,
+  opts: Record<string, unknown> | undefined,
+  state: FetchTelemetryState,
+): string {
+  const rawUrl = describeRequest(request)
+  const internalPath = resolveInternalPath(rawUrl, state.origin)
+  if (internalPath)
+    return shortTimelineUrl(redactSensitiveQueryValues(normalizeInternalPath(withFetchQuery(internalPath, opts?.query ?? opts?.params))))
+  return shortUrl(rawUrl)
+}
+
+function shortTimelineUrl(url: string): string {
+  return url.replace(/^https?:\/\//, '').slice(0, 180)
+}
+
+function resolveInternalFetchTarget(
+  request: unknown,
+  opts: Record<string, unknown> | undefined,
+  state: FetchTelemetryState,
+): { key: string, method: string, url: string } | undefined {
+  const rawUrl = describeRequest(request)
+  const path = resolveInternalPath(rawUrl, state.origin)
+  if (!path)
+    return undefined
+  const method = describeMethod(request, opts)
+  const normalizedPath = normalizeInternalPath(withFetchQuery(path, opts?.query ?? opts?.params))
+  return {
+    key: `${method} ${normalizedPath}`,
+    method,
+    url: shortUrl(normalizedPath),
+  }
+}
+
+function withFetchQuery(path: string, query: unknown): string {
+  if (!query)
+    return path
+  const url = new URL(path, 'http://nuxt-use-query.local')
+  if (query instanceof URLSearchParams) {
+    for (const [key, value] of query)
+      url.searchParams.set(key, value)
+  }
+  else if (typeof query === 'string') {
+    const params = new URLSearchParams(query)
+    for (const [key, value] of params)
+      url.searchParams.set(key, value)
+  }
+  else if (typeof query === 'object') {
+    for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+      if (value == null)
+        continue
+      if (Array.isArray(value)) {
+        url.searchParams.delete(key)
+        for (const item of value)
+          url.searchParams.append(key, String(item))
+        continue
+      }
+      url.searchParams.set(key, String(value))
+    }
+  }
+  return `${url.pathname}${url.search}`
+}
+
+function resolveInternalPath(rawUrl: string, origin: string | undefined): string | undefined {
+  if (rawUrl.startsWith('/'))
+    return rawUrl
+  if (!origin)
+    return undefined
+  try {
+    const url = new URL(rawUrl)
+    return url.origin === origin ? `${url.pathname}${url.search}` : undefined
+  }
+  catch {
+    return undefined
+  }
+}
+
+function normalizeInternalPath(path: string): string {
+  try {
+    const url = new URL(path, 'http://nuxt-use-query.local')
+    url.searchParams.sort()
+    return `${url.pathname}${url.search}`
+  }
+  catch {
+    return path || '/'
+  }
+}
+
+function redactSensitiveQueryValues(path: string): string {
+  try {
+    const url = new URL(path, 'http://nuxt-use-query.local')
+    let redacted = false
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (!isSensitiveQueryKey(key))
+        continue
+      redacted = true
+      const values = url.searchParams.getAll(key)
+      url.searchParams.delete(key)
+      for (const _value of values)
+        url.searchParams.append(key, '[redacted]')
+    }
+    return redacted ? `${url.pathname}${url.search}` : path
+  }
+  catch {
+    return path
+  }
+}
+
+function isSensitiveQueryKey(key: string): boolean {
+  const normalized = key.toLowerCase()
+  return SENSITIVE_QUERY_KEY_PARTS.some(part => normalized.includes(part))
+}
+
+function redactFetchStack(stack: string[]): string[] {
+  return stack.map((entry) => {
+    const firstSpace = entry.indexOf(' ')
+    if (firstSpace === -1)
+      return redactSensitiveQueryValues(entry)
+    return `${entry.slice(0, firstSpace)} ${redactSensitiveQueryValues(entry.slice(firstSpace + 1).trimStart())}`
+  })
+}
+
+function withInternalFetchStackHeader(opts: Record<string, unknown> | undefined, stack: string[]): Record<string, unknown> {
+  return {
+    ...(opts ?? {}),
+    headers: withHeader(opts?.headers, INTERNAL_FETCH_STACK_HEADER, serializeFetchStack(stack)),
+  }
+}
+
+function withHeader(headers: unknown, name: string, value: string): unknown {
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    const next = new Headers(headers)
+    next.set(name, value)
+    return next
+  }
+  if (Array.isArray(headers))
+    return [...headers, [name, value]]
+  if (headers && typeof headers === 'object')
+    return { ...(headers as Record<string, unknown>), [name]: value }
+  return { [name]: value }
+}
+
+function readIncomingFetchStack(event: any): string[] | undefined {
+  const value = headerValue(event?.node?.req?.headers, INTERNAL_FETCH_STACK_HEADER)
+  if (!value)
+    return undefined
+  const stack = value
+    .split(',')
+    .map(part => safeDecodeURIComponent(part))
+    .filter(Boolean)
+  return stack.length > 0 ? stack : undefined
+}
+
+function serializeFetchStack(stack: string[]): string {
+  return stack.slice(-20).map(encodeURIComponent).join(',')
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  }
+  catch {
+    return value
+  }
+}
+
+function headerValue(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== 'object')
+    return undefined
+  const value = (headers as Record<string, string | string[] | undefined>)[name]
+    ?? (headers as Record<string, string | string[] | undefined>)[name.toLowerCase()]
+  if (Array.isArray(value))
+    return value[0]
+  return typeof value === 'string' ? value : undefined
+}
+
+function readFetchTimeout(value: unknown): number | false | undefined {
+  if (value == null)
+    return undefined
+  if (value === false || value === 'false' || value === 0 || value === '0')
+    return false
+  const timeout = Number(value)
+  return Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
+}
+
+function isFetchTimeoutError(error: unknown, durationMs: number, timeoutMs: number): boolean {
+  const e = error as {
+    cause?: { code?: unknown, name?: string }
+    code?: unknown
+    name?: string
+  } | undefined
+  const names = [e?.name, e?.cause?.name]
+  return names.includes('TimeoutError') || e?.code === 23 || e?.cause?.code === 23 || durationMs >= timeoutMs
 }

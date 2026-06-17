@@ -11,7 +11,9 @@ export default defineNuxtConfig({
   modules: [resolve(here, '../../src/module.ts')],
   nuxtUseQuery: {
     telemetry: {
+      console: false,
       slowFetchThreshold: 60_000,
+      timeout: 100,
       waterfallThreshold: 60_000,
     },
   },

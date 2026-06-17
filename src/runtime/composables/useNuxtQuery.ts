@@ -1,7 +1,6 @@
-import type { AvailableRouterMethod, NitroFetchRequest } from 'nitropack/types'
+import type { InternalApi, NitroFetchRequest } from 'nitropack/types'
 import type {
   AsyncData,
-  FetchResult,
   UseFetchOptions,
 } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
@@ -26,14 +25,22 @@ type PickFrom<T, K extends Array<string>> = T extends Array<any>
         : Pick<T, K[number]>
     : T
 
+type LooseFetchRequest = string & {}
+
+type InternalRouteResponse<ReqT extends NitroFetchRequest> = ReqT extends keyof InternalApi
+  ? 'get' extends keyof InternalApi[ReqT]
+    ? InternalApi[ReqT]['get']
+    : 'default' extends keyof InternalApi[ReqT]
+      ? InternalApi[ReqT]['default']
+      : unknown
+  : unknown
+
 export interface UseNuxtQueryOptions<
   ResT,
   DataT = ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
   DefaultT = undefined,
-  ReqT extends NitroFetchRequest = string & {},
-  Method extends AvailableRouterMethod<ReqT> = AvailableRouterMethod<ReqT>,
-> extends Omit<UseFetchOptions<ResT, DataT, PickKeys, DefaultT, ReqT, Method>, 'transform'> {
+> extends Omit<UseFetchOptions<ResT, DataT, PickKeys, DefaultT, LooseFetchRequest, any>, 'transform'> {
   key: MaybeRefOrGetter<string>
   transform?: (input: unknown) => DataT | Promise<DataT>
   enabled?: MaybeRefOrGetter<boolean>
@@ -75,40 +82,30 @@ interface QueryTelemetryState {
 export function useNuxtQuery<
   ResT = void,
   ErrorT = unknown,
-  ReqT extends NitroFetchRequest = NitroFetchRequest,
-  Method extends AvailableRouterMethod<ReqT> = ResT extends void
-    ? 'get' extends AvailableRouterMethod<ReqT>
-      ? AvailableRouterMethod<ReqT> & 'get'
-      : AvailableRouterMethod<ReqT>
-    : AvailableRouterMethod<ReqT>,
-  _ResT = [ResT] extends [void] ? FetchResult<ReqT, Method> : ResT,
+  ReqT extends NitroFetchRequest = string & {},
+  _ResT = [ResT] extends [void] ? InternalRouteResponse<ReqT> : ResT,
   DataT = _ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
   DefaultT = undefined,
 >(
   request: ReqT | MaybeRefOrGetter<ReqT>,
-  opts: UseNuxtQueryOptions<_ResT, DataT, PickKeys, DefaultT, ReqT, Method>,
+  opts: UseNuxtQueryOptions<_ResT, DataT, PickKeys, DefaultT>,
 ): NuxtQuery<DefaultT | PickFrom<DataT, PickKeys>, ErrorT | undefined>
 export function useNuxtQuery<
   ResT = void,
   ErrorT = unknown,
-  ReqT extends NitroFetchRequest = NitroFetchRequest,
-  Method extends AvailableRouterMethod<ReqT> = ResT extends void
-    ? 'get' extends AvailableRouterMethod<ReqT>
-      ? AvailableRouterMethod<ReqT> & 'get'
-      : AvailableRouterMethod<ReqT>
-    : AvailableRouterMethod<ReqT>,
-  _ResT = [ResT] extends [void] ? FetchResult<ReqT, Method> : ResT,
+  ReqT extends NitroFetchRequest = string & {},
+  _ResT = [ResT] extends [void] ? InternalRouteResponse<ReqT> : ResT,
   DataT = _ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
   DefaultT = DataT,
 >(
   request: ReqT | MaybeRefOrGetter<ReqT>,
-  opts: UseNuxtQueryOptions<_ResT, DataT, PickKeys, DefaultT, ReqT, Method>,
+  opts: UseNuxtQueryOptions<_ResT, DataT, PickKeys, DefaultT>,
 ): NuxtQuery<DefaultT | PickFrom<DataT, PickKeys>, ErrorT | undefined>
 export function useNuxtQuery(
   request: NitroFetchRequest | MaybeRefOrGetter<NitroFetchRequest>,
-  opts: UseNuxtQueryOptions<any, any, any, any, any, any>,
+  opts: UseNuxtQueryOptions<any, any, any, any>,
 ): NuxtQuery<any, any> {
   const {
     enabled: enabledOption = true,

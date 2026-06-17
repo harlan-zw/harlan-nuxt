@@ -19,8 +19,9 @@ export interface ModuleOptions {
    */
   contracts?: ContractQueryEnforcementOptions
   /**
-   * Server-side `$fetch` telemetry. Enable with `true` to log slow fetches and
-   * likely SSR waterfalls, or pass an object to tune thresholds.
+   * Server-side `$fetch` telemetry and default timeout. Enable with `true` to
+   * log slow fetches, timeouts, and likely SSR waterfalls, or pass an object to
+   * tune thresholds and console output.
    */
   telemetry?: ModuleTelemetryOptions
 }

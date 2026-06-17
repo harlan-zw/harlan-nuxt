@@ -7,7 +7,7 @@ import type {
 } from '../rpc/core'
 import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
 import { computed, toValue } from 'vue'
-import { useNuxtApp } from '#app'
+import { useNuxtApp, useRequestFetch } from '#app'
 import {
   createNuxtRpcClient,
   normalizeNuxtRpcError,
@@ -78,9 +78,18 @@ export function useNuxtRpc(options: UseNuxtRpcOptions = {}) {
   const withContext = <TEvent>(cb?: (event: TEvent) => void | Promise<void>) =>
     cb ? (event: TEvent) => nuxtApp.runWithContext(() => cb(event)) : undefined
   return createNuxtRpcClient({
-    fetch: options.fetch ?? (nuxtApp.$fetch as NuxtRpcClientOptions['fetch']),
+    fetch: options.fetch ?? resolveNuxtRpcFetch(nuxtApp),
     onError: withContext(options.onError),
     onSettled: withContext(options.onSettled),
     onSuccess: withContext(options.onSuccess),
   })
+}
+
+function resolveNuxtRpcFetch(nuxtApp: ReturnType<typeof useNuxtApp>): NuxtRpcClientOptions['fetch'] {
+  const appFetch = (nuxtApp as { $fetch?: unknown }).$fetch
+  if (typeof appFetch === 'function')
+    return appFetch as NuxtRpcClientOptions['fetch']
+  if (import.meta.server)
+    return useRequestFetch() as NuxtRpcClientOptions['fetch']
+  return globalThis.$fetch as NuxtRpcClientOptions['fetch']
 }

@@ -13,7 +13,7 @@ const echoSchema = z.object({
 
 const { data: a } = await useNuxtQuery<{ value: string, call: number }>('/api/echo', {
   key: 'echo-a',
-  query: { v: 'a' },
+  query: { token: 'fixture-secret-token', v: 'a' },
 })
 
 const { data: b } = await useNuxtQuery<{ value: string, call: number }>('/api/echo', {
@@ -33,6 +33,8 @@ const echoQueries = defineNuxtQueryGroup('fixture', {
 const { data: rpcQuery } = await useNuxtRpcQuery(echoQueries.detail('rpc-query'))
 const rpc = useNuxtRpc({ fetch: $fetch as any })
 const rpcDirect = await rpc.query(echoQueries.detail('rpc-direct'))
+const rpcDefault = await useNuxtRpc().query(echoQueries.detail('rpc-default'))
+const appContextFetch = await $fetch<{ source: string }>('/api/app-context-fetch')
 const mutationOperation = defineNuxtRpcMutation({
   method: 'DELETE',
   path: '/api/echo',
@@ -71,6 +73,7 @@ const importedFns = [
 
 const probe = {
   a: a.value,
+  appContextFetch,
   b: b.value,
   cacheKeys: Array.from(cache.lastFetched.keys()).sort(),
   cacheSameInstance,
@@ -78,6 +81,7 @@ const probe = {
   hasAutoImports: importedFns.every(fn => typeof fn === 'function'),
   mutationMethod: mutationOperation.method,
   rpcDirect,
+  rpcDefault,
   rpcKey,
   rpcQuery: rpcQuery.value,
 }
