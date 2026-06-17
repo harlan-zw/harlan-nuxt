@@ -8,10 +8,17 @@ import type {
 } from './queue'
 import type {
   AnyJobDefinition,
+  JobDefinitionByName,
   JobNameOf,
   JobPayloadByName,
   LazyJobEntry,
+  QueueNameOf,
 } from './registry'
+import type {
+  CreateDurableJobsRuntimeOptions,
+  DurableJobsRuntime,
+  DurableJobsRuntimeRegistry,
+} from './runtime'
 import type { QueueBindingsConfig } from './types'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
@@ -19,12 +26,14 @@ import {
   createJobQueue,
   processRegisteredQueueBatch,
   resolveNitroTaskEnv,
+  resolveQueueBindingName,
   runtimeConfigSource,
   validateJobQueueBindings,
   validateQueueBindingShape,
   validateQueueConsumerConfig,
 } from './queue'
 import { defineJobRegistry, validateJobDefinitions } from './registry'
+import { createDurableJobsRuntime } from './runtime'
 
 export interface CfJobsRuntimeConfig {
   cfJobs: { queues: QueueBindingsConfig }
@@ -32,6 +41,15 @@ export interface CfJobsRuntimeConfig {
 
 export type CfJobsQueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>
   = Omit<RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>, 'registry' | 'queues'>
+
+export type CfJobsDurableRuntimeOptions<
+  Queue extends string,
+  Env,
+  Db,
+  Logger,
+> = Omit<CreateDurableJobsRuntimeOptions<Queue, Env, Db, Logger>, 'registry' | 'resolveQueueBinding'> & {
+  resolveQueueBinding?: CreateDurableJobsRuntimeOptions<Queue, Env, Db, Logger>['resolveQueueBinding']
+}
 
 export type UseRuntimeConfigFn = (event?: unknown) => CfJobsRuntimeConfig
 
@@ -68,11 +86,6 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${i.reason}`).join('\n')}`)
   }
 
-  function getQueue<const Job extends Jobs[number]>(job: Job): ReturnType<typeof createJobQueue<Job>>
-  function getQueue<const Job extends Jobs[number]>(
-    source: QueueSource | undefined,
-    job: Job,
-  ): ReturnType<typeof createJobQueue<Job>>
   // Read runtime config safely from a (possibly synthetic) queue source.
   // nitro's `useRuntimeConfig(event)` derefs `event.context.nitro.runtimeConfig`
   // unconditionally, so the synthetic `{ context: { cloudflare: { env } } }`
@@ -87,6 +100,11 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     return isH3Event ? useRuntimeConfig(source as never) : useRuntimeConfig()
   }
 
+  function getQueue<const Job extends Jobs[number]>(job: Job): ReturnType<typeof createJobQueue<Job>>
+  function getQueue<const Job extends Jobs[number]>(
+    source: QueueSource | undefined,
+    job: Job,
+  ): ReturnType<typeof createJobQueue<Job>>
   function getQueue(sourceOrJob: unknown, maybeJob?: unknown) {
     const isJobOnly = maybeJob === undefined && isJobDefinition(sourceOrJob)
     const job = (isJobOnly ? sourceOrJob : maybeJob) as AnyJobDefinition
@@ -111,6 +129,12 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     opts: PrepareRegisteredDurableJobOptions<Jobs, Name>,
   ) {
     return prepareRegisteredDurableJob(jobRegistry, opts)
+  }
+
+  function loadJobDefinition<Name extends JobNameOf<Jobs>>(name: Name): Promise<JobDefinitionByName<Jobs, Name> | undefined>
+  function loadJobDefinition(name: string): Promise<AnyJobDefinition | undefined>
+  function loadJobDefinition(name: string) {
+    return jobRegistry.loadJobDefinition(name)
   }
 
   // Queue-binding validation depends on runtimeConfig — runs on first batch only.
@@ -147,6 +171,29 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     })
   }
 
+  function createDurableRuntime<
+    Queue extends QueueNameOf<Jobs> & string = QueueNameOf<Jobs> & string,
+    Env = unknown,
+    Db = unknown,
+    Logger = unknown,
+  >(opts: CfJobsDurableRuntimeOptions<Queue, Env, Db, Logger>): DurableJobsRuntime<Queue> {
+    const resolveQueueBinding = opts.resolveQueueBinding ?? ((queue: Queue) => {
+      const runtimeConfig = readRuntimeConfig(runtimeConfigSource(opts.env))
+      return resolveQueueBindingName(runtimeConfig.cfJobs.queues, queue)
+    })
+    const registry: DurableJobsRuntimeRegistry<Env, Db, Logger> = {
+      getHandler: name => jobRegistry.getHandler(name) as ReturnType<DurableJobsRuntimeRegistry<Env, Db, Logger>['getHandler']>,
+      getJobDefinition: name => jobRegistry.getJobDefinition(name) as ReturnType<NonNullable<DurableJobsRuntimeRegistry<Env, Db, Logger>['getJobDefinition']>>,
+      getJobRoute: name => jobRegistry.getJobRoute(name),
+    }
+
+    return createDurableJobsRuntime({
+      ...opts,
+      registry,
+      resolveQueueBinding,
+    })
+  }
+
   const validateQueueBindings = (queues: QueueBindingsConfig = useRuntimeConfig().cfJobs.queues) =>
     validateJobQueueBindings(queues, materialized)
 
@@ -157,7 +204,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     jobs: materialized,
     jobRegistry,
     getHandler: jobRegistry.getHandler,
-    loadJobDefinition: jobRegistry.loadJobDefinition,
+    loadJobDefinition,
     getJobDefinition: jobRegistry.getJobDefinition,
     getJobQueue: jobRegistry.getJobQueue,
     getJobRoute: jobRegistry.getJobRoute,
@@ -168,6 +215,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     buildJobPayload,
     prepareJob,
     registerQueueConsumer,
+    createDurableRuntime,
   }
 }
 
@@ -215,6 +263,7 @@ export const cfJobsAppExportNames = [
   'buildJobPayload',
   'prepareJob',
   'registerQueueConsumer',
+  'createDurableRuntime',
 ] as const satisfies readonly Exclude<keyof CfJobsApp<readonly AnyJobDefinition[]>, 'jobs'>[]
 
 export type QueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>

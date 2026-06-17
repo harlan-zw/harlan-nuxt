@@ -33,6 +33,8 @@ export interface JobMetricsEvent {
   userId: number | null
   /** Present for `failed` / `released` (the release reason). */
   error?: string
+  /** Optional completion result supplied by the consumer. */
+  result?: unknown
   // Execution stats reported via ctx.reportStats (completed jobs). Undefined when
   // the handler reported none. Recorded as Analytics Engine doubles for sum/avg.
   rowsFetched?: number
@@ -95,7 +97,10 @@ export function metricsSinkToRepoHooks(
 ): Pick<D1DurableJobRepositoryOptions, 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'> {
   return {
     onJobCompleted({ job, durationMs, result }) {
-      return sink.record({ ...toEvent(job, 'completed', { durationMs }), ...readStats(result) })
+      const event: JobMetricsEvent = { ...toEvent(job, 'completed', { durationMs }), ...readStats(result) }
+      if (result !== undefined)
+        event.result = result
+      return sink.record(event)
     },
     onJobFailed({ job, error }) {
       return sink.record(toEvent(job, 'failed', { durationMs: job.duration_ms ?? null, error }))

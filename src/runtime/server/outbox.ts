@@ -155,6 +155,8 @@ export interface QueuePublisher<
 
 export interface DurableJobRecoveryQuery {
   now?: number
+  /** Only return jobs created at or before this unix-second timestamp. */
+  createdBefore?: number
   limit?: number
 }
 

@@ -201,6 +201,8 @@ export function defineJobRegistry<
   // Caches the loaded full definition of a lazy entry (one import per job).
   const loaded = new Map<string, Promise<AnyJobDefinition>>()
 
+  function loadJobDefinition<Name extends JobNameOf<Jobs>>(name: Name): Promise<JobDefinitionByName<Jobs, Name> | undefined>
+  function loadJobDefinition(name: string): Promise<AnyJobDefinition | undefined>
   function loadJobDefinition(name: string): Promise<AnyJobDefinition | undefined> {
     const entry = byName.get(name)
     if (!entry)

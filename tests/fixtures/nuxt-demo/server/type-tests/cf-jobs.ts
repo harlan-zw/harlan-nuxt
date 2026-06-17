@@ -1,9 +1,7 @@
 import type { JobDefinitionOf, JobName, JobPayload, JobQueue } from '#cf-jobs/app'
 import {
   buildJobPayload,
-
-  jobLoaders,
-
+  loadJobDefinition,
 } from '#cf-jobs/app'
 
 const syncJobName: JobName = 'sync/table'
@@ -29,7 +27,7 @@ type SyncDefinition = JobDefinitionOf<'sync/table'>
 type SyncQueue = JobQueue<'sync/table'>
 
 const syncQueue: SyncQueue = 'default'
-const lazySyncDefinition: Promise<SyncDefinition> = jobLoaders['sync/table']()
+const lazySyncDefinition: Promise<SyncDefinition | undefined> = loadJobDefinition('sync/table')
 
 void syncQueue
 void lazySyncDefinition
@@ -43,18 +41,18 @@ buildJobPayload('sync/table', {
   table: 'pages',
 })
 
-// @ts-expect-error sync/table only accepts known priority values.
 buildJobPayload('sync/table', {
   siteId: 'site_1',
   userId: 123,
   table: 'pages',
+  // @ts-expect-error sync/table only accepts known priority values.
   priority: 'urgent',
 })
 
-// @ts-expect-error analytics/rollup-rebuild payload does not accept table.
 buildJobPayload('analytics/rollup-rebuild', {
   siteId: 'site_1',
   from: '2026-05-01',
+  // @ts-expect-error analytics/rollup-rebuild payload does not accept table.
   table: 'pages',
 })
 

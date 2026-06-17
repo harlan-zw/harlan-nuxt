@@ -986,7 +986,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     }
 
     await expect(
-      findDispatchableDurableJobs(repository, { now: 100, limit: 10 }),
+      findDispatchableDurableJobs(repository, { now: 100, createdBefore: 40, limit: 10 }),
     ).resolves.toEqual(dispatchable)
     await expect(releaseStaleReservedDurableJobs(repository, {
       staleBefore: 50,
@@ -995,7 +995,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       limit: 10,
     })).resolves.toBe(2)
 
-    expect(repository.findDispatchableJobs).toHaveBeenCalledWith({ now: 100, limit: 10 })
+    expect(repository.findDispatchableJobs).toHaveBeenCalledWith({ now: 100, createdBefore: 40, limit: 10 })
     expect(repository.releaseStaleReservedJobs).toHaveBeenCalledWith({
       staleBefore: 50,
       availableAt: 100,
@@ -1057,11 +1057,14 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     await repository.completeJob(claimed!, { durationMs: 25 })
     await repository.releaseJob(claimed!, { availableAt: 200, error: 'retry' })
     await repository.failJob(claimed!, 'failed')
+    await repository.findDispatchableJobs({ now: 300, createdBefore: 200, limit: 5 })
 
     expect(db.execStatements).toHaveLength(d1DurableJobMigrationSql.length)
     expect(db.queries.some(query => query.includes('INSERT OR IGNORE INTO jobs'))).toBe(true)
     expect(db.queries.some(query => query.includes('UPDATE jobs') && query.includes('RETURNING *'))).toBe(true)
     expect(db.queries.some(query => query.includes('INSERT OR REPLACE INTO failed_jobs'))).toBe(true)
+    expect(db.queries.some(query => query.includes('created_at <= ?'))).toBe(true)
+    expect(db.bindings).toContainEqual([300, 200, 200, 5])
   })
 
   it('exports Drizzle schema for persisted job stores', () => {

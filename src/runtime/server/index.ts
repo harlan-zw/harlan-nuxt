@@ -7,9 +7,11 @@
 // harness never drags this barrel's `scheduled` → `nitropack/runtime` edge.
 export * from './app'
 export * from './batch'
+export * from './broadcast'
 export * from './d1'
 export * from './dispatch'
 export * from './errors'
+export * from './inspection'
 export * from './metrics'
 export * from './outbox'
 export * from './policy'
@@ -25,6 +27,7 @@ export {
   resolveQueueBindingName,
 } from './queue'
 export type { JobQueuePublisher, QueueSource } from './queue'
+export * from './recovery'
 export * from './registry'
 export * from './result'
 export * from './retry'

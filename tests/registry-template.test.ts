@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { generateRegistryTemplate, generateRegistryTypesTemplate } from '../src/module'
+import { generateRegistryTemplate, generateRegistryTypesTemplate } from '../src/build/registry'
 
 const rootDir = resolve(__dirname, 'fixtures/nuxt-demo')
 const templateDir = resolve(__dirname, 'fixtures/nuxt-demo/.nuxt/cf-jobs')
@@ -36,16 +36,18 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).not.toMatch(/import\(".*\.ts"\)/)
   })
 
-  it('builds the app from a metadata array (plain JS, no TS-only syntax)', async () => {
+  it('builds the app from a lazy metadata array and types the exported facade', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/export const jobs = \[/)
-    // Plain JS: the nitro server rollup parses this file as JavaScript, so no
-    // `as const` (types live in the `declare module` augmentation instead).
     expect(out).not.toContain('as const')
     expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*useRuntimeConfig,/)
+    expect(out).toContain(`import type { CfJobsApp } from 'nuxt-cf-jobs/server'`)
+    expect(out).toContain('const typedApp = app as unknown as CfJobsApp<Jobs>')
+    expect(out).toContain('export function loadJobDefinition<Name extends LocalJobName>')
+    expect(out).toContain('} = typedApp')
     expect(out).toContain('registerQueueConsumer,')
+    expect(out).toContain('createDurableRuntime,')
     expect(out).toContain('jobRegistry,')
-    expect(out).toContain('loadJobDefinition,')
   })
 
   it('inlines AST-extracted routing metadata (name + literal queue)', async () => {
@@ -87,9 +89,9 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     expect(out).not.toContain('export declare const app')
   })
 
-  it('re-exports QueueConsumerOptions from the augmentation', async () => {
+  it('re-exports app helper option types from the augmentation', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
-    expect(out).toContain(`export type { QueueConsumerOptions } from 'nuxt-cf-jobs/server'`)
+    expect(out).toContain(`export type { CfJobsDurableRuntimeOptions, QueueConsumerOptions } from 'nuxt-cf-jobs/server'`)
   })
 
   it('exports type aliases derived from the full job def tuple', async () => {
@@ -104,5 +106,16 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     expect(out).not.toMatch(/import\(".*\.ts"\)/)
     expect(out).toContain('sync/table')
     expect(out).toContain('analytics/rollup-rebuild')
+  })
+
+  it('uses the same duplicate-name guard as the value module', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-dupes-'))
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    writeFileSync(join(root, 'server/jobs/a.ts'), `export default defineJob({ name: 'same', queue: 'default', handle() {} })`)
+    writeFileSync(join(root, 'server/jobs/b.ts'), `export default defineJob({ name: 'same', queue: 'default', handle() {} })`)
+
+    await expect(generateRegistryTypesTemplate(options, root, join(root, '.nuxt/cf-jobs')))
+      .rejects
+      .toThrow('Duplicate nuxt-cf-jobs generated job names')
   })
 })

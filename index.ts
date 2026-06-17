@@ -1,2 +1,2 @@
 export { default } from './src/module'
-export type { ModuleOptions } from './src/types'
+export type { BroadcastOptions, ModuleOptions } from './src/types'

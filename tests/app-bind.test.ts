@@ -52,6 +52,39 @@ describe('createCfJobsApp (statically-injected jobs + useRuntimeConfig)', () => 
     expect(() => app.validateQueueBindings()).not.toThrow()
   })
 
+  it('createDurableRuntime wires the generated registry and runtime queue bindings', async () => {
+    const sent: unknown[] = []
+    const app = createCfJobsApp(
+      [defineJob({ name: 'x', queue: 'default', handle: vi.fn() })],
+      { useRuntimeConfig },
+    )
+    const runtime = app.createDurableRuntime({
+      db: {} as never,
+      env: {
+        JOBS: {
+          send: vi.fn(async (message: unknown) => void sent.push(message)),
+          sendBatch: vi.fn(async (messages: Array<{ body: unknown }>) => void sent.push(...messages.map(m => m.body))),
+        },
+      },
+      createJobContext: () => ({
+        env: {},
+        db: {},
+        log: undefined,
+        jobId: 'job_1',
+        batchId: null,
+        attempt: 1,
+        release: vi.fn(),
+        fail: vi.fn(),
+      }),
+    })
+
+    const ok = await runtime.publisher.sendBatch('default', [{ jobId: 'job_1', queue: 'default' }])
+
+    expect(ok).toBe(true)
+    expect(sent).toEqual([{ jobId: 'job_1', queue: 'default' }])
+    expect(runtime.repository.toDispatchableJob).toBeTypeOf('function')
+  })
+
   // Regression: nitro's real `useRuntimeConfig(event)` derefs
   // `event.context.nitro.runtimeConfig` unconditionally, so passing the synthetic
   // `{ context: { cloudflare: { env } } }` source getQueue builds for scheduled

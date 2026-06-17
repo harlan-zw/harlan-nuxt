@@ -5,9 +5,8 @@ import { describe, expect, it } from 'vitest'
 // The dev worker endpoint registers ONLY in dev (module.ts gates on
 // nuxt.options.dev), so this boots the fixture with `dev: true`. It proves the
 // handler actually builds and registers under real nitropack v2 — i.e. that its
-// import wiring (defineEventHandler/getQuery from `h3`, useNitroApp/
-// useRuntimeConfig from `nitropack/runtime`) resolves. The happy-dom unit
-// project can't catch that: it stubs `nitropack/runtime`.
+// import wiring (`nitropack/runtime`) and raw Nitro handler shape resolve. The
+// happy-dom unit project can't catch that: it stubs `nitropack/runtime`.
 describe('dev worker endpoint', async () => {
   await setup({
     rootDir: fileURLToPath(new URL('./fixtures/nuxt-demo', import.meta.url)),

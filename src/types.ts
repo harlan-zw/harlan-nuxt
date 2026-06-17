@@ -13,6 +13,38 @@ export interface QueueBindingOptions {
   deadLetterQueueBinding?: string
 }
 
+export interface BroadcastOptions {
+  /**
+   * Register the Nitro WebSocket endpoint and publish its route to app runtime
+   * config. Use `cfJobs.broadcast: true` for defaults.
+   */
+  enabled?: boolean
+  /** WebSocket endpoint used by app composables. Defaults to `/__cf-jobs/ws`. */
+  route?: string
+  /** Durable Object namespace binding used by server broadcast helpers. */
+  durableObjectBinding?: string
+  /** Durable Object instance name. Defaults to Nitro's central `server` object. */
+  durableObjectName?: string
+}
+
+export interface ReconcileOptions {
+  /**
+   * Disable the module-owned recovery task when an app already owns durable job
+   * recovery. Defaults to enabled.
+   */
+  enabled?: boolean
+  /** D1 binding that owns the durable jobs tables. Defaults to auto-detect. */
+  d1Binding?: string
+  /** Reserved jobs older than this are released for retry. Defaults to 300s. */
+  staleSeconds?: number
+  /** Due, unreserved jobs older than this are treated as orphaned. Defaults to 600s. */
+  orphanedSeconds?: number
+  /** Pending batches with no active jobs older than this are closed. Defaults to 7 days. */
+  orphanedBatchSeconds?: number
+  /** Max stale/orphaned rows handled per cron tick. Defaults to 100. */
+  limit?: number
+}
+
 export interface ModuleOptions {
   /**
    * Logical queue name -> Cloudflare env binding name.
@@ -82,6 +114,17 @@ export interface ModuleOptions {
    * of this flag (it only takes effect on deploy).
    */
   scheduledTasks?: boolean
+  /**
+   * Opt-in Laravel-style broadcasting over Nitro WebSockets. The route is
+   * transport-only: apps can deny subscriptions with the
+   * `cf-jobs:broadcast:authorize` Nitro hook when channels are private.
+   */
+  broadcast?: boolean | BroadcastOptions
+  /**
+   * Module-owned durable job recovery backstop. Enabled by default so persisted
+   * jobs recover if queue sends are missed or a worker dies while reserved.
+   */
+  reconcile?: boolean | ReconcileOptions
   /**
    * Cross-check the user's wrangler config against `queues` at build time
    * and emit `.nuxt/cf-jobs/wrangler.suggested.toml`. Defaults to `true`.

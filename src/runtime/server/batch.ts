@@ -65,6 +65,11 @@ export interface DurableBatchStore {
   getJobBatchId: (jobId: string) => Promise<string | null>
   /** Grow a batch's counters (used for parent batches / dynamically-added members). */
   incrementCounters?: (batchId: string, opts?: { by?: number }) => Promise<void>
+  /**
+   * Close old pending batches that no longer have active jobs. This is a cleanup
+   * backstop for missed settle bookkeeping; it deliberately does not fire onFinish.
+   */
+  finishOrphanedBatches?: (query: { before: number, now?: number, limit?: number }) => Promise<number>
 }
 
 // ============================================
@@ -155,6 +160,30 @@ export function createD1DurableBatchStore(
         SET total_jobs = total_jobs + ?, pending_jobs = pending_jobs + ?, updated_at = unixepoch()
         WHERE id = ?
       `).bind(by, by, batchId).run()
+    },
+
+    async finishOrphanedBatches(query) {
+      const now = query.now ?? Math.floor(Date.now() / 1000)
+      const result = await db.prepare(`
+        UPDATE ${batches}
+        SET pending_jobs = 0, updated_at = ?, finished_at = COALESCE(finished_at, ?)
+        WHERE id IN (
+          SELECT id
+          FROM ${batches}
+          WHERE pending_jobs > 0
+            AND finished_at IS NULL
+            AND created_at <= ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM ${jobs}
+              WHERE ${jobs}.batch_id = ${batches}.id
+                AND ${jobs}.completed_at IS NULL
+                AND ${jobs}.failed_at IS NULL
+            )
+          LIMIT ?
+        )
+      `).bind(now, now, query.before, query.limit ?? 100).run()
+      return result.meta?.changes ?? 0
     },
   }
 }

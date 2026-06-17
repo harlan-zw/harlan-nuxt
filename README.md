@@ -24,6 +24,7 @@ Typed Cloudflare Queue jobs for Nuxt, with Laravel-style ergonomics.
 - ☁️ **Cloudflare Queues**: send to queue bindings and consume batches through a Nitro hook, with per-queue routing.
 - 🗄️ **Durable D1 jobs**: persist a record before enqueue so work survives restarts and delivery gaps, with retry, release, and DLQ.
 - ⏰ **Scheduled tasks**: co-locate a cron with its handler; `nitro.tasks`, `scheduledTasks`, and Cloudflare `triggers.crons` are derived from it.
+- 📡 **Realtime broadcasting**: opt into Nitro WebSockets backed by a Durable Object, then watch job lifecycle, batch progress, and app-specific job results from Nuxt composables.
 - 🧪 **Laravel-style testing**: run handlers inline, fake the queue, drain the outbox, or drive the whole `queue:work` loop on a virtual clock.
 - 🛠️ **`cf-jobs` CLI**: `artisan queue:*`-style status, retry, flush, and migrate against local or remote D1, plus a `work` dev worker that runs durable jobs out-of-band so WebSockets stream live progress in `nuxt dev`.
 
@@ -265,6 +266,126 @@ export default defineNitroPlugin((nitroApp) => {
 ```
 
 `createD1DurableJobRepository()` exposes `migrate`, `insertJob`, `claimJob`, `completeJob`, `failJob`, `releaseJob`, `findDispatchableJobs`, `findStaleReservedJobs`, `releaseStaleReservedJobs`, and `toDispatchableJob`.
+
+The module also registers a `cf-jobs:reconcile` scheduled task by default. It releases jobs reserved for more than 5 minutes, immediately re-dispatches those reclaimed jobs, and re-dispatches due unreserved rows only after they are at least 10 minutes old so normal queue backlog is not amplified with duplicate messages.
+
+```ts
+export default defineNuxtConfig({
+  cfJobs: {
+    reconcile: {
+      d1Binding: 'DB',
+      staleSeconds: 300,
+      orphanedSeconds: 600,
+      orphanedBatchSeconds: 7 * 86400,
+      limit: 100,
+    },
+    // or disable when the app owns recovery itself:
+    // reconcile: false,
+  },
+})
+```
+
+## Broadcasting
+
+Broadcasting follows the same shape as Laravel Echo: clients subscribe to named channels and receive event envelopes. The built-in channels are `job:<id>`, `batch:<id>`, `site:<id>`, `user:<id>`, and `queue:<name>`.
+
+Enable the Nitro WebSocket endpoint:
+
+```ts
+export default defineNuxtConfig({
+  cfJobs: {
+    broadcast: true, // route: /__cf-jobs/ws
+  },
+  nitro: {
+    preset: 'cloudflare-durable',
+    cloudflare: {
+      wrangler: {
+        durable_objects: {
+          bindings: [{ name: '$DurableObject', class_name: '$DurableObject' }],
+        },
+        migrations: [{ tag: 'v1', new_classes: ['$DurableObject'] }],
+      },
+    },
+  },
+})
+```
+
+Wire the durable runtime to publish lifecycle and batch events:
+
+```ts
+import { jobRegistry } from '#cf-jobs/app'
+import { createDurableJobsRuntime } from '#cf-jobs/server'
+
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook('cloudflare:queue', async ({ batch, env }) => {
+    const runtime = createDurableJobsRuntime({
+      db: env.DB,
+      env,
+      registry: jobRegistry,
+      resolveQueueBinding: queue => queue === 'default' ? 'QUEUE_DEFAULT' : undefined,
+      createJobContext: ({ job, control }) => ({
+        env,
+        db: env.DB,
+        log: console,
+        jobId: job.id,
+        batchId: job.batchId,
+        attempt: job.attempts,
+        release: async (delaySeconds: number) => {
+          control.handled = true
+          control.action = 'released'
+          control.delaySeconds = delaySeconds
+        },
+        fail: async (error: string) => {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+      broadcast: true,
+      completeResult: ({ job }) => ({ jobId: job.id }),
+    })
+
+    await runtime.consumeBatch(batch)
+  })
+})
+```
+
+Use the Nuxt composables in app code:
+
+```vue
+<script setup lang="ts">
+const jobId = ref<string | null>(null)
+const { state, result, error } = useCfJob(jobId)
+
+const { progress, finished } = useCfJobBatch('batch_123')
+
+useCfJobsChannel(cfJobSiteChannel('site_1'), (event) => {
+  if (event.event === 'lighthouse.completed')
+    console.log(event.data)
+})
+</script>
+```
+
+Publish app-specific events on the same transport from any server code:
+
+```ts
+import { cfJobSiteChannel, publishCfJobsBroadcast } from '#cf-jobs/server'
+
+await publishCfJobsBroadcast(env, cfJobSiteChannel(siteId), 'lighthouse.completed', {
+  score: 98,
+})
+```
+
+By default, enabling `cfJobs.broadcast` registers the transport. If a channel is private, deny subscriptions with a Nitro hook:
+
+```ts
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook('cf-jobs:broadcast:authorize', async (ctx) => {
+    if (ctx.channel.startsWith('site:') && !await userCanAccessSite(ctx.peer.request, ctx.channel))
+      ctx.authorized = false
+  })
+})
+```
 
 ## Scheduled Tasks (cron)
 

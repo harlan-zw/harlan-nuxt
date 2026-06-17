@@ -362,11 +362,17 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         FROM ${jobsTable}
         WHERE reserved_at IS NULL
           AND available_at <= ?
+          AND (? IS NULL OR created_at <= ?)
           AND completed_at IS NULL
           AND failed_at IS NULL
         ORDER BY available_at ASC
         LIMIT ?
-      `).bind(query.now ?? currentUnixSeconds(), query.limit ?? 100))
+      `).bind(
+        query.now ?? currentUnixSeconds(),
+        query.createdBefore ?? null,
+        query.createdBefore ?? null,
+        query.limit ?? 100,
+      ))
     },
 
     async findStaleReservedJobs(query) {
@@ -393,6 +399,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
             AND reserved_at <= ?
             AND completed_at IS NULL
             AND failed_at IS NULL
+          ORDER BY reserved_at ASC
           LIMIT ?
         )
       `).bind(

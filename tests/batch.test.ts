@@ -250,6 +250,28 @@ describe('settleBatchMember', () => {
     const res = await settleBatchMember({ store, jobId: 'nope' })
     expect(res).toEqual({ batchComplete: false, onFinishDispatched: false })
   })
+
+  it('closes old orphaned pending batches without active jobs', async () => {
+    const { db, repo, store, publisher } = await setupBatchEnv()
+    const [terminalJob, activeJob] = await Promise.all([
+      prepareJob('scan/terminal', {}),
+      prepareJob('scan/active', {}),
+    ])
+    const terminal = await createJobBatch({ store, repository: repo, publisher, jobs: [terminalJob] })
+    const active = await createJobBatch({ store, repository: repo, publisher, jobs: [activeJob] })
+    const old = 1000
+    const now = old + 8 * 86400
+
+    db._db.prepare('UPDATE job_batches SET created_at = ? WHERE id IN (?, ?)').run(old, terminal.batchId, active.batchId)
+    db._db.prepare('UPDATE jobs SET completed_at = ? WHERE id = ?').run(old, terminal.jobIds[0])
+
+    await expect(store.finishOrphanedBatches!({ before: now - 7 * 86400, now, limit: 10 })).resolves.toBe(1)
+
+    const terminalRow = db._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(terminal.batchId) as { pending_jobs: number, finished_at: number | null }
+    const activeRow = db._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(active.batchId) as { pending_jobs: number, finished_at: number | null }
+    expect(terminalRow).toEqual({ pending_jobs: 0, finished_at: now })
+    expect(activeRow).toEqual({ pending_jobs: 1, finished_at: null })
+  })
 })
 
 describe('parent batches', () => {

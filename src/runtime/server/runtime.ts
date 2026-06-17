@@ -1,9 +1,8 @@
-import type { BatchProgress, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
-import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository } from './d1'
+import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
+import type { CfJobsBroadcastOptions, CfJobsRuntimeBroadcastOptions } from './broadcast'
+import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository, D1DurableJobRepositoryOptions } from './d1'
 import type { JobMetricsSink } from './metrics'
 import type {
-  CreateJobBatchOptions,
-  CreateJobBatchResult,
   DurableJobContinuation,
   DurableJobContinuationStage,
   DurableJobRecord,
@@ -17,6 +16,7 @@ import type {
 } from './outbox'
 import type { DispatchableJob, JobDefinition, JobHandler, QueueBatch, QueueMessage } from './types'
 import { createD1DurableBatchStore, createJobBatch, settleBatchMember } from './batch'
+import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastRepositoryHooks } from './broadcast'
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { formatJobError } from './errors'
@@ -183,6 +183,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
   onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
+  completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
   isDuplicate?: (id: string | undefined) => boolean
@@ -256,13 +257,14 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
     const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
     if (jobId) {
       await runDurableJobBatchMessage({
-        message,
+        message: message as unknown as ConsumerMessage,
         lifecycle: opts.repository,
         registry: opts.registry,
         store: opts.store,
         toDispatchableJob: opts.repository.toDispatchableJob,
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds,
+        completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
         createJobScope: opts.createJobScope,
@@ -317,8 +319,15 @@ export interface CreateDurableJobsRuntimeOptions<
   reclaimAfterSeconds?: number
   /** Telemetry sink; wired into the repo's lifecycle hooks automatically. */
   metricsSink?: JobMetricsSink
+  /**
+   * Broadcast job lifecycle + batch progress over Nitro WebSockets via Nitro's
+   * Cloudflare Durable Object publisher. Pass `true` for defaults.
+   */
+  broadcast?: CfJobsRuntimeBroadcastOptions
   /** Notified after each batch settle. */
   onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
+  /** Optional completion payload forwarded to `completeJob` and broadcast result. */
+  completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Override how a batch's onFinish continuation runs (default: durable enqueue). */
   dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
   /** Per-throw retry backoff for the consumer. */
@@ -367,6 +376,54 @@ function makeIsDuplicate(seen: Set<string> | undefined): ((id: string | undefine
   }
 }
 
+type D1LifecycleHooks<Queue extends string> = Pick<D1DurableJobRepositoryOptions<Queue>, 'onJobClaimed' | 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'>
+
+function resolveBroadcastOptions(input: CfJobsRuntimeBroadcastOptions | undefined): CfJobsBroadcastOptions | null {
+  if (!input)
+    return null
+  return input === true ? {} : input
+}
+
+function composeLifecycleHooks<Queue extends string>(
+  ...sets: Array<Partial<D1LifecycleHooks<Queue>> | undefined>
+): D1LifecycleHooks<Queue> {
+  return {
+    onJobClaimed: composeHook(sets.map(s => s?.onJobClaimed)),
+    onJobCompleted: composeHook(sets.map(s => s?.onJobCompleted)),
+    onJobFailed: composeHook(sets.map(s => s?.onJobFailed)),
+    onJobReleased: composeHook(sets.map(s => s?.onJobReleased)),
+  }
+}
+
+function composeHook<T>(hooks: Array<((input: T) => void | Promise<void>) | undefined>): (input: T) => void {
+  return (input) => {
+    for (const hook of hooks) {
+      try {
+        const result = hook?.(input)
+        if (result && typeof (result as Promise<void>).then === 'function')
+          (result as Promise<void>).catch(() => {})
+      }
+      catch {
+        // Lifecycle observers must not affect job execution.
+      }
+    }
+  }
+}
+
+function composeBatchProgress(
+  broadcast: ((progress: BatchProgress) => void) | undefined,
+  user: ((progress: BatchProgress) => void | Promise<void>) | undefined,
+): ((progress: BatchProgress) => void | Promise<void>) | undefined {
+  if (!broadcast)
+    return user
+  if (!user)
+    return broadcast
+  return async (progress) => {
+    broadcast(progress)
+    await user(progress)
+  }
+}
+
 export interface DurableJobsRuntime<Queue extends string = string> {
   repository: D1DurableJobRepository<Queue>
   store: DurableBatchStore
@@ -395,9 +452,18 @@ export function createDurableJobsRuntime<
   Db = unknown,
   Logger = unknown,
 >(opts: CreateDurableJobsRuntimeOptions<Queue, Env, Db, Logger>): DurableJobsRuntime<Queue> {
+  const broadcastOptions = resolveBroadcastOptions(opts.broadcast)
+  const lifecycleHooks = composeLifecycleHooks(
+    opts.metricsSink ? metricsSinkToRepoHooks(opts.metricsSink) : undefined,
+    broadcastOptions ? createCfJobsBroadcastRepositoryHooks<Queue>(opts.env, broadcastOptions) : undefined,
+  )
+  const onBatchProgress = composeBatchProgress(
+    broadcastOptions ? createCfJobsBroadcastBatchProgressHandler(opts.env, broadcastOptions) : undefined,
+    opts.onBatchProgress,
+  )
   const repository = createD1DurableJobRepository<Queue>(opts.db, {
     reclaimAfterSeconds: opts.reclaimAfterSeconds,
-    ...(opts.metricsSink ? metricsSinkToRepoHooks(opts.metricsSink) : {}),
+    ...lifecycleHooks,
   })
   const store = createD1DurableBatchStore(opts.db)
   const publisher = createQueuePublisher<Record<string, unknown>, Queue>(
@@ -415,7 +481,7 @@ export function createDurableJobsRuntime<
   const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
-      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry })
+      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry as never })
       await enqueueDurableJob(repository, publisher, record as DurableJobRecord<Queue>)
     }
     catch (error) {
@@ -445,11 +511,12 @@ export function createDurableJobsRuntime<
       createJobContext: opts.createJobContext,
       retryDelaySeconds: opts.retryDelaySeconds,
       maxAttemptsOf: stored => stored.max_attempts,
+      completeResult: opts.completeResult,
       createJobScope: opts.createJobScope,
       isPermanentFailure: opts.isPermanentFailure,
       dispatchContinuations: opts.dispatchContinuations,
       dispatchOnFinish,
-      onBatchProgress: opts.onBatchProgress,
+      onBatchProgress,
     }),
     consumeBatch: batch => consumeQueueBatch({
       batch,
@@ -458,8 +525,9 @@ export function createDurableJobsRuntime<
       registry: opts.registry,
       createJobContext: opts.createJobContext,
       dispatchOnFinish,
-      onBatchProgress: opts.onBatchProgress,
+      onBatchProgress,
       retryDelaySeconds: opts.retryDelaySeconds,
+      completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate,
       onLog: opts.onLog,

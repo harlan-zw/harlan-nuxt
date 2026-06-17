@@ -1,5 +1,3 @@
-import type { H3Event } from 'h3'
-import { defineEventHandler, getQuery } from 'h3'
 // @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
 import { useNitroApp, useRuntimeConfig } from 'nitropack/runtime'
 import { createD1DurableJobRepository } from '../d1'
@@ -12,6 +10,11 @@ interface QueueConsumerHost {
   hooks: { callHook: (name: string, payload: unknown) => Promise<unknown> }
 }
 interface CfJobsRuntimeConfig { cfJobs?: { queues?: Record<string, string | { maxConcurrency?: number, maxBatchSize?: number }> } }
+interface DevWorkerEvent {
+  context: { cloudflare?: { env?: Record<string, unknown> } }
+  node?: { req?: { url?: string } }
+  req?: { url?: string }
+}
 
 /**
  * Dev-only worker endpoint. Registered ONLY when `nuxt.options.dev` (see
@@ -21,11 +24,11 @@ interface CfJobsRuntimeConfig { cfJobs?: { queues?: Record<string, string | { ma
  * consumer IN THIS dev process, so an already-connected WebSocket sees live
  * progress. See `dev-worker.ts` for the rationale.
  */
-export default defineEventHandler(async (event: H3Event) => {
+export default async function devWorkHandler(event: DevWorkerEvent) {
   if (!import.meta.dev)
     return { processed: 0, byQueue: {}, remaining: 0, error: 'dev-only' }
 
-  const query = getQuery(event)
+  const query = getEventQuery(event)
   // This poll is the worker's heartbeat: refresh the lease so the dev queue keeps
   // deferring auto-dispatch to us (see the dev-queues plugin) for the next ~15s.
   // `lease=0` is a pure read-only observer (`cf-jobs watch` for agents): it must
@@ -92,12 +95,28 @@ export default defineEventHandler(async (event: H3Event) => {
       recent,
     }))
     .catch(() => base)
-})
+}
 
-function resolveEnv(event: H3Event): Record<string, unknown> {
+function resolveEnv(event: DevWorkerEvent): Record<string, unknown> {
   const fromEvent = (event.context.cloudflare as { env?: Record<string, unknown> } | undefined)?.env
   const fromGlobal = (globalThis as { __env__?: Record<string, unknown> }).__env__
   return { ...(fromGlobal ?? {}), ...(fromEvent ?? {}) }
+}
+
+function getEventQuery(event: DevWorkerEvent): Record<string, string | string[]> {
+  const url = event.node?.req?.url ?? event.req?.url ?? ''
+  const search = url.includes('?') ? url.slice(url.indexOf('?') + 1) : ''
+  const query: Record<string, string | string[]> = {}
+  for (const [key, value] of new URLSearchParams(search)) {
+    const current = query[key]
+    if (Array.isArray(current))
+      current.push(value)
+    else if (current !== undefined)
+      query[key] = [current, value]
+    else
+      query[key] = value
+  }
+  return query
 }
 
 function pickString(value: unknown): string | undefined {
