@@ -68,25 +68,29 @@ export default defineScheduledTask({
 
     // `findD1Binding` duck-types `prepare`/`exec`, which an RPC stub (a Durable
     // Object / service binding on the `cloudflare-durable` preset) also satisfies
-    // — and it can sort ahead of the real D1, so the bare scan picks a binding
-    // whose `.prepare()` throws `The RPC receiver does not implement the method`.
-    // When the scan is ambiguous and no binding is pinned, probe the candidates
-    // and prefer one that answers a trivial query; warn so the app pins
-    // `cfJobs.reconcile.d1Binding` instead of relying on enumeration order.
-    if (d1.ambiguous && !reconcile.d1Binding) {
-      const working: string[] = []
-      for (const name of d1.ambiguous) {
-        if (await probeD1((env as Record<string, unknown>)[name]))
-          working.push(name)
+    // — but invoking `.prepare()` on a stub throws `The RPC receiver does not
+    // implement the method`. This bit even the PINNED path: a pinned binding name
+    // that resolves to a stub in the task context was trusted unprobed, so
+    // reconcile silently `recovery-error`'d every tick. So ALWAYS probe the
+    // resolved binding (pinned or scanned); if it fails, scan every binding and
+    // pick the first that answers a trivial query.
+    if (!(await probeD1(d1.db))) {
+      let working: { binding: string, db: typeof d1.db } | undefined
+      for (const [name, value] of Object.entries(env as Record<string, unknown>)) {
+        if (value && typeof (value as { prepare?: unknown }).prepare === 'function' && await probeD1(value)) {
+          working = { binding: name, db: value as typeof d1.db }
+          break
+        }
       }
-      console.warn(
-        `[cf-jobs:reconcile] ambiguous D1 binding (${d1.ambiguous.join(', ')}) — pin one via cfJobs.reconcile.d1Binding. ${
-          working.length ? `Using "${working[0]}".` : 'None responded to a probe; skipping.'}`,
-      )
-      if (!working.length)
+      if (!working) {
+        console.warn(
+          `[cf-jobs:reconcile] D1 binding "${d1.binding}" failed a probe (likely an RPC stub in this task context) and no other binding answered — skipping. Pin a real D1 via cfJobs.reconcile.d1Binding.`,
+        )
         return { result: { skipped: 'no-working-d1-binding' as const } }
-      if (working[0] !== d1.binding)
-        d1 = { binding: working[0]!, db: (env as Record<string, unknown>)[working[0]!] as typeof d1.db }
+      }
+      if (working.binding !== d1.binding)
+        console.warn(`[cf-jobs:reconcile] D1 binding "${d1.binding}" failed a probe; using "${working.binding}".`)
+      d1 = working
     }
 
     const queues = rc.cfJobs?.queues ?? {}
@@ -97,6 +101,12 @@ export default defineScheduledTask({
     const publisher = createQueuePublisher(env, (queue: string) => {
       const entry = queues[queue]
       return typeof entry === 'string' ? entry : entry?.binding
+    }, {
+      // A missing/stub queue producer binding (no `.send` in this task context)
+      // would otherwise drop re-dispatches silently — surface it loudly so a
+      // swept-but-not-dispatched tick is diagnosable.
+      onMissingBinding: (queue, count) =>
+        console.warn(`[cf-jobs:reconcile] no working queue producer binding for "${queue}" — ${count} message(s) NOT dispatched (binding missing or lacks .send here).`),
     })
 
     const staleSeconds = reconcile.staleSeconds ?? 300
@@ -122,14 +132,18 @@ export default defineScheduledTask({
         limit,
       }) ?? 0
 
-      return {
-        result: {
-          released: recovered.released,
-          swept: recovered.swept,
-          dispatched: recovered.dispatched,
-          orphanedBatches,
-        },
+      const result = {
+        released: recovered.released,
+        swept: recovered.swept,
+        dispatched: recovered.dispatched,
+        orphanedBatches,
       }
+      // Surface a tick that actually did (or should have done) work, so a
+      // recovering backlog — or a swept-but-not-dispatched stall — is visible in
+      // logs instead of hiding in the (un-logged) task return value.
+      if (result.swept > 0 || result.released > 0 || result.orphanedBatches > 0)
+        console.warn(`[cf-jobs:reconcile] ${JSON.stringify(result)}`)
+      return { result }
     }
     catch (error) {
       console.warn(`[cf-jobs:reconcile] recovery failed on binding "${d1.binding}": ${(error as Error)?.message ?? error}`)
