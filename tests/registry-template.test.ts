@@ -16,14 +16,13 @@ const options = {
 } as never
 
 describe('generateRegistryTemplate (data-only lazy registry)', () => {
-  it('imports useRuntimeConfig from the #imports alias + the app factory', async () => {
+  it('imports useRuntimeConfig from nitropack/runtime + the app factory', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
-    // Must use the virtual `#imports` alias, never the bare `nitropack/runtime`
-    // specifier: the generated file lives in the consumer's buildDir where
-    // nitropack may not be physically resolvable (dropped symlink / peer
-    // conflict). #imports is always provided by the framework.
-    expect(out).toMatch(/from\s+['"]#imports['"]/)
-    expect(out).not.toMatch(/from\s+['"]nitropack\/runtime['"]/)
+    // Must be the real `nitropack/runtime` specifier (resolvable by raw Node from
+    // the consumer's node_modules), never a virtual alias like `#imports` which
+    // only resolves inside the bundle.
+    expect(out).toMatch(/from\s+['"]nitropack\/runtime['"]/)
+    expect(out).not.toMatch(/from\s+['"]#imports['"]/)
     expect(out).toContain('useRuntimeConfig')
     expect(out).toContain(`from 'nuxt-cf-jobs/server'`)
   })
