@@ -633,6 +633,26 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(fake.messages).toEqual([{ body: { _task: 'demo/queue-publish', id: 'scan_1' }, opts: { delaySeconds: 3 } }])
   })
 
+  it('reports unavailable queue bindings through the publisher hook', async () => {
+    const job = defineJob({
+      name: 'demo/missing-binding',
+      queue: 'default',
+      async handle() {},
+    })
+    const onUnavailable = vi.fn()
+    const queue = createJobQueue({}, { default: 'QUEUE_DEFAULT' }, job, { onUnavailable })
+
+    await expect(queue.sendBatch([{ id: '1' }, { id: '2' }] as never)).resolves.toBe(false)
+
+    expect(onUnavailable).toHaveBeenCalledWith({
+      job,
+      queue: 'default',
+      binding: 'QUEUE_DEFAULT',
+      reason: 'missing-env-binding',
+      count: 2,
+    })
+  })
+
   it('uses typed batch publishing via createJobQueue', async () => {
     const job = defineJob({
       name: 'demo/queue-batch',

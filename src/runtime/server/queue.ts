@@ -124,6 +124,20 @@ export interface JobQueuePublisher<Job extends AnyJobDefinition> {
   ) => Promise<boolean>
 }
 
+export type QueueBindingUnavailableReason = 'missing-config' | 'missing-env' | 'missing-env-binding' | 'invalid-binding'
+
+export interface QueueBindingUnavailableInput<Job extends AnyJobDefinition = AnyJobDefinition> {
+  job: Pick<Job, 'name' | 'queue'>
+  queue: string
+  binding?: string
+  reason: QueueBindingUnavailableReason
+  count: number
+}
+
+export interface JobQueuePublisherOptions<Job extends AnyJobDefinition = AnyJobDefinition> {
+  onUnavailable?: (input: QueueBindingUnavailableInput<Job>) => void | Promise<void>
+}
+
 export interface QueueBindingValidationIssue {
   jobName: string
   queue: string
@@ -195,20 +209,42 @@ export function createJobQueue<const Job extends AnyJobDefinition>(
   source: QueueSource | undefined,
   queues: QueueBindingsConfig,
   definition: Job,
+  publisherOpts: JobQueuePublisherOptions<Job> = {},
 ): JobQueuePublisher<Job> {
   const env = resolveQueueSourceEnv(source)
 
-  function getQueue(): CloudflareQueue<JobMessageOf<Job>> | undefined {
+  function resolveQueue(): { queue: CloudflareQueue<JobMessageOf<Job>> } | { reason: QueueBindingUnavailableReason, binding?: string } {
     const binding = resolveQueueBindingName(queues, definition.queue)
     if (!binding)
-      return undefined
-    const queue = env?.[binding] as CloudflareQueue<JobMessageOf<Job>> | undefined
-    return queue && typeof queue.send === 'function' ? queue : undefined
+      return { reason: 'missing-config' }
+    if (!env)
+      return { reason: 'missing-env', binding }
+    const queue = env[binding] as CloudflareQueue<JobMessageOf<Job>> | undefined
+    if (!queue)
+      return { reason: 'missing-env-binding', binding }
+    if (typeof queue.send !== 'function')
+      return { reason: 'invalid-binding', binding }
+    return { queue }
+  }
+
+  async function getQueue(count: number): Promise<CloudflareQueue<JobMessageOf<Job>> | undefined> {
+    const resolved = resolveQueue()
+    if ('queue' in resolved)
+      return resolved.queue
+
+    await publisherOpts.onUnavailable?.({
+      job: definition,
+      queue: definition.queue,
+      binding: resolved.binding,
+      reason: resolved.reason,
+      count,
+    })
+    return undefined
   }
 
   return {
     async send(payload, opts) {
-      const queue = getQueue()
+      const queue = await getQueue(1)
       if (!queue)
         return false
 
@@ -222,7 +258,7 @@ export function createJobQueue<const Job extends AnyJobDefinition>(
       if (payloads.length === 0)
         return true
 
-      const queue = getQueue()
+      const queue = await getQueue(payloads.length)
       if (!queue)
         return false
 
@@ -234,7 +270,7 @@ export function createJobQueue<const Job extends AnyJobDefinition>(
       if (messages.length === 0)
         return true
 
-      const queue = getQueue()
+      const queue = await getQueue(messages.length)
       if (!queue)
         return false
 

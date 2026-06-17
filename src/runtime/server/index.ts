@@ -26,7 +26,7 @@ export {
   resolveNitroTaskEnv,
   resolveQueueBindingName,
 } from './queue'
-export type { JobQueuePublisher, QueueSource } from './queue'
+export type { JobQueuePublisher, JobQueuePublisherOptions, QueueBindingUnavailableInput, QueueBindingUnavailableReason, QueueSource } from './queue'
 export * from './recovery'
 export * from './registry'
 export * from './result'

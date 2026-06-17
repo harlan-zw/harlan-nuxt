@@ -2,6 +2,7 @@ import type {
   PrepareRegisteredDurableJobOptions,
 } from './outbox'
 import type {
+  QueueBindingUnavailableInput,
   QueueSource,
   RegisteredQueueConsumerPayload,
   RegisterRegisteredQueueConsumerOptions,
@@ -78,13 +79,14 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     ? jobs.map(j => (j.queue ? j : { ...j, queue: defaultQueue }))
     : jobs.slice()) as unknown as Jobs
 
-  const jobRegistry = defineJobRegistry(materialized)
-
   // Eager: invalid `defineJob` shapes surface at boot rather than on first message.
   const jobIssues = validateJobDefinitions(materialized)
   if (jobIssues.length > 0) {
     console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${i.reason}`).join('\n')}`)
   }
+
+  const jobRegistry = defineJobRegistry(materialized)
+  const warnedUnavailableQueueSends = new Set<string>()
 
   // Read runtime config safely from a (possibly synthetic) queue source.
   // nitro's `useRuntimeConfig(event)` derefs `event.context.nitro.runtimeConfig`
@@ -115,7 +117,9 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
     const runtimeConfig = readRuntimeConfig(resolvedSource)
-    return createJobQueue(resolvedSource, runtimeConfig.cfJobs.queues, job)
+    return createJobQueue(resolvedSource, runtimeConfig.cfJobs.queues, job, {
+      onUnavailable: warnUnavailableQueueSend,
+    })
   }
 
   function buildJobPayload<Name extends JobNameOf<Jobs>>(
@@ -150,6 +154,17 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
       return
 
     console.warn(`[nuxt-cf-jobs] queue config warnings:\n${issues.map(i => `  - ${i}`).join('\n')}`)
+  }
+
+  function warnUnavailableQueueSend(input: QueueBindingUnavailableInput): void {
+    const key = `${input.reason}:${input.job.name}:${input.queue}:${input.binding ?? ''}`
+    if (warnedUnavailableQueueSends.has(key))
+      return
+    warnedUnavailableQueueSends.add(key)
+
+    const count = input.count === 1 ? '1 message' : `${input.count} messages`
+    const binding = input.binding ? ` binding "${input.binding}"` : ''
+    console.warn(`[nuxt-cf-jobs] job "${input.job.name}" could not enqueue ${count} on queue "${input.queue}"${binding}: ${formatQueueUnavailableReason(input)}`)
   }
 
   function registerQueueConsumer<Env extends Record<string, unknown>, Db, Logger>(
@@ -275,4 +290,17 @@ function isJobDefinition(value: unknown): value is AnyJobDefinition {
   // Eager defs expose `handle`; lazy entries expose `load`.
   return typeof (value as AnyJobDefinition).handle === 'function'
     || typeof (value as LazyJobEntry).load === 'function'
+}
+
+function formatQueueUnavailableReason(input: QueueBindingUnavailableInput): string {
+  switch (input.reason) {
+    case 'missing-config':
+      return `no cfJobs.queues entry resolves queue "${input.queue}".`
+    case 'missing-env':
+      return 'no Cloudflare env was available; pass an H3 event/env source or run with the dev queue plugin.'
+    case 'missing-env-binding':
+      return `env is missing${input.binding ? ` "${input.binding}"` : ' the configured queue binding'}.`
+    case 'invalid-binding':
+      return `env binding "${input.binding}" is not a Cloudflare Queue binding (missing send()).`
+  }
 }

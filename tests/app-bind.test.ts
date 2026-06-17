@@ -52,6 +52,40 @@ describe('createCfJobsApp (statically-injected jobs + useRuntimeConfig)', () => 
     expect(() => app.validateQueueBindings()).not.toThrow()
   })
 
+  it('warns once when a generated-app queue send has no runtime binding', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const job = defineJob({ name: 'x', queue: 'default', handle: vi.fn() })
+      const app = createCfJobsApp([job], { useRuntimeConfig })
+      const source = {} as Record<string, unknown>
+
+      await expect(app.getQueue(source, job).send({ hello: 'world' } as never)).resolves.toBe(false)
+      await expect(app.getQueue(source, job).sendBatch([{ hello: 'again' }] as never)).resolves.toBe(false)
+
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0]?.[0]).toContain('job "x" could not enqueue 1 message on queue "default" binding "JOBS"')
+      expect(warn.mock.calls[0]?.[0]).toContain('env is missing "JOBS"')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('warns before failing fast on invalid job definitions', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(() => createCfJobsApp([{ name: '', queue: '', handle: null } as never], { useRuntimeConfig }))
+        .toThrow('Invalid nuxt-cf-jobs registry')
+      expect(warn).toHaveBeenCalledOnce()
+      expect(warn.mock.calls[0]?.[0]).toContain('[nuxt-cf-jobs] job definition warnings')
+      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid-definition')
+      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid-queue')
+    }
+    finally {
+      warn.mockRestore()
+    }
+  })
+
   it('createDurableRuntime wires the generated registry and runtime queue bindings', async () => {
     const sent: unknown[] = []
     const app = createCfJobsApp(
