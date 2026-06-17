@@ -1,4 +1,5 @@
 import { createQueryCache } from 'nuxt-use-query/cache'
+import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from 'nuxt-use-query/telemetry'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
@@ -10,6 +11,8 @@ import { ref } from 'vue'
 let fetchState: { data: any, status: any, refresh: any }
 let lastUseFetchOpts: any
 let lastIntervalFn: any
+let callHook: any
+let runtimeConfig: any
 const cache = createQueryCache()
 
 vi.mock('#app', () => ({
@@ -17,6 +20,8 @@ vi.mock('#app', () => ({
     lastUseFetchOpts = opts
     return fetchState
   },
+  useNuxtApp: () => ({ hooks: { callHook } }),
+  useRuntimeConfig: () => runtimeConfig,
   clearNuxtData: vi.fn(),
 }))
 
@@ -45,6 +50,8 @@ beforeEach(async () => {
   for (const t of cache.gcTimers.values()) clearTimeout(t)
   cache.gcTimers.clear()
   fetchState = { data: ref<any>(null), status: ref('idle'), refresh: vi.fn(() => Promise.resolve()) }
+  callHook = vi.fn(() => Promise.resolve())
+  runtimeConfig = { public: { nuxtUseQuery: { telemetry: { enabled: false } } } }
   void nextTick
 })
 
@@ -94,6 +101,119 @@ describe('useNuxtQuery fetch stamping', () => {
     fetchState.status.value = 'success'
     await tick()
     expect(cache.lastFetched.has('q')).toBe(true)
+  })
+
+  it('emits Nuxt app telemetry hooks for query start and finish', async () => {
+    runtimeConfig.public.nuxtUseQuery.telemetry.enabled = true
+    useNuxtQuery('/api/x', { key: 'q' })
+
+    await lastUseFetchOpts.onRequest({})
+    await lastUseFetchOpts.onResponse({})
+
+    expect(callHook).toHaveBeenCalledWith(
+      NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart,
+      expect.objectContaining({
+        key: 'q',
+        request: '/api/x',
+      }),
+    )
+    expect(callHook).toHaveBeenCalledWith(
+      NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish,
+      expect.objectContaining({
+        key: 'q',
+        request: '/api/x',
+        status: 'success',
+      }),
+    )
+  })
+
+  it('does not emit Nuxt app telemetry hooks when telemetry is disabled', async () => {
+    useNuxtQuery('/api/x', { key: 'q' })
+
+    await lastUseFetchOpts.onRequest({})
+    await lastUseFetchOpts.onResponse({})
+
+    expect(callHook).not.toHaveBeenCalled()
+  })
+
+  it('does not emit a success finish before an HTTP response error', async () => {
+    runtimeConfig.public.nuxtUseQuery.telemetry.enabled = true
+    useNuxtQuery('/api/x', { key: 'q' })
+
+    const error = new Error('server failed')
+    const context = { error, response: { ok: false, status: 500 } }
+    await lastUseFetchOpts.onRequest(context)
+    await lastUseFetchOpts.onResponse(context)
+    await lastUseFetchOpts.onResponseError(context)
+
+    const finishes = callHook.mock.calls.filter(([name]: [string]) => name === NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish)
+    expect(finishes).toHaveLength(1)
+    expect(finishes[0][1]).toEqual(expect.objectContaining({
+      error,
+      status: 'error',
+    }))
+  })
+
+  it('emits success for ignored HTTP response errors', async () => {
+    runtimeConfig.public.nuxtUseQuery.telemetry.enabled = true
+    useNuxtQuery('/api/x', { ignoreResponseError: true, key: 'q' })
+
+    const context = { response: { ok: false, status: 404 } }
+    await lastUseFetchOpts.onRequest(context)
+    await lastUseFetchOpts.onResponse(context)
+
+    expect(callHook).toHaveBeenCalledWith(
+      NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish,
+      expect.objectContaining({
+        key: 'q',
+        status: 'success',
+      }),
+    )
+  })
+
+  it('reports a thrown response hook as a single error finish', async () => {
+    runtimeConfig.public.nuxtUseQuery.telemetry.enabled = true
+    const error = new Error('hook failed')
+    useNuxtQuery('/api/x', {
+      key: 'q',
+      onResponse: () => {
+        throw error
+      },
+    })
+
+    const context = {}
+    await lastUseFetchOpts.onRequest(context)
+    await expect(lastUseFetchOpts.onResponse(context)).rejects.toThrow(error)
+    await lastUseFetchOpts.onResponseError(context)
+
+    const finishes = callHook.mock.calls.filter(([name]: [string]) => name === NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish)
+    expect(finishes).toHaveLength(1)
+    expect(finishes[0][1]).toEqual(expect.objectContaining({
+      error,
+      status: 'error',
+    }))
+  })
+
+  it('keeps the started query key and request for reactive inputs', async () => {
+    runtimeConfig.public.nuxtUseQuery.telemetry.enabled = true
+    const key = ref('first')
+    const request = ref('/api/first')
+    useNuxtQuery(request, { key })
+
+    const context = {}
+    await lastUseFetchOpts.onRequest(context)
+    key.value = 'second'
+    request.value = '/api/second'
+    await lastUseFetchOpts.onResponse(context)
+
+    expect(callHook).toHaveBeenCalledWith(
+      NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish,
+      expect.objectContaining({
+        key: 'first',
+        request: '/api/first',
+        status: 'success',
+      }),
+    )
   })
 })
 

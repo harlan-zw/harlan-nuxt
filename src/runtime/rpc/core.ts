@@ -1,6 +1,8 @@
 import type { $Fetch } from 'nitropack'
 import type { z, ZodIssue } from 'zod'
+import type { Outcome } from '../lifecycle'
 import { ZodError } from 'zod'
+import { runIsolatedHooks, toOutcome } from '../lifecycle'
 
 export type NuxtRpcKey = string | readonly [string, ...unknown[]]
 
@@ -135,8 +137,7 @@ export type NuxtRpcError
  * thrown `unknown`. Discriminate on `_tag`.
  */
 export type NuxtRpcResult<TData>
-  = | { _tag: 'ok', data: TData }
-    | { _tag: 'err', error: NuxtRpcError }
+  = Outcome<TData, NuxtRpcError>
 
 export interface NuxtRpcErrorEvent {
   operation: NuxtRpcOperationContext
@@ -175,13 +176,10 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     perform: () => Promise<TData>,
   ): Promise<NuxtRpcResult<TData>> {
     const startedAt = Date.now()
-    let outcome: NuxtRpcResult<TData>
-    try {
-      outcome = { _tag: 'ok', data: await perform() }
-    }
-    catch (error) {
-      outcome = { _tag: 'err', error: normalizeNuxtRpcError(error, 'response-validation') }
-    }
+    const outcome = await toOutcome(
+      perform,
+      error => normalizeNuxtRpcError(error, 'response-validation'),
+    )
     const durationMs = Date.now() - startedAt
     if (outcome._tag === 'ok')
       await notifyRpcSuccess({ data: outcome.data, durationMs, onSettled, onSuccess, operation: context })
@@ -452,21 +450,6 @@ function firstIssueMessage(issues: NuxtRpcValidationIssue[]): string | undefined
   return issue.path ? `${issue.path}: ${issue.message}` : issue.message
 }
 
-// Lifecycle hooks are caller-supplied observers. A throwing/rejecting hook is
-// a caller bug, not part of the RPC outcome, so we run each in isolation: the
-// failure is reported (never swallowed silently) but cannot reject the call or
-// mask the normalized RPC error. Reported via `console.error` rather than a
-// rethrow — an uncaught throw on the SSR server would surface as an
-// `uncaughtException` and could take down the request.
-async function callRpcHook(invoke: () => void | Promise<void>): Promise<void> {
-  try {
-    await invoke()
-  }
-  catch (error) {
-    console.error('[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:', error)
-  }
-}
-
 async function notifyRpcSuccess(options: {
   operation: NuxtRpcOperationContext
   data: unknown
@@ -479,8 +462,10 @@ async function notifyRpcSuccess(options: {
     data: options.data,
     durationMs: options.durationMs,
   }
-  await callRpcHook(() => options.onSuccess?.(event))
-  await callRpcHook(() => options.onSettled?.(event))
+  await runIsolatedHooks([
+    () => options.onSuccess?.(event),
+    () => options.onSettled?.(event),
+  ], '[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:')
 }
 
 async function notifyRpcError(options: {
@@ -496,7 +481,8 @@ async function notifyRpcError(options: {
     error: options.error,
     durationMs: options.durationMs,
   }
-  if (!options.silent)
-    await callRpcHook(() => options.onError?.(event))
-  await callRpcHook(() => options.onSettled?.(event))
+  await runIsolatedHooks([
+    ...(options.silent ? [] : [() => options.onError?.(event)]),
+    () => options.onSettled?.(event),
+  ], '[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:')
 }

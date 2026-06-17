@@ -4,5 +4,6 @@
 // own vite plugin so the real Nuxt runtime is loaded there.
 export const useFetch: any = undefined
 export const useNuxtApp: any = undefined
+export const useRuntimeConfig: any = undefined
 export const refreshNuxtData: any = undefined
 export const clearNuxtData: any = undefined

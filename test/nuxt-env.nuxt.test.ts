@@ -19,13 +19,13 @@ import { useNuxtQuery } from 'nuxt-use-query/query'
 import {
   getQueryData,
   invalidateNuxtQueries,
-  seedCacheFromPayload,
   setQueryData,
   useQueryCache,
 } from 'nuxt-use-query/query-cache'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import { clearNuxtData, useNuxtApp } from '#app'
+import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
 
 // Counted handler so a refresh is observable by call count, not just shape.
 const echoCalls = vi.fn()

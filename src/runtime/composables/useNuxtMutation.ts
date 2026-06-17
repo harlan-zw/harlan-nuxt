@@ -1,5 +1,7 @@
 import type { Ref } from 'vue'
+import type { Outcome } from '../lifecycle'
 import { ref } from 'vue'
+import { runIsolatedHooks } from '../lifecycle'
 import { invalidateNuxtQueries } from './useQueryCache'
 
 // `useNuxtMutation` is the write-side companion to `useNuxtQuery`. Mutations
@@ -58,8 +60,7 @@ export interface UseNuxtMutationOptions<TArgs, TResult, TContext = unknown> {
  * rather than a control-flow jump. Discriminate on `_tag`.
  */
 export type MutationResult<TResult>
-  = | { _tag: 'ok', data: TResult }
-    | { _tag: 'err', error: unknown }
+  = Outcome<TResult>
 
 export interface NuxtMutation<TArgs, TResult> {
   /**
@@ -90,22 +91,6 @@ export function useNuxtMutation<TArgs = void, TResult = unknown, TContext = unkn
   const pending = ref(false)
   const error = ref<unknown>(null)
 
-  // Runs one lifecycle hook in isolation. Awaited (so a promise-returning
-  // handler's rejection is caught here, not left dangling after the mutation
-  // resolved), reported (never swallowed silently), and the failure is returned
-  // so callers can decide whether to surface it. `onMutate` is NOT run through
-  // here: it gates the mutation, so its throw is the mutation's own failure.
-  async function runHook(invoke: () => void | Promise<void>): Promise<unknown> {
-    try {
-      await invoke()
-      return undefined
-    }
-    catch (e) {
-      console.error('[nuxt-use-query] a mutation lifecycle hook threw:', e)
-      return e
-    }
-  }
-
   // Updates reactive state, then fires the outcome's hooks (settle before error,
   // matching the rollback contract). Returns the outcome plus the first hook
   // failure observed — both hooks always run regardless of an earlier throw.
@@ -116,16 +101,16 @@ export function useNuxtMutation<TArgs = void, TResult = unknown, TContext = unkn
   ): Promise<{ outcome: MutationResult<TResult>, hookError: unknown }> {
     error.value = outcome._tag === 'err' ? outcome.error : null
     pending.value = false
-    const failures = outcome._tag === 'ok'
-      ? [
-          await runHook(() => opts.onSuccess?.(outcome.data, args, context)),
-          await runHook(() => opts.onSettled?.(outcome.data, null, args, context)),
-        ]
-      : [
-          await runHook(() => opts.onSettled?.(undefined, outcome.error, args, context)),
-          await runHook(() => opts.onError?.(outcome.error, args, context)),
-        ]
-    return { outcome, hookError: failures.find(e => e !== undefined) }
+    const hookError = outcome._tag === 'ok'
+      ? await runIsolatedHooks([
+          () => opts.onSuccess?.(outcome.data, args, context),
+          () => opts.onSettled?.(outcome.data, null, args, context),
+        ], '[nuxt-use-query] a mutation lifecycle hook threw:')
+      : await runIsolatedHooks([
+          () => opts.onSettled?.(undefined, outcome.error, args, context),
+          () => opts.onError?.(outcome.error, args, context),
+        ], '[nuxt-use-query] a mutation lifecycle hook threw:')
+    return { outcome, hookError }
   }
 
   // Total core: never throws. Resolves to the outcome plus the first lifecycle

@@ -24,6 +24,7 @@ export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
   'key' | 'query' | 'transform'
 >
 
+// eslint-disable-next-line harlanzw/vue-no-faux-composables -- Nuxt composable, wraps useNuxtQuery and normalizes its error ref.
 export function useNuxtRpcQuery<
   TResponseSchema extends z.ZodTypeAny,
   TQuery = undefined,

@@ -1,5 +1,7 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
+import type { ModuleTelemetryOptions } from './module/telemetry'
 import { addImports, addPlugin, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { setupFetchTelemetryModule } from './module/telemetry'
 
 // `nuxt-use-query` — TanStack-Query-shaped wrapper over Nuxt's `useFetch` /
 // `useAsyncData`. Built on Nuxt primitives (refreshNuxtData, clearNuxtData,
@@ -16,6 +18,11 @@ export interface ModuleOptions {
    * query files must define Zod-backed Nuxt RPC operations.
    */
   contracts?: ContractQueryEnforcementOptions
+  /**
+   * Server-side `$fetch` telemetry. Enable with `true` to log slow fetches and
+   * likely SSR waterfalls, or pass an object to tune thresholds.
+   */
+  telemetry?: ModuleTelemetryOptions
 }
 
 export default defineNuxtModule<ModuleOptions>({
@@ -27,6 +34,7 @@ export default defineNuxtModule<ModuleOptions>({
     contracts: {
       enabled: false,
     },
+    telemetry: false,
   },
   setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
@@ -49,9 +57,15 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'serializeNuxtRpcKey', from: rpcCore },
     ])
 
-    // Serializes the per-request `lastFetched` map into the payload so the
-    // client seeds exact fetch timestamps (see runtime/plugin.ts).
-    addPlugin(resolver.resolve('./runtime/plugin'))
+    // Server-only: serializes the per-request `lastFetched` map into the
+    // payload so the client seeds exact fetch timestamps.
+    addPlugin({ mode: 'server', src: resolver.resolve('./runtime/plugin.server') })
+
+    setupFetchTelemetryModule(
+      options.telemetry,
+      nuxt.options.runtimeConfig as Record<string, any>,
+      resolver.resolve('./runtime/server/plugins/fetch-telemetry'),
+    )
 
     if (options.contracts?.enabled) {
       nuxt.hook('build:before', async () => {

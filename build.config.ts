@@ -5,6 +5,7 @@ export default defineBuildConfig({
   externals: [
     '#app',
     'nitropack',
+    'nitropack/runtime',
     'nitropack/types',
   ],
 })

@@ -12,6 +12,7 @@
 - `useNuxtMutation` wires mutations to query invalidation and optimistic cache rollback.
 - `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` let apps centralize Client -> API contracts in query folders with Zod request/response schemas.
 - Optional build-time contract enforcement flags API path literals outside query folders and query operations that skip shared contract imports or schemas.
+- Optional server `$fetch` telemetry flags slow upstream calls and likely SSR request waterfalls.
 - `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
 - Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
 
@@ -321,6 +322,68 @@ const rpc = useNuxtRpc({
 
 await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
   silent: true, // skip onError for flows that handle their own UX
+})
+```
+
+## Server Fetch Telemetry
+
+Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It logs:
+
+- `slow fetch` when a completed server fetch exceeds `slowFetchThreshold`.
+- `fetch waterfall` when one incoming request performs multiple mostly sequential fetches and the request fetch span exceeds `waterfallThreshold`.
+
+```ts
+export default defineNuxtConfig({
+  modules: ['nuxt-use-query'],
+  nuxtUseQuery: {
+    telemetry: {
+      enabled: true,
+      slowFetchThreshold: 3_000,
+      waterfallMinFetches: 2,
+      waterfallThreshold: 3_000,
+      debug: false,
+    },
+  },
+})
+```
+
+Use `telemetry: true` for the defaults. Set `debug: true` to also log per-fetch timing and per-request summaries.
+
+Telemetry also emits hook events so apps can send data to their own logger/APM without parsing console output.
+
+For server `$fetch` telemetry, attach Nitro hooks from a server plugin:
+
+```ts
+import { defineNitroPlugin } from 'nitropack/runtime'
+import {
+  formatFetchWaterfallTelemetryEvent,
+  formatSlowFetchTelemetryEvent,
+  NUXT_USE_QUERY_TELEMETRY_HOOKS,
+} from 'nuxt-use-query/telemetry'
+
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, (event) => {
+    console.warn(formatSlowFetchTelemetryEvent(event))
+  })
+
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchWaterfall, (event) => {
+    console.warn(formatFetchWaterfallTelemetryEvent(event))
+  })
+})
+```
+
+For Nuxt app-side query telemetry, attach hooks from a Nuxt plugin:
+
+```ts
+import {
+  formatQueryTelemetryFinishEvent,
+  NUXT_USE_QUERY_TELEMETRY_HOOKS,
+} from 'nuxt-use-query/telemetry'
+
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, (event) => {
+    console.info(formatQueryTelemetryFinishEvent(event))
+  })
 })
 ```
 

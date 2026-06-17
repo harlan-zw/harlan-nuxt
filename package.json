@@ -46,9 +46,36 @@
     "./rpc": {
       "types": "./dist/runtime/rpc/index.d.ts",
       "import": "./dist/runtime/rpc/index.js"
+    },
+    "./telemetry": {
+      "types": "./dist/runtime/telemetry.d.ts",
+      "import": "./dist/runtime/telemetry.js"
     }
   },
   "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "cache": [
+        "./dist/runtime/cache.d.ts"
+      ],
+      "mutation": [
+        "./dist/runtime/composables/useNuxtMutation.d.ts"
+      ],
+      "query": [
+        "./dist/runtime/composables/useNuxtQuery.d.ts"
+      ],
+      "query-cache": [
+        "./dist/runtime/composables/useQueryCache.d.ts"
+      ],
+      "rpc": [
+        "./dist/runtime/rpc/index.d.ts"
+      ],
+      "telemetry": [
+        "./dist/runtime/telemetry.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist"
   ],
@@ -93,7 +120,7 @@
     "eslint-plugin-harlanzw": "catalog:",
     "happy-dom": "catalog:dev-test",
     "nitropack": "catalog:",
-    "nuxt": "catalog:",
+    "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
     "unbuild": "catalog:",
     "vitest": "catalog:dev-test",

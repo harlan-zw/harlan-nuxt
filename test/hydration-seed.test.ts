@@ -1,6 +1,6 @@
 import { createQueryCache, isQueryStale } from 'nuxt-use-query/cache'
-import { seedCacheFromPayload } from 'nuxt-use-query/query-cache'
 import { describe, expect, it } from 'vitest'
+import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
 
 // Regression: the `lastFetched` timestamp map lives on the per-Nuxt-app cache
 // and is NOT serialized across SSR → client. Without seeding it from the

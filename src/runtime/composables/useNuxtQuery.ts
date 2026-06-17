@@ -6,11 +6,13 @@ import type {
 } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
+import type { QueryTelemetryFinishEvent, QueryTelemetryStartEvent } from '../telemetry'
 import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
 import { computed, getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from 'vue'
-import { clearNuxtData, useFetch } from '#app'
+import { clearNuxtData, useFetch, useNuxtApp, useRuntimeConfig } from '#app'
 import { isQueryStale, markQueryFetched, retainQuery } from '../cache'
 import { readNuxtData } from '../nuxt-data'
+import { callTelemetryHook, NUXT_USE_QUERY_TELEMETRY_HOOKS } from '../telemetry'
 import { useQueryCache } from './useQueryCache'
 
 export type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
@@ -49,6 +51,25 @@ export type NuxtQuery<DataT, ErrorT> = AsyncData<DataT, ErrorT> & {
   isPlaceholderData: ComputedRef<boolean>
   isPending: ComputedRef<boolean>
   isFetching: ComputedRef<boolean>
+}
+
+const QUERY_TELEMETRY_STATE = Symbol('nuxt-use-query-state')
+
+interface QueryTelemetryRuntimeConfig {
+  public?: {
+    nuxtUseQuery?: {
+      telemetry?: {
+        enabled?: unknown
+      }
+    }
+  }
+}
+
+interface QueryTelemetryState {
+  finished: boolean
+  key: string
+  request: string
+  startedAt: number
 }
 
 export function useNuxtQuery<
@@ -102,8 +123,55 @@ export function useNuxtQuery(
   } = opts
 
   const cache = useQueryCache()
+  const nuxtApp = useNuxtApp()
+  const telemetryEnabled = isQueryTelemetryEnabled()
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
+
+  function emitQueryStart(context: unknown): void {
+    if (!telemetryEnabled)
+      return
+    const startedAt = Date.now()
+    const state: QueryTelemetryState = {
+      finished: false,
+      key: key.value,
+      request: describeQueryRequest(request),
+      startedAt,
+    }
+    setQueryTelemetryState(context, state)
+    const event: QueryTelemetryStartEvent = {
+      client: import.meta.client,
+      key: state.key,
+      request: state.request,
+      server: import.meta.server,
+      startedAt,
+    }
+    callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, event)
+  }
+
+  function emitQueryFinish(status: 'error' | 'success', context: unknown, error?: unknown): void {
+    if (!telemetryEnabled)
+      return
+    const state = getQueryTelemetryState(context)
+    if (state?.finished)
+      return
+    if (state)
+      state.finished = true
+    const endedAt = Date.now()
+    const startedAt = state?.startedAt ?? endedAt
+    const event: QueryTelemetryFinishEvent = {
+      client: import.meta.client,
+      durationMs: Math.max(0, endedAt - startedAt),
+      endedAt,
+      error,
+      key: state?.key ?? key.value,
+      request: state?.request ?? describeQueryRequest(request),
+      server: import.meta.server,
+      startedAt,
+      status,
+    }
+    callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
+  }
 
   const query = useFetch(request as any, {
     ...fetchOptions,
@@ -124,6 +192,43 @@ export function useNuxtQuery(
       if (isQueryStale(cache, cacheKey, staleTime))
         return undefined
       return readNuxtData(nuxtApp, cacheKey)
+    },
+    onRequest: async (context: unknown) => {
+      emitQueryStart(context)
+      try {
+        await callFetchHook(fetchOptions.onRequest, context)
+      }
+      catch (error) {
+        emitQueryFinish('error', context, error)
+        throw error
+      }
+    },
+    onRequestError: async (context: any) => {
+      try {
+        await callFetchHook(fetchOptions.onRequestError, context)
+      }
+      finally {
+        emitQueryFinish('error', context, context?.error)
+      }
+    },
+    onResponse: async (context: unknown) => {
+      try {
+        await callFetchHook(fetchOptions.onResponse, context)
+      }
+      catch (error) {
+        emitQueryFinish('error', context, error)
+        throw error
+      }
+      if (!isPendingResponseError(context, fetchOptions.ignoreResponseError))
+        emitQueryFinish('success', context)
+    },
+    onResponseError: async (context: any) => {
+      try {
+        await callFetchHook(fetchOptions.onResponseError, context)
+      }
+      finally {
+        emitQueryFinish('error', context, context?.error ?? context?.response)
+      }
     },
   } as any) as NuxtQuery<any, any>
 
@@ -186,6 +291,59 @@ export function useNuxtQuery(
   }
 
   return query
+}
+
+function isQueryTelemetryEnabled(): boolean {
+  try {
+    const config = useRuntimeConfig() as QueryTelemetryRuntimeConfig
+    return config.public?.nuxtUseQuery?.telemetry?.enabled === true
+  }
+  catch {
+    return false
+  }
+}
+
+async function callFetchHook(hook: unknown, context: unknown): Promise<void> {
+  if (hook == null)
+    return
+  if (Array.isArray(hook)) {
+    for (const fn of hook)
+      await callFetchHook(fn, context)
+    return
+  }
+  await (hook as (context: unknown) => void | Promise<void>)(context)
+}
+
+function setQueryTelemetryState(context: unknown, state: QueryTelemetryState): void {
+  if (context && typeof context === 'object')
+    (context as Record<typeof QUERY_TELEMETRY_STATE, QueryTelemetryState>)[QUERY_TELEMETRY_STATE] = state
+}
+
+function getQueryTelemetryState(context: unknown): QueryTelemetryState | undefined {
+  if (!context || typeof context !== 'object')
+    return undefined
+  return (context as Partial<Record<typeof QUERY_TELEMETRY_STATE, QueryTelemetryState>>)[QUERY_TELEMETRY_STATE]
+}
+
+function isPendingResponseError(context: unknown, ignoreResponseError: unknown): boolean {
+  if (ignoreResponseError === true || !context || typeof context !== 'object')
+    return false
+  const response = (context as { response?: { ok?: boolean, status?: unknown } }).response
+  if (!response)
+    return false
+  const status = Number(response.status)
+  return response.ok === false || (Number.isFinite(status) && status >= 400)
+}
+
+function describeQueryRequest(request: NitroFetchRequest | MaybeRefOrGetter<NitroFetchRequest>): string {
+  const value = toValue(request)
+  if (typeof value === 'string')
+    return value
+  if (value instanceof URL)
+    return value.href
+  if (value && typeof value === 'object' && 'url' in value)
+    return String((value as { url: unknown }).url)
+  return '[unknown]'
 }
 
 function refetchIfAllowed(

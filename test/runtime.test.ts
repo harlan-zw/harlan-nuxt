@@ -31,9 +31,21 @@ await setup({
 interface Probe {
   a: { value: string, call: number } | null
   b: { value: string, call: number } | null
+  cachedManualWrite: { ok: boolean } | undefined
   cacheKeys: string[]
   cacheSameInstance: boolean
   hasAutoImports: boolean
+  mutationMethod: string
+  rpcDirect: { value: string, call: number }
+  rpcKey: string
+  rpcQuery: { value: string, call: number } | null
+}
+
+interface TelemetryStore {
+  fetches: Array<{ request?: string, url?: string }>
+  slowFetches: unknown[]
+  summaries: Array<{ fetches?: number, request?: string }>
+  waterfalls: unknown[]
 }
 
 async function readProbe(): Promise<Probe> {
@@ -63,6 +75,25 @@ describe('nuxt-use-query · e2e', () => {
     expect(probe.cacheSameInstance).toBe(true)
     expect(probe.cacheKeys).toContain('manual-stamp-a')
     expect(probe.cacheKeys).toContain('manual-stamp-b')
+  })
+
+  it('registers RPC auto-imports through the module surface', async () => {
+    const probe = await readProbe()
+    expect(probe.rpcKey).toBe('fixture:rpc-query')
+    expect(probe.rpcQuery?.value).toBe('rpc-query')
+    expect(probe.rpcDirect.value).toBe('rpc-direct')
+    expect(probe.mutationMethod).toBe('DELETE')
+    expect(probe.cachedManualWrite).toEqual({ ok: true })
+  })
+
+  it('registers fetch telemetry through the module option and Nitro plugin', async () => {
+    await $fetch('/api/telemetry', { query: { reset: '1' } })
+
+    await readProbe()
+
+    const telemetry = await $fetch<TelemetryStore>('/api/telemetry')
+    expect(telemetry.fetches.some(event => event.request === 'GET /' && event.url === '/api/echo')).toBe(true)
+    expect(telemetry.summaries.some(event => event.request === 'GET /' && (event.fetches ?? 0) >= 2)).toBe(true)
   })
 
   it('hits the echo endpoint directly through Nitro', async () => {
