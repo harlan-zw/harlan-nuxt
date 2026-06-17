@@ -16,14 +16,16 @@ const options = {
 } as never
 
 describe('generateRegistryTemplate (data-only lazy registry)', () => {
-  it('imports useRuntimeConfig from nitropack/runtime + the app factory', async () => {
+  it('imports nothing framework-bound — only the app factory', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
-    // Must be the real `nitropack/runtime` specifier (resolvable by raw Node from
-    // the consumer's node_modules), never a virtual alias like `#imports` which
-    // only resolves inside the bundle.
-    expect(out).toMatch(/from\s+['"]nitropack\/runtime['"]/)
+    // The registry loads in raw Node / the Vite build / nitro dev's external
+    // `file://` graph, so it must NOT import `nitropack/runtime` (drags
+    // `internal/storage.mjs` → unresolved `#nitro-internal-virtual/storage`) nor
+    // `#imports` (a build-only Nuxt virtual). nitro's `useRuntimeConfig` is
+    // injected at runtime by the `provide-runtime-config` server plugin.
+    expect(out).not.toMatch(/from\s+['"]nitropack\/runtime['"]/)
     expect(out).not.toMatch(/from\s+['"]#imports['"]/)
-    expect(out).toContain('useRuntimeConfig')
+    expect(out).not.toContain('useRuntimeConfig')
     expect(out).toContain(`from 'nuxt-cf-jobs/server'`)
   })
 
@@ -45,7 +47,7 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).toMatch(/export const jobs = \[/)
     expect(out).not.toContain('as const')
     expect(out).toContain('@type {import(\'nuxt-cf-jobs/server\').CfJobsApp<readonly [')
-    expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*useRuntimeConfig,/)
+    expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*(undefined|['"])/)
     // Every facade helper (incl. loadJobDefinition) is destructured straight off
     // the runtime app — no hand-written typed wrapper.
     expect(out).toContain('} = app')

@@ -55,10 +55,29 @@ export type CfJobsDurableRuntimeOptions<
 export type UseRuntimeConfigFn = (event?: unknown) => CfJobsRuntimeConfig
 
 export interface CreateCfJobsAppOptions {
-  /** Bundled nitro's `useRuntimeConfig`. Required — tests can pass a stub. */
-  useRuntimeConfig: UseRuntimeConfigFn
+  /**
+   * Bundled nitro's `useRuntimeConfig`. Optional: the generated `#cf-jobs/app`
+   * registry omits it (it must import nothing framework-bound — see the template
+   * comment) and the `provide-runtime-config` server plugin injects it at startup
+   * via `provideRuntimeConfig`. Tests pass a stub directly here.
+   */
+  useRuntimeConfig?: UseRuntimeConfigFn
   /** Fallback queue applied to jobs whose `defineJob` omits `queue`. */
   defaultQueue?: string
+}
+
+/**
+ * Stand-in `useRuntimeConfig` used before the server plugin injects nitro's real
+ * one. Reaching runtime config means a queue dispatch ran before nitro started
+ * its plugins (or `nuxt-cf-jobs`'s `provide-runtime-config` plugin is missing).
+ */
+function runtimeConfigNotProvided(): never {
+  throw new Error(
+    '[nuxt-cf-jobs] runtime config was read before it was provided. The '
+    + '`provide-runtime-config` server plugin injects nitro\'s `useRuntimeConfig` '
+    + 'at startup — ensure the nuxt-cf-jobs module is installed and its server '
+    + 'plugins are registered, and that no job is dispatched before nitro boots.',
+  )
 }
 
 /**
@@ -73,8 +92,16 @@ export interface CreateCfJobsAppOptions {
  */
 export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   jobs: Jobs,
-  { useRuntimeConfig, defaultQueue }: CreateCfJobsAppOptions,
+  { useRuntimeConfig: injectedRuntimeConfig, defaultQueue }: CreateCfJobsAppOptions = {},
 ) {
+  // Mutable so the `provide-runtime-config` server plugin can supply nitro's real
+  // `useRuntimeConfig` at startup. Every closure below reads it at call time, so
+  // injection is visible regardless of import order.
+  let useRuntimeConfig: UseRuntimeConfigFn = injectedRuntimeConfig ?? runtimeConfigNotProvided
+  const provideRuntimeConfig = (fn: UseRuntimeConfigFn): void => {
+    useRuntimeConfig = fn
+  }
+
   const materialized = (defaultQueue
     ? jobs.map(j => (j.queue ? j : { ...j, queue: defaultQueue }))
     : jobs.slice()) as unknown as Jobs
@@ -219,6 +246,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   return {
     jobs: materialized,
     jobRegistry,
+    provideRuntimeConfig,
     getHandler: jobRegistry.getHandler,
     loadJobDefinition,
     getJobDefinition: jobRegistry.getJobDefinition,
@@ -236,22 +264,20 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
 }
 
 /**
- * Thin wrapper used by the generated `#cf-jobs/app` template: bridges nitro's
- * `useRuntimeConfig` (whose types aren't visible from this package, hence the
- * `any` param + cast) to the strictly-typed injectable. Keeping this here means
- * the template emits only dynamic data, and the cast is type-checked in source.
+ * Thin wrapper used by the generated `#cf-jobs/app` template. The template emits
+ * only static data (the job array + default queue) and imports nothing
+ * framework-bound — nitro's `useRuntimeConfig` is injected later by the
+ * `provide-runtime-config` server plugin via `app.provideRuntimeConfig`.
  */
 export function createGeneratedCfJobsApp<const Jobs extends readonly LazyJobEntry[]>(
   jobs: Jobs,
-
-  useRuntimeConfig: (...args: any[]) => any,
   defaultQueue?: string,
 ) {
   // Lazy entries carry static routing metadata + a `load()` thunk instead of an
   // eager `handle`; the registry resolves handlers on demand. The precise
   // per-job payload/queue types reach consumers via the generated `#cf-jobs/app`
   // `.d.ts` augmentation, so the runtime cast here is intentional.
-  return createCfJobsApp(jobs as unknown as readonly AnyJobDefinition[], { useRuntimeConfig: useRuntimeConfig as UseRuntimeConfigFn, defaultQueue })
+  return createCfJobsApp(jobs as unknown as readonly AnyJobDefinition[], { defaultQueue })
 }
 
 export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>

@@ -68,6 +68,11 @@ export default defineNuxtModule<ModuleOptions>({
     ])
     installRegistryTemplates(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
 
+    // Inject nitro's `useRuntimeConfig` into the generated registry at startup.
+    // The registry imports nothing framework-bound (so it survives raw-Node / Vite
+    // / nitro-dev external loads); this bundled plugin bridges the runtime in.
+    addServerPlugin(resolver.resolve('./runtime/server/plugins/provide-runtime-config'))
+
     if (options.defaultQueue && !options.queues[options.defaultQueue])
       useLogger('nuxt-cf-jobs').warn(`cfJobs.defaultQueue="${options.defaultQueue}" is not a key of cfJobs.queues`)
 
