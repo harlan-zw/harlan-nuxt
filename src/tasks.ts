@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { resolveFiles } from '@nuxt/kit'
 
-const TASK_HANDLER_EXTENSION_RE = /\.[cm]?tsx?$/
+// Strip the source extension so the handler path is extensionless — both `.ts`
+// family (app source) and `.js` family (the module's own compiled tasks dir).
+const TASK_HANDLER_EXTENSION_RE = /\.[cm]?[jt]sx?$/
 
 export interface DiscoveredTask {
   /** Declared task name (nitro registers `nitro.tasks[name]`). */

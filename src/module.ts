@@ -1,4 +1,5 @@
 import type { Nuxt } from '@nuxt/schema'
+import type { DiscoveredTask } from './tasks'
 import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
 import { addImportsDir, addServerHandler, addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
@@ -200,11 +201,22 @@ async function wireScheduledTasks(options: ModuleOptions, nuxt: Nuxt, templateDi
   // (`cf-jobs:reconcile`) registers in every consuming app, even one that didn't
   // configure `tasksDir`. App task dirs are layered on top when configured.
   const moduleTasksDir = createResolver(import.meta.url).resolve('./runtime/server/tasks')
-  const tasksDir = [
-    ...(options.tasksDir ? resolveTaskDirs(options.tasksDir, nuxt) : []),
-    ...(isReconcileEnabled(options.reconcile) ? [moduleTasksDir] : []),
-  ]
-  const { tasks, unnamed } = await collectTasks({ ...options, tasksDir }, rootDir)
+  // App task dirs honour the user's `tasksPattern` (default `**/*.ts` — apps ship
+  // source). The module's OWN dir ships COMPILED `.js` in consumers (and `.ts` in
+  // this repo's playground), so scan it with an extension-agnostic pattern of its
+  // own — reusing the user's `**/*.ts` here silently dropped `reconcile.js`, so
+  // the recovery cron never registered in any built app.
+  const userTasksDir = options.tasksDir ? resolveTaskDirs(options.tasksDir, nuxt) : []
+  const { tasks: userTasks, unnamed } = userTasksDir.length
+    ? await collectTasks({ ...options, tasksDir: userTasksDir }, rootDir)
+    : { tasks: [], unnamed: [] as string[] }
+  const { tasks: moduleTasks } = isReconcileEnabled(options.reconcile)
+    ? await collectTasks(
+        { ...options, tasksDir: [moduleTasksDir], tasksPattern: '**/*.{ts,mts,cts,js,mjs,cjs}', tasksIgnore: ['**/*.d.ts', '**/*.d.mts'] },
+        rootDir,
+      )
+    : { tasks: [] as DiscoveredTask[] }
+  const tasks = [...userTasks, ...moduleTasks]
 
   for (const file of unnamed)
     logger.warn(`nuxt-cf-jobs: task at ${relative(rootDir, file)} declares a cron but no statically-readable string-literal \`name\` — skipped.`)
