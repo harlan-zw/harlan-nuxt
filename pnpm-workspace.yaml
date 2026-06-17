@@ -8,7 +8,7 @@ trustPolicyExclude:
 catalog:
   '@antfu/eslint-config': latest
   '@nuxt/test-utils': ^4.0.3
-  '@vitest/coverage-v8': 4.1.8
+  '@vitest/coverage-v8': 4.1.9
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
   eslint: ^10.5.0
@@ -27,8 +27,8 @@ catalogs:
     typescript: ^6.0.3
     vue-tsc: ^3.3.5
   dev-test:
-    happy-dom: ^20.10.3
-    vitest: ^4.1.8
+    happy-dom: ^20.10.4
+    vitest: ^4.1.9
   nuxt:
     '@nuxt/kit': ^4.4.8
     '@nuxt/module-builder': ^1.0.2
