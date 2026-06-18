@@ -25,6 +25,7 @@ export {
   exponentialBackoff,
   resolveNitroTaskEnv,
   resolveQueueBindingName,
+  runtimeConfigSource,
 } from './queue'
 export type { JobQueuePublisher, JobQueuePublisherOptions, QueueBindingUnavailableInput, QueueBindingUnavailableReason, QueueSource } from './queue'
 export * from './recovery'
@@ -32,6 +33,7 @@ export * from './registry'
 export * from './result'
 export * from './retry'
 export * from './runtime'
+export { useJobRuntimeConfig } from './runtime-config'
 export * from './scheduled'
 export * from './schema'
 export * from './types'
