@@ -224,7 +224,7 @@ export function useNuxtQuery(
         await callFetchHook(fetchOptions.onResponseError, context)
       }
       finally {
-        emitQueryFinish('error', context, context?.error ?? context?.response)
+        emitQueryFinish('error', context, toResponseError(context))
       }
     },
   } as any) as NuxtQuery<any, any>
@@ -320,6 +320,31 @@ function getQueryTelemetryState(context: unknown): QueryTelemetryState | undefin
   if (!context || typeof context !== 'object')
     return undefined
   return (context as Partial<Record<typeof QUERY_TELEMETRY_STATE, QueryTelemetryState>>)[QUERY_TELEMETRY_STATE]
+}
+
+// ofetch only sets `context.error` for request-side failures; on an HTTP response
+// error the interceptor receives a bare `Response` instead. Emitting that raw
+// `Response` as the telemetry error is useless to log or report (it stringifies to
+// `[object Response]` with no message). Synthesize a real `Error` from the response
+// when ofetch hasn't supplied one, mirroring ofetch's own FetchError shape so
+// downstream consumers can still read `status`/`data`/`response`.
+function toResponseError(context: any): unknown {
+  if (context?.error)
+    return context.error
+  const response = context?.response
+  if (!response)
+    return undefined
+  const method = String(context?.options?.method ?? 'GET').toUpperCase()
+  const url = describeQueryRequest(context?.request)
+  const error = new Error(`[${method}] "${url}": ${response.status} ${response.statusText}`) as Error & Record<string, unknown>
+  error.name = 'FetchError'
+  error.status = response.status
+  error.statusCode = response.status
+  error.statusText = response.statusText
+  error.statusMessage = response.statusText
+  error.data = (response as { _data?: unknown })._data
+  error.response = response
+  return error
 }
 
 function isPendingResponseError(context: unknown, ignoreResponseError: unknown): boolean {
