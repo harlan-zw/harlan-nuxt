@@ -19,7 +19,7 @@ catalog:
   nitropack: ^2.13.4
   nuxt: ^4.4.8
   unbuild: ^3.6.1
-  wrangler: ^4.100.0
+  wrangler: ^4.101.0
 
 catalogs:
   dev-build:
@@ -27,7 +27,7 @@ catalogs:
     typescript: ^6.0.3
     vue-tsc: ^3.3.5
   dev-test:
-    happy-dom: ^20.10.4
+    happy-dom: ^20.10.6
     vitest: ^4.1.9
   nuxt:
     '@nuxt/kit': ^4.4.8
