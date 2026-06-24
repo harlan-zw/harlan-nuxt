@@ -175,7 +175,7 @@ async function resolveJobFiles(options: ModuleOptions, rootDir: string): Promise
       return []
     return resolveFiles(resolvedDir, pattern, { ignore })
   }))
-  return files.flat()
+  return [...new Set(files.flat())]
 }
 
 async function assertUniqueGeneratedJobNames(files: string[], options: ModuleOptions, rootDir: string): Promise<void> {
