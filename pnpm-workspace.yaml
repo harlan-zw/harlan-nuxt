@@ -6,7 +6,7 @@ trustPolicyExclude:
   - tinyexec@1.2.2
 
 catalog:
-  '@antfu/eslint-config': latest
+  '@antfu/eslint-config': ^9.1.0
   '@nuxt/test-utils': ^4.0.3
   '@vitest/coverage-v8': 4.1.9
   citty: ^0.2.2
@@ -19,11 +19,11 @@ catalog:
   nitropack: ^2.13.4
   nuxt: ^4.4.8
   unbuild: ^3.6.1
-  wrangler: ^4.101.0
+  wrangler: ^4.104.0
 
 catalogs:
   dev-build:
-    '@types/node': ^25.9.3
+    '@types/node': ^26.0.0
     typescript: ^6.0.3
     vue-tsc: ^3.3.5
   dev-test:
