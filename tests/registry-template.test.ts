@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { generateRegistryTemplate, generateRegistryTypesTemplate } from '../src/build/registry'
+import { generateRegistryTemplate, generateRegistryTypesTemplate, inlineRegistryTemplateInNitroDev } from '../src/build/registry'
 
 const rootDir = resolve(__dirname, 'fixtures/nuxt-demo')
 const templateDir = resolve(__dirname, 'fixtures/nuxt-demo/.nuxt/cf-jobs')
@@ -18,11 +18,12 @@ const options = {
 describe('generateRegistryTemplate (data-only lazy registry)', () => {
   it('imports nothing framework-bound — only the app factory', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
-    // The registry loads in raw Node / the Vite build / nitro dev's external
-    // `file://` graph, so it must NOT import `nitropack/runtime` (drags
-    // `internal/storage.mjs` → unresolved `#nitro-internal-virtual/storage`) nor
-    // `#imports` (a build-only Nuxt virtual). nitro's `useRuntimeConfig` is
-    // injected at runtime by the `provide-runtime-config` server plugin.
+    // The registry loads in raw Node and Vite contexts, so it must NOT import
+    // `nitropack/runtime` (drags `internal/storage.mjs` → unresolved
+    // `#nitro-internal-virtual/storage`) nor `#imports` (a build-only Nuxt
+    // virtual). Nitro dev inlines the registry separately so its job imports are
+    // bundled, and `useRuntimeConfig` is injected at runtime by the
+    // `provide-runtime-config` server plugin.
     expect(out).not.toMatch(/from\s+['"]nitropack\/runtime['"]/)
     expect(out).not.toMatch(/from\s+['"]#imports['"]/)
     expect(out).not.toContain('useRuntimeConfig')
@@ -137,5 +138,43 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     await expect(generateRegistryTypesTemplate(options, root, join(root, '.nuxt/cf-jobs')))
       .rejects
       .toThrow('Duplicate nuxt-cf-jobs generated job names')
+  })
+})
+
+describe('inlineRegistryTemplateInNitroDev', () => {
+  it('inlines the generated registry in Nitro dev even when rollup resolves it as a file URL', () => {
+    const registryPath = '/tmp/app/.nuxt/cf-jobs/registry.js'
+    const existingInline = /node_modules\/already-inline/
+    const nuxt = {
+      options: {
+        dev: true,
+        nitro: {
+          externals: {
+            inline: [existingInline],
+          },
+        },
+      },
+    }
+
+    inlineRegistryTemplateInNitroDev(nuxt as never, registryPath)
+
+    const inline = nuxt.options.nitro.externals.inline
+    expect(inline[0]).toBe(existingInline)
+    const matcher = inline[1] as (id: string) => boolean
+    expect(matcher(registryPath)).toBe(true)
+    expect(matcher('file:///tmp/app/.nuxt/cf-jobs/registry.js')).toBe(true)
+    expect(matcher('file:///tmp/app/.nuxt/cf-jobs/other.js')).toBe(false)
+  })
+
+  it('does not mutate Nitro externals outside dev', () => {
+    const nuxt = {
+      options: {
+        dev: false,
+      },
+    }
+
+    inlineRegistryTemplateInNitroDev(nuxt as never, '/tmp/app/.nuxt/cf-jobs/registry.js')
+
+    expect(nuxt.options).not.toHaveProperty('nitro')
   })
 })
