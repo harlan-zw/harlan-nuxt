@@ -279,7 +279,16 @@ function release(url: string) {
   conn.stopped = true
   if (conn.reconnect)
     clearTimeout(conn.reconnect)
-  conn.ws?.close()
+  // Closing a socket that is still CONNECTING makes the browser log
+  // "WebSocket is closed before the connection is established." A short-lived
+  // consumer (a pro route that unmounts before the handshake completes) hits
+  // this on every navigation. Defer the close until the socket opens so the
+  // handshake finishes cleanly first.
+  const ws = conn.ws
+  if (ws && ws.readyState === WebSocket.CONNECTING)
+    ws.addEventListener('open', () => ws.close(), { once: true })
+  else
+    ws?.close()
   registry.delete(url)
 }
 
