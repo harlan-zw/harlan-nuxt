@@ -13,7 +13,7 @@ catalog:
   consola: ^3.4.2
   eslint-plugin-harlanzw: ^0.17.0
   nitropack: ^2.13.4
-  oxc-parser: 0.136.0
+  oxc-parser: 0.137.0
   oxc-walker: 1.0.0
   pathe: ^2.0.3
   unbuild: ^3.6.1
@@ -21,16 +21,16 @@ catalog:
 
 catalogs:
   dev-build:
-    '@arethetypeswrong/cli': ^0.18.3
+    '@arethetypeswrong/cli': ^0.18.4
     typescript: ^6.0.3
     vue-tsc: ^3.3.5
   dev-lint:
-    '@antfu/eslint-config': ^9.0.0
+    '@antfu/eslint-config': ^9.1.0
     eslint: ^10.5.0
   dev-test:
     '@nuxt/test-utils': ^4.0.3
     '@vue/test-utils': ^2.4.11
-    happy-dom: ^20.10.4
+    happy-dom: ^20.10.6
     vitest: ^4.1.9
   nuxt:
     '@nuxt/kit': ^4.4.8

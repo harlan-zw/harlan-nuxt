@@ -17,6 +17,7 @@ import {
   normalizeFetchTelemetryOptions,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
   recordFetchTelemetry,
+  resolveSlowFetchThreshold,
   startFetchTelemetry,
   summarizeFetchTelemetry,
 } from '../../telemetry'
@@ -225,10 +226,12 @@ export default defineNitroPlugin((nitroApp) => {
         logger.warn(formatFetchTimeoutTelemetryEvent(timeoutEvent))
     }
 
-    if (ok && options.slowFetchThreshold > 0 && durationMs >= options.slowFetchThreshold) {
+    const slowThreshold = readFetchSlowThreshold(opts?.slowFetchThreshold)
+      ?? resolveSlowFetchThreshold(options.slowFetchThreshold, requestHost(request))
+    if (ok && typeof slowThreshold === 'number' && slowThreshold > 0 && durationMs >= slowThreshold) {
       const slowEvent: SlowFetchTelemetryEvent = {
         ...event,
-        thresholdMs: options.slowFetchThreshold,
+        thresholdMs: slowThreshold,
       }
       callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, slowEvent)
       if (options.console)
@@ -594,6 +597,32 @@ function readFetchTimeout(value: unknown): number | false | undefined {
     return false
   const timeout = Number(value)
   return Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
+}
+
+// Per-call slow-fetch threshold override (ms): `$fetch(url, { slowFetchThreshold })`.
+// `false`/`0` mutes detection for that one call; `undefined` defers to the
+// configured global/per-host threshold.
+function readFetchSlowThreshold(value: unknown): number | false | undefined {
+  if (value == null)
+    return undefined
+  if (value === false || value === 'false' || value === 0 || value === '0')
+    return false
+  const threshold = Number(value)
+  return Number.isFinite(threshold) && threshold > 0 ? Math.floor(threshold) : undefined
+}
+
+// Hostname for per-host threshold lookup. Relative/internal fetches have no
+// host and resolve to the map default.
+function requestHost(request: unknown): string | undefined {
+  const raw = describeRequest(request)
+  if (raw.startsWith('/'))
+    return undefined
+  try {
+    return new URL(raw).hostname
+  }
+  catch {
+    return undefined
+  }
 }
 
 function isFetchTimeoutError(error: unknown, durationMs: number, timeoutMs: number): boolean {

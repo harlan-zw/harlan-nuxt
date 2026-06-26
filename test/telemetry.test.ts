@@ -13,7 +13,9 @@ import {
   formatSlowFetchTelemetryEvent,
   isFetchWaterfall,
   normalizeFetchTelemetryOptions,
+  normalizeSlowFetchThreshold,
   recordFetchTelemetry,
+  resolveSlowFetchThreshold,
   startFetchTelemetry,
   summarizeFetchTelemetry,
 } from '../src/runtime/telemetry'
@@ -107,6 +109,51 @@ describe('fetch telemetry', () => {
   it('allows disabling the default server fetch timeout', () => {
     expect(normalizeFetchTelemetryOptions({ timeout: false }).timeout).toBe(false)
     expect(normalizeFetchTelemetryOptions({ timeout: '0' as any }).timeout).toBe(false)
+  })
+
+  it('normalizes a per-host slow-fetch threshold map', () => {
+    const normalized = normalizeSlowFetchThreshold({
+      default: '3000' as any,
+      hosts: {
+        'gscdump.com': '12000' as any,
+        'WWW.Example.COM': 8_000,
+        'muted.test': 0,
+        'bad.test': 'nope' as any,
+      },
+    }, 3_000)
+    expect(normalized).toEqual({
+      default: 3_000,
+      hosts: {
+        'gscdump.com': 12_000,
+        'example.com': 8_000,
+        'muted.test': false,
+      },
+    })
+  })
+
+  it('falls back to the provided default for invalid thresholds', () => {
+    expect(normalizeSlowFetchThreshold(undefined, 3_000)).toBe(3_000)
+    expect(normalizeSlowFetchThreshold('nope' as any, 3_000)).toBe(3_000)
+    expect(normalizeSlowFetchThreshold({ hosts: {} }, 3_000)).toEqual({ default: 3_000, hosts: {} })
+    expect(normalizeSlowFetchThreshold(false, 3_000)).toBe(false)
+  })
+
+  it('resolves per-host thresholds with www-stripping and default fallthrough', () => {
+    const map = normalizeSlowFetchThreshold({
+      default: 3_000,
+      hosts: { 'gscdump.com': 12_000, 'muted.test': 0 },
+    }, 3_000)
+    // exact host override
+    expect(resolveSlowFetchThreshold(map, 'gscdump.com')).toBe(12_000)
+    // www. prefix is stripped before lookup
+    expect(resolveSlowFetchThreshold(map, 'www.gscdump.com')).toBe(12_000)
+    // explicit mute
+    expect(resolveSlowFetchThreshold(map, 'muted.test')).toBe(false)
+    // un-mapped host + relative/internal (undefined) fall to default
+    expect(resolveSlowFetchThreshold(map, 'other.example')).toBe(3_000)
+    expect(resolveSlowFetchThreshold(map, undefined)).toBe(3_000)
+    // a plain number applies to every host
+    expect(resolveSlowFetchThreshold(5_000, 'gscdump.com')).toBe(5_000)
   })
 
   it('formats server fetch events as readable blocks', () => {

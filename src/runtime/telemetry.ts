@@ -1,3 +1,26 @@
+export interface SlowFetchThresholdMap {
+  /**
+   * Default threshold (ms) applied to hosts without a specific override.
+   * `0` or `false` disables slow-fetch detection for un-mapped hosts.
+   */
+  default: number | false
+  /**
+   * Per-host threshold overrides (ms), keyed by hostname (e.g. `gscdump.com`).
+   * A leading `www.` is stripped before lookup. Set a host to `0`/`false` to
+   * mute it entirely. Use this to raise the bar for a known-slow upstream
+   * without desensitising detection for every other fetch.
+   */
+  hosts: Record<string, number | false>
+}
+
+/**
+ * Slow-fetch threshold in milliseconds. Pass a single number to apply one
+ * threshold to every outbound fetch, or a {@link SlowFetchThresholdMap} to map
+ * per-host thresholds. Individual calls may override either form by passing a
+ * `slowFetchThreshold` option to the tracked `$fetch`.
+ */
+export type SlowFetchThreshold = number | SlowFetchThresholdMap
+
 export interface FetchTelemetryRuntimeOptions {
   console: boolean
   debug: boolean
@@ -5,7 +28,7 @@ export interface FetchTelemetryRuntimeOptions {
   enabled: boolean
   nestedFetchDepthThreshold: number | false
   recursiveFetchWarning: boolean
-  slowFetchThreshold: number
+  slowFetchThreshold: SlowFetchThreshold
   timeout: number | false
   waterfallMinFetches: number
   waterfallThreshold: number
@@ -196,7 +219,7 @@ export function normalizeFetchTelemetryOptions(input: Partial<FetchTelemetryRunt
     enabled: booleanOption(input.enabled, DEFAULT_FETCH_TELEMETRY_OPTIONS.enabled),
     nestedFetchDepthThreshold: thresholdOption(input.nestedFetchDepthThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.nestedFetchDepthThreshold),
     recursiveFetchWarning: booleanOption(input.recursiveFetchWarning, DEFAULT_FETCH_TELEMETRY_OPTIONS.recursiveFetchWarning),
-    slowFetchThreshold: numberOption(input.slowFetchThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.slowFetchThreshold),
+    slowFetchThreshold: normalizeSlowFetchThreshold(input.slowFetchThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.slowFetchThreshold),
     timeout: timeoutOption(input.timeout, DEFAULT_FETCH_TELEMETRY_OPTIONS.timeout),
     waterfallMinFetches: numberOption(input.waterfallMinFetches, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallMinFetches),
     waterfallThreshold: numberOption(input.waterfallThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallThreshold),
@@ -496,6 +519,63 @@ function thresholdOption(value: unknown, fallback: number | false): number | fal
   if (Number.isFinite(number) && number > 0)
     return Math.floor(number)
   return fallback
+}
+
+/**
+ * Validate a slow-fetch threshold option into its canonical form. Accepts a
+ * number (one threshold for every host) or a per-host map; invalid entries fall
+ * back to the provided default so a malformed config can never silence
+ * detection outright.
+ */
+export function normalizeSlowFetchThreshold(value: unknown, fallback: SlowFetchThreshold): SlowFetchThreshold {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const map = value as Partial<SlowFetchThresholdMap>
+    const fallbackDefault = typeof fallback === 'number' ? fallback : fallback.default
+    const hosts: Record<string, number | false> = {}
+    if (map.hosts && typeof map.hosts === 'object') {
+      for (const [host, threshold] of Object.entries(map.hosts)) {
+        const normalized = slowThresholdValue(threshold)
+        if (normalized != null)
+          hosts[normalizeHostKey(host)] = normalized
+      }
+    }
+    const normalizedDefault = slowThresholdValue(map.default)
+    return {
+      default: normalizedDefault ?? fallbackDefault,
+      hosts,
+    }
+  }
+  const normalized = slowThresholdValue(value)
+  return normalized ?? fallback
+}
+
+/**
+ * Resolve the effective slow-fetch threshold (ms) for a request host. A `www.`
+ * prefix is stripped before lookup; un-mapped hosts (and relative/internal
+ * fetches, which pass `undefined`) fall through to the map default.
+ */
+export function resolveSlowFetchThreshold(threshold: SlowFetchThreshold, host: string | undefined): number | false {
+  if (typeof threshold === 'number')
+    return threshold
+  if (host) {
+    const key = normalizeHostKey(host)
+    if (key in threshold.hosts)
+      return threshold.hosts[key]
+  }
+  return threshold.default
+}
+
+function slowThresholdValue(value: unknown): number | false | null {
+  if (value === false || value === 'false' || value === 0 || value === '0')
+    return false
+  const number = Number(value)
+  if (Number.isFinite(number) && number > 0)
+    return Math.floor(number)
+  return null
+}
+
+function normalizeHostKey(host: string): string {
+  return host.trim().toLowerCase().replace(/^www\./, '')
 }
 
 function formatDuration(ms: number): string {
