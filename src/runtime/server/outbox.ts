@@ -173,6 +173,13 @@ export interface DurableJobRecoveryRepository<
   findDispatchableJobs?: (query?: DurableJobRecoveryQuery) => Promise<Record[]>
   findStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Record[]>
   releaseStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
+  /**
+   * Terminally fail stale-reserved jobs that have already exhausted their
+   * attempts (`attempts >= max_attempts`), moving them to `failed_jobs` instead
+   * of leaving them to be re-released forever. Returns the number terminalized.
+   * Optional so older repositories degrade to the prior (revive-only) behaviour.
+   */
+  failStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
 }
 
 export interface PruneDurableJobsQuery {
@@ -593,6 +600,16 @@ export async function releaseStaleReservedDurableJobs<
   query: DurableJobStaleRecoveryQuery,
 ): Promise<number> {
   return await repository.releaseStaleReservedJobs?.(query) ?? 0
+}
+
+export async function failStaleReservedDurableJobs<
+  Queue extends string,
+  Record extends Pick<DurableJobRecord<Queue>, 'id' | 'queue'>,
+>(
+  repository: Pick<DurableJobRecoveryRepository<Queue, Record>, 'failStaleReservedJobs'>,
+  query: DurableJobStaleRecoveryQuery,
+): Promise<number> {
+  return await repository.failStaleReservedJobs?.(query) ?? 0
 }
 
 /**

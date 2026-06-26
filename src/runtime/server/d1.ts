@@ -399,6 +399,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
             AND reserved_at <= ?
             AND completed_at IS NULL
             AND failed_at IS NULL
+            AND (max_attempts IS NULL OR attempts < max_attempts)
           ORDER BY reserved_at ASC
           LIMIT ?
         )
@@ -409,6 +410,52 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         query.limit ?? 100,
       ).run()
       return result.meta?.changes ?? 0
+    },
+
+    // A reservation that goes stale (worker evicted before settling) is normally
+    // revived by `releaseStaleReservedJobs`. But a perpetually-stale job would be
+    // revived forever, its `attempts` climbing past `max_attempts` while never
+    // reaching the consumer's terminal branch (which only fires on an actual
+    // throw). Honour the Laravel cap here: move stale rows that have already hit
+    // `attempts >= max_attempts` to `failed_jobs` instead. `INSERT OR REPLACE`
+    // keeps it idempotent, and the DELETE only removes rows that made it into
+    // `failed_jobs`, so a mid-tick failure can't lose a job (it just retries the
+    // move next tick). `max_attempts IS NOT NULL` leaves uncapped jobs untouched.
+    async failStaleReservedJobs(query) {
+      await db.prepare(`
+        INSERT OR REPLACE INTO ${failedJobsTable} (
+          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+          exception, attempts, max_attempts, failed_at
+        )
+        SELECT
+          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+          ?, attempts, max_attempts, unixepoch()
+        FROM ${jobsTable}
+        WHERE reserved_at IS NOT NULL
+          AND reserved_at <= ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+          AND max_attempts IS NOT NULL
+          AND attempts >= max_attempts
+        ORDER BY reserved_at ASC
+        LIMIT ?
+      `).bind(
+        query.error ?? 'stale-reservation: exhausted retries',
+        query.staleBefore,
+        query.limit ?? 100,
+      ).run()
+
+      const deleted = await db.prepare(`
+        DELETE FROM ${jobsTable}
+        WHERE reserved_at IS NOT NULL
+          AND reserved_at <= ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+          AND max_attempts IS NOT NULL
+          AND attempts >= max_attempts
+          AND id IN (SELECT id FROM ${failedJobsTable})
+      `).bind(query.staleBefore).run()
+      return deleted.meta?.changes ?? 0
     },
 
     toDispatchableJob(job) {

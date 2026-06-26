@@ -6,6 +6,7 @@ import type {
 } from './outbox'
 import {
   dispatchDurableJobBatch,
+  failStaleReservedDurableJobs,
   findDispatchableDurableJobs,
   releaseStaleReservedDurableJobs,
 } from './outbox'
@@ -20,6 +21,7 @@ export interface RecoverDurableJobsOptions {
 
 export interface RecoverDurableJobsResult<Queue extends string = string> {
   released: number
+  terminalized: number
   swept: number
   dispatched: number
   stale: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
@@ -41,6 +43,16 @@ export async function recoverDurableJobs<
   const orphanedSeconds = opts.orphanedSeconds ?? 600
   const limit = opts.limit ?? 100
   const staleBefore = nowSeconds - staleSeconds
+
+  // Terminalize exhausted stale reservations FIRST (move them to failed_jobs).
+  // Doing this before the find/release below means the revive path only ever
+  // sees still-retriable jobs, so an `attempts >= max_attempts` job can't be
+  // re-dispatched into an endless reaper → stale → reaper loop.
+  const terminalized = await failStaleReservedDurableJobs(repository, {
+    staleBefore,
+    error: opts.staleError ? `${opts.staleError}: exhausted retries` : 'exhausted retries',
+    limit,
+  })
 
   const stale = await repository.findStaleReservedJobs?.({
     staleBefore,
@@ -68,6 +80,7 @@ export async function recoverDurableJobs<
 
   return {
     released,
+    terminalized,
     swept: dispatchable.length,
     dispatched: dispatchResults.filter(result => result.status === 'sent').length,
     stale,

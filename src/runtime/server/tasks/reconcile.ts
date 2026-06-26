@@ -134,6 +134,7 @@ export default defineScheduledTask({
 
       const result = {
         released: recovered.released,
+        terminalized: recovered.terminalized,
         swept: recovered.swept,
         dispatched: recovered.dispatched,
         orphanedBatches,
@@ -141,7 +142,7 @@ export default defineScheduledTask({
       // Surface a tick that actually did (or should have done) work, so a
       // recovering backlog — or a swept-but-not-dispatched stall — is visible in
       // logs instead of hiding in the (un-logged) task return value.
-      if (result.swept > 0 || result.released > 0 || result.orphanedBatches > 0)
+      if (result.swept > 0 || result.released > 0 || result.terminalized > 0 || result.orphanedBatches > 0)
         console.warn(`[cf-jobs:reconcile] ${JSON.stringify(result)}`)
       return { result }
     }
