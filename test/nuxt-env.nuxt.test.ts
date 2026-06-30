@@ -246,11 +246,10 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     expect(echoCalls.mock.calls.length).toBe(callsAfterFirst)
   })
 
-  it('sequential mount with the same key reuses the existing _asyncData entry (no refetch)', async () => {
-    // Documents the surprising-vs-TanStack behavior: even with staleTime=0,
-    // a second `useFetch(key=X)` after the first resolved reuses Nuxt's
-    // existing `_asyncData[X]` entry rather than consulting `getCachedData`
-    // again. Refetch only happens via explicit refresh/invalidation/focus.
+  it('sequential stale remount with the same key refetches by default', async () => {
+    // Nuxt reuses an existing `_asyncData[X]` entry on sequential mounts, so
+    // `useNuxtQuery` explicitly refreshes stale resolved data to preserve the
+    // documented refetchOnMount default.
     const cache = useQueryCache()
     cache.lastFetched.clear()
     echoCalls.mockClear()
@@ -259,7 +258,8 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     const callsAfterFirst = echoCalls.mock.calls.length
 
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-3' })
-    expect(echoCalls.mock.calls.length).toBe(callsAfterFirst)
+    await new Promise(r => setTimeout(r, 50))
+    expect(echoCalls.mock.calls.length).toBeGreaterThan(callsAfterFirst)
   })
 
   it('a hydration-seeded payload key is served by getCachedData (no refetch) with staleTime > 0', async () => {
@@ -299,5 +299,29 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
 
     // Both keys refetched, so the endpoint was hit twice more.
     expect(echoCalls.mock.calls.length).toBeGreaterThanOrEqual(countAfterInitial + 2)
+  })
+
+  it('invalidateNuxtQueries marks inactive payload-only keys stale for the next mount', async () => {
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    setQueryData<{ call: number, fromPayload: boolean }>('inactive-sites:1', {
+      call: 0,
+      fromPayload: true,
+    })
+    expect(cache.lastFetched.has('inactive-sites:1')).toBe(true)
+
+    invalidateNuxtQueries('inactive-sites:')
+    expect(cache.lastFetched.has('inactive-sites:1')).toBe(false)
+
+    const q = await useNuxtQuery<{ call: number, fromPayload?: boolean }>('/api/echo-env', {
+      key: 'inactive-sites:1',
+      staleTime: 60_000,
+    })
+
+    expect(echoCalls.mock.calls.length).toBe(1)
+    expect(q.data.value?.fromPayload).toBeUndefined()
+    expect(q.data.value?.call).toBeGreaterThan(0)
   })
 })

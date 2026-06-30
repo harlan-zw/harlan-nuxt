@@ -7,3 +7,4 @@ export const useNuxtApp: any = undefined
 export const useRuntimeConfig: any = undefined
 export const refreshNuxtData: any = undefined
 export const clearNuxtData: any = undefined
+export const onNuxtReady: any = undefined

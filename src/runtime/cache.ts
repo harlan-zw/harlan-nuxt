@@ -41,11 +41,11 @@ export function markQueryFetched(cache: QueryCache, key: string, now: number = D
  * `'static'` are immutable until invalidated explicitly.
  */
 export function isQueryStale(cache: QueryCache, key: string, staleTime: QueryStaleTime, now: number = Date.now()): boolean {
-  if (staleTime === 'static' || !Number.isFinite(staleTime))
-    return false
   const ts = cache.lastFetched.get(key)
   if (ts == null)
     return true
+  if (staleTime === 'static' || !Number.isFinite(staleTime))
+    return false
   return now - ts >= staleTime
 }
 
@@ -67,7 +67,11 @@ export function retainQuery(
     clearTimeout(pending)
     cache.gcTimers.delete(key)
   }
+  let released = false
   return () => {
+    if (released)
+      return
+    released = true
     const next = (cache.refCounts.get(key) ?? 1) - 1
     if (next > 0) {
       cache.refCounts.set(key, next)

@@ -28,9 +28,14 @@ vi.mock('#app', () => ({
 vi.mock('@vueuse/core', () => ({
   useDocumentVisibility: () => ref('visible'),
   useEventListener: vi.fn(),
-  useIntervalFn: (fn: any) => {
-    lastIntervalFn = { fn }
-    return { pause: vi.fn(), resume: vi.fn() }
+  useIntervalFn: (fn: any, interval: any) => {
+    lastIntervalFn = {
+      fn,
+      interval,
+      pause: vi.fn(),
+      resume: vi.fn(),
+    }
+    return { pause: lastIntervalFn.pause, resume: lastIntervalFn.resume }
   },
 }))
 
@@ -244,6 +249,16 @@ describe('useNuxtQuery enabled gate', () => {
     await tick()
     expect(fetchState.refresh).toHaveBeenCalledOnce()
   })
+
+  it('refreshes when enabled flips for never-fetched immutable queries', async () => {
+    const enabled = ref(false)
+    useNuxtQuery('/api/x', { key: 'q', enabled, staleTime: Number.POSITIVE_INFINITY })
+
+    enabled.value = true
+    await tick()
+
+    expect(fetchState.refresh).toHaveBeenCalledOnce()
+  })
 })
 
 describe('useNuxtQuery TanStack-style refetch aliases', () => {
@@ -292,8 +307,16 @@ describe('useNuxtQuery refetchInterval', () => {
     expect(lastIntervalFn).toBeUndefined()
   })
 
+  it('does not start polling when refetchInterval is false', () => {
+    lastIntervalFn = undefined
+    useNuxtQuery('/api/x', { key: 'q', refetchInterval: false })
+    expect(lastIntervalFn).toBeUndefined()
+  })
+
   it('invokes refresh when the interval fn fires and enabled is true', () => {
     useNuxtQuery('/api/x', { key: 'q', refetchInterval: 30_000 })
+    expect(lastIntervalFn.resume).toHaveBeenCalledOnce()
+    expect(lastIntervalFn.interval.value).toBe(30_000)
     expect(fetchState.refresh).not.toHaveBeenCalled()
     lastIntervalFn.fn()
     expect(fetchState.refresh).toHaveBeenCalledOnce()
@@ -302,6 +325,50 @@ describe('useNuxtQuery refetchInterval', () => {
   it('does not fire the polled refresh when enabled is false', () => {
     useNuxtQuery('/api/x', { key: 'q', refetchInterval: 30_000, enabled: false })
     lastIntervalFn.fn()
+    expect(fetchState.refresh).not.toHaveBeenCalled()
+  })
+
+  it('pauses and resumes polling for reactive falsey intervals', async () => {
+    const interval = ref<number | false>(false)
+    useNuxtQuery('/api/x', { key: 'q', refetchInterval: interval })
+
+    expect(lastIntervalFn.pause).toHaveBeenCalledOnce()
+    expect(lastIntervalFn.interval.value).toBe(0)
+
+    interval.value = 1_000
+    await tick()
+    expect(lastIntervalFn.resume).toHaveBeenCalledOnce()
+    expect(lastIntervalFn.interval.value).toBe(1_000)
+
+    lastIntervalFn.fn()
+    expect(fetchState.refresh).toHaveBeenCalledOnce()
+
+    interval.value = false
+    await tick()
+    expect(lastIntervalFn.pause).toHaveBeenCalledTimes(2)
+    expect(lastIntervalFn.interval.value).toBe(0)
+
+    lastIntervalFn.fn()
+    expect(fetchState.refresh).toHaveBeenCalledOnce()
+  })
+})
+
+describe('useNuxtQuery refetchOnMount', () => {
+  it('refreshes stale resolved data on mount when refetchOnMount is true', () => {
+    fetchState.data.value = { n: 1 }
+    fetchState.status.value = 'success'
+    cache.lastFetched.set('q', Date.now() - 10_000)
+
+    useNuxtQuery('/api/x', { key: 'q', staleTime: 1 })
+
+    expect(fetchState.refresh).toHaveBeenCalledOnce()
+  })
+
+  it('does not double-refresh the initial pending fetch', () => {
+    fetchState.status.value = 'pending'
+
+    useNuxtQuery('/api/x', { key: 'q' })
+
     expect(fetchState.refresh).not.toHaveBeenCalled()
   })
 })

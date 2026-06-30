@@ -24,7 +24,9 @@ import {
 
 const STATE_KEY = '__nuxtUseQueryFetchTelemetry'
 const WRAPPED_KEY = '__nuxtUseQueryFetchTelemetryWrapped'
+const ORIGINAL_KEY = '__nuxtUseQueryFetchTelemetryOriginal'
 const INTERNAL_FETCH_STACK_HEADER = 'x-nuxt-use-query-fetch-stack'
+const INTERNAL_FETCH_STACK_TOKEN_HEADER = 'x-nuxt-use-query-fetch-stack-token'
 const SENSITIVE_QUERY_KEY_PARTS = [
   'access-key',
   'access_key',
@@ -47,6 +49,7 @@ const SENSITIVE_QUERY_KEY_PARTS = [
 ]
 
 type FetchLike = ((request: unknown, opts?: Record<string, unknown>) => Promise<unknown>) & {
+  [ORIGINAL_KEY]?: FetchLike
   [WRAPPED_KEY]?: boolean
   create?: (...args: unknown[]) => FetchLike
   native?: unknown
@@ -66,25 +69,26 @@ export default defineNitroPlugin((nitroApp) => {
   if (!options.enabled)
     return
 
+  const internalStackToken = createInternalStackToken()
   const original = globalThis.$fetch as FetchLike | undefined
-  if (!original || original[WRAPPED_KEY])
-    return
-
-  globalThis.$fetch = wrapFetch(original, () => {
-    const event = safeEvent()
-    return event ? getEventState(event) : undefined
-  }, true) as typeof globalThis.$fetch
+  const originalGlobalFetch = original?.[ORIGINAL_KEY] ?? original
+  if (originalGlobalFetch) {
+    globalThis.$fetch = wrapFetch(originalGlobalFetch, () => {
+      const event = safeEvent()
+      return event ? getEventState(event, internalStackToken) : undefined
+    }, true) as typeof globalThis.$fetch
+  }
 
   nitroApp.hooks.hook('request', (event) => {
     const fetchEvent = event as { $fetch?: FetchLike }
     const fetcher = fetchEvent.$fetch
-    if (!fetcher || fetcher[WRAPPED_KEY]) {
+    if (!fetcher) {
       return
     }
-    fetchEvent.$fetch = wrapFetch(fetcher, () => getEventState(event), true)
+    fetchEvent.$fetch = wrapFetch(fetcher[ORIGINAL_KEY] ?? fetcher, () => getEventState(event, internalStackToken), true)
   })
 
-  nitroApp.hooks.hook('afterResponse', (event) => {
+  nitroApp.hooks.hook('afterResponse', async (event) => {
     const state = (event?.context as Record<string, unknown> | undefined)?.[STATE_KEY]
     if (state == null)
       return
@@ -99,7 +103,7 @@ export default defineNitroPlugin((nitroApp) => {
       request,
       server: true,
     }
-    callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSummary, summaryEvent)
+    await callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSummary, summaryEvent)
 
     if (options.console && options.debug) {
       logger.debug(formatFetchSummaryTelemetryEvent(summaryEvent))
@@ -111,7 +115,7 @@ export default defineNitroPlugin((nitroApp) => {
         minFetches: options.waterfallMinFetches,
         thresholdMs: options.waterfallThreshold,
       }
-      callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchWaterfall, waterfallEvent)
+      await callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchWaterfall, waterfallEvent)
       if (options.console)
         logger.warn(formatFetchWaterfallTelemetryEvent(waterfallEvent))
     }
@@ -140,6 +144,7 @@ export default defineNitroPlugin((nitroApp) => {
     if ('native' in fetcher)
       wrapped.native = fetcher.native
 
+    wrapped[ORIGINAL_KEY] = fetcher
     wrapped[WRAPPED_KEY] = true
     return wrapped
   }
@@ -155,7 +160,7 @@ export default defineNitroPlugin((nitroApp) => {
     const state = resolveState()
     const internalFetch = state ? trackInternalFetch(request, resolved.opts, state) : undefined
     const fetchOptions = internalFetch
-      ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack)
+      ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack, internalStackToken)
       : resolved.opts
     const startedAt = Date.now()
     if (state)
@@ -360,7 +365,7 @@ function safeEvent(): any {
   }
 }
 
-function getEventState(event: any): FetchTelemetryState | undefined {
+function getEventState(event: any, internalStackToken: string): FetchTelemetryState | undefined {
   const ctx = event?.context as Record<string, unknown> | undefined
   if (ctx == null)
     return undefined
@@ -368,7 +373,7 @@ function getEventState(event: any): FetchTelemetryState | undefined {
   state.request ??= describeEvent(event)
   state.origin ??= describeEventOrigin(event)
   if (state.internalFetchStack.length === 0)
-    state.internalFetchStack = readIncomingFetchStack(event) ?? [describeEventFetchKey(event)]
+    state.internalFetchStack = readIncomingFetchStack(event, internalStackToken) ?? [describeEventFetchKey(event)]
   return state
 }
 
@@ -536,27 +541,33 @@ function redactFetchStack(stack: string[]): string[] {
   })
 }
 
-function withInternalFetchStackHeader(opts: Record<string, unknown> | undefined, stack: string[]): Record<string, unknown> {
+function withInternalFetchStackHeader(opts: Record<string, unknown> | undefined, stack: string[], token: string): Record<string, unknown> {
   return {
     ...(opts ?? {}),
-    headers: withHeader(opts?.headers, INTERNAL_FETCH_STACK_HEADER, serializeFetchStack(stack)),
+    headers: withHeaders(opts?.headers, {
+      [INTERNAL_FETCH_STACK_HEADER]: serializeFetchStack(redactFetchStack(stack)),
+      [INTERNAL_FETCH_STACK_TOKEN_HEADER]: token,
+    }),
   }
 }
 
-function withHeader(headers: unknown, name: string, value: string): unknown {
+function withHeaders(headers: unknown, values: Record<string, string>): unknown {
   if (typeof Headers !== 'undefined' && headers instanceof Headers) {
     const next = new Headers(headers)
-    next.set(name, value)
+    for (const [name, value] of Object.entries(values))
+      next.set(name, value)
     return next
   }
   if (Array.isArray(headers))
-    return [...headers, [name, value]]
+    return [...headers, ...Object.entries(values)]
   if (headers && typeof headers === 'object')
-    return { ...(headers as Record<string, unknown>), [name]: value }
-  return { [name]: value }
+    return { ...(headers as Record<string, unknown>), ...values }
+  return values
 }
 
-function readIncomingFetchStack(event: any): string[] | undefined {
+function readIncomingFetchStack(event: any, token: string): string[] | undefined {
+  if (headerValue(event?.node?.req?.headers, INTERNAL_FETCH_STACK_TOKEN_HEADER) !== token)
+    return undefined
   const value = headerValue(event?.node?.req?.headers, INTERNAL_FETCH_STACK_HEADER)
   if (!value)
     return undefined
@@ -578,6 +589,11 @@ function safeDecodeURIComponent(value: string): string {
   catch {
     return value
   }
+}
+
+function createInternalStackToken(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
 function headerValue(headers: unknown, name: string): string | undefined {

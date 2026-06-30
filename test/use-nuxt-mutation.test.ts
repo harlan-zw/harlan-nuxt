@@ -123,6 +123,47 @@ describe('useNuxtMutation onMutate + context', () => {
     ])
   })
 
+  it('runs onError rollback before onSettled observes final state', async () => {
+    const order: string[] = []
+    const m = useNuxtMutation<void, void, { rolledBack: boolean }>({
+      onMutate: () => ({ rolledBack: false }),
+      mutation: async () => { throw new Error('x') },
+      onError: (_error, _args, context) => {
+        order.push('error')
+        if (context)
+          context.rolledBack = true
+      },
+      onSettled: (_data, _error, _args, context) => {
+        order.push(`settled:${context?.rolledBack}`)
+      },
+    })
+
+    await m.mutate()
+
+    expect(order).toEqual(['error', 'settled:true'])
+  })
+
+  it('keeps pending true until all concurrent mutations settle', async () => {
+    const releases: Array<() => void> = []
+    const m = useNuxtMutation({
+      mutation: () => new Promise<void>((resolve) => {
+        releases.push(resolve)
+      }),
+    })
+
+    const first = m.mutate()
+    const second = m.mutate()
+    expect(m.pending.value).toBe(true)
+
+    releases[0]!()
+    await first
+    expect(m.pending.value).toBe(true)
+
+    releases[1]!()
+    await second
+    expect(m.pending.value).toBe(false)
+  })
+
   it('treats an onMutate throw as a mutation failure (does not run the mutation fn)', async () => {
     const fn = vi.fn()
     const m = useNuxtMutation({

@@ -19,7 +19,7 @@ export interface SlowFetchThresholdMap {
  * per-host thresholds. Individual calls may override either form by passing a
  * `slowFetchThreshold` option to the tracked `$fetch`.
  */
-export type SlowFetchThreshold = number | SlowFetchThresholdMap
+export type SlowFetchThreshold = number | false | SlowFetchThresholdMap
 
 export interface FetchTelemetryRuntimeOptions {
   console: boolean
@@ -280,15 +280,16 @@ export function callTelemetryHook(
   hooks: unknown,
   name: string,
   event: unknown,
-): void {
+): Promise<void> | void {
   const hookBus = hooks as { callHook?: (name: string, event: unknown) => Promise<void> | void } | undefined
   try {
     const result = hookBus?.callHook?.(name, event)
     if (result && typeof (result as Promise<void>).catch === 'function') {
-      void (result as Promise<void>).catch((error) => {
+      return (result as Promise<void>).catch((error) => {
         console.error('[nuxt-use-query] a telemetry hook threw:', error)
       })
     }
+    return result
   }
   catch (error) {
     console.error('[nuxt-use-query] a telemetry hook threw:', error)
@@ -530,7 +531,7 @@ function thresholdOption(value: unknown, fallback: number | false): number | fal
 export function normalizeSlowFetchThreshold(value: unknown, fallback: SlowFetchThreshold): SlowFetchThreshold {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const map = value as Partial<SlowFetchThresholdMap>
-    const fallbackDefault = typeof fallback === 'number' ? fallback : fallback.default
+    const fallbackDefault = typeof fallback === 'object' ? fallback.default : fallback
     const hosts: Record<string, number | false> = {}
     if (map.hosts && typeof map.hosts === 'object') {
       for (const [host, threshold] of Object.entries(map.hosts)) {
@@ -555,12 +556,15 @@ export function normalizeSlowFetchThreshold(value: unknown, fallback: SlowFetchT
  * fetches, which pass `undefined`) fall through to the map default.
  */
 export function resolveSlowFetchThreshold(threshold: SlowFetchThreshold, host: string | undefined): number | false {
+  if (threshold === false)
+    return false
   if (typeof threshold === 'number')
     return threshold
   if (host) {
     const key = normalizeHostKey(host)
-    if (key in threshold.hosts)
-      return threshold.hosts[key]
+    const hostThreshold = threshold.hosts[key]
+    if (hostThreshold !== undefined)
+      return hostThreshold
   }
   return threshold.default
 }

@@ -90,25 +90,28 @@ export function useNuxtMutation<TArgs = void, TResult = unknown, TContext = unkn
 ): NuxtMutation<TArgs, TResult> {
   const pending = ref(false)
   const error = ref<unknown>(null)
+  let pendingCount = 0
 
-  // Updates reactive state, then fires the outcome's hooks (settle before error,
-  // matching the rollback contract). Returns the outcome plus the first hook
-  // failure observed — both hooks always run regardless of an earlier throw.
+  // Updates reactive state, then fires outcome hooks. On failures `onError`
+  // runs before `onSettled` so rollback has happened before final observers
+  // inspect cache state. Returns the first hook failure observed — both hooks
+  // always run regardless of an earlier throw.
   async function settle(
     outcome: MutationResult<TResult>,
     args: TArgs,
     context: TContext | undefined,
   ): Promise<{ outcome: MutationResult<TResult>, hookError: unknown }> {
     error.value = outcome._tag === 'err' ? outcome.error : null
-    pending.value = false
+    pendingCount = Math.max(0, pendingCount - 1)
+    pending.value = pendingCount > 0
     const hookError = outcome._tag === 'ok'
       ? await runIsolatedHooks([
           () => opts.onSuccess?.(outcome.data, args, context),
           () => opts.onSettled?.(outcome.data, null, args, context),
         ], '[nuxt-use-query] a mutation lifecycle hook threw:')
       : await runIsolatedHooks([
-          () => opts.onSettled?.(undefined, outcome.error, args, context),
           () => opts.onError?.(outcome.error, args, context),
+          () => opts.onSettled?.(undefined, outcome.error, args, context),
         ], '[nuxt-use-query] a mutation lifecycle hook threw:')
     return { outcome, hookError }
   }
@@ -117,6 +120,7 @@ export function useNuxtMutation<TArgs = void, TResult = unknown, TContext = unkn
   // hook failure. `mutate` surfaces a failed rollback by throwing it; the
   // value-returning `mutateSafe` returns the outcome and relies on the report.
   async function runMutation(args: TArgs): Promise<{ outcome: MutationResult<TResult>, hookError: unknown }> {
+    pendingCount++
     pending.value = true
     error.value = null
     // `onMutate` runs first so a caller can optimistically update the cache and

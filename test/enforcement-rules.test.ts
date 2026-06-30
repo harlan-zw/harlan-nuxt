@@ -58,6 +58,15 @@ describe('apiLiteralOutsideQueryRule', () => {
     )
     expect(runRule(apiLiteralOutsideQueryRule, ctx)).toBe(false)
   })
+
+  it('normalizes trailing slashes in custom api prefixes', () => {
+    const ctx = makeCtx(
+      'app/components/Foo.ts',
+      'const x = "/api/sites"',
+      { apiPrefixes: ['/api/'] },
+    )
+    expect(runRule(apiLiteralOutsideQueryRule, ctx)).toBe(true)
+  })
 })
 
 describe('queryFileWithoutOperationRule', () => {
@@ -123,6 +132,14 @@ describe('operationResponseSchemaMissingRule', () => {
     expect(runRule(operationResponseSchemaMissingRule, ctx)).toBe(false)
   })
 
+  it('checks direct operation objects inside defineNuxtQueryGroup', () => {
+    const ctx = makeCtx(
+      'app/queries/sites.ts',
+      'export const g = defineNuxtQueryGroup("sites", { detail: { key: "s", path: "/api/s" } })',
+    )
+    expect(runRule(operationResponseSchemaMissingRule, ctx)).toBe(true)
+  })
+
   it('skips when response is present', () => {
     const ctx = makeCtx(
       'app/queries/sites.ts',
@@ -158,6 +175,14 @@ describe('mutationBodySchemaMissingRule', () => {
     )
     expect(runRule(mutationBodySchemaMissingRule, ctx)).toBe(false)
   })
+
+  it('checks direct mutation objects inside defineNuxtQueryGroup', () => {
+    const ctx = makeCtx(
+      'app/queries/update.ts',
+      'export const g = defineNuxtQueryGroup("sites", { update: { method: "PATCH", path: "/api/x", response: r } })',
+    )
+    expect(runRule(mutationBodySchemaMissingRule, ctx)).toBe(true)
+  })
 })
 
 describe('serverRouteMissingContractRule', () => {
@@ -177,6 +202,24 @@ describe('serverRouteMissingContractRule', () => {
       { requireServerContracts: true },
     )
     expect(runRule(serverRouteMissingContractRule, ctx)).toBe(false)
+  })
+
+  it('skips server/api files that only import zod error helpers', () => {
+    const ctx = makeCtx(
+      'server/api/sites.get.ts',
+      'import { ZodError } from "zod"; export default defineEventHandler(() => ZodError)',
+      { requireServerContracts: true },
+    )
+    expect(runRule(serverRouteMissingContractRule, ctx)).toBe(false)
+  })
+
+  it('detects inline schemas from aliased zod namespace imports', () => {
+    const ctx = makeCtx(
+      'server/api/sites.get.ts',
+      'import { z as zod } from "zod"; const body = zod.object({ id: zod.string() }); export default defineEventHandler(() => ({ ok: true }))',
+      { requireServerContracts: true },
+    )
+    expect(runRule(serverRouteMissingContractRule, ctx)).toBe(true)
   })
 
   it('skips when requireServerContracts is false', () => {

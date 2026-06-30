@@ -103,6 +103,23 @@ describe('contract query enforcer', () => {
     ])
   })
 
+  it('detects API literals inside Vue template event bindings', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'app/components/TemplateFetch.vue',
+          source: '<template><button @click="$fetch(\'/api/sites\')">Go</button></template>',
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations.map(violation => violation.code)).toEqual([
+      'api-literal-outside-query',
+    ])
+  })
+
   it('does not flag API-looking text in comments or non-configured prefixes', async () => {
     const enforcer = createContractQueryEnforcer({
       readSourceFiles: async () => [
@@ -144,5 +161,22 @@ describe('contract query enforcer', () => {
     const violations = await enforcer.scan('/app')
 
     expect(violations).toEqual([])
+  })
+
+  it('honors custom contractDirs without accepting shared/contracts implicitly', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'app/queries/sites.ts',
+          source: 'import { siteSchema } from "@/shared/contracts/legacy"; export const s = defineNuxtRpcQuery({ key: "s", path: "/api/s", response: siteSchema })',
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app', {
+      contractDirs: ['domain/contracts'],
+    })
+
+    expect(violations.map(violation => violation.code)).toContain('missing-contract-import')
   })
 })

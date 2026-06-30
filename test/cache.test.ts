@@ -38,6 +38,11 @@ describe('staleness helpers', () => {
     expect(isQueryStale(cache, 'k', Number.POSITIVE_INFINITY, 1_000 + 10 ** 9)).toBe(false)
   })
 
+  it('still treats immutable keys as stale until they have been fetched once', () => {
+    expect(isQueryStale(cache, 'k', Number.POSITIVE_INFINITY)).toBe(true)
+    expect(isQueryStale(cache, 'k', 'static')).toBe(true)
+  })
+
   it('never goes stale when staleTime is static', () => {
     markQueryFetched(cache, 'k', 1_000)
     expect(isQueryStale(cache, 'k', 'static', 1_000 + 10 ** 9)).toBe(false)
@@ -84,6 +89,21 @@ describe('retainQuery (gcTime eviction)', () => {
     const release2 = retainQuery(cache, 'k', 1_000, evict)
     vi.advanceTimersByTime(10_000)
     expect(evict).not.toHaveBeenCalled()
+    release2()
+    vi.advanceTimersByTime(1_000)
+    expect(evict).toHaveBeenCalledOnce()
+  })
+
+  it('release functions are idempotent', () => {
+    const evict = vi.fn()
+    const release = retainQuery(cache, 'k', 1_000, evict)
+    release()
+    release()
+
+    const release2 = retainQuery(cache, 'k', 1_000, evict)
+    vi.advanceTimersByTime(10_000)
+    expect(evict).not.toHaveBeenCalled()
+
     release2()
     vi.advanceTimersByTime(1_000)
     expect(evict).toHaveBeenCalledOnce()

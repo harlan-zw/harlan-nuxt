@@ -26,7 +26,7 @@ catalogs:
     vue-tsc: ^3.3.5
   dev-lint:
     '@antfu/eslint-config': ^9.1.0
-    eslint: ^10.5.0
+    eslint: ^10.6.0
   dev-test:
     '@nuxt/test-utils': ^4.0.3
     '@vue/test-utils': ^2.4.11
@@ -38,7 +38,7 @@ catalogs:
     '@nuxt/schema': ^4.4.8
     nuxt: ^4.4.6
   vue:
-    vue: ^3.5.38
+    vue: ^3.5.39
     vue-router: ^5.1.0
 
 onlyBuiltDependencies:

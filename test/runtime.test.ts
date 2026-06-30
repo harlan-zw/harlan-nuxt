@@ -46,7 +46,7 @@ interface Probe {
 interface TelemetryStore {
   duplicates: Array<{ count?: number, threshold?: number, url?: string }>
   fetches: Array<{ request?: string, url?: string }>
-  nested: Array<{ depth?: number, threshold?: number, url?: string }>
+  nested: Array<{ depth?: number, stack?: string[], threshold?: number, url?: string }>
   recursive: Array<{ depth?: number, stack?: string[], url?: string }>
   slowFetches: unknown[]
   summaries: Array<{
@@ -156,6 +156,30 @@ describe('nuxt-use-query · e2e', () => {
       && event.depth === 2
       && event.stack?.filter(item => item === 'GET /api/telemetry-recursive').length === 2,
     )).toBe(true)
+  })
+
+  it('redacts and authenticates propagated internal fetch stack headers', async () => {
+    await $fetch('/api/telemetry', { query: { reset: '1' } })
+
+    const stackProbe = await $fetch<{ stack: string, token: string }>('/api/telemetry-stack-parent')
+    const decodedStack = decodeURIComponent(stackProbe.stack)
+
+    expect(stackProbe.token).toBeTypeOf('string')
+    expect(stackProbe.token.length).toBeGreaterThan(0)
+    expect(decodedStack).toContain('redacted')
+    expect(decodedStack).not.toContain('fixture-secret-token')
+
+    await $fetch('/api/telemetry', { query: { reset: '1' } })
+    await $fetch('/api/telemetry-depth', {
+      headers: {
+        'x-nuxt-use-query-fetch-stack': encodeURIComponent('GET /fake-parent'),
+      },
+    })
+
+    const telemetry = await $fetch<TelemetryStore>('/api/telemetry')
+    expect(telemetry.nested.some(event =>
+      event.stack?.some(item => item.includes('/fake-parent')),
+    )).toBe(false)
   })
 
   it('hits the echo endpoint directly through Nitro', async () => {

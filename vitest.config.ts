@@ -1,13 +1,19 @@
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineVitestConfig } from '@nuxt/test-utils/config'
 import { defineConfig, defineProject } from 'vitest/config'
 
+const rootDir = dirname(fileURLToPath(import.meta.url))
+const r = (path: string) => resolve(rootDir, path)
+
 const packageAliases = {
-  'nuxt-use-query/cache': '/home/harlan/pkg/nuxt-use-query/src/runtime/cache.ts',
-  'nuxt-use-query/mutation': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useNuxtMutation.ts',
-  'nuxt-use-query/query': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useNuxtQuery.ts',
-  'nuxt-use-query/query-cache': '/home/harlan/pkg/nuxt-use-query/src/runtime/composables/useQueryCache.ts',
-  'nuxt-use-query/rpc': '/home/harlan/pkg/nuxt-use-query/src/runtime/rpc/index.ts',
-  'nuxt-use-query/telemetry': '/home/harlan/pkg/nuxt-use-query/src/runtime/telemetry.ts',
+  'nuxt-use-query/cache': r('src/runtime/cache.ts'),
+  'nuxt-use-query/mutation': r('src/runtime/composables/useNuxtMutation.ts'),
+  'nuxt-use-query/query': r('src/runtime/composables/useNuxtQuery.ts'),
+  'nuxt-use-query/query-cache': r('src/runtime/composables/useQueryCache.ts'),
+  'nuxt-use-query/rpc': r('src/runtime/rpc/index.ts'),
+  'nuxt-use-query/subscription': r('src/runtime/composables/useNuxtSubscription.ts'),
+  'nuxt-use-query/telemetry': r('src/runtime/telemetry.ts'),
 }
 
 const nuxtProject = defineVitestConfig({
@@ -19,7 +25,7 @@ const nuxtProject = defineVitestConfig({
     environment: 'nuxt',
     environmentOptions: {
       nuxt: {
-        rootDir: '/home/harlan/pkg/nuxt-use-query/test/fixture',
+        rootDir: r('test/fixture'),
       },
     },
     include: ['test/**/*.nuxt.test.ts'],
@@ -34,7 +40,7 @@ export default defineConfig({
       defineProject({
         resolve: {
           alias: {
-            '#app': '/home/harlan/pkg/nuxt-use-query/test/stubs/app.ts',
+            '#app': r('test/stubs/app.ts'),
             ...packageAliases,
           },
         },

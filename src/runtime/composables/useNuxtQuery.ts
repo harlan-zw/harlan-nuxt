@@ -6,11 +6,11 @@ import type {
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
 import type { QueryTelemetryFinishEvent, QueryTelemetryStartEvent } from '../telemetry'
-import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
-import { computed, getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from 'vue'
-import { clearNuxtData, useFetch, useNuxtApp, useRuntimeConfig } from '#app'
-import { isQueryStale, markQueryFetched, retainQuery } from '../cache'
+import { computed, toValue } from 'vue'
+import { useFetch, useNuxtApp, useRuntimeConfig } from '#app'
+import { isQueryStale } from '../cache'
 import { readNuxtData } from '../nuxt-data'
+import { applyQueryLifecycle } from '../query-lifecycle'
 import { callTelemetryHook, NUXT_USE_QUERY_TELEMETRY_HOOKS } from '../telemetry'
 import { useQueryCache } from './useQueryCache'
 
@@ -229,65 +229,18 @@ export function useNuxtQuery(
     },
   } as any) as NuxtQuery<any, any>
 
-  const previousData = shallowRef()
-  watch(query.data, (value) => {
-    if (value != null)
-      previousData.value = value
-  }, { immediate: true })
-  const isPlaceholderData = computed(() => {
-    return keepPreviousData && query.data.value == null && previousData.value !== undefined
-  })
-  const displayData = computed(() => {
-    return isPlaceholderData.value ? previousData.value : query.data.value
-  })
-
-  query.displayData = displayData
-  query.isPlaceholderData = isPlaceholderData
-  query.isPending = computed(() => query.status.value === 'pending' && query.data.value == null)
-  query.isFetching = computed(() => query.status.value === 'pending')
-
-  let release: (() => void) | undefined
-  watch(key, (next) => {
-    release?.()
-    release = retainQuery(cache, next, gcTime, () => clearNuxtData(next))
-  }, { immediate: true })
-  if (getCurrentScope())
-    onScopeDispose(() => release?.())
-
-  watch(query.status, (status, previous) => {
-    if (previous === 'pending' && status === 'success')
-      markQueryFetched(cache, key.value)
-  })
-
-  watch(enabled, (next, previous) => {
-    if (next && previous === false && isQueryStale(cache, key.value, staleTime))
-      void query.refresh()
-  })
-
-  if (refetchOnMount === 'always' && enabled.value) {
-    void query.refresh()
-  }
-
-  if (import.meta.client) {
-    const visibility = useDocumentVisibility()
-    watch(visibility, (state) => {
-      if (state === 'visible')
-        refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnWindowFocus)
-    })
-
-    useEventListener(window, 'online', () => {
-      refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnReconnect)
-    })
-  }
-
-  if (refetchInterval != null) {
-    useIntervalFn(() => {
-      if (enabled.value)
-        void query.refresh()
-    }, computed(() => toValue(refetchInterval) || 0), { immediate: false })
-  }
-
-  return query
+  return applyQueryLifecycle(query as any, {
+    cache,
+    enabled,
+    gcTime,
+    key,
+    keepPreviousData,
+    refetchInterval,
+    refetchOnMount,
+    refetchOnReconnect,
+    refetchOnWindowFocus,
+    staleTime,
+  }) as NuxtQuery<any, any>
 }
 
 function isQueryTelemetryEnabled(): boolean {
@@ -366,18 +319,4 @@ function describeQueryRequest(request: NitroFetchRequest | MaybeRefOrGetter<Nitr
   if (value && typeof value === 'object' && 'url' in value)
     return String((value as { url: unknown }).url)
   return '[unknown]'
-}
-
-function refetchIfAllowed(
-  query: { refresh: () => Promise<void> },
-  enabled: boolean,
-  key: string,
-  cache: ReturnType<typeof useQueryCache>,
-  staleTime: QueryStaleTime,
-  option: boolean | 'always',
-) {
-  if (!enabled || !option)
-    return
-  if (option === 'always' || isQueryStale(cache, key, staleTime))
-    void query.refresh()
 }

@@ -33,8 +33,10 @@ export function invalidateNuxtQueries(prefix?: string | ((key: string) => boolea
     ? prefix
     : (k: string) => !prefix || k.startsWith(prefix)
   const keys = listActiveNuxtDataKeys(nuxt).filter(matches)
-  for (const k of keys)
-    cache.lastFetched.delete(k)
+  for (const k of cache.lastFetched.keys()) {
+    if (matches(k))
+      cache.lastFetched.delete(k)
+  }
   if (keys.length > 0)
     void refreshNuxtData(keys)
 }

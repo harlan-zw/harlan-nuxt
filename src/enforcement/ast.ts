@@ -14,6 +14,37 @@ const RPC_DEFINE_NAMES = new Set([
   'defineNuxtQueryGroup',
 ])
 
+const ZOD_SCHEMA_FACTORY_NAMES = new Set([
+  'any',
+  'array',
+  'bigint',
+  'boolean',
+  'date',
+  'discriminatedUnion',
+  'enum',
+  'instanceof',
+  'intersection',
+  'lazy',
+  'literal',
+  'map',
+  'nan',
+  'nativeEnum',
+  'never',
+  'null',
+  'nullable',
+  'number',
+  'object',
+  'optional',
+  'record',
+  'set',
+  'string',
+  'tuple',
+  'undefined',
+  'union',
+  'unknown',
+  'void',
+])
+
 /** Walk once and yield every `defineNuxtRpc*` / `defineNuxtQueryGroup` call. */
 export function findRpcOperationCalls(ast: any): RpcOperationCall[] {
   const calls: RpcOperationCall[] = []
@@ -24,6 +55,11 @@ export function findRpcOperationCalls(ast: any): RpcOperationCall[] {
       const name = getCalleeName(node.callee)
       if (!name || !RPC_DEFINE_NAMES.has(name))
         return
+      if (name === 'defineNuxtQueryGroup') {
+        calls.push({ calleeName: name, argument: node.arguments?.[1] ?? null })
+        collectQueryGroupOperationObjects(node.arguments?.[1], calls)
+        return
+      }
       calls.push({ calleeName: name, argument: node.arguments?.[0] ?? null })
     },
   })
@@ -51,21 +87,52 @@ export function hasApiLiteral(ast: any, apiPrefixes: string[]): boolean {
  */
 export function hasZodUsage(ast: any): boolean {
   let found = false
+  const zodNamespaces = new Set<string>()
+  const zodFactories = new Set<string>()
+
+  walk(ast.program, {
+    enter(node: any) {
+      if (node.type !== 'ImportDeclaration')
+        return
+      const source = node.source?.value
+      if (typeof source !== 'string' || (source !== 'zod' && !source.startsWith('zod/')))
+        return
+      for (const specifier of node.specifiers ?? []) {
+        if (specifier.type === 'ImportNamespaceSpecifier') {
+          zodNamespaces.add(specifier.local?.name)
+          continue
+        }
+        if (specifier.type !== 'ImportSpecifier')
+          continue
+        const imported = getPropertyName(specifier.imported)
+        const local = specifier.local?.name
+        if (!local)
+          continue
+        if (imported === 'z')
+          zodNamespaces.add(local)
+        if (imported && ZOD_SCHEMA_FACTORY_NAMES.has(imported))
+          zodFactories.add(local)
+      }
+    },
+  })
+
   walk(ast.program, {
     enter(node: any) {
       if (found)
         return
-      if (node.type === 'ImportDeclaration') {
-        const source = node.source?.value
-        if (typeof source === 'string' && (source === 'zod' || source.startsWith('zod/'))) {
-          found = true
-          return
-        }
+      if (
+        node.type === 'CallExpression'
+        && node.callee?.type === 'MemberExpression'
+        && node.callee.object?.type === 'Identifier'
+        && zodNamespaces.has(node.callee.object.name)
+        && ZOD_SCHEMA_FACTORY_NAMES.has(getPropertyName(node.callee.property) ?? '')
+      ) {
+        found = true
       }
       if (
-        node.type === 'MemberExpression'
-        && node.object?.type === 'Identifier'
-        && node.object.name === 'z'
+        node.type === 'CallExpression'
+        && node.callee?.type === 'Identifier'
+        && zodFactories.has(node.callee.name)
       ) {
         found = true
       }
@@ -136,12 +203,48 @@ function isApiLiteralNode(node: any, apiPrefixes: string[]): boolean {
 }
 
 function matchesPrefix(value: string, prefix: string): boolean {
-  return value === prefix || value.startsWith(`${prefix}/`) || value.startsWith(`${prefix}?`)
+  const normalized = normalizeApiPrefix(prefix)
+  return value === normalized || value.startsWith(`${normalized}/`) || value.startsWith(`${normalized}?`)
 }
 
 function isContractImport(importSource: string, contractDirs: string[]): boolean {
-  return (
-    /shared\/contracts(?:\/|$)/.test(importSource)
-    || contractDirs.some(dir => directoryPatternToRegExp(dir).test(importSource))
-  )
+  return contractDirs.some(dir => directoryPatternToRegExp(dir).test(importSource))
+}
+
+function normalizeApiPrefix(prefix: string): string {
+  const normalized = prefix.replace(/\/+$/g, '')
+  return normalized || '/'
+}
+
+function collectQueryGroupOperationObjects(groupArgument: any, calls: RpcOperationCall[]): void {
+  if (groupArgument?.type !== 'ObjectExpression')
+    return
+  for (const prop of groupArgument.properties ?? []) {
+    if (prop.type !== 'Property')
+      continue
+    collectOperationObject(prop.value, calls)
+  }
+}
+
+function collectOperationObject(node: any, calls: RpcOperationCall[]): void {
+  if (node?.type === 'ObjectExpression') {
+    const props = getObjectProperties(node)
+    if (!props.has('path') && !props.has('key') && !props.has('method'))
+      return
+    calls.push({
+      calleeName: props.has('method') ? 'defineNuxtRpcMutation' : 'defineNuxtRpcQuery',
+      argument: node,
+    })
+    return
+  }
+  if (node?.type === 'ArrowFunctionExpression') {
+    collectOperationObject(node.body, calls)
+    return
+  }
+  if (node?.type === 'FunctionExpression' || node?.type === 'FunctionDeclaration') {
+    for (const statement of node.body?.body ?? []) {
+      if (statement.type === 'ReturnStatement')
+        collectOperationObject(statement.argument, calls)
+    }
+  }
 }

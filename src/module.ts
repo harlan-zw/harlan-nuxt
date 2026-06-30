@@ -8,8 +8,8 @@ import { setupFetchTelemetryModule } from './module/telemetry'
 // `_asyncData`); cache state lives on the Nuxt app instance for SSR safety.
 //
 // Exposes auto-imports: useNuxtQuery, useNuxtMutation, useNuxtRpc,
-// useNuxtRpcQuery, useQueryCache, invalidateNuxtQueries, getQueryData,
-// setQueryData.
+// useNuxtRpcQuery, useNuxtSubscription, useQueryCache, invalidateNuxtQueries,
+// getQueryData, setQueryData.
 
 export interface ModuleOptions {
   /**
@@ -45,9 +45,11 @@ export default defineNuxtModule<ModuleOptions>({
 
     addImports([
       { name: 'useNuxtQuery', from: `${composables}/useNuxtQuery` },
+      { name: 'useNuxtAsyncQuery', from: `${composables}/useNuxtAsyncQuery` },
       { name: 'useNuxtMutation', from: `${composables}/useNuxtMutation` },
       { name: 'useNuxtRpc', from: `${composables}/useNuxtRpc` },
       { name: 'useNuxtRpcQuery', from: `${composables}/useNuxtRpc` },
+      { name: 'useNuxtSubscription', from: `${composables}/useNuxtSubscription` },
       { name: 'useQueryCache', from: `${composables}/useQueryCache` },
       { name: 'invalidateNuxtQueries', from: `${composables}/useQueryCache` },
       { name: 'getQueryData', from: `${composables}/useQueryCache` },

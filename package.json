@@ -1,7 +1,7 @@
 {
   "name": "nuxt-use-query",
   "type": "module",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
@@ -31,6 +31,10 @@
       "types": "./dist/runtime/cache.d.ts",
       "import": "./dist/runtime/cache.js"
     },
+    "./async-query": {
+      "types": "./dist/runtime/composables/useNuxtAsyncQuery.d.ts",
+      "import": "./dist/runtime/composables/useNuxtAsyncQuery.js"
+    },
     "./mutation": {
       "types": "./dist/runtime/composables/useNuxtMutation.d.ts",
       "import": "./dist/runtime/composables/useNuxtMutation.js"
@@ -47,6 +51,10 @@
       "types": "./dist/runtime/rpc/index.d.ts",
       "import": "./dist/runtime/rpc/index.js"
     },
+    "./subscription": {
+      "types": "./dist/runtime/composables/useNuxtSubscription.d.ts",
+      "import": "./dist/runtime/composables/useNuxtSubscription.js"
+    },
     "./telemetry": {
       "types": "./dist/runtime/telemetry.d.ts",
       "import": "./dist/runtime/telemetry.js"
@@ -56,6 +64,9 @@
   "types": "./dist/types.d.mts",
   "typesVersions": {
     "*": {
+      "async-query": [
+        "./dist/runtime/composables/useNuxtAsyncQuery.d.ts"
+      ],
       "cache": [
         "./dist/runtime/cache.d.ts"
       ],
@@ -70,6 +81,9 @@
       ],
       "rpc": [
         "./dist/runtime/rpc/index.d.ts"
+      ],
+      "subscription": [
+        "./dist/runtime/composables/useNuxtSubscription.d.ts"
       ],
       "telemetry": [
         "./dist/runtime/telemetry.d.ts"
@@ -103,6 +117,7 @@
     "@nuxt/schema": "catalog:nuxt",
     "@vueuse/core": "catalog:",
     "consola": "catalog:",
+    "nitropack": "catalog:",
     "oxc-parser": "catalog:",
     "oxc-walker": "catalog:",
     "pathe": "catalog:",
@@ -119,7 +134,6 @@
     "eslint": "catalog:dev-lint",
     "eslint-plugin-harlanzw": "catalog:",
     "happy-dom": "catalog:dev-test",
-    "nitropack": "catalog:",
     "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
     "unbuild": "catalog:",
