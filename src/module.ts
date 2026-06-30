@@ -42,6 +42,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     const composables = resolver.resolve('./runtime/composables')
     const rpcCore = resolver.resolve('./runtime/rpc/core')
+    const websocket = resolver.resolve('./runtime/websocket')
 
     addImports([
       { name: 'useNuxtQuery', from: `${composables}/useNuxtQuery` },
@@ -49,7 +50,9 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'useNuxtMutation', from: `${composables}/useNuxtMutation` },
       { name: 'useNuxtRpc', from: `${composables}/useNuxtRpc` },
       { name: 'useNuxtRpcQuery', from: `${composables}/useNuxtRpc` },
+      { name: 'invalidateNuxtRpc', from: `${composables}/useNuxtRpc` },
       { name: 'useNuxtSubscription', from: `${composables}/useNuxtSubscription` },
+      { name: 'nuxtWebSocketSource', from: websocket },
       { name: 'useQueryCache', from: `${composables}/useQueryCache` },
       { name: 'invalidateNuxtQueries', from: `${composables}/useQueryCache` },
       { name: 'getQueryData', from: `${composables}/useQueryCache` },

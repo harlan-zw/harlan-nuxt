@@ -1,7 +1,7 @@
 {
   "name": "nuxt-use-query",
   "type": "module",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
@@ -55,6 +55,10 @@
       "types": "./dist/runtime/composables/useNuxtSubscription.d.ts",
       "import": "./dist/runtime/composables/useNuxtSubscription.js"
     },
+    "./websocket": {
+      "types": "./dist/runtime/websocket.d.ts",
+      "import": "./dist/runtime/websocket.js"
+    },
     "./telemetry": {
       "types": "./dist/runtime/telemetry.d.ts",
       "import": "./dist/runtime/telemetry.js"
@@ -84,6 +88,9 @@
       ],
       "subscription": [
         "./dist/runtime/composables/useNuxtSubscription.d.ts"
+      ],
+      "websocket": [
+        "./dist/runtime/websocket.d.ts"
       ],
       "telemetry": [
         "./dist/runtime/telemetry.d.ts"

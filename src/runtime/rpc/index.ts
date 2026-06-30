@@ -5,6 +5,7 @@
 // the source of each symbol.
 
 export {
+  invalidateNuxtRpc,
   useNuxtRpc,
   useNuxtRpcQuery,
 } from '../composables/useNuxtRpc'

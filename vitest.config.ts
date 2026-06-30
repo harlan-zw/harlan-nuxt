@@ -13,6 +13,7 @@ const packageAliases = {
   'nuxt-use-query/query-cache': r('src/runtime/composables/useQueryCache.ts'),
   'nuxt-use-query/rpc': r('src/runtime/rpc/index.ts'),
   'nuxt-use-query/subscription': r('src/runtime/composables/useNuxtSubscription.ts'),
+  'nuxt-use-query/websocket': r('src/runtime/websocket.ts'),
   'nuxt-use-query/telemetry': r('src/runtime/telemetry.ts'),
 }
 

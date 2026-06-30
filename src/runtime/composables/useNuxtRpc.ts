@@ -3,6 +3,7 @@ import type { z } from 'zod'
 import type {
   NuxtRpcClientOptions,
   NuxtRpcError,
+  NuxtRpcKey,
   NuxtRpcQueryOperation,
 } from '../rpc/core'
 import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
@@ -15,6 +16,20 @@ import {
   serializeNuxtRpcKey,
 } from '../rpc/core'
 import { useNuxtQuery } from './useNuxtQuery'
+import { invalidateNuxtQueries } from './useQueryCache'
+
+/**
+ * Invalidate cached queries for an RPC operation (or a raw key) by its serialized
+ * cache key. The type-safe alternative to hand-writing the prefix string, which
+ * otherwise has to mirror `serializeNuxtRpcKey` exactly (including its per-segment
+ * `encodeURIComponent`). Prefix-matches, so it also catches keys nested under it.
+ */
+
+export function invalidateNuxtRpc(operationOrKey: NuxtRpcKey | { key: NuxtRpcKey }): void {
+  const isOperation = typeof operationOrKey === 'object' && operationOrKey !== null && 'key' in operationOrKey
+  const key = isOperation ? operationOrKey.key : operationOrKey
+  invalidateNuxtQueries(serializeNuxtRpcKey(key))
+}
 
 // `DefaultT` must stay a generic so the `default` factory drives its own
 // inference. Without it `DefaultT` pins to `undefined` and `default` collapses

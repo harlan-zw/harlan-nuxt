@@ -14,6 +14,7 @@
 - Optional build-time contract enforcement flags API path literals outside query folders and query operations that skip shared contract imports or schemas.
 - Optional server `$fetch` telemetry flags slow upstream calls and likely SSR request waterfalls.
 - `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
+- `useNuxtSubscription` bridges a realtime message stream (WebSocket, SSE, vendor SDK) into the cache, with an optional `nuxtWebSocketSource` adapter built on VueUse.
 - Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
 
 ## Choosing A Layer
@@ -77,6 +78,8 @@ The module auto-imports:
 - `useNuxtMutation`
 - `useNuxtRpc`
 - `useNuxtRpcQuery`
+- `useNuxtSubscription`
+- `nuxtWebSocketSource`
 - `defineNuxtQueryGroup`
 - `defineNuxtRpcQuery`
 - `defineNuxtRpcMutation`
@@ -306,6 +309,71 @@ setQueryData<Site>(`sites:${siteId}`, current => ({
 if (previous)
   setQueryData(`sites:${siteId}`, previous)
 ```
+
+## Realtime: `useNuxtSubscription`
+
+`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it — a WebSocket module, a vendor SDK, raw `useWebSocket` — and this is the standard seam from "a message arrived" to "this read is now stale".
+
+```ts
+import { z } from 'zod'
+
+const jobEvent = z.object({ siteId: z.string(), status: z.string() })
+
+useNuxtSubscription({
+  // Inject the transport. Client-only, established after hydration. Wire
+  // teardown to `ctx.signal` and/or return a cleanup function.
+  source: ctx => connectChannel('job-status', ctx.push),
+  // Parse the untrusted frame once, at the boundary.
+  schema: jobEvent,
+  // Map the parsed message to cache operations. Explicit by design — you
+  // decide which reads move, the same as a mutation's `invalidates`.
+  onMessage: e => invalidateNuxtQueries(`sites:${e.siteId}`),
+})
+```
+
+It mirrors the rest of the package: callbacks run inside the Nuxt context (so the global cache helpers and composables resolve), failures surface through `onError` and an `error` ref rather than being swallowed, and `status` reports bridge establishment (`idle` / `connecting` / `active` / `error`).
+
+**`source` may call composables.** It runs in its own effect scope, so if your transport is itself a composable (`useWebSocket`, a channel composable), call it directly in `source` — its `onScopeDispose` / watchers are torn down with the subscription. Create them synchronously (before any `await`); only the synchronous portion of an async source is scoped.
+
+**Reconnect is a boundary, not magic.** The bridge only sees messages that arrive; events missed while the socket was down are not its concern. Cold-start recovery stays with `useNuxtQuery`'s refetch-on-mount. For mid-session reconnects, run `onReconnect` — typically a wider invalidation that catches up everything that drifted while disconnected. If the transport exposes a connection-status ref, `ctx.resyncOn` wires it for you (it fires `onReconnect` on every reconnect, never the initial connect); otherwise call `ctx.resync()` yourself:
+
+```ts
+useNuxtSubscription({
+  source: (ctx) => {
+    const { status } = connectChannel('job-status', ctx.push) // returns a status ref
+    ctx.resyncOn(status, s => s === 'open') // fire onReconnect on each re-open
+  },
+  onMessage: e => invalidateNuxtQueries(`sites:${e.siteId}`),
+  onReconnect: () => invalidateNuxtQueries('sites:'),
+})
+```
+
+**Coalescing is yours.** Each `invalidateNuxtQueries` triggers a refresh, so a burst of progress events means a burst of refetches. For chatty channels, debounce inside `onMessage` (the package deliberately does not hide this decision):
+
+```ts
+import { useDebounceFn } from '@vueuse/core'
+
+const sync = useDebounceFn(() => invalidateNuxtQueries(`sites:${id}`), 400)
+useNuxtSubscription({ source: connectSocket, onMessage: () => sync() })
+```
+
+### WebSocket Source
+
+`nuxtWebSocketSource` is a ready-made `source` over VueUse's `useWebSocket` (already a dependency, so no extra weight). It maps frames to `ctx.push`, calls `ctx.resync()` on every reconnect, and closes the socket on teardown. Heartbeat and auto-reconnect are VueUse built-ins, passed straight through:
+
+```ts
+useNuxtSubscription({
+  source: nuxtWebSocketSource('wss://example.com/ws', {
+    heartbeat: true,
+    autoReconnect: true,
+  }),
+  schema: jobEvent,
+  onMessage: e => invalidateNuxtQueries(`sites:${e.siteId}`),
+  onReconnect: () => invalidateNuxtQueries('sites:'),
+})
+```
+
+String frames are JSON-parsed by default (non-JSON frames pass through for `schema` to handle); pass `deserialize` to override. For other transports (SSE, a vendor SDK), write a `source` that calls `ctx.push` per message and returns a cleanup function.
 
 ## RPC Error Handling
 

@@ -22,6 +22,7 @@ import {
   setQueryData,
   useQueryCache,
 } from 'nuxt-use-query/query-cache'
+import { invalidateNuxtRpc } from 'nuxt-use-query/rpc'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import { clearNuxtData, useNuxtApp } from '#app'
@@ -198,6 +199,22 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     // The optimistic write (count: 11) was rolled back to the snapshot (10),
     // proving the onMutate → onError context flow against real Nuxt payload.
     expect(getQueryData<{ count: number }>('opt-count')).toEqual({ count: 10 })
+  })
+
+  it('invalidateNuxtRpc invalidates by the operation key serialized form', async () => {
+    const cache = useQueryCache()
+    cache.lastFetched.clear()
+    echoCalls.mockClear()
+
+    // ['pro','echo',siteId] serializes to `pro:echo:<siteId>` — the same key
+    // `useNuxtRpcQuery` would register, so a raw `useNuxtQuery` under it matches.
+    await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'pro:echo:s1' })
+    const before = echoCalls.mock.calls.length
+
+    invalidateNuxtRpc({ key: ['pro', 'echo', 's1'] })
+    await new Promise(r => setTimeout(r, 50))
+
+    expect(echoCalls.mock.calls.length).toBe(before + 1)
   })
 
   it('invalidateNuxtQueries with a predicate filter matches arbitrary keys', async () => {
