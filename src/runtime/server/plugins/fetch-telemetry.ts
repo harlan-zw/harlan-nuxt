@@ -69,13 +69,20 @@ export default defineNitroPlugin((nitroApp) => {
   if (!options.enabled)
     return
 
-  const internalStackToken = createInternalStackToken()
+  // Generate the stack token LAZILY (on first fetch, inside a request handler) —
+  // NOT here at plugin init. Nitro plugins run in workerd's GLOBAL scope, where
+  // generating random values is disallowed ("Disallowed operation called within
+  // global scope", code 10021), so an eager `createInternalStackToken()` crashes
+  // worker startup on Cloudflare. Deferring keeps the token per-isolate-stable
+  // while keeping the random call in request scope.
+  let internalStackToken: string | undefined
+  const getInternalStackToken = () => (internalStackToken ??= createInternalStackToken())
   const original = globalThis.$fetch as FetchLike | undefined
   const originalGlobalFetch = original?.[ORIGINAL_KEY] ?? original
   if (originalGlobalFetch) {
     globalThis.$fetch = wrapFetch(originalGlobalFetch, () => {
       const event = safeEvent()
-      return event ? getEventState(event, internalStackToken) : undefined
+      return event ? getEventState(event, getInternalStackToken()) : undefined
     }, true) as typeof globalThis.$fetch
   }
 
@@ -85,7 +92,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (!fetcher) {
       return
     }
-    fetchEvent.$fetch = wrapFetch(fetcher[ORIGINAL_KEY] ?? fetcher, () => getEventState(event, internalStackToken), true)
+    fetchEvent.$fetch = wrapFetch(fetcher[ORIGINAL_KEY] ?? fetcher, () => getEventState(event, getInternalStackToken()), true)
   })
 
   nitroApp.hooks.hook('afterResponse', async (event) => {
@@ -160,7 +167,7 @@ export default defineNitroPlugin((nitroApp) => {
     const state = resolveState()
     const internalFetch = state ? trackInternalFetch(request, resolved.opts, state) : undefined
     const fetchOptions = internalFetch
-      ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack, internalStackToken)
+      ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack, getInternalStackToken())
       : resolved.opts
     const startedAt = Date.now()
     if (state)
