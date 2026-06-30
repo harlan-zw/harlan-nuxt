@@ -11,7 +11,7 @@ catalog:
   '@vitest/coverage-v8': 4.1.9
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
-  eslint: ^10.5.0
+  eslint: ^10.6.0
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
   h3: 2.0.1-rc.22
@@ -19,11 +19,11 @@ catalog:
   nitropack: ^2.13.4
   nuxt: ^4.4.8
   unbuild: ^3.6.1
-  wrangler: ^4.104.0
+  wrangler: ^4.105.0
 
 catalogs:
   dev-build:
-    '@types/node': ^26.0.0
+    '@types/node': ^26.0.1
     typescript: ^6.0.3
     vue-tsc: ^3.3.5
   dev-test:
@@ -35,7 +35,7 @@ catalogs:
     '@nuxt/schema': ^4.4.8
     nuxt: ^4.4.6
   vue:
-    vue: ^3.5.38
+    vue: ^3.5.39
 
 onlyBuiltDependencies:
   - '@parcel/watcher'
