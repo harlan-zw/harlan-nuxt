@@ -79,7 +79,14 @@ export function useCfJobsBroadcast(options: UseCfJobsBroadcastOptions = {}): CfJ
   }
 
   const conn = acquire(resolveBroadcastUrl(options), options)
-  onScopeDispose(() => release(conn.url))
+  let closed = false
+  const close = () => {
+    if (closed)
+      return
+    closed = true
+    release(conn.url)
+  }
+  onScopeDispose(close)
 
   return {
     status: conn.status,
@@ -92,9 +99,7 @@ export function useCfJobsBroadcast(options: UseCfJobsBroadcastOptions = {}): CfJ
     unsubscribe(channel: string) {
       removeChannel(conn, channel)
     },
-    close() {
-      release(conn.url)
-    },
+    close,
   }
 }
 
@@ -254,7 +259,7 @@ function acquire(url: string, options: UseCfJobsBroadcastOptions): Connection {
     conn = {
       url,
       ws: null,
-      status: ref<CfJobsBroadcastStatus>('connecting'),
+      status: ref<CfJobsBroadcastStatus>('idle'),
       channels: new Map(),
       refs: 0,
       stopped: false,
@@ -262,7 +267,6 @@ function acquire(url: string, options: UseCfJobsBroadcastOptions): Connection {
       reconnectDelay: options.reconnectDelay ?? 2000,
     }
     registry.set(url, conn)
-    connect(conn)
   }
   conn.refs += 1
   return conn
@@ -340,7 +344,10 @@ function addChannel(conn: Connection, channel: string): boolean {
     return false
   if (!conn.channels.has(channel)) {
     conn.channels.set(channel, new Set())
-    sendCommand(conn, 'subscribe', [channel])
+    if (!conn.ws)
+      connect(conn)
+    else
+      sendCommand(conn, 'subscribe', [channel])
   }
   return true
 }

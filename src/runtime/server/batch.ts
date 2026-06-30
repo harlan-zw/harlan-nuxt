@@ -254,12 +254,20 @@ export async function createJobBatch<
     userId: opts.userId ?? null,
   })
 
+  const inserted = await opts.repository.insertJobs(records, { batchSize: opts.insertBatchSize ?? 90 })
+  const failedChunks = inserted.chunks.filter(chunk => !chunk.ok)
+  if (failedChunks.length > 0 || inserted.inserted.length !== records.length) {
+    const insertedCount = inserted.inserted.length
+    const failed = failedChunks.length > 0 ? `; ${failedChunks.length} chunk(s) failed` : ''
+    throw new Error(`Failed to create nuxt-cf-jobs batch ${batchId}: inserted ${insertedCount}/${records.length} job(s)${failed}`)
+  }
+
   // A child batch occupies exactly one slot in its parent (the parent fires once
   // every child batch completes), independent of how many members the child has.
+  // Only increment after every member row is durably inserted; otherwise the
+  // parent would wait on a child batch that failed to exist coherently.
   if (opts.parentBatchId)
     await opts.store.incrementCounters?.(opts.parentBatchId, { by: 1 })
-
-  await opts.repository.insertJobs(records, { batchSize: opts.insertBatchSize ?? 90 })
 
   const dispatched = await dispatchDurableJobBatch(
     opts.publisher,

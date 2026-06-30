@@ -17,6 +17,11 @@ describe('parseTaskSource (static, no execution)', () => {
       .toEqual({ name: 'x', crons: ['0 3 * * *', '0 */6 * * *'] })
   })
 
+  it('reads static template literal strings', () => {
+    expect(parseTaskSource('export default defineScheduledTask({ name: `x`, cron: [`0 3 * * *`], run() {} })'))
+      .toEqual({ name: 'x', crons: ['0 3 * * *'] })
+  })
+
   it('reads name from a plain defineTask meta with no cron', () => {
     expect(parseTaskSource(`export default defineTask({ meta: { name: 'm', description: 'd' }, run() {} })`))
       .toEqual({ name: 'm', crons: [] })
@@ -30,6 +35,18 @@ describe('parseTaskSource (static, no execution)', () => {
   it('returns no name when the name is computed (not a literal)', () => {
     expect(parseTaskSource(`const n = 'x'\nexport default defineScheduledTask({ name: n, cron: '* * * * *', run() {} })`))
       .toEqual({ name: undefined, crons: ['* * * * *'] })
+  })
+
+  it('ignores unrelated name and cron literals before the task call', () => {
+    const src = `
+      const logger = { name: 'logger', cron: '* * * * *' }
+      export default defineScheduledTask({
+        name: 'real:task',
+        cron: '0 4 * * *',
+        run() { logger.name }
+      })
+    `
+    expect(parseTaskSource(src)).toEqual({ name: 'real:task', crons: ['0 4 * * *'] })
   })
 })
 

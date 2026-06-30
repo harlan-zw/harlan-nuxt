@@ -128,6 +128,28 @@ describe('createJobBatch', () => {
     expect(countRows(db, 'job_batches')).toBe(0)
     expect(sent).toHaveLength(0)
   })
+
+  it('throws and does not dispatch when durable member inserts are partial', async () => {
+    const { db, repo, store, publisher, sent } = await setupBatchEnv()
+    const definition = { unique: true }
+    const jobs = await Promise.all([
+      prepareDurableJob({ name: 'scan/unique', payload: { siteId: 's1' }, route: { queue: 'default', jobType: 'scan/unique' }, definition }),
+      prepareDurableJob({ name: 'scan/unique', payload: { siteId: 's1' }, route: { queue: 'default', jobType: 'scan/unique' }, definition }),
+    ])
+
+    await expect(createJobBatch({
+      store,
+      repository: repo,
+      publisher,
+      jobs,
+      name: 'deduped',
+    })).rejects.toThrow('inserted 1/2 job')
+
+    expect(sent).toHaveLength(0)
+    expect(countRows(db, 'jobs')).toBe(1)
+    const batchRow = db._db.prepare('SELECT pending_jobs FROM job_batches').get() as { pending_jobs: number }
+    expect(batchRow.pending_jobs).toBe(2)
+  })
 })
 
 describe('settleBatchMember', () => {

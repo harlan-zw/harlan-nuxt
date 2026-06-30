@@ -1,9 +1,6 @@
-import {
-  buildJobPayload,
-  defineJob,
-  defineJobRegistry,
-  processRegisteredQueueBatch,
-} from '../../src/runtime/server/index'
+import { defineJob, defineJobRegistry } from '../../src/runtime/server/index'
+import { buildJobPayload } from '../../src/runtime/server/payload'
+import { processRegisteredQueueBatch } from '../../src/runtime/server/queue'
 
 interface Env {
   JOBS: Queue<Record<string, unknown>>

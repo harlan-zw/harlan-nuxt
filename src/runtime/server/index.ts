@@ -23,17 +23,17 @@ export {
   createJobQueue,
   defineCfJobsQueues,
   exponentialBackoff,
-  resolveNitroTaskEnv,
   resolveQueueBindingName,
-  runtimeConfigSource,
 } from './queue'
-export type { JobQueuePublisher, JobQueuePublisherOptions, QueueBindingUnavailableInput, QueueBindingUnavailableReason, QueueSource } from './queue'
+export type { JobQueuePublisher, JobQueuePublisherOptions, QueueBindingUnavailableInput, QueueBindingUnavailableReason } from './queue'
 export * from './recovery'
 export * from './registry'
 export * from './result'
 export * from './retry'
 export * from './runtime'
 export { useJobRuntimeConfig } from './runtime-config'
+export { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
+export type { QueueSource } from './runtime-env'
 export * from './scheduled'
 export * from './schema'
 export * from './types'

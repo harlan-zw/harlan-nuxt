@@ -7,6 +7,7 @@ import type {
   DurableJobRepository,
   ReleaseDurableJobOptions,
 } from './outbox'
+import { DurableJobOwnershipError } from './errors'
 
 export interface D1PreparedStatementLike<T = unknown> {
   bind: (...values: unknown[]) => D1PreparedStatementLike<T>
@@ -277,7 +278,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // wall-clock) so duration is populated even when the handler reports none.
       const reportedDuration = stats('durationMs')
       const durationMs = reportedDuration ?? (job.reserved_at != null ? (currentUnixSeconds() - job.reserved_at) * 1000 : null)
-      await db.prepare(`
+      const resultUpdate = await db.prepare(`
         UPDATE ${jobsTable}
         SET completed_at = unixepoch(), reserved_at = NULL,
             duration_ms = COALESCE(?, duration_ms),
@@ -286,6 +287,10 @@ export function createD1DurableJobRepository<Queue extends string = string>(
             d1_rows_read = COALESCE(?, d1_rows_read),
             d1_rows_written = COALESCE(?, d1_rows_written)
         WHERE id = ?
+          AND reserved_at = ?
+          AND attempts = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
       `).bind(
         durationMs,
         stats('rowsFetched') ?? null,
@@ -293,42 +298,58 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         stats('d1RowsRead') ?? null,
         stats('d1RowsWritten') ?? null,
         job.id,
+        job.reserved_at,
+        job.attempts,
       ).run()
+      assertOwnedMutation(resultUpdate, job.id)
       fireHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
     },
 
     async failJob(job, error) {
-      await db.prepare(`
+      const insert = await db.prepare(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
           exception, attempts, max_attempts, failed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+        SELECT
+          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+          ?, attempts, max_attempts, unixepoch()
+        FROM ${jobsTable}
+        WHERE id = ?
+          AND reserved_at = ?
+          AND attempts = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
       `).bind(
-        job.id,
-        job.queue,
-        job.job_type,
-        job.batch_id,
-        job.user_id,
-        job.site_id,
-        job.partner_id,
-        job.trace_id,
-        job.unique_key,
-        job.payload,
         error,
+        job.id,
+        job.reserved_at,
         job.attempts,
-        job.max_attempts,
       ).run()
-      await db.prepare(`DELETE FROM ${jobsTable} WHERE id = ?`).bind(job.id).run()
+      assertOwnedMutation(insert, job.id)
+      const deleted = await db.prepare(`
+        DELETE FROM ${jobsTable}
+        WHERE id = ?
+          AND reserved_at = ?
+          AND attempts = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(job.id, job.reserved_at, job.attempts).run()
+      assertOwnedMutation(deleted, job.id)
       fireHook(() => opts.onJobFailed?.({ job, error }))
     },
 
     async releaseJob(job, releaseOpts) {
-      await db.prepare(`
+      const result = await db.prepare(`
         UPDATE ${jobsTable}
         SET reserved_at = NULL, available_at = ?, last_error = COALESCE(?, last_error)
         WHERE id = ?
-      `).bind(resolveAvailableAt(releaseOpts), releaseOpts?.error ?? null, job.id).run()
+          AND reserved_at = ?
+          AND attempts = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(resolveAvailableAt(releaseOpts), releaseOpts?.error ?? null, job.id, job.reserved_at, job.attempts).run()
+      assertOwnedMutation(result, job.id)
       fireHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
     },
 
@@ -553,6 +574,12 @@ function fireHook(fn: () => void | Promise<void>): void {
   catch {
     // hooks are fire-and-forget
   }
+}
+
+function assertOwnedMutation(result: { meta?: { changes?: number }, success?: boolean }, jobId: string): void {
+  if (typeof result.meta?.changes === 'number' ? result.meta.changes > 0 : result.success === true)
+    return
+  throw new DurableJobOwnershipError(jobId)
 }
 
 function resolveAvailableAt(opts: ReleaseDurableJobOptions | undefined): number {

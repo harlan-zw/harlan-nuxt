@@ -23,16 +23,23 @@ async function getAvailablePort() {
   return port
 }
 
-async function waitForJson<T>(url: string, timeoutMs = 45_000): Promise<T> {
+async function waitForJsonUntil<T>(url: string, predicate: (value: T) => boolean, timeoutMs = 45_000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   let lastError: unknown
+  let lastValue: T | undefined
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url)
-      if (response.ok)
-        return await response.json() as T
-      lastError = new Error(`HTTP ${response.status}`)
+      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) })
+      if (response.ok) {
+        const value = await response.json() as T
+        if (predicate(value))
+          return value
+        lastValue = value
+      }
+      else {
+        lastError = new Error(`HTTP ${response.status}`)
+      }
     }
     catch (error) {
       lastError = error
@@ -40,6 +47,8 @@ async function waitForJson<T>(url: string, timeoutMs = 45_000): Promise<T> {
     await new Promise(resolve => setTimeout(resolve, 500))
   }
 
+  if (lastValue !== undefined)
+    throw new Error(`Timed out waiting for ${url}; last value: ${JSON.stringify(lastValue)}`)
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
@@ -77,9 +86,15 @@ describeE2E('nuxt-cf-jobs wrangler dev e2e', () => {
     worker.stdout.on('data', chunk => logs += chunk.toString())
     worker.stderr.on('data', chunk => logs += chunk.toString())
 
-    await waitForJson(`${baseUrl}/state`)
+    try {
+      await waitForJsonUntil(`${baseUrl}/state`, () => true)
+    }
+    catch (error) {
+      const detail = error instanceof Error ? error.stack ?? error.message : String(error)
+      throw new Error(`${detail}\n\nwrangler logs:\n${logs}`)
+    }
     await fetch(`${baseUrl}/reset`, { method: 'POST' })
-  }, 60_000)
+  }, 120_000)
 
   afterAll(async () => {
     if (!worker || worker.killed)
@@ -104,11 +119,15 @@ describeE2E('nuxt-cf-jobs wrangler dev e2e', () => {
     expect(response.status, logs).toBe(200)
     expect(await response.json()).toEqual({ queued: true })
 
-    const state = await waitForJson<{
+    const state = await waitForJsonUntil<{
       handled: string[]
       middleware: string[]
       failures: string[]
-    }>(`${baseUrl}/state`, 30_000)
+    }>(
+      `${baseUrl}/state`,
+      state => state.handled.includes('wrangler') && state.middleware.includes('after:wrangler'),
+      30_000,
+    )
 
     expect(state.failures, logs).toEqual([])
     expect(state.handled).toEqual(['wrangler'])

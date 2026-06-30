@@ -81,7 +81,14 @@ export async function listD1BatchMembers(
       completed_at AS completedAt
     FROM ${jobsTable}
     WHERE batch_id = ?
-    ORDER BY COALESCE(reserved_at, 0) DESC, created_at DESC, id ASC
+    ORDER BY
+      CASE
+        WHEN reserved_at IS NOT NULL THEN 0
+        WHEN completed_at IS NOT NULL THEN 1
+        ELSE 2
+      END ASC,
+      COALESCE(reserved_at, completed_at, created_at, 0) DESC,
+      id ASC
   `, [batchId])
   const failed = await all<FailedBatchMemberRow>(db, `
     SELECT

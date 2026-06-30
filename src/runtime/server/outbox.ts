@@ -15,7 +15,7 @@ import type {
   QueueSendOptions,
 } from './types'
 import { dispatchRegisteredJob } from './dispatch'
-import { describeCause, formatJobError, jobErrors, jobErrorToException } from './errors'
+import { describeCause, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
 import { CF_QUEUE_MAX_MESSAGE_BYTES, sendBatchChunked, withSendBackpressure } from './queue'
@@ -885,6 +885,18 @@ export async function runDurableJobMessage<
     for (const stage of stages)
       await opts.dispatchContinuations?.({ storedJob, stage })
   }
+  const observeSettlement = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
+    await settle(status, permanent, error).catch(() => {})
+  }
+  const dispatchTerminalContinuations = async (...stages: DurableJobContinuationStage[]): Promise<void> => {
+    await continuations(...stages).catch(() => {})
+  }
+  const obsoleteDelivery = (error: unknown): RunDurableJobMessageResult | null => {
+    if (!isDurableJobOwnershipError(error))
+      return null
+    opts.message.ack()
+    return { status: 'in-flight' }
+  }
 
   try {
     const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
@@ -895,10 +907,19 @@ export async function runDurableJobMessage<
     const dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())
 
     if (!dispatch.success) {
-      if (opts.failDispatchFailure !== false)
-        await failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed')
-      await settle('dispatch-failed', true, dispatch.error)
-      await continuations('catch', 'finally')
+      if (opts.failDispatchFailure !== false) {
+        try {
+          await failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed')
+        }
+        catch (error) {
+          const obsolete = obsoleteDelivery(error)
+          if (obsolete)
+            return obsolete
+          throw error
+        }
+      }
+      await observeSettlement('dispatch-failed', true, dispatch.error)
+      await dispatchTerminalContinuations('catch', 'finally')
       opts.message.ack()
       return { status: 'dispatch-failed', dispatch, error: dispatch.error }
     }
@@ -907,15 +928,31 @@ export async function runDurableJobMessage<
       // Persist the control outcome — an ack alone would leave the row reserved
       // (and, for `release`, silently drop the job instead of redelivering it).
       if (dispatch.control.action === 'failed') {
-        await failDurableJob(opts.lifecycle, storedJob, dispatch.control.error ?? 'Job failed via ctx.fail()')
-        await settle('failed', true, dispatch.control.error)
-        await continuations('catch', 'finally')
+        try {
+          await failDurableJob(opts.lifecycle, storedJob, dispatch.control.error ?? 'Job failed via ctx.fail()')
+        }
+        catch (error) {
+          const obsolete = obsoleteDelivery(error)
+          if (obsolete)
+            return obsolete
+          throw error
+        }
+        await observeSettlement('failed', true, dispatch.control.error)
+        await dispatchTerminalContinuations('catch', 'finally')
         opts.message.ack()
         return { status: 'failed', dispatch }
       }
       const delaySeconds = dispatch.control.delaySeconds ?? 0
-      await releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: dispatch.control.error })
-      await settle('released', false, dispatch.control.error)
+      try {
+        await releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: dispatch.control.error })
+      }
+      catch (error) {
+        const obsolete = obsoleteDelivery(error)
+        if (obsolete)
+          return obsolete
+        throw error
+      }
+      await observeSettlement('released', false, dispatch.control.error)
       opts.message.retry({ delaySeconds })
       return { status: 'released', dispatch }
     }
@@ -926,9 +963,17 @@ export async function runDurableJobMessage<
     const completeWith = hasStats
       ? { ...(result && typeof result === 'object' ? result : {}), ...reportedStats }
       : result
-    await completeDurableJob(opts.lifecycle, storedJob, completeWith)
-    await settle('completed', false)
-    await continuations('then', 'finally')
+    try {
+      await completeDurableJob(opts.lifecycle, storedJob, completeWith)
+    }
+    catch (error) {
+      const obsolete = obsoleteDelivery(error)
+      if (obsolete)
+        return obsolete
+      throw error
+    }
+    await observeSettlement('completed', false)
+    await dispatchTerminalContinuations('then', 'finally')
     opts.message.ack()
     return { status: 'completed', dispatch }
   }
@@ -941,20 +986,36 @@ export async function runDurableJobMessage<
       ? opts.isPermanentFailure({ error, storedJob, attempts: job.attempts, maxAttempts })
       : (typeof maxAttempts === 'number' && job.attempts >= maxAttempts)
     if (permanent) {
-      await failDurableJob(opts.lifecycle, storedJob, describeCause(error))
-      await settle('exhausted', true, error)
-      await continuations('catch', 'finally')
+      try {
+        await failDurableJob(opts.lifecycle, storedJob, describeCause(error))
+      }
+      catch (failError) {
+        const obsolete = obsoleteDelivery(failError)
+        if (obsolete)
+          return obsolete
+        throw failError
+      }
+      await observeSettlement('exhausted', true, error)
+      await dispatchTerminalContinuations('catch', 'finally')
       opts.message.ack()
       return { status: 'exhausted', error: jobErrors.handlerThrew(error) }
     }
     const delaySeconds = typeof opts.retryDelaySeconds === 'function'
       ? opts.retryDelaySeconds({ error, job: storedJob })
       : opts.retryDelaySeconds ?? 0
-    await releaseDurableJob(opts.lifecycle, storedJob, {
-      delaySeconds,
-      error: describeCause(error),
-    })
-    await settle('errored', false, error)
+    try {
+      await releaseDurableJob(opts.lifecycle, storedJob, {
+        delaySeconds,
+        error: describeCause(error),
+      })
+    }
+    catch (releaseError) {
+      const obsolete = obsoleteDelivery(releaseError)
+      if (obsolete)
+        return obsolete
+      throw releaseError
+    }
+    await observeSettlement('errored', false, error)
     opts.message.retry({ delaySeconds })
     return { status: 'errored', error: jobErrors.handlerThrew(error) }
   }

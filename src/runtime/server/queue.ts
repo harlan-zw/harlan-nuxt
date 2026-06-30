@@ -1,12 +1,15 @@
 import type { JobRegistryLike } from './dispatch'
 import type { DurableJobFailureRepository } from './outbox'
 import type { AnyJobDefinition, JobMessageOf, JobPayloadOf } from './registry'
+import type { QueueSource } from './runtime-env'
 import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendOptions } from './types'
 import { dispatchRegisteredJob } from './dispatch'
 import { formatJobError } from './errors'
 import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
+import { createObjectMessageDedup } from './message-dedup'
 import { clampDelay, resolveJobMaxAttempts, resolveJobRetryDelay } from './policy'
 import { buildJobMessage } from './registry'
+import { resolveQueueSourceEnv, runtimeConfigSource } from './runtime-env'
 
 export { CF_QUEUE_MAX_DELAY_SECONDS } from './internal'
 
@@ -105,16 +108,6 @@ export async function sendBatchMessagesChunked<T>(
   }
 }
 
-export type QueueSource
-  = | Record<string, unknown>
-    | {
-      context?: {
-        cloudflare?: {
-          env?: Record<string, unknown>
-        } | unknown
-      } | unknown
-    }
-
 export interface JobQueuePublisher<Job extends AnyJobDefinition> {
   send: (payload: JobPayloadOf<Job>, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
   sendBatch: (payloads: Array<JobPayloadOf<Job>>, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
@@ -173,36 +166,6 @@ export function assertJobQueueBindings(
     .map(issue => `${issue.jobName} -> ${issue.queue}`)
     .join(', ')
   throw new Error(`Missing Cloudflare queue bindings for jobs: ${details}`)
-}
-
-/**
- * Resolves the Cloudflare runtime env from a Nitro task context where no `H3Event` is available.
- *
- * Nitro tasks (`defineTask`) run without an event, so Cloudflare bindings must be threaded through
- * `globalThis.__env__`. This helper reads that shim and returns the env (or `undefined`).
- */
-export function resolveNitroTaskEnv(): Record<string, unknown> | undefined {
-  const globalEnv = (globalThis as { __env__?: unknown }).__env__
-  if (globalEnv && typeof globalEnv === 'object')
-    return globalEnv as Record<string, unknown>
-  return undefined
-}
-
-export function resolveQueueSourceEnv(source: QueueSource | undefined): Record<string, unknown> | undefined {
-  if (!source)
-    return undefined
-
-  const maybeEvent = source as { context?: { cloudflare?: { env?: Record<string, unknown> } } }
-  return maybeEvent.context?.cloudflare?.env ?? source as Record<string, unknown>
-}
-
-/**
- * Wraps a Cloudflare env as the event-shaped source `useRuntimeConfig` expects.
- * Queue consumers run without an `H3Event`, so without this the `queues` resolver
- * would call `useRuntimeConfig()` bare and miss per-deployment `NUXT_*` env overrides.
- */
-export function runtimeConfigSource(env: Record<string, unknown>): QueueSource {
-  return { context: { cloudflare: { env } } }
 }
 
 export function createJobQueue<const Job extends AnyJobDefinition>(
@@ -730,26 +693,6 @@ export async function processRegisteredQueueBatch<Env extends Record<string, unk
     await processRegisteredQueueMessage({ env: payload.env, batch: payload.batch, message, logicalQueue }, opts)
 }
 
-const DEFAULT_DEDUP_CACHE_SIZE = 1024
-const dedupCaches = new WeakMap<object, Set<string>>()
-
-function recordMessageId(opts: object, id: string, capacity: number): boolean {
-  let cache = dedupCaches.get(opts)
-  if (!cache) {
-    cache = new Set()
-    dedupCaches.set(opts, cache)
-  }
-  if (cache.has(id))
-    return true
-  cache.add(id)
-  if (cache.size > capacity) {
-    const first = cache.values().next().value
-    if (first !== undefined)
-      cache.delete(first)
-  }
-  return false
-}
-
 async function processRegisteredQueueMessage<Env extends Record<string, unknown>, Db, Logger>(
   input: RegisteredQueueConsumerHookInput<Env> & { logicalQueue: string, message: RegisteredQueueConsumerMessage },
   opts: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>,
@@ -757,22 +700,25 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
   const payload = isRecord(input.message.body) ? input.message.body : {}
   const taskName = typeof payload._task === 'string' ? payload._task : ''
   const definition = taskName ? opts.registry.getJobDefinition?.(taskName) : undefined
+  const dedup = opts.dedupCacheSize === undefined || opts.dedupCacheSize > 0
+    ? createObjectMessageDedup(opts, opts.dedupCacheSize)
+    : undefined
+  const markTerminal = () => {
+    dedup?.mark(input.message.id)
+  }
 
   if (!definition || definition.queue !== input.logicalQueue) {
     await opts.onInvalidPayload?.({ ...input, taskName, definition, error: taskName ? `No handler for task: ${taskName}` : 'No _task in payload' })
+    markTerminal()
     input.message.ack()
     return
   }
 
   // Dedup duplicate at-least-once deliveries by message.id within this isolate.
-  const dedupCapacity = opts.dedupCacheSize ?? DEFAULT_DEDUP_CACHE_SIZE
-  if (dedupCapacity > 0 && input.message.id) {
-    const seen = recordMessageId(opts, input.message.id, dedupCapacity)
-    if (seen) {
-      await opts.onDuplicate?.({ ...input, taskName, definition })
-      input.message.ack()
-      return
-    }
+  if (dedup?.has(input.message.id)) {
+    await opts.onDuplicate?.({ ...input, taskName, definition })
+    input.message.ack()
+    return
   }
 
   const job: DispatchableJob = {
@@ -809,13 +755,24 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
         error: result.error ? formatJobError(result.error) : undefined,
         validationError: result.error?._tag === 'invalid-payload' ? result.error.cause : undefined,
       })
+      markTerminal()
       input.message.ack()
       return
     }
 
-    if (result.control?.action === 'released')
+    if (result.control?.action === 'released') {
+      input.message.retry({ delaySeconds: result.control.delaySeconds ?? 0 })
       return
+    }
 
+    if (result.control?.action === 'failed') {
+      await opts.onDispatchError?.({ ...input, taskName, definition, job, error: new Error(result.control.error ?? 'Job failed via ctx.fail()') })
+      markTerminal()
+      input.message.ack()
+      return
+    }
+
+    markTerminal()
     input.message.ack()
   }
   catch (error) {
@@ -834,6 +791,7 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
         const sent = await sendQueueMessage(input.env as Record<string, unknown>, dlqBindingName, input.message.body).catch(() => false)
         if (sent) {
           await opts.onDlq?.({ ...input, taskName, definition, job })
+          markTerminal()
           input.message.ack()
           return
         }

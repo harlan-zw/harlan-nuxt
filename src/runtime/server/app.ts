@@ -3,7 +3,6 @@ import type {
 } from './outbox'
 import type {
   QueueBindingUnavailableInput,
-  QueueSource,
   RegisteredQueueConsumerPayload,
   RegisterRegisteredQueueConsumerOptions,
 } from './queue'
@@ -20,21 +19,21 @@ import type {
   DurableJobsRuntime,
   DurableJobsRuntimeRegistry,
 } from './runtime'
+import type { QueueSource } from './runtime-env'
 import type { QueueBindingsConfig } from './types'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
   assertJobQueueBindings,
   createJobQueue,
   processRegisteredQueueBatch,
-  resolveNitroTaskEnv,
   resolveQueueBindingName,
-  runtimeConfigSource,
   validateJobQueueBindings,
   validateQueueBindingShape,
   validateQueueConsumerConfig,
 } from './queue'
 import { defineJobRegistry, validateJobDefinitions } from './registry'
 import { createDurableJobsRuntime } from './runtime'
+import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
 
 export interface CfJobsRuntimeConfig {
   cfJobs: { queues: QueueBindingsConfig }

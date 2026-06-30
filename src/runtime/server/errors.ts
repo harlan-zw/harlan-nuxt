@@ -82,6 +82,17 @@ export interface ClaimThrewError {
   readonly message: string
 }
 
+export class DurableJobOwnershipError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Durable job reservation is no longer owned by this worker: ${jobId}`)
+    this.name = 'DurableJobOwnershipError'
+  }
+}
+
+export function isDurableJobOwnershipError(error: unknown): error is DurableJobOwnershipError {
+  return error instanceof DurableJobOwnershipError
+}
+
 export type JobError
   = | NoTaskError
     | HandlerNotFoundError

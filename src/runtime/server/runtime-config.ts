@@ -1,5 +1,5 @@
 import type { useRuntimeConfig } from 'nitropack/runtime'
-import { resolveNitroTaskEnv, runtimeConfigSource } from './queue'
+import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
 
 type UseRuntimeConfig = typeof useRuntimeConfig
 
@@ -47,5 +47,5 @@ export function useJobRuntimeConfig(): ReturnType<typeof useRuntimeConfig> {
     )
   }
   const env = resolveNitroTaskEnv()
-  return injectedUseRuntimeConfig(env ? runtimeConfigSource(env) : undefined)
+  return injectedUseRuntimeConfig(env ? runtimeConfigSource(env) as never : undefined)
 }

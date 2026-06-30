@@ -20,6 +20,7 @@ import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastReposit
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { formatJobError } from './errors'
+import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
 import { resolveJobRetryDelay } from './policy'
@@ -106,14 +107,16 @@ export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logge
   message: Pick<QueueMessage, 'id' | 'body' | 'attempts' | 'ack' | 'retry'>
   registry: DurableJobsRuntimeRegistry<Env, Db, Logger>
   createJobContext: ConsumerContextFactory<Env, Db, Logger>
-  /** Per-isolate dedup of at-least-once redeliveries. Return true to drop. */
+  /** Per-isolate dedup of terminally-acked at-least-once redeliveries. Return true to drop. */
   isDuplicate?: (id: string | undefined) => boolean
+  /** Mark an id as terminally handled. Retried/released messages must not be marked. */
+  markDuplicate?: (id: string | undefined) => void
   /** Diagnostic sink for dropped/invalid messages (no throw). */
   onLog?: (event: { stage: string, taskName?: string, error?: string }) => void
 }
 
 export type RunLightweightMessageResult
-  = | { status: 'invalid' | 'duplicate' | 'dispatch-failed' | 'released' | 'completed' | 'errored' }
+  = | { status: 'invalid' | 'duplicate' | 'dispatch-failed' | 'released' | 'failed' | 'completed' | 'errored' }
 
 export async function runLightweightMessage<Env, Db, Logger>(
   opts: RunLightweightMessageOptions<Env, Db, Logger>,
@@ -124,6 +127,7 @@ export async function runLightweightMessage<Env, Db, Logger>(
   const definition = taskName ? registry.getJobDefinition?.(taskName) : undefined
   if (!definition) {
     opts.onLog?.({ stage: 'invalid_payload', taskName, error: taskName ? `No handler for task: ${taskName}` : 'No _task in payload' })
+    opts.markDuplicate?.(message.id)
     message.ack()
     return { status: 'invalid' }
   }
@@ -147,10 +151,28 @@ export async function runLightweightMessage<Env, Db, Logger>(
     const dispatch = await dispatchRegisteredJob({
       registry,
       job,
-      createContext: ({ control }) => createJobContext({ job, storedJob: job, taskName, payload: job.payload, control }),
+      createContext: async ({ control }) => {
+        const ctx = await createJobContext({ job, storedJob: job, taskName, payload: job.payload, control })
+        return {
+          ...ctx,
+          async release(delaySeconds) {
+            control.handled = true
+            control.action = 'released'
+            control.delaySeconds = delaySeconds
+            await ctx.release(delaySeconds)
+          },
+          async fail(error) {
+            control.handled = true
+            control.action = 'failed'
+            control.error = error
+            await ctx.fail(error)
+          },
+        }
+      },
     })
     if (!dispatch.success) {
       opts.onLog?.({ stage: 'invalid_payload', taskName, error: dispatch.error ? formatJobError(dispatch.error) : 'invalid payload' })
+      opts.markDuplicate?.(message.id)
       message.ack()
       return { status: 'dispatch-failed' }
     }
@@ -158,6 +180,13 @@ export async function runLightweightMessage<Env, Db, Logger>(
       message.retry({ delaySeconds: dispatch.control.delaySeconds ?? 0 })
       return { status: 'released' }
     }
+    if (dispatch.control?.action === 'failed') {
+      opts.onLog?.({ stage: 'failed', taskName, error: dispatch.control.error })
+      opts.markDuplicate?.(message.id)
+      message.ack()
+      return { status: 'failed' }
+    }
+    opts.markDuplicate?.(message.id)
     message.ack()
     return { status: 'completed' }
   }
@@ -188,6 +217,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
   isDuplicate?: (id: string | undefined) => boolean
+  markDuplicate?: (id: string | undefined) => void
   onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
   // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
@@ -255,8 +285,19 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
     }
 
     const body = (message.body ?? {}) as Record<string, unknown>
+    const taskName = typeof body._task === 'string' ? body._task : undefined
     const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
-    if (jobId) {
+    if (taskName) {
+      await runLightweightMessage({
+        message,
+        registry: opts.registry,
+        createJobContext: opts.createJobContext,
+        isDuplicate: opts.isDuplicate,
+        markDuplicate: opts.markDuplicate,
+        onLog: opts.onLog,
+      })
+    }
+    else if (jobId) {
       await runDurableJobBatchMessage({
         message: message as unknown as ConsumerMessage,
         lifecycle: opts.repository,
@@ -282,6 +323,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         registry: opts.registry,
         createJobContext: opts.createJobContext,
         isDuplicate: opts.isDuplicate,
+        markDuplicate: opts.markDuplicate,
         onLog: opts.onLog,
       })
     }
@@ -359,26 +401,6 @@ export interface CreateDurableJobsRuntimeOptions<
   maxBatchCpuMs?: number
   /** Delay (s) for CPU-guard-deferred messages. Default 5. */
   cpuGuardRetryDelaySeconds?: number
-}
-
-const DEFAULT_DEDUP_CAPACITY = 1024
-
-function makeIsDuplicate(seen: Set<string> | undefined): ((id: string | undefined) => boolean) | undefined {
-  if (!seen)
-    return undefined
-  return (id) => {
-    if (!id)
-      return false
-    if (seen.has(id))
-      return true
-    seen.add(id)
-    if (seen.size > DEFAULT_DEDUP_CAPACITY) {
-      const first = seen.values().next().value
-      if (first !== undefined)
-        seen.delete(first)
-    }
-    return false
-  }
 }
 
 type D1LifecycleHooks<Queue extends string> = Pick<D1DurableJobRepositoryOptions<Queue>, 'onJobClaimed' | 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'>
@@ -494,7 +516,7 @@ export function createDurableJobsRuntime<
     }
   })
 
-  const isDuplicate = makeIsDuplicate(opts.dedup)
+  const dedup = opts.dedup ? createMessageDedup(opts.dedup) : undefined
 
   return {
     repository,
@@ -536,7 +558,8 @@ export function createDurableJobsRuntime<
       claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
-      isDuplicate,
+      isDuplicate: dedup?.has,
+      markDuplicate: dedup?.mark,
       onLog: opts.onLog,
       createJobScope: opts.createJobScope,
       isPermanentFailure: opts.isPermanentFailure,

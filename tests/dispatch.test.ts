@@ -478,6 +478,132 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(batch.messages[0]?.retries).toEqual([{ delaySeconds: 42 }])
   })
 
+  it('retries registered queue messages when handlers release', async () => {
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/release-queued',
+        queue: 'default',
+        async handle(_payload: Record<string, never>, ctx: { release: (delaySeconds: number) => Promise<void> }) {
+          await ctx.release(17)
+        },
+      }),
+    ])
+    const batch = createQueueBatch('cf-default', [
+      buildJobPayload('demo/release-queued', {}),
+    ])
+
+    await processRegisteredQueueBatch({
+      batch,
+      env: {},
+    }, {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      createContext: ({ control, job, message }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        async release(delaySeconds: number) {
+          control.handled = true
+          control.action = 'released'
+          control.delaySeconds = delaySeconds
+        },
+        fail: vi.fn(),
+      }),
+    })
+
+    expect(batch.messages[0]?.acked).toBe(false)
+    expect(batch.messages[0]?.retries).toEqual([{ delaySeconds: 17 }])
+  })
+
+  it('does not dedup registered queue redeliveries until a message is terminally acked', async () => {
+    let calls = 0
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/flaky-once',
+        queue: 'default',
+        async handle() {
+          calls++
+          if (calls === 1)
+            throw new Error('retry me')
+        },
+      }),
+    ])
+    const opts = {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      retryDelaySeconds: () => 1,
+      createContext: ({ job, message }: { job: { id: string }, message: { attempts: number } }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        fail: vi.fn(),
+      }),
+    }
+    const first = createQueueBatch('cf-default', [buildJobPayload('demo/flaky-once', {})], { ids: ['same-id'] })
+    await processRegisteredQueueBatch({ batch: first, env: {} }, opts as never)
+    expect(calls).toBe(1)
+    expect(first.messages[0]?.acked).toBe(false)
+    expect(first.messages[0]?.retries).toEqual([{ delaySeconds: 1 }])
+
+    const second = createQueueBatch('cf-default', [buildJobPayload('demo/flaky-once', {})], { ids: ['same-id'] })
+    second.messages[0]!.attempts = 2
+    await processRegisteredQueueBatch({ batch: second, env: {} }, opts as never)
+
+    expect(calls).toBe(2)
+    expect(second.messages[0]?.acked).toBe(true)
+    expect(second.messages[0]?.retries).toEqual([])
+  })
+
+  it('acks registered queue ctx.fail() as an explicit failure, not a completed success', async () => {
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/fail-control',
+        queue: 'default',
+        async handle(_payload: Record<string, never>, ctx: { fail: (error: string) => Promise<void> }) {
+          await ctx.fail('bad order')
+        },
+      }),
+    ])
+    const batch = createQueueBatch('cf-default', [
+      buildJobPayload('demo/fail-control', {}),
+    ])
+    const onDispatchError = vi.fn()
+
+    await processRegisteredQueueBatch({
+      batch,
+      env: {},
+    }, {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      onDispatchError,
+      createContext: ({ control, job, message }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        async fail(error: string) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+    })
+
+    expect(onDispatchError).toHaveBeenCalledWith(expect.objectContaining({ taskName: 'demo/fail-control', error: expect.any(Error) }))
+    expect(batch.messages[0]?.acked).toBe(true)
+    expect(batch.messages[0]?.retries).toEqual([])
+  })
+
   it('acks invalid registered queue payloads and reports validation failures', async () => {
     const registry = defineJobRegistry([
       defineJob({

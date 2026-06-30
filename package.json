@@ -107,7 +107,7 @@
     "h3": "catalog:",
     "happy-dom": "catalog:dev-test",
     "nitropack": "catalog:",
-    "nuxt": "catalog:",
+    "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
     "unbuild": "catalog:",
     "vitest": "catalog:dev-test",

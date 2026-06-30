@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { createDurableJobsRuntime, prepareDurableJob } from '#cf-jobs/server'
+import { createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -258,6 +258,32 @@ describe('claim-error (backing store throws during claim)', () => {
   })
 })
 
+describe('reservation ownership', () => {
+  it('does not complete or settle a job after another attempt has reclaimed it', async () => {
+    let d1Ref: ReturnType<typeof createSqliteD1>
+    const { d1, runtime } = await setup({
+      race: async () => {
+        d1Ref._db.prepare('UPDATE jobs SET reserved_at = reserved_at + 1, attempts = attempts + 1 WHERE completed_at IS NULL AND failed_at IS NULL').run()
+      },
+      finish: async () => {},
+    })
+    d1Ref = d1
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('race', {})], onFinish: { name: 'finish', payload: {} } })
+    const m = msg(jobIds[0]!)
+
+    const result = await runtime.consumeMessage(m)
+
+    expect(result.run.status).toBe('in-flight')
+    expect(result.settled).toBeNull()
+    expect(m.ack).toHaveBeenCalled()
+    expect(m.retry).not.toHaveBeenCalled()
+    const job = d1._db.prepare('SELECT completed_at, failed_at, attempts FROM jobs WHERE id = ?').get(jobIds[0]!) as { completed_at: number | null, failed_at: number | null, attempts: number }
+    expect(job).toMatchObject({ completed_at: null, failed_at: null, attempts: 2 })
+    const batch = d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches').get() as { pending_jobs: number, finished_at: number | null }
+    expect(batch).toEqual({ pending_jobs: 1, finished_at: null })
+  })
+})
+
 describe('maxAttempts (Laravel worker model)', () => {
   it('retries a throwing job below the attempt cap (released, batch not settled)', async () => {
     const { runtime } = await setup({ boom: async () => {
@@ -314,6 +340,60 @@ describe('consumeBatch', () => {
     await runtime.consumeBatch({ queue: 'jobs', messages: [m1b] })
     expect(ran).toEqual([1])
     expect(m1b.ack).toHaveBeenCalled()
+  })
+
+  it('does not dedup a lightweight retry before the redelivery succeeds', async () => {
+    const ran: number[] = []
+    let calls = 0
+    const dedup = new Set<string>()
+    const d1 = createSqliteD1()
+    const { binding } = createQueueBinding()
+    const runtime = createDurableJobsRuntime({
+      db: d1,
+      env: { Q: binding },
+      registry: createRegistry({
+        light: async () => {
+          calls++
+          ran.push(calls)
+          if (calls === 1)
+            throw new Error('retry me')
+        },
+      }),
+      resolveQueueBinding: () => 'Q',
+      createJobContext: ({ control, job }) => ({ ...ctxFactory(control), jobId: job.id, attempt: job.attempts }),
+      dedup,
+    })
+    await runtime.repository.migrate()
+
+    const first = { id: 'same-id', body: { _task: 'light', n: 1 }, attempts: 1, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs', messages: [first] })
+    expect(first.ack).not.toHaveBeenCalled()
+    expect(first.retry).toHaveBeenCalled()
+
+    const second = { id: 'same-id', body: { _task: 'light', n: 1 }, attempts: 2, ack: vi.fn(), retry: vi.fn() }
+    await runtime.consumeBatch({ queue: 'jobs', messages: [second] })
+
+    expect(ran).toEqual([1, 2])
+    expect(second.ack).toHaveBeenCalled()
+    expect(second.retry).not.toHaveBeenCalled()
+  })
+
+  it('surfaces lightweight ctx.fail() as failed', async () => {
+    const registry = createRegistry({
+      light: async (_p, ctx) => {
+        await ctx.fail('bad')
+      },
+    })
+    const message = { id: 'm-fail', body: { _task: 'light' }, attempts: 1, ack: vi.fn(), retry: vi.fn() }
+    const result = await runLightweightMessage({
+      message,
+      registry,
+      createJobContext: ({ control }) => ctxFactory(control),
+    })
+
+    expect(result.status).toBe('failed')
+    expect(message.ack).toHaveBeenCalled()
+    expect(message.retry).not.toHaveBeenCalled()
   })
 
   it('settles a durable member off a DLQ batch so it cannot hang', async () => {
@@ -422,6 +502,29 @@ describe('gscdump-parity hooks', () => {
     expect(order).toEqual(['before', 'run', 'after'])
     expect(settled).toEqual([{ status: 'completed', permanent: false, hasDuration: true }])
     expect(conts).toEqual(['then', 'finally'])
+  })
+
+  it('settles and acks after completion even when terminal continuations throw', async () => {
+    const { d1, runtime } = await setup(
+      { work: async () => {}, finish: async () => {} },
+      {
+        dispatchContinuations: () => {
+          throw new Error('continuation sink down')
+        },
+      },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    const m = msg(jobIds[0]!)
+
+    const result = await runtime.consumeMessage(m)
+
+    expect(result.run.status).toBe('completed')
+    expect(result.settled?.batchComplete).toBe(true)
+    expect(m.ack).toHaveBeenCalled()
+    expect(m.retry).not.toHaveBeenCalled()
+    const batch = d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches').get() as { pending_jobs: number, finished_at: number | null }
+    expect(batch.pending_jobs).toBe(0)
+    expect(batch.finished_at).toBeTypeOf('number')
   })
 
   it('isPermanentFailure decides retry vs terminal; catch/finally continuations on terminal', async () => {

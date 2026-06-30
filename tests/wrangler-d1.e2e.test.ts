@@ -23,16 +23,23 @@ async function getAvailablePort() {
   return port
 }
 
-async function waitForJson<T>(url: string, timeoutMs = 45_000): Promise<T> {
+async function waitForJsonUntil<T>(url: string, predicate: (value: T) => boolean, timeoutMs = 45_000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   let lastError: unknown
+  let lastValue: T | undefined
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url)
-      if (response.ok)
-        return await response.json() as T
-      lastError = new Error(`HTTP ${response.status}`)
+      const response = await fetch(url, { signal: AbortSignal.timeout(2_000) })
+      if (response.ok) {
+        const value = await response.json() as T
+        if (predicate(value))
+          return value
+        lastValue = value
+      }
+      else {
+        lastError = new Error(`HTTP ${response.status}`)
+      }
     }
     catch (error) {
       lastError = error
@@ -40,6 +47,8 @@ async function waitForJson<T>(url: string, timeoutMs = 45_000): Promise<T> {
     await new Promise(resolve => setTimeout(resolve, 500))
   }
 
+  if (lastValue !== undefined)
+    throw new Error(`Timed out waiting for ${url}; last value: ${JSON.stringify(lastValue)}`)
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
@@ -77,9 +86,9 @@ describeE2E('nuxt-cf-jobs wrangler d1 e2e', () => {
     worker.stdout.on('data', chunk => logs += chunk.toString())
     worker.stderr.on('data', chunk => logs += chunk.toString())
 
-    await waitForJson(`${baseUrl}/jobs/__boot__`)
+    await waitForJsonUntil(`${baseUrl}/jobs/__boot__`, () => true)
     await fetch(`${baseUrl}/reset`, { method: 'POST' })
-  }, 60_000)
+  }, 120_000)
 
   afterAll(async () => {
     if (!worker || worker.killed)
@@ -106,10 +115,14 @@ describeE2E('nuxt-cf-jobs wrangler d1 e2e', () => {
     expect(queued.traceId).toMatch(/^job_/)
     expect(queued.uniqueKey).toMatch(/^job_unique_/)
 
-    const state = await waitForJson<{
+    const state = await waitForJsonUntil<{
       job: null | { completed_at: number | null, attempts: number, rows_fetched: number | null, rows_inserted: number | null, trace_id: string | null, unique_key: string | null }
       failed: null
-    }>(`${baseUrl}/jobs/${queued.id}`, 30_000)
+    }>(
+      `${baseUrl}/jobs/${queued.id}`,
+      state => typeof state.job?.completed_at === 'number',
+      30_000,
+    )
 
     expect(state.failed, logs).toBeNull()
     expect(state.job?.completed_at, logs).toEqual(expect.any(Number))
@@ -129,10 +142,14 @@ describeE2E('nuxt-cf-jobs wrangler d1 e2e', () => {
     expect(response.status, logs).toBe(200)
     const queued = await response.json() as { id: string, traceId: string }
 
-    const state = await waitForJson<{
+    const state = await waitForJsonUntil<{
       job: null
       failed: null | { exception: string, attempts: number, trace_id: string | null }
-    }>(`${baseUrl}/jobs/${queued.id}`, 30_000)
+    }>(
+      `${baseUrl}/jobs/${queued.id}`,
+      state => !!state.failed,
+      30_000,
+    )
 
     expect(state.job, logs).toBeNull()
     expect(state.failed?.exception).toBe('forced failure')

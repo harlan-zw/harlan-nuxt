@@ -3,8 +3,8 @@ import { createD1DurableBatchStore } from '../batch'
 import { createD1DurableJobRepository } from '../d1'
 import { findD1Binding } from '../dev-worker'
 import { createQueuePublisher } from '../outbox'
-import { resolveNitroTaskEnv } from '../queue'
 import { recoverDurableJobs } from '../recovery'
+import { resolveNitroTaskEnv } from '../runtime-env'
 import { defineScheduledTask } from '../scheduled'
 
 // cf-jobs recovery backstop (the "app's own reconcile cron" the durable-queue

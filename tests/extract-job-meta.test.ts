@@ -46,6 +46,16 @@ describe('extractJobMeta', () => {
     expect(extractJobMeta(`export default defineJob({ name: NAME, queue: 'q' })`).name).toBeUndefined()
   })
 
+  it('reads static template literal strings', () => {
+    expect(extractJobMeta('export default defineJob({ name: `a/b`, queue: `q`, jobType: `jt` })')).toEqual({
+      name: 'a/b',
+      queue: 'q',
+      jobType: 'jt',
+      hasInput: false,
+      hasUniqueId: false,
+    })
+  })
+
   it('leaves queue undefined when missing', () => {
     const meta = extractJobMeta(`export default defineJob({ jobType: 'foo' })`)
     expect(meta).toEqual({

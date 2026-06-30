@@ -103,7 +103,7 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
   it('augments the resolved module rather than re-declaring it', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/^import type /m)
-    expect(out).toContain(`declare module '#cf-jobs/app' {`)
+    expect(out).toMatch(/declare module ["']#cf-jobs\/app["'] \{/)
     // Runtime values come from the plain JS template; precision is added with
     // JSDoc on `app`, not value re-declarations in the augmentation.
     expect(out).not.toContain('export declare const jobs')
@@ -127,6 +127,26 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     expect(out).not.toMatch(/import\(".*\.ts"\)/)
     expect(out).toContain('sync/table')
     expect(out).toContain('analytics/rollup-rebuild')
+  })
+
+  it('augments a custom registryAlias as well as the plugin-required default alias', async () => {
+    const out = await generateRegistryTypesTemplate({ ...options, registryAlias: '#my/jobs' } as never, rootDir, templateDir)
+    expect(out).toMatch(/declare module ["']#cf-jobs\/app["'] \{/)
+    expect(out).toMatch(/declare module ["']#my\/jobs["'] \{/)
+  })
+
+  it('strips TS-family source extensions from value and type imports', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-ext-'))
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    writeFileSync(join(root, 'server/jobs/a.mts'), `export default defineJob({ name: 'a', queue: 'default', handle() {} })`)
+    writeFileSync(join(root, 'server/jobs/b.tsx'), `export default defineJob({ name: 'b', queue: 'default', handle() {} })`)
+    const opts = { ...options, jobsPattern: '**/*.{mts,tsx}' } as never
+
+    const value = await generateRegistryTemplate(opts, root, join(root, '.nuxt/cf-jobs'))
+    const types = await generateRegistryTypesTemplate(opts, root, join(root, '.nuxt/cf-jobs'))
+
+    expect(value).not.toMatch(/import\(".*\.(?:mts|tsx)"\)/)
+    expect(types).not.toMatch(/import\(".*\.(?:mts|tsx)"\)/)
   })
 
   it('uses the same duplicate-name guard as the value module', async () => {

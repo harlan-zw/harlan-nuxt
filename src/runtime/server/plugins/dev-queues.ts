@@ -2,6 +2,7 @@
 import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
 import { createDevQueueRuntime } from '../dev'
 import { isWorkerActive } from '../dev-worker'
+import { mergeNitroTaskEnv, resolveNitroTaskEnv } from '../runtime-env'
 
 interface NitroAppLike {
   hooks: {
@@ -30,7 +31,7 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
       // live on the task-env shim (`globalThis.__env__`), so merge them in
       // (queue bindings win) — otherwise the consumer's `createContext` throws on
       // a missing binding (e.g. the D1 database) the moment a job actually runs.
-      const baseEnv = (globalThis as { __env__?: Record<string, unknown> }).__env__ ?? {}
+      const baseEnv = resolveNitroTaskEnv() ?? {}
       await nitroApp.hooks.callHook('cloudflare:queue', {
         ...payload,
         env: { ...baseEnv, ...(payload.env ?? {}) },
@@ -55,8 +56,7 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
   // real binding already on the shim wins, matching the request precedence above.
   // (This plugin is only registered in dev — see module.ts — so it never touches
   // production env.)
-  const taskEnvHost = globalThis as { __env__?: Record<string, unknown> }
-  taskEnvHost.__env__ = { ...runtime.env, ...(taskEnvHost.__env__ ?? {}) }
+  mergeNitroTaskEnv(runtime.env, resolveNitroTaskEnv())
 
   nitroApp.hooks.hook('request', (event: RequestEventLike) => {
     const existing = event.context.cloudflare?.env
@@ -78,7 +78,7 @@ export default defineNitroPlugin((nitroApp: NitroAppLike) => {
     // touches D1 fails to claim — the batch silently never drains in dev. Queue
     // bindings keep precedence over the native env.
     if (existing)
-      taskEnvHost.__env__ = { ...taskEnvHost.__env__, ...existing, ...runtime.env }
+      mergeNitroTaskEnv(resolveNitroTaskEnv(), existing, runtime.env)
   })
 
   nitroApp.hooks.hook('close', () => runtime.dispose())

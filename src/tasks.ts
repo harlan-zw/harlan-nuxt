@@ -3,6 +3,12 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { relative, resolve } from 'node:path'
 import { resolveFiles } from '@nuxt/kit'
+import {
+  findStaticObjectCall,
+  getStaticObjectValue,
+  stringArrayValue,
+  stringLiteralValue,
+} from './build/static-ast'
 
 // Strip the source extension so the handler path is extensionless — both `.ts`
 // family (app source) and `.js` family (the module's own compiled tasks dir).
@@ -37,20 +43,6 @@ export async function resolveTaskFiles(options: ModuleOptions, rootDir: string):
   return [...new Set(files.flat())]
 }
 
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:"'\\])\/\/.*$/gm, (_m, prefix) => prefix)
-}
-
-// A single/double/backtick string literal; group 2 is the inner content.
-// Hoisted to module scope (compiled once).
-const STRING_LITERAL_SRC = `(['"\`])((?:[^'"\`\\\\]|\\\\.)*)\\1`
-const NAME_RE = new RegExp(`\\bname\\s*:\\s*${STRING_LITERAL_SRC}`)
-const CRON_SINGLE_RE = new RegExp(`\\bcron\\s*:\\s*${STRING_LITERAL_SRC}`)
-const CRON_ARRAY_RE = /\bcron\s*:\s*\[([\s\S]*?)\]/
-const STRING_LITERAL_G = new RegExp(STRING_LITERAL_SRC, 'g')
-
 /**
  * Statically read the declared `name` and `cron` from a task source file
  * without executing it (task files import db/server utils that won't load
@@ -58,23 +50,16 @@ const STRING_LITERAL_G = new RegExp(STRING_LITERAL_SRC, 'g')
  * not resolvable at build time and are reported by the caller.
  */
 export function parseTaskSource(source: string): { name?: string, crons: string[] } {
-  const clean = stripComments(source)
+  const arg = findStaticObjectCall(source, ['defineTask', 'defineScheduledTask'])
+  if (!arg)
+    return { crons: [] }
 
-  // First `name:` literal — for `defineScheduledTask({ name })` and for
-  // `defineTask({ meta: { name } })` (meta.name is the first occurrence).
-  const name = clean.match(NAME_RE)?.[2]
-
-  const crons: string[] = []
-  const arrayMatch = clean.match(CRON_ARRAY_RE)
-  if (arrayMatch) {
-    for (const m of arrayMatch[1]!.matchAll(STRING_LITERAL_G))
-      crons.push(m[2]!)
-  }
-  else {
-    const single = clean.match(CRON_SINGLE_RE)?.[2]
-    if (single)
-      crons.push(single)
-  }
+  const meta = getStaticObjectValue(arg, 'meta')
+  const name = stringLiteralValue(getStaticObjectValue(arg, 'name'))
+    ?? stringLiteralValue(getStaticObjectValue(meta, 'name'))
+  const cronValue = getStaticObjectValue(arg, 'cron')
+  const singleCron = stringLiteralValue(cronValue)
+  const crons = singleCron !== undefined ? [singleCron] : stringArrayValue(cronValue)
 
   return { name, crons }
 }

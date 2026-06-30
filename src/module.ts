@@ -39,7 +39,7 @@ interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'stal
   d1Binding?: string
 }
 
-export default defineNuxtModule<ModuleOptions>({
+export default defineNuxtModule<ModuleOptions>().with({
   meta: {
     name: 'nuxt-cf-jobs',
     configKey: 'cfJobs',
@@ -57,6 +57,7 @@ export default defineNuxtModule<ModuleOptions>({
   },
   async setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
+    const queues = options.queues as ModuleOptions['queues']
 
     nuxt.options.alias['#cf-jobs/server'] = resolver.resolve('./runtime/server')
     // Cloudflare Analytics Engine sink lives on its own subpath so its
@@ -74,25 +75,25 @@ export default defineNuxtModule<ModuleOptions>({
     // / nitro-dev external loads); this bundled plugin bridges the runtime in.
     addServerPlugin(resolver.resolve('./runtime/server/plugins/provide-runtime-config'))
 
-    if (options.defaultQueue && !options.queues[options.defaultQueue])
+    if (options.defaultQueue && !queues[options.defaultQueue])
       useLogger('nuxt-cf-jobs').warn(`cfJobs.defaultQueue="${options.defaultQueue}" is not a key of cfJobs.queues`)
 
     // In dev, fill each queue's lane budget (max_concurrency / max_batch_size) from
     // the wrangler consumer config so `cf-jobs work` fans out at the real per-queue
     // concurrency without the app duplicating it into `cfJobs.queues`. Prod is
     // unaffected (the real consumer reads wrangler directly).
-    let runtimeQueues = options.queues
+    let runtimeQueues = queues
     if (nuxt.options.dev) {
       const wranglerPath = options.wranglerPath
         ? resolve(nuxt.options.rootDir, options.wranglerPath)
         : findWranglerConfig(nuxt.options.rootDir)
       const { expectations, merged } = reconcileQueues({
-        queues: options.queues,
+        queues,
         fileWrangler: wranglerPath ? parseWranglerConfig(wranglerPath) : undefined,
         nitroOptions: (nuxt.options as { nitro?: unknown }).nitro,
         fallbackPath: wranglerPath ?? nuxt.options.rootDir,
       })
-      runtimeQueues = enrichQueuesWithConsumerConfig(options.queues, expectations, merged?.consumers ?? [])
+      runtimeQueues = enrichQueuesWithConsumerConfig(queues, expectations, merged?.consumers ?? [])
     }
 
     const broadcast = resolveBroadcastOptions(options.broadcast)
