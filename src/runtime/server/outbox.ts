@@ -734,6 +734,13 @@ export interface RunDurableJobMessageOptions<
   // dispatchRegisteredJob awaits it.)
   getJobId?: (message: Message) => string | undefined
   retryDelaySeconds?: number | ((input: { error: unknown, job: StoredJob }) => number)
+  /**
+   * Backoff (s) when the claim step THROWS (vs a clean miss) — the backing store
+   * was unreachable/overloaded before any handler ran. The message is retried,
+   * not failed, so the load is shed rather than the whole batch failing and CF
+   * redelivering it (which re-claims and amplifies the overload). Default 10.
+   */
+  claimRetryDelaySeconds?: number | ((input: { error: unknown }) => number)
   failDispatchFailure?: boolean
   completeResult?: (input: { job: StoredJob, dispatch: DispatchResult }) => unknown | Promise<unknown>
   /**
@@ -794,6 +801,10 @@ export interface DurableJobScope<StoredJob> {
  *   original throw). Distinct from `released` (a deliberate `ctx.release()`).
  * - `exhausted`: the handler threw AND `attempts` reached `maxAttemptsOf` — the job
  *   was failed (→ `failed_jobs`) rather than retried. Terminal.
+ * - `claim-error`: the claim step itself threw (e.g. an overloaded backing store)
+ *   before any handler ran; the message is retried with backoff. Non-terminal, so
+ *   the row is left untouched for the redelivery to re-claim. Distinct from a
+ *   `DurableJobClaimMiss` (a clean miss where the row was already terminal).
  */
 export type RunDurableJobMessageResult
   = | { status: 'invalid-message' }
@@ -804,6 +815,7 @@ export type RunDurableJobMessageResult
     | { status: 'completed', dispatch: DispatchResult }
     | { status: 'errored', error: JobError }
     | { status: 'exhausted', error: JobError }
+    | { status: 'claim-error', error: JobError }
 
 export async function runDurableJobMessage<
   StoredJob,
@@ -823,7 +835,24 @@ export async function runDurableJobMessage<
     return { status: 'invalid-message' }
   }
 
-  const claimed = await claimDurableJob(opts.lifecycle, jobId)
+  // The claim runs before the dispatch try/catch below, so a throw here (e.g. the
+  // backing store is overloaded / "queued for too long") would otherwise escape
+  // and fail EVERY sibling message in the batch — CF then redelivers the whole
+  // batch, which re-claims and piles more load onto the already-overloaded store
+  // (a self-amplifying loop). Catch it, retry just this message with backoff, and
+  // leave the row untouched (the claim UPDATE is atomic: it either committed or
+  // threw before commit, so the redelivery can re-claim cleanly).
+  let claimed: DurableJobClaimResult<StoredJob>
+  try {
+    claimed = await claimDurableJob(opts.lifecycle, jobId)
+  }
+  catch (error) {
+    const delaySeconds = typeof opts.claimRetryDelaySeconds === 'function'
+      ? opts.claimRetryDelaySeconds({ error })
+      : opts.claimRetryDelaySeconds ?? 10
+    opts.message.retry({ delaySeconds })
+    return { status: 'claim-error', error: jobErrors.claimThrew(error) }
+  }
   if (claimed.status !== 'claimed') {
     if (claimed.status === 'in-flight')
       opts.message.retry({ delaySeconds: 60 })

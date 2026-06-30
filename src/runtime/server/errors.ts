@@ -69,6 +69,19 @@ export interface HandlerThrewError {
   readonly message: string
 }
 
+/**
+ * The claim step itself threw (e.g. the backing store was overloaded) before any
+ * handler could run. Distinct from `handler-threw`: no dispatch happened, so the
+ * message is simply retried with backoff rather than counted toward the attempt
+ * cap. Capturing it as a value lets the consumer shed load instead of letting the
+ * throw escape and fail every sibling message in the batch.
+ */
+export interface ClaimThrewError {
+  readonly _tag: 'claim-threw'
+  readonly cause: unknown
+  readonly message: string
+}
+
 export type JobError
   = | NoTaskError
     | HandlerNotFoundError
@@ -79,6 +92,7 @@ export type JobError
     | InvalidContinuationError
     | ContinuationQueueMismatchError
     | HandlerThrewError
+    | ClaimThrewError
 
 export type JobErrorTag = JobError['_tag']
 
@@ -135,6 +149,9 @@ export const jobErrors = {
   },
   handlerThrew(cause: unknown, task?: string): HandlerThrewError {
     return { _tag: 'handler-threw', task, cause, message: describeCause(cause) }
+  },
+  claimThrew(cause: unknown): ClaimThrewError {
+    return { _tag: 'claim-threw', cause, message: describeCause(cause) }
   },
 } as const
 

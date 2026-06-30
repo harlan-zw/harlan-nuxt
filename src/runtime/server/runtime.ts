@@ -183,6 +183,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
   onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
+  claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
   completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
@@ -264,6 +265,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         toDispatchableJob: opts.repository.toDispatchableJob,
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds,
+        claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
@@ -333,6 +335,8 @@ export interface CreateDurableJobsRuntimeOptions<
   dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
   /** Per-throw retry backoff for the consumer. */
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
+  /** Backoff (s) when the claim step itself throws (overloaded store). Default 10. */
+  claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
   /** Classify a queue as a dead-letter queue (defaults to a `-dlq` suffix check). */
   isDlqQueue?: (queue: string) => boolean
@@ -511,6 +515,7 @@ export function createDurableJobsRuntime<
       toDispatchableJob: repository.toDispatchableJob,
       createJobContext: opts.createJobContext,
       retryDelaySeconds: opts.retryDelaySeconds,
+      claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
       maxAttemptsOf: stored => stored.max_attempts,
       completeResult: opts.completeResult,
       createJobScope: opts.createJobScope,
@@ -528,6 +533,7 @@ export function createDurableJobsRuntime<
       dispatchOnFinish,
       onBatchProgress,
       retryDelaySeconds: opts.retryDelaySeconds,
+      claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate,

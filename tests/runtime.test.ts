@@ -221,6 +221,43 @@ describe('runDurableJobMessage control handling (lifecycle fix)', () => {
   })
 })
 
+describe('claim-error (backing store throws during claim)', () => {
+  it('retries the message with backoff, leaves the row untouched, does not settle the batch', async () => {
+    const { d1, runtime } = await setup({ work: async () => {} }, { claimRetryDelaySeconds: 25 })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+    // Backing store overloaded → the claim UPDATE throws before any handler runs.
+    const overloaded = new Error('D1 DB is overloaded. Requests queued for too long.')
+    runtime.repository.claimJob = async () => {
+      throw overloaded
+    }
+
+    const m = msg(jobIds[0]!)
+    const r = await runtime.consumeMessage(m)
+
+    expect(r.run.status).toBe('claim-error')
+    expect(r.settled).toBeNull() // non-terminal → batch not settled
+    expect(m.retry).toHaveBeenCalledWith({ delaySeconds: 25 }) // shed load, don't fail the batch
+    expect(m.ack).not.toHaveBeenCalled()
+    // Row untouched: still claimable for the redelivery (the throw escaped before commit).
+    const row = d1._db.prepare('SELECT reserved_at, completed_at, failed_at FROM jobs WHERE id = ?').get(jobIds[0]!) as { reserved_at: number | null, completed_at: number | null, failed_at: number | null }
+    expect(row).toMatchObject({ reserved_at: null, completed_at: null, failed_at: null })
+  })
+
+  it('defaults the claim-retry backoff to 10s when unset', async () => {
+    const { runtime } = await setup({ work: async () => {} })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+    runtime.repository.claimJob = async () => {
+      throw new Error('D1 DB is overloaded')
+    }
+
+    const m = msg(jobIds[0]!)
+    const r = await runtime.consumeMessage(m)
+
+    expect(r.run.status).toBe('claim-error')
+    expect(m.retry).toHaveBeenCalledWith({ delaySeconds: 10 })
+  })
+})
+
 describe('maxAttempts (Laravel worker model)', () => {
   it('retries a throwing job below the attempt cap (released, batch not settled)', async () => {
     const { runtime } = await setup({ boom: async () => {
