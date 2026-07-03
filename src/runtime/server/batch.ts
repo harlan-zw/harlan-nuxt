@@ -66,8 +66,25 @@ export interface DurableBatchStore {
   /** Grow a batch's counters (used for parent batches / dynamically-added members). */
   incrementCounters?: (batchId: string, opts?: { by?: number }) => Promise<void>
   /**
-   * Close old pending batches that no longer have active jobs. This is a cleanup
-   * backstop for missed settle bookkeeping; it deliberately does not fire onFinish.
+   * Find old pending batches whose member rows prove every job is already
+   * terminal. Implementations must not treat "no remaining member rows" as
+   * terminal proof; completed/failed member evidence can be pruned separately.
+   */
+  findOrphanedBatches?: (query: { before: number, limit?: number }) => Promise<DurableBatchRecord[]>
+  /**
+   * Find old pending batches that have no active members left but cannot be
+   * safely finished because terminal evidence is missing.
+   */
+  findUnrecoverableOrphanedBatches?: (query: { before: number, limit?: number }) => Promise<DurableBatchRecord[]>
+  /**
+   * Atomically finish one orphaned batch if it is still pending and still has
+   * terminal evidence for every member. Returns the post-finish row, or `null`
+   * when another worker won or the row is no longer safely recoverable.
+   */
+  finishOrphanedBatch?: (batchId: string, query?: { now?: number }) => Promise<DurableBatchRecord | null>
+  /**
+   * Legacy cleanup helper: close old pending batches that are provably terminal.
+   * Prefer {@link recoverOrphanedBatches} when `onFinish` must be fired.
    */
   finishOrphanedBatches?: (query: { before: number, now?: number, limit?: number }) => Promise<number>
 }
@@ -162,6 +179,38 @@ export function createD1DurableBatchStore(
       `).bind(by, by, batchId).run()
     },
 
+    async findOrphanedBatches(query) {
+      return await all<Record<string, unknown>>(db.prepare(`
+        SELECT id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+        FROM ${batches}
+        WHERE ${orphanedBatchPredicate(batches, jobs, failedJobs, 'created_at <= ?')}
+        ORDER BY created_at ASC
+        LIMIT ?
+      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(mapBatchRow))
+    },
+
+    async findUnrecoverableOrphanedBatches(query) {
+      return await all<Record<string, unknown>>(db.prepare(`
+        SELECT id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+        FROM ${batches}
+        WHERE ${orphanedBatchPredicate(batches, jobs, failedJobs, 'created_at <= ?', 'unrecoverable')}
+        ORDER BY created_at ASC
+        LIMIT ?
+      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(mapBatchRow))
+    },
+
+    async finishOrphanedBatch(batchId, query = {}) {
+      const now = query.now ?? Math.floor(Date.now() / 1000)
+      const row = await db.prepare<Record<string, unknown>>(`
+        UPDATE ${batches}
+        SET pending_jobs = 0, updated_at = ?, finished_at = COALESCE(finished_at, ?)
+        WHERE id = ?
+          AND ${orphanedBatchPredicate(batches, jobs, failedJobs)}
+        RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+      `).bind(now, now, batchId).first<Record<string, unknown>>()
+      return row ? mapBatchRow(row) : null
+    },
+
     async finishOrphanedBatches(query) {
       const now = query.now ?? Math.floor(Date.now() / 1000)
       const result = await db.prepare(`
@@ -170,16 +219,7 @@ export function createD1DurableBatchStore(
         WHERE id IN (
           SELECT id
           FROM ${batches}
-          WHERE pending_jobs > 0
-            AND finished_at IS NULL
-            AND created_at <= ?
-            AND NOT EXISTS (
-              SELECT 1
-              FROM ${jobs}
-              WHERE ${jobs}.batch_id = ${batches}.id
-                AND ${jobs}.completed_at IS NULL
-                AND ${jobs}.failed_at IS NULL
-            )
+          WHERE ${orphanedBatchPredicate(batches, jobs, failedJobs, 'created_at <= ?')}
           LIMIT ?
         )
       `).bind(now, now, query.before, query.limit ?? 100).run()
@@ -328,6 +368,30 @@ export interface SettleBatchMemberOptions<
   dispatchOnFinish?: (input: DispatchBatchOnFinishInput<Name, Payload, Queue>) => void | Promise<void>
 }
 
+export interface RecoverOrphanedBatchesOptions<
+  Name extends string = string,
+  Payload extends object = Record<string, unknown>,
+  Queue extends string = string,
+> {
+  store: DurableBatchStore
+  before: number
+  now?: number
+  limit?: number
+  dispatchOnFinish?: SettleBatchMemberOptions<Name, Payload, Queue>['dispatchOnFinish']
+}
+
+export interface RecoverOrphanedBatchesResult {
+  scanned: number
+  recovered: number
+  onFinishDispatched: number
+  onFinishFailed: number
+  skipped: number
+  unrecoverable: number
+  batches: DurableBatchRecord[]
+  unrecoverableBatches: DurableBatchRecord[]
+  errors: Array<{ batchId: string, error: unknown }>
+}
+
 function toProgress(batch: DurableBatchRecord): BatchProgress {
   return {
     batchId: batch.id,
@@ -367,10 +431,72 @@ async function fireOnFinishChain<
   if (batch.parentBatchId) {
     const parent = await store.decrementPending(batch.parentBatchId)
     if (parent && parent.pendingJobs === 0)
-      await fireOnFinishChain(store, parent, dispatch)
+      dispatched = (await fireOnFinishChain(store, parent, dispatch)) || dispatched
   }
 
   return dispatched
+}
+
+/**
+ * Recover batches whose member jobs already reached a terminal state but whose
+ * `pending_jobs` decrement was missed. This mirrors the normal settle path:
+ * one atomic finisher closes the batch, then the batch/parent `onFinish` chain is
+ * fired by the same caller. Stores must only return batches with terminal member
+ * evidence for every expected job.
+ */
+export async function recoverOrphanedBatches<
+  Name extends string = string,
+  Payload extends object = Record<string, unknown>,
+  Queue extends string = string,
+>(opts: RecoverOrphanedBatchesOptions<Name, Payload, Queue>): Promise<RecoverOrphanedBatchesResult> {
+  if (!opts.store.findOrphanedBatches || !opts.store.finishOrphanedBatch)
+    return { scanned: 0, recovered: 0, onFinishDispatched: 0, onFinishFailed: 0, skipped: 0, unrecoverable: 0, batches: [], unrecoverableBatches: [], errors: [] }
+
+  const candidates = await opts.store.findOrphanedBatches({
+    before: opts.before,
+    limit: opts.limit,
+  })
+  const unrecoverableBatches = await opts.store.findUnrecoverableOrphanedBatches?.({
+    before: opts.before,
+    limit: opts.limit,
+  }) ?? []
+  let recovered = 0
+  let onFinishDispatched = 0
+  let onFinishFailed = 0
+  let skipped = 0
+  const batches: DurableBatchRecord[] = []
+  const errors: Array<{ batchId: string, error: unknown }> = []
+
+  for (const candidate of candidates) {
+    const batch = await opts.store.finishOrphanedBatch(candidate.id, { now: opts.now })
+    if (!batch) {
+      skipped++
+      continue
+    }
+
+    recovered++
+    batches.push(batch)
+    try {
+      if (await fireOnFinishChain(opts.store, batch, opts.dispatchOnFinish))
+        onFinishDispatched++
+    }
+    catch (error) {
+      onFinishFailed++
+      errors.push({ batchId: batch.id, error })
+    }
+  }
+
+  return {
+    scanned: candidates.length,
+    recovered,
+    onFinishDispatched,
+    onFinishFailed,
+    skipped,
+    unrecoverable: unrecoverableBatches.length,
+    batches,
+    unrecoverableBatches,
+    errors,
+  }
 }
 
 /**
@@ -431,4 +557,54 @@ export async function createParentJobBatch<
     userId: opts.userId ?? null,
   })
   return batchId
+}
+
+function orphanedBatchPredicate(
+  batches: string,
+  jobs: string,
+  failedJobs: string,
+  ageClause?: string,
+  evidence: 'recoverable' | 'unrecoverable' = 'recoverable',
+): string {
+  const terminalEvidence = `((
+      SELECT COUNT(*)
+      FROM ${jobs}
+      WHERE ${jobs}.batch_id = ${batches}.id
+        AND ${jobs}.completed_at IS NOT NULL
+    ) + (
+      SELECT COUNT(*)
+      FROM ${failedJobs}
+      WHERE ${failedJobs}.batch_id = ${batches}.id
+    ) + (
+      SELECT COUNT(*)
+      FROM ${batches} child_batches
+      WHERE child_batches.parent_batch_id = ${batches}.id
+        AND child_batches.finished_at IS NOT NULL
+    ))`
+  const clauses = [
+    'pending_jobs > 0',
+    'total_jobs > 0',
+    'finished_at IS NULL',
+    ageClause,
+    `NOT EXISTS (
+      SELECT 1
+      FROM ${jobs}
+      WHERE ${jobs}.batch_id = ${batches}.id
+        AND ${jobs}.completed_at IS NULL
+        AND ${jobs}.failed_at IS NULL
+    )`,
+    `NOT EXISTS (
+      SELECT 1
+      FROM ${batches} child_batches
+      WHERE child_batches.parent_batch_id = ${batches}.id
+        AND child_batches.finished_at IS NULL
+    )`,
+    `${terminalEvidence} ${evidence === 'recoverable' ? '>=' : '<'} total_jobs`,
+  ].filter(Boolean)
+  return clauses.join('\n          AND ')
+}
+
+async function all<T>(statement: { all?: <Result = T>() => Promise<{ results?: Result[] }> }): Promise<T[]> {
+  const result = await statement.all?.<T>()
+  return result?.results ?? []
 }

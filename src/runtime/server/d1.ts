@@ -492,13 +492,45 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async pruneCompletedJobs(query) {
-      // Only soft-completed rows (completed_at IS NOT NULL) — never in-flight ones.
-      return await pruneInChunks(db, jobsTable, 'completed_at IS NOT NULL AND completed_at <= ?', query)
+      // Only soft-completed rows (completed_at IS NOT NULL) — never in-flight
+      // ones, and never member evidence for a batch that is still unfinished.
+      return await pruneInChunks(
+        db,
+        jobsTable,
+        `completed_at IS NOT NULL
+          AND completed_at <= ?
+          AND (
+            batch_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM ${batchesTable}
+              WHERE ${batchesTable}.id = ${jobsTable}.batch_id
+                AND ${batchesTable}.finished_at IS NULL
+            )
+          )`,
+        query,
+      )
     },
 
     async pruneFailedJobs(query) {
-      // failed_jobs.failed_at is always set; the predicate is just the age cutoff.
-      return await pruneInChunks(db, failedJobsTable, 'failed_at <= ?', query)
+      // failed_jobs.failed_at is always set. Preserve failed-member evidence
+      // while its parent batch is unfinished so orphaned-batch recovery can
+      // prove every expected member reached a terminal state.
+      return await pruneInChunks(
+        db,
+        failedJobsTable,
+        `failed_at <= ?
+          AND (
+            batch_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM ${batchesTable}
+              WHERE ${batchesTable}.id = ${failedJobsTable}.batch_id
+                AND ${batchesTable}.finished_at IS NULL
+            )
+          )`,
+        query,
+      )
     },
 
     async pruneFinishedBatches(query) {
@@ -507,11 +539,28 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // deleting a batch with a lingering (not-yet-pruned) completed member would
       // violate the FK where D1 enforces it. This makes the prune FK-safe even
       // when completed-jobs retention is set LONGER than batch retention; such a
-      // batch is simply pruned on a later run once its members age out.
+      // batch is simply pruned on a later run once its members age out. Finished
+      // child batches are also retained while their parent is unfinished because
+      // they are the parent's terminal-member evidence.
       return await pruneInChunks(
         db,
         batchesTable,
-        `finished_at IS NOT NULL AND finished_at <= ? AND NOT EXISTS (SELECT 1 FROM ${jobsTable} WHERE ${jobsTable}.batch_id = ${batchesTable}.id)`,
+        `finished_at IS NOT NULL
+          AND finished_at <= ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM ${jobsTable}
+            WHERE ${jobsTable}.batch_id = ${batchesTable}.id
+          )
+          AND (
+            parent_batch_id IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM ${batchesTable} parent_batches
+              WHERE parent_batches.id = ${batchesTable}.parent_batch_id
+                AND parent_batches.finished_at IS NULL
+            )
+          )`,
         query,
       )
     },

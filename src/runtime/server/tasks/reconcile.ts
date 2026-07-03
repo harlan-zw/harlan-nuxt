@@ -1,8 +1,10 @@
 import { useRuntimeConfig } from 'nitropack/runtime'
-import { createD1DurableBatchStore } from '../batch'
+// @ts-expect-error - #cf-jobs/app is the generated registry alias, resolved by Nuxt
+import { jobRegistry } from '#cf-jobs/app'
+import { createD1DurableBatchStore, recoverOrphanedBatches } from '../batch'
 import { createD1DurableJobRepository } from '../d1'
 import { findD1Binding } from '../dev-worker'
-import { createQueuePublisher } from '../outbox'
+import { createQueuePublisher, enqueueDurableJob, prepareDurableJob } from '../outbox'
 import { recoverDurableJobs } from '../recovery'
 import { resolveNitroTaskEnv } from '../runtime-env'
 import { defineScheduledTask } from '../scheduled'
@@ -126,23 +128,59 @@ export default defineScheduledTask({
         limit,
         staleError: 'stale-reservation',
       })
-      const orphanedBatches = await store.finishOrphanedBatches?.({
+      const orphanedBatches = await recoverOrphanedBatches({
+        store,
         before: nowSeconds - orphanedBatchSeconds,
         now: nowSeconds,
         limit,
-      }) ?? 0
+        dispatchOnFinish: async ({ continuation, batch }) => {
+          const record = await prepareDurableJob({
+            name: continuation.name,
+            payload: continuation.payload,
+            registry: jobRegistry,
+            delaySeconds: continuation.delaySeconds,
+          })
+          const result = await enqueueDurableJob(
+            repo,
+            publisher,
+            record,
+            continuation.delaySeconds ? { delaySeconds: continuation.delaySeconds } : undefined,
+          )
+          if (result.status !== 'enqueued' && result.status !== 'duplicate') {
+            console.warn(
+              `[cf-jobs:reconcile] recovered orphaned batch "${batch.id}" onFinish "${continuation.name}" persisted but was not dispatched: ${result.status}`,
+            )
+          }
+        },
+      })
 
       const result = {
         released: recovered.released,
         terminalized: recovered.terminalized,
         swept: recovered.swept,
         dispatched: recovered.dispatched,
-        orphanedBatches,
+        orphanedBatches: orphanedBatches.recovered,
+        orphanedBatchScanned: orphanedBatches.scanned,
+        orphanedBatchSkipped: orphanedBatches.skipped,
+        orphanedBatchOnFinishDispatched: orphanedBatches.onFinishDispatched,
+        orphanedBatchOnFinishFailed: orphanedBatches.onFinishFailed,
+        orphanedBatchUnrecoverable: orphanedBatches.unrecoverable,
+      }
+      for (const error of orphanedBatches.errors) {
+        console.warn(
+          `[cf-jobs:reconcile] recovered orphaned batch "${error.batchId}" but failed to dispatch onFinish: ${(error.error as Error)?.message ?? error.error}`,
+        )
+      }
+      if (orphanedBatches.unrecoverable > 0) {
+        const ids = orphanedBatches.unrecoverableBatches.slice(0, 10).map(batch => batch.id).join(', ')
+        console.warn(
+          `[cf-jobs:reconcile] ${orphanedBatches.unrecoverable} orphaned batch(es) have no active members but missing terminal evidence; left pending: ${ids}`,
+        )
       }
       // Surface a tick that actually did (or should have done) work, so a
       // recovering backlog — or a swept-but-not-dispatched stall — is visible in
       // logs instead of hiding in the (un-logged) task return value.
-      if (result.swept > 0 || result.released > 0 || result.terminalized > 0 || result.orphanedBatches > 0)
+      if (result.swept > 0 || result.released > 0 || result.terminalized > 0 || result.orphanedBatches > 0 || result.orphanedBatchScanned > 0 || result.orphanedBatchUnrecoverable > 0)
         console.warn(`[cf-jobs:reconcile] ${JSON.stringify(result)}`)
       return { result }
     }

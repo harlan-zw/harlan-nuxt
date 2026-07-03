@@ -508,8 +508,21 @@ export function createDurableJobsRuntime<
   const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
-      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry as never })
-      await enqueueDurableJob(repository, publisher, record as DurableJobRecord<Queue>)
+      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry as never, delaySeconds: c.delaySeconds })
+      const result = await enqueueDurableJob(
+        repository,
+        publisher,
+        record as DurableJobRecord<Queue>,
+        c.delaySeconds ? { delaySeconds: c.delaySeconds } : undefined,
+      )
+      if (result.status !== 'enqueued' && result.status !== 'duplicate') {
+        opts.onLog?.({
+          stage: 'onfinish-failed',
+          taskName: c.name,
+          jobId: batch.id,
+          error: result.status,
+        })
+      }
     }
     catch (error) {
       opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: error instanceof Error ? error.message : String(error) })

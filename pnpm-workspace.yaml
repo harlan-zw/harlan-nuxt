@@ -18,13 +18,13 @@ catalog:
   magicast: ^0.5.3
   nitropack: ^2.13.4
   unbuild: ^3.6.1
-  wrangler: ^4.105.0
+  wrangler: ^4.106.0
 
 catalogs:
   dev-build:
-    '@types/node': ^26.0.1
+    '@types/node': ^26.1.0
     typescript: ^6.0.3
-    vue-tsc: ^3.3.5
+    vue-tsc: ^3.3.6
   dev-test:
     happy-dom: ^20.10.6
     vitest: ^4.1.9

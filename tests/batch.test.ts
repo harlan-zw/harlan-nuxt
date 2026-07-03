@@ -7,6 +7,7 @@ import {
   createJobBatch,
   createParentJobBatch,
   prepareDurableJob,
+  recoverOrphanedBatches,
   settleBatchMember,
 } from '#cf-jobs/server'
 
@@ -294,6 +295,78 @@ describe('settleBatchMember', () => {
     expect(terminalRow).toEqual({ pending_jobs: 0, finished_at: now })
     expect(activeRow).toEqual({ pending_jobs: 1, finished_at: null })
   })
+
+  it('does not close an orphaned batch when terminal member evidence is missing', async () => {
+    const { db, repo, store, publisher } = await setupBatchEnv()
+    const jobs = await Promise.all([
+      prepareJob('scan/terminal', {}),
+      prepareJob('scan/pruned', {}),
+    ])
+    const { batchId, jobIds } = await createJobBatch({ store, repository: repo, publisher, jobs })
+    const old = 1000
+    const now = old + 8 * 86400
+
+    db._db.prepare('UPDATE job_batches SET created_at = ? WHERE id = ?').run(old, batchId)
+    db._db.prepare('UPDATE jobs SET completed_at = ? WHERE id = ?').run(old, jobIds[0])
+    db._db.prepare('DELETE FROM jobs WHERE id = ?').run(jobIds[1])
+
+    await expect(store.finishOrphanedBatches!({ before: now - 7 * 86400, now, limit: 10 })).resolves.toBe(0)
+    await expect(recoverOrphanedBatches({ store, before: now - 7 * 86400, now, limit: 10 })).resolves.toMatchObject({
+      scanned: 0,
+      recovered: 0,
+      unrecoverable: 1,
+    })
+
+    const row = db._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(batchId) as { pending_jobs: number, finished_at: number | null }
+    expect(row).toEqual({ pending_jobs: 2, finished_at: null })
+  })
+
+  it('recovers old orphaned batches and fires onFinish when every member is terminal', async () => {
+    const { db, repo, store, publisher } = await setupBatchEnv()
+    const jobs = await Promise.all([
+      prepareJob('scan/done', { siteId: 's1' }),
+      prepareJob('scan/failed', { siteId: 's1' }),
+    ])
+    const { batchId, jobIds } = await createJobBatch({
+      store,
+      repository: repo,
+      publisher,
+      jobs,
+      onFinish: { name: 'assess/site', payload: { siteId: 's1' } },
+    })
+    const old = 1000
+    const now = old + 8 * 86400
+
+    db._db.prepare('UPDATE job_batches SET created_at = ? WHERE id = ?').run(old, batchId)
+    db._db.prepare('UPDATE jobs SET completed_at = ? WHERE id = ?').run(old, jobIds[0])
+    const failed = await repo.claimJob(jobIds[1]!)
+    await repo.failJob(failed!, 'boom')
+
+    const fired: Array<{ name: string, payload: unknown }> = []
+    const recovered = await recoverOrphanedBatches({
+      store,
+      before: now - 7 * 86400,
+      now,
+      limit: 10,
+      dispatchOnFinish: async ({ continuation }) => {
+        fired.push({ name: continuation.name, payload: continuation.payload })
+      },
+    })
+
+    expect(recovered).toMatchObject({
+      scanned: 1,
+      recovered: 1,
+      onFinishDispatched: 1,
+      onFinishFailed: 0,
+      skipped: 0,
+    })
+    expect(fired).toEqual([
+      { name: 'assess/site', payload: { siteId: 's1', batchId } },
+    ])
+
+    const row = db._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(batchId) as { pending_jobs: number, finished_at: number | null }
+    expect(row).toEqual({ pending_jobs: 0, finished_at: now })
+  })
 })
 
 describe('parent batches', () => {
@@ -328,5 +401,48 @@ describe('parent batches', () => {
     expect(fired).toContain('childB/done')
     expect(fired).toContain('parent/done')
     expect(fired.filter(f => f === 'parent/done')).toHaveLength(1)
+  })
+
+  it('recovers an orphaned parent batch from finished child batches', async () => {
+    const { db, repo, store, publisher } = await setupBatchEnv()
+    const old = 1000
+    const now = old + 8 * 86400
+    const fired: string[] = []
+
+    const parentId = await createParentJobBatch({
+      store,
+      name: 'parent',
+      onFinish: { name: 'parent/done', payload: {} },
+    })
+    const childAJobs = await Promise.all([prepareJob('a', {})])
+    const childBJobs = await Promise.all([prepareJob('b', {})])
+    const childA = await createJobBatch({ store, repository: repo, publisher, jobs: childAJobs, parentBatchId: parentId })
+    const childB = await createJobBatch({ store, repository: repo, publisher, jobs: childBJobs, parentBatchId: parentId })
+
+    db._db.prepare('UPDATE job_batches SET created_at = ? WHERE id IN (?, ?, ?)').run(old, parentId, childA.batchId, childB.batchId)
+    db._db.prepare('UPDATE job_batches SET pending_jobs = 0, finished_at = ? WHERE id IN (?, ?)').run(old, childA.batchId, childB.batchId)
+    db._db.prepare('UPDATE jobs SET completed_at = ? WHERE batch_id IN (?, ?)').run(old, childA.batchId, childB.batchId)
+
+    const recovered = await recoverOrphanedBatches({
+      store,
+      before: now - 7 * 86400,
+      now,
+      limit: 10,
+      dispatchOnFinish: async ({ continuation }) => {
+        fired.push(continuation.name)
+      },
+    })
+
+    expect(recovered).toMatchObject({
+      scanned: 1,
+      recovered: 1,
+      onFinishDispatched: 1,
+      onFinishFailed: 0,
+      skipped: 0,
+    })
+    expect(fired).toEqual(['parent/done'])
+
+    const parentRow = db._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(parentId) as { pending_jobs: number, finished_at: number | null }
+    expect(parentRow).toEqual({ pending_jobs: 0, finished_at: now })
   })
 })

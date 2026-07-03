@@ -72,6 +72,24 @@ describe('pruneCompletedJobs', () => {
     expect(deleted).toBe(1)
     expect(count(d1, 'jobs')).toBe(2) // recent + in-flight survive
   })
+
+  it('preserves completed member evidence while the parent batch is unfinished', async () => {
+    const d1 = createSqliteD1()
+    const repo = createD1DurableJobRepository(d1)
+    await repo.migrate()
+    const store = createD1DurableBatchStore(d1)
+
+    await store.insertBatch({ id: 'b-unfinished', totalJobs: 1, pendingJobs: 1 })
+    const member = await seedJob(d1, repo)
+    d1._db.prepare('UPDATE jobs SET batch_id = ?, completed_at = ? WHERE id = ?').run('b-unfinished', OLD, member)
+
+    await expect(repo.pruneCompletedJobs({ before: NOW - 1000 })).resolves.toBe(0)
+    expect(count(d1, 'jobs')).toBe(1)
+
+    setColumn(d1, 'job_batches', 'finished_at', OLD, 'b-unfinished')
+    await expect(repo.pruneCompletedJobs({ before: NOW - 1000 })).resolves.toBe(1)
+    expect(count(d1, 'jobs')).toBe(0)
+  })
 })
 
 describe('pruneFailedJobs', () => {
@@ -88,6 +106,24 @@ describe('pruneFailedJobs', () => {
     const deleted = await repo.pruneFailedJobs({ before: NOW - 1000 })
     expect(deleted).toBe(1)
     expect(count(d1, 'failed_jobs')).toBe(1)
+  })
+
+  it('preserves failed member evidence while the parent batch is unfinished', async () => {
+    const d1 = createSqliteD1()
+    const repo = createD1DurableJobRepository(d1)
+    await repo.migrate()
+    const store = createD1DurableBatchStore(d1)
+
+    await store.insertBatch({ id: 'b-unfinished', totalJobs: 1, pendingJobs: 1 })
+    await repo.recordFailure({ id: 'f-member', queue: 'q', jobType: 'x', batchId: 'b-unfinished', payload: '{}', exception: 'boom', attempts: 3 })
+    setColumn(d1, 'failed_jobs', 'failed_at', OLD, 'f-member')
+
+    await expect(repo.pruneFailedJobs({ before: NOW - 1000 })).resolves.toBe(0)
+    expect(count(d1, 'failed_jobs')).toBe(1)
+
+    setColumn(d1, 'job_batches', 'finished_at', OLD, 'b-unfinished')
+    await expect(repo.pruneFailedJobs({ before: NOW - 1000 })).resolves.toBe(1)
+    expect(count(d1, 'failed_jobs')).toBe(0)
   })
 })
 
@@ -107,6 +143,24 @@ describe('pruneFinishedBatches', () => {
     const deleted = await repo.pruneFinishedBatches({ before: NOW - 1000 })
     expect(deleted).toBe(1)
     expect(count(d1, 'job_batches')).toBe(2)
+  })
+
+  it('preserves finished child batch evidence while the parent batch is unfinished', async () => {
+    const d1 = createSqliteD1()
+    const repo = createD1DurableJobRepository(d1)
+    await repo.migrate()
+    const store = createD1DurableBatchStore(d1)
+
+    await store.insertBatch({ id: 'parent', totalJobs: 1, pendingJobs: 1 })
+    await store.insertBatch({ id: 'child', parentBatchId: 'parent', totalJobs: 1, pendingJobs: 0 })
+    setColumn(d1, 'job_batches', 'finished_at', OLD, 'child')
+
+    await expect(repo.pruneFinishedBatches({ before: NOW - 1000 })).resolves.toBe(0)
+    expect(count(d1, 'job_batches')).toBe(2)
+
+    setColumn(d1, 'job_batches', 'finished_at', OLD, 'parent')
+    await expect(repo.pruneFinishedBatches({ before: NOW - 1000 })).resolves.toBe(2)
+    expect(count(d1, 'job_batches')).toBe(0)
   })
 })
 
