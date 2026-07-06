@@ -10,11 +10,11 @@
 
 - `useNuxtQuery` wraps Nuxt `useFetch` with TanStack-style stale-time revalidation, polling, enabled gates, and previous-data display.
 - `useNuxtMutation` wires mutations to query invalidation and optimistic cache rollback.
-- `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` let apps centralize Client -> API contracts in query folders with Zod request/response schemas.
+- `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` let apps centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
 - Optional build-time contract enforcement flags API path literals outside query folders and query operations that skip shared contract imports or schemas.
 - Optional server `$fetch` telemetry flags slow upstream calls and likely SSR request waterfalls.
 - `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
-- `useNuxtSubscription` bridges a realtime message stream (WebSocket, SSE, vendor SDK) into the cache, with an optional `nuxtWebSocketSource` adapter built on VueUse.
+- `useNuxtSubscription` bridges a realtime message stream (WebSocket, SSE, vendor SDK) into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
 - Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
 
 ## Choosing A Layer
@@ -312,7 +312,7 @@ if (previous)
 
 ## Realtime: `useNuxtSubscription`
 
-`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it — a WebSocket module, a vendor SDK, raw `useWebSocket` — and this is the standard seam from "a message arrived" to "this read is now stale".
+`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it — a [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) module, a vendor SDK, raw `useWebSocket` — and this is the standard seam from "a message arrived" to "this read is now stale".
 
 ```ts
 import { z } from 'zod'
@@ -398,8 +398,9 @@ await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
 Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
 
 - `slow fetch` when a completed server fetch exceeds `slowFetchThreshold`.
+- `large HTTP payload` when a completed server fetch's response `Content-Length` exceeds `largePayloadThreshold` (default `300_000` bytes).
 - `fetch timeout` when a server fetch is aborted by the configured timeout.
-- `fetch waterfall` when one incoming request performs multiple mostly sequential fetches and the request fetch span exceeds `waterfallThreshold`. The warning includes request metrics and an aligned timeline of tracked `$fetch` calls.
+- `fetch waterfall` when one incoming request performs multiple sequential fetches and the request fetch span exceeds `waterfallThreshold`. The warning includes request metrics and an aligned timeline of tracked `$fetch` calls.
 - `duplicate fetch` when one incoming request repeats the same internal GET at least `duplicateFetchThreshold` times.
 - `nested fetch` when internal Nitro fetches chain at least `nestedFetchDepthThreshold` levels deep.
 - `recursive fetch` when an internal Nitro fetch calls a route already in its request stack.
@@ -415,6 +416,7 @@ export default defineNuxtConfig({
       nestedFetchDepthThreshold: 3,
       recursiveFetchWarning: true,
       slowFetchThreshold: 3_000,
+      largePayloadThreshold: 300_000,
       waterfallMinFetches: 2,
       waterfallThreshold: 3_000,
       console: true,
@@ -424,7 +426,23 @@ export default defineNuxtConfig({
 })
 ```
 
-Use `telemetry: true` for the defaults. Set `timeout: false` to disable the default timeout, or pass `timeout` per `$fetch` call to override it. Set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false` to disable those specific internal-fetch warnings. Set `debug: true` to also log per-fetch timing and per-request summaries, including the per-request timeline. Set `console: false` to keep hook events enabled while suppressing package console output, including slow fetch, timeout, waterfall, duplicate, nested, and recursive warnings.
+Use `telemetry: true` for the defaults. Set `timeout: false` to disable the default timeout, or pass `timeout` per `$fetch` call to override it. Set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false` to disable those specific internal-fetch warnings. Set `debug: true` to also log per-fetch timing and per-request summaries, including the per-request timeline. Set `console: false` to keep hook events enabled while suppressing package console output, including slow fetch, large payload, timeout, waterfall, duplicate, nested, and recursive warnings.
+
+`largePayloadThreshold` defaults to `300_000` bytes (mirroring Sentry's Large HTTP Payload detector). Like `slowFetchThreshold`, it accepts a per-host map so you can mute an upstream whose big responses are expected while keeping detection everywhere else, a plain `false`/`0` to turn it off globally, or a per-`$fetch`-call override:
+
+```ts
+largePayloadThreshold: {
+  default: 300_000,
+  hosts: {
+    // a data/export API whose big responses are expected — silence it
+    'searchconsole.googleapis.com': false,
+  },
+}
+// off globally: largePayloadThreshold: false
+// or per call:  $fetch('/api/export', { largePayloadThreshold: false })
+```
+
+Detection is **header-only**: it reads the response `Content-Length` (wire bytes, so compressed when the response is encoded) and never sizes the parsed body, keeping it cheap on the hot path. Responses that omit `Content-Length` (streamed/chunked) are silently skipped, and the capture interceptor is skipped for muted hosts and per-call opt-outs.
 
 Telemetry also emits hook events so apps can send data to their own logger/APM without parsing console output.
 
@@ -438,6 +456,7 @@ import {
   formatDuplicateFetchTelemetryEvent,
   formatFetchTimeoutTelemetryEvent,
   formatFetchWaterfallTelemetryEvent,
+  formatLargePayloadTelemetryEvent,
   formatNestedFetchTelemetryEvent,
   formatRecursiveFetchTelemetryEvent,
   formatSlowFetchTelemetryEvent,
@@ -447,6 +466,10 @@ import {
 export default defineNitroPlugin((nitroApp) => {
   nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, (event) => {
     console.warn(formatSlowFetchTelemetryEvent(event))
+  })
+
+  nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchLargePayload, (event) => {
+    console.warn(formatLargePayloadTelemetryEvent(event))
   })
 
   nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchTimeout, (event) => {

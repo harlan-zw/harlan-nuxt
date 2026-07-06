@@ -1,4 +1,4 @@
-import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchTimeoutTelemetryEvent, FetchWaterfallTelemetryEvent, NestedFetchTelemetryEvent, RecursiveFetchTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
+import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchTimeoutTelemetryEvent, FetchWaterfallTelemetryEvent, LargePayloadTelemetryEvent, NestedFetchTelemetryEvent, RecursiveFetchTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
 import { consola } from 'consola'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from 'nitropack/runtime'
 import {
@@ -10,6 +10,7 @@ import {
   formatFetchTelemetryEvent,
   formatFetchTimeoutTelemetryEvent,
   formatFetchWaterfallTelemetryEvent,
+  formatLargePayloadTelemetryEvent,
   formatNestedFetchTelemetryEvent,
   formatRecursiveFetchTelemetryEvent,
   formatSlowFetchTelemetryEvent,
@@ -17,6 +18,7 @@ import {
   normalizeFetchTelemetryOptions,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
   recordFetchTelemetry,
+  resolveLargePayloadThreshold,
   resolveSlowFetchThreshold,
   startFetchTelemetry,
   summarizeFetchTelemetry,
@@ -166,22 +168,39 @@ export default defineNitroPlugin((nitroApp) => {
     const resolved = resolveFetchOptions(opts, applyDefaultTimeout)
     const state = resolveState()
     const internalFetch = state ? trackInternalFetch(request, resolved.opts, state) : undefined
-    const fetchOptions = internalFetch
+    const withStack = internalFetch
       ? withInternalFetchStackHeader(resolved.opts, internalFetch.stack, getInternalStackToken())
       : resolved.opts
+    // Only pay for Content-Length capture when a large-payload threshold is
+    // actually active for this call — skips muted hosts and per-call opt-outs.
+    const payloadThreshold = effectiveLargePayloadThreshold(request, opts)
+    const capture: { bytes?: number } = {}
+    const fetchOptions = payloadThreshold != null
+      ? withPayloadCapture(withStack, capture)
+      : withStack
     const startedAt = Date.now()
     if (state)
       startFetchTelemetry(state, startedAt)
 
     try {
       const result = await invoke(fetchOptions)
-      reportFetch(request, fetchOptions, startedAt, true, state, resolved.timeoutMs)
+      reportFetch(request, fetchOptions, startedAt, true, state, resolved.timeoutMs, payloadThreshold, capture.bytes)
       return result
     }
     catch (error) {
-      reportFetch(request, fetchOptions, startedAt, false, state, resolved.timeoutMs, error)
+      reportFetch(request, fetchOptions, startedAt, false, state, resolved.timeoutMs, payloadThreshold, undefined, error)
       throw error
     }
+  }
+
+  // Effective large-payload threshold (bytes) for a call, or null when muted:
+  // per-call `largePayloadThreshold` override wins, else the configured
+  // global/per-host threshold. Returns null for `false`/0 so callers can skip
+  // capture entirely.
+  function effectiveLargePayloadThreshold(request: unknown, opts: Record<string, unknown> | undefined): number | null {
+    const override = readFetchLargePayloadThreshold(opts?.largePayloadThreshold)
+    const resolved = override ?? resolveLargePayloadThreshold(options.largePayloadThreshold, requestHost(request))
+    return typeof resolved === 'number' && resolved > 0 ? resolved : null
   }
 
   function reportFetch(
@@ -191,6 +210,8 @@ export default defineNitroPlugin((nitroApp) => {
     ok: boolean,
     state: FetchTelemetryState | undefined,
     timeoutMs: number | undefined,
+    payloadThreshold: number | null,
+    payloadBytes: number | undefined,
     error?: unknown,
   ): void {
     const endedAt = Date.now()
@@ -248,6 +269,17 @@ export default defineNitroPlugin((nitroApp) => {
       callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, slowEvent)
       if (options.console)
         logger.warn(formatSlowFetchTelemetryEvent(slowEvent))
+    }
+
+    if (ok && payloadThreshold != null && payloadBytes != null && payloadBytes >= payloadThreshold) {
+      const payloadEvent: LargePayloadTelemetryEvent = {
+        ...event,
+        bytesLength: payloadBytes,
+        thresholdBytes: payloadThreshold,
+      }
+      callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchLargePayload, payloadEvent)
+      if (options.console)
+        logger.warn(formatLargePayloadTelemetryEvent(payloadEvent))
     }
   }
 
@@ -558,6 +590,38 @@ function withInternalFetchStackHeader(opts: Record<string, unknown> | undefined,
   }
 }
 
+// Attach an ofetch `onResponse` interceptor that records the response
+// `Content-Length` (wire bytes) into `capture`. Header-only by design — never
+// sizes the parsed body — so streamed/chunked responses without the header are
+// silently skipped. We pre-merge any caller-supplied `onResponse` into one
+// function rather than relying on ofetch's array-merge semantics, and a
+// non-ofetch fetcher simply ignores the option (no capture, no error).
+function withPayloadCapture(opts: Record<string, unknown> | undefined, capture: { bytes?: number }): Record<string, unknown> {
+  return {
+    ...(opts ?? {}),
+    onResponse: chainOnResponse(opts?.onResponse, (ctx) => {
+      const headers = (ctx as { response?: { headers?: { get?: (name: string) => string | null } } } | undefined)?.response?.headers
+      const raw = typeof headers?.get === 'function' ? headers.get('content-length') : undefined
+      const length = Number(raw)
+      if (Number.isFinite(length) && length > 0)
+        capture.bytes = length
+    }),
+  }
+}
+
+function chainOnResponse(existing: unknown, added: (ctx: unknown) => void): unknown {
+  if (existing == null)
+    return added
+  const list = Array.isArray(existing) ? existing : [existing]
+  return async (ctx: unknown) => {
+    for (const hook of list) {
+      if (typeof hook === 'function')
+        await hook(ctx)
+    }
+    added(ctx)
+  }
+}
+
 function withHeaders(headers: unknown, values: Record<string, string>): unknown {
   if (typeof Headers !== 'undefined' && headers instanceof Headers) {
     const next = new Headers(headers)
@@ -626,6 +690,18 @@ function readFetchTimeout(value: unknown): number | false | undefined {
 // `false`/`0` mutes detection for that one call; `undefined` defers to the
 // configured global/per-host threshold.
 function readFetchSlowThreshold(value: unknown): number | false | undefined {
+  if (value == null)
+    return undefined
+  if (value === false || value === 'false' || value === 0 || value === '0')
+    return false
+  const threshold = Number(value)
+  return Number.isFinite(threshold) && threshold > 0 ? Math.floor(threshold) : undefined
+}
+
+// Per-call large-payload threshold override (bytes): `$fetch(url, {
+// largePayloadThreshold })`. `false`/`0` mutes detection for that one call;
+// `undefined` defers to the configured global/per-host threshold.
+function readFetchLargePayloadThreshold(value: unknown): number | false | undefined {
   if (value == null)
     return undefined
   if (value === false || value === 'false' || value === 0 || value === '0')

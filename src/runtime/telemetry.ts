@@ -21,11 +21,40 @@ export interface SlowFetchThresholdMap {
  */
 export type SlowFetchThreshold = number | false | SlowFetchThresholdMap
 
+export interface LargePayloadThresholdMap {
+  /**
+   * Default threshold (bytes) applied to hosts without a specific override.
+   * `0` or `false` disables large-payload detection for un-mapped hosts.
+   */
+  default: number | false
+  /**
+   * Per-host threshold overrides (bytes), keyed by hostname (e.g. `gscdump.com`).
+   * A leading `www.` is stripped before lookup. Set a host to `0`/`false` to
+   * mute it entirely. Use this to silence a known-large upstream (a data/export
+   * API you don't control) without desensitising every other fetch.
+   */
+  hosts: Record<string, number | false>
+}
+
+/**
+ * Large-payload threshold in bytes, compared against the response
+ * `Content-Length` header. Pass a single number to apply one threshold to every
+ * outbound fetch, or a {@link LargePayloadThresholdMap} to map per-host
+ * thresholds. Individual calls may override either form by passing a
+ * `largePayloadThreshold` option to the tracked `$fetch`.
+ *
+ * Detection is header-only: it reads `Content-Length` (wire bytes, so compressed
+ * when the response is encoded) and never sizes the parsed body. Responses that
+ * omit the header (streamed/chunked) are silently skipped. Off by default.
+ */
+export type LargePayloadThreshold = number | false | LargePayloadThresholdMap
+
 export interface FetchTelemetryRuntimeOptions {
   console: boolean
   debug: boolean
   duplicateFetchThreshold: number | false
   enabled: boolean
+  largePayloadThreshold: LargePayloadThreshold
   nestedFetchDepthThreshold: number | false
   recursiveFetchWarning: boolean
   slowFetchThreshold: SlowFetchThreshold
@@ -82,6 +111,11 @@ export interface FetchTelemetryEvent {
 
 export interface SlowFetchTelemetryEvent extends FetchTelemetryEvent {
   thresholdMs: number
+}
+
+export interface LargePayloadTelemetryEvent extends FetchTelemetryEvent {
+  bytesLength: number
+  thresholdBytes: number
 }
 
 export interface FetchTimeoutTelemetryEvent extends FetchTelemetryEvent {
@@ -154,6 +188,7 @@ declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
     'nuxt-use-query:telemetry:fetch': (event: FetchTelemetryEvent) => TelemetryHookResult
     'nuxt-use-query:telemetry:fetch:duplicate': (event: DuplicateFetchTelemetryEvent) => TelemetryHookResult
+    'nuxt-use-query:telemetry:fetch:large-payload': (event: LargePayloadTelemetryEvent) => TelemetryHookResult
     'nuxt-use-query:telemetry:fetch:nested': (event: NestedFetchTelemetryEvent) => TelemetryHookResult
     'nuxt-use-query:telemetry:fetch:recursive': (event: RecursiveFetchTelemetryEvent) => TelemetryHookResult
     'nuxt-use-query:telemetry:fetch:slow': (event: SlowFetchTelemetryEvent) => TelemetryHookResult
@@ -168,6 +203,10 @@ export const DEFAULT_FETCH_TELEMETRY_OPTIONS: FetchTelemetryRuntimeOptions = {
   debug: false,
   duplicateFetchThreshold: 2,
   enabled: true,
+  // 300kb mirrors Sentry's Large HTTP Payload detector. On by default; mute a
+  // known-large upstream with a per-host map, `largePayloadThreshold: false`, or
+  // a per-call `$fetch(url, { largePayloadThreshold: false })`.
+  largePayloadThreshold: 300_000,
   nestedFetchDepthThreshold: 3,
   recursiveFetchWarning: true,
   slowFetchThreshold: 3_000,
@@ -179,6 +218,7 @@ export const DEFAULT_FETCH_TELEMETRY_OPTIONS: FetchTelemetryRuntimeOptions = {
 export const NUXT_USE_QUERY_TELEMETRY_HOOKS = {
   fetch: 'nuxt-use-query:telemetry:fetch',
   fetchDuplicate: 'nuxt-use-query:telemetry:fetch:duplicate',
+  fetchLargePayload: 'nuxt-use-query:telemetry:fetch:large-payload',
   fetchNested: 'nuxt-use-query:telemetry:fetch:nested',
   fetchRecursive: 'nuxt-use-query:telemetry:fetch:recursive',
   fetchSlow: 'nuxt-use-query:telemetry:fetch:slow',
@@ -217,6 +257,7 @@ export function normalizeFetchTelemetryOptions(input: Partial<FetchTelemetryRunt
     debug: booleanOption(input.debug, DEFAULT_FETCH_TELEMETRY_OPTIONS.debug),
     duplicateFetchThreshold: thresholdOption(input.duplicateFetchThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.duplicateFetchThreshold),
     enabled: booleanOption(input.enabled, DEFAULT_FETCH_TELEMETRY_OPTIONS.enabled),
+    largePayloadThreshold: normalizeLargePayloadThreshold(input.largePayloadThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.largePayloadThreshold),
     nestedFetchDepthThreshold: thresholdOption(input.nestedFetchDepthThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.nestedFetchDepthThreshold),
     recursiveFetchWarning: booleanOption(input.recursiveFetchWarning, DEFAULT_FETCH_TELEMETRY_OPTIONS.recursiveFetchWarning),
     slowFetchThreshold: normalizeSlowFetchThreshold(input.slowFetchThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.slowFetchThreshold),
@@ -309,6 +350,14 @@ export function formatSlowFetchTelemetryEvent(event: SlowFetchTelemetryEvent): s
   return formatTelemetryBlock('slow server fetch', [
     ['fetch', `${event.method} ${event.url}`],
     ['duration', `${formatDuration(event.durationMs)} (threshold ${formatDuration(event.thresholdMs)})`],
+    event.request ? ['request', event.request] : undefined,
+  ])
+}
+
+export function formatLargePayloadTelemetryEvent(event: LargePayloadTelemetryEvent): string {
+  return formatTelemetryBlock('large HTTP payload', [
+    ['fetch', `${event.method} ${event.url}`],
+    ['size', `${formatBytes(event.bytesLength)} (threshold ${formatBytes(event.thresholdBytes)})`],
     event.request ? ['request', event.request] : undefined,
   ])
 }
@@ -569,6 +618,54 @@ export function resolveSlowFetchThreshold(threshold: SlowFetchThreshold, host: s
   return threshold.default
 }
 
+/**
+ * Validate a large-payload threshold option into its canonical form. Accepts a
+ * number of bytes (one threshold for every host) or a per-host map; invalid
+ * entries fall back to the provided default. Structurally identical to
+ * {@link normalizeSlowFetchThreshold} but kept separate so the byte vs ms
+ * semantics stay distinct at the type level.
+ */
+export function normalizeLargePayloadThreshold(value: unknown, fallback: LargePayloadThreshold): LargePayloadThreshold {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const map = value as Partial<LargePayloadThresholdMap>
+    const fallbackDefault = typeof fallback === 'object' ? fallback.default : fallback
+    const hosts: Record<string, number | false> = {}
+    if (map.hosts && typeof map.hosts === 'object') {
+      for (const [host, threshold] of Object.entries(map.hosts)) {
+        const normalized = slowThresholdValue(threshold)
+        if (normalized != null)
+          hosts[normalizeHostKey(host)] = normalized
+      }
+    }
+    const normalizedDefault = slowThresholdValue(map.default)
+    return {
+      default: normalizedDefault ?? fallbackDefault,
+      hosts,
+    }
+  }
+  const normalized = slowThresholdValue(value)
+  return normalized ?? fallback
+}
+
+/**
+ * Resolve the effective large-payload threshold (bytes) for a request host. A
+ * `www.` prefix is stripped before lookup; un-mapped hosts (and relative/internal
+ * fetches, which pass `undefined`) fall through to the map default.
+ */
+export function resolveLargePayloadThreshold(threshold: LargePayloadThreshold, host: string | undefined): number | false {
+  if (threshold === false)
+    return false
+  if (typeof threshold === 'number')
+    return threshold
+  if (host) {
+    const key = normalizeHostKey(host)
+    const hostThreshold = threshold.hosts[key]
+    if (hostThreshold !== undefined)
+      return hostThreshold
+  }
+  return threshold.default
+}
+
 function slowThresholdValue(value: unknown): number | false | null {
   if (value === false || value === 'false' || value === 0 || value === '0')
     return false
@@ -586,6 +683,16 @@ function formatDuration(ms: number): string {
   if (ms < 1_000)
     return `${Math.round(ms)}ms`
   return `${(ms / 1_000).toFixed(ms < 10_000 ? 2 : 1)}s`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024)
+    return `${Math.round(bytes)} B`
+  const kb = bytes / 1_024
+  if (kb < 1_024)
+    return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`
+  const mb = kb / 1_024
+  return `${mb.toFixed(mb < 10 ? 2 : 1)} MB`
 }
 
 function formatCount(count: number, singular: string, plural: string): string {

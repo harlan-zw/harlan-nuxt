@@ -55,6 +55,12 @@ describe('telemetry hook types', () => {
         expectTypeOf(event.timeoutMs).toEqualTypeOf<number>()
         expectTypeOf(event.error).toEqualTypeOf<unknown>()
       })
+
+      hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchLargePayload, (event) => {
+        expectTypeOf(event.bytesLength).toEqualTypeOf<number>()
+        expectTypeOf(event.thresholdBytes).toEqualTypeOf<number>()
+        expectTypeOf(event.url).toEqualTypeOf<string>()
+      })
     }
   })
 })

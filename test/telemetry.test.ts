@@ -6,6 +6,7 @@ import {
   formatFetchTelemetryEvent,
   formatFetchTimeoutTelemetryEvent,
   formatFetchWaterfallTelemetryEvent,
+  formatLargePayloadTelemetryEvent,
   formatNestedFetchTelemetryEvent,
   formatQueryTelemetryFinishEvent,
   formatQueryTelemetryStartEvent,
@@ -13,8 +14,10 @@ import {
   formatSlowFetchTelemetryEvent,
   isFetchWaterfall,
   normalizeFetchTelemetryOptions,
+  normalizeLargePayloadThreshold,
   normalizeSlowFetchThreshold,
   recordFetchTelemetry,
+  resolveLargePayloadThreshold,
   resolveSlowFetchThreshold,
   startFetchTelemetry,
   summarizeFetchTelemetry,
@@ -156,6 +159,43 @@ describe('fetch telemetry', () => {
     expect(resolveSlowFetchThreshold(5_000, 'gscdump.com')).toBe(5_000)
   })
 
+  it('defaults large-payload detection to 300kb and normalizes byte thresholds', () => {
+    // on by default at Sentry's 300kb; users tune or mute as needed
+    expect(normalizeFetchTelemetryOptions().largePayloadThreshold).toBe(300_000)
+    expect(normalizeFetchTelemetryOptions({ largePayloadThreshold: '500000' as any }).largePayloadThreshold).toBe(500_000)
+    expect(normalizeFetchTelemetryOptions({ largePayloadThreshold: false }).largePayloadThreshold).toBe(false)
+    expect(normalizeFetchTelemetryOptions({ largePayloadThreshold: 0 as any }).largePayloadThreshold).toBe(false)
+  })
+
+  it('normalizes and resolves a per-host large-payload threshold map', () => {
+    const normalized = normalizeLargePayloadThreshold({
+      default: '300000' as any,
+      hosts: {
+        'searchconsole.googleapis.com': 0,
+        'WWW.Example.COM': 1_000_000,
+        'bad.test': 'nope' as any,
+      },
+    }, false)
+    expect(normalized).toEqual({
+      default: 300_000,
+      hosts: {
+        'searchconsole.googleapis.com': false,
+        'example.com': 1_000_000,
+      },
+    })
+    // exact host mute (an upstream you don't control), www-stripping, default fallthrough
+    expect(resolveLargePayloadThreshold(normalized, 'searchconsole.googleapis.com')).toBe(false)
+    expect(resolveLargePayloadThreshold(normalized, 'www.example.com')).toBe(1_000_000)
+    expect(resolveLargePayloadThreshold(normalized, 'other.example')).toBe(300_000)
+    expect(resolveLargePayloadThreshold(normalized, undefined)).toBe(300_000)
+    // false/number shorthands
+    expect(resolveLargePayloadThreshold(false, 'example.com')).toBe(false)
+    expect(resolveLargePayloadThreshold(500_000, 'example.com')).toBe(500_000)
+    // invalid input falls back
+    expect(normalizeLargePayloadThreshold('nope' as any, false)).toBe(false)
+    expect(normalizeLargePayloadThreshold(undefined, 300_000)).toBe(300_000)
+  })
+
   it('formats server fetch events as readable blocks', () => {
     expect(formatFetchTelemetryEvent({
       durationMs: 42,
@@ -195,6 +235,20 @@ describe('fetch telemetry', () => {
   duration: 20.0s
   timeout : 20.0s
   request : GET /dashboard`)
+
+    expect(formatLargePayloadTelemetryEvent({
+      bytesLength: 2_621_440,
+      durationMs: 180,
+      method: 'POST',
+      ok: true,
+      request: 'GET /sync',
+      server: true,
+      thresholdBytes: 300_000,
+      url: 'searchconsole.googleapis.com/v3/query',
+    })).toBe(`large HTTP payload
+  fetch  : POST searchconsole.googleapis.com/v3/query
+  size   : 2.50 MB (threshold 293 KB)
+  request: GET /sync`)
   })
 
   it('formats internal fetch warning events as readable blocks', () => {
