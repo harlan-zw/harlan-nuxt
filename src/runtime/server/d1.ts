@@ -83,8 +83,14 @@ export interface D1DurableJobRepositoryOptions<Queue extends string = string> {
   onJobClaimed?: (input: { job: D1DurableJobRecord<Queue> }) => void
   /** Fire-and-forget hook invoked after `completeJob` writes succeed. Errors are swallowed. */
   onJobCompleted?: (input: { job: D1DurableJobRecord<Queue>, durationMs: number | null, result?: unknown }) => void
-  /** Fire-and-forget hook invoked after `failJob` writes succeed. Errors are swallowed. */
-  onJobFailed?: (input: { job: D1DurableJobRecord<Queue>, error: string }) => void
+  /**
+   * Fire-and-forget hook invoked after `failJob` writes succeed. Errors are swallowed.
+   *
+   * `error` is the HEADLINE (`"TypeError: <message>"`) — safe for issue titles,
+   * realtime payloads and Analytics Engine blobs. `cause` is the ORIGINAL thrown
+   * value: report it as-is (`captureException(cause)`) to keep the native stack.
+   */
+  onJobFailed?: (input: { job: D1DurableJobRecord<Queue>, error: string, cause?: unknown }) => void
   /** Fire-and-forget hook invoked after `releaseJob` writes succeed. Errors are swallowed. */
   onJobReleased?: (input: { job: D1DurableJobRecord<Queue>, opts: ReleaseDurableJobOptions | undefined }) => void
 }
@@ -305,7 +311,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       fireHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
     },
 
-    async failJob(job, error) {
+    async failJob(job, error, failOpts) {
       const insert = await db.prepare(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
@@ -341,8 +347,9 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // The hook is telemetry — sinks put this string in a Sentry issue title, a
       // realtime `job-status` payload, an Analytics Engine blob — so it gets the
       // HEADLINE only (`"TypeError: <message>"`, always the stack's first line).
-      // A caller passing a plain single-line message is unaffected.
-      fireHook(() => opts.onJobFailed?.({ job, error: headlineOf(error) }))
+      // A caller passing a plain single-line message is unaffected. `cause` carries the
+      // original throw so an error tracker reports it directly, stack and all.
+      fireHook(() => opts.onJobFailed?.({ job, error: headlineOf(error), cause: failOpts?.cause }))
     },
 
     async releaseJob(job, releaseOpts) {

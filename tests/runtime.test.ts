@@ -314,10 +314,11 @@ describe('maxAttempts (Laravel worker model)', () => {
   })
 
   it('persists the defect stack to failed_jobs.exception, but reports only the headline to sinks', async () => {
-    const events: Array<{ status: string, error?: string }> = []
+    const events: Array<{ status: string, error?: string, cause?: unknown }> = []
+    const thrown = new TypeError('Cannot assign to read only property \'name\'')
     const { d1, runtime } = await setup(
-      { boom: async () => { throw new TypeError('Cannot assign to read only property \'name\'') }, finish: async () => {} },
-      { metricsSink: { record: (e: { status: string, error?: string }) => void events.push(e) } },
+      { boom: async () => { throw thrown }, finish: async () => {} },
+      { metricsSink: { record: (e: { status: string, error?: string, cause?: unknown }) => void events.push(e) } },
     )
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'finish', payload: {} } })
     d1._db.prepare('UPDATE jobs SET max_attempts = 1 WHERE id = ?').run(jobIds[0]!)
@@ -334,6 +335,11 @@ describe('maxAttempts (Laravel worker model)', () => {
     const failed = events.find(e => e.status === 'failed')
     expect(failed?.error).toBe('TypeError: Cannot assign to read only property \'name\'')
     expect(failed?.error).not.toContain('\n')
+
+    // …while `cause` is the ORIGINAL throw, so an error-tracker sink can report it
+    // directly (native stack + grouping) rather than rebuilding `new Error(message)`.
+    expect(failed?.cause).toBe(thrown)
+    expect(failed?.cause).toBeInstanceOf(TypeError)
   })
 })
 

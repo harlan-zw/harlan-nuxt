@@ -36,6 +36,18 @@ describe('defaultJobDataPoint', () => {
       doubles: [0, 2, 0, 0, 0, 0],
     })
   })
+
+  it('never writes the failure `cause` into a blob (blobs cap at 5120 bytes)', () => {
+    const point = defaultJobDataPoint({
+      ...event,
+      status: 'failed',
+      durationMs: null,
+      error: 'TypeError: bad',
+      cause: new TypeError('bad'),
+    })
+    expect(point.blobs).toEqual(['crawl', 'crawl/site', 'failed', 'TypeError: bad'])
+    expect(JSON.stringify(point.blobs).length).toBeLessThan(5120)
+  })
 })
 
 describe('createAnalyticsEngineSink', () => {

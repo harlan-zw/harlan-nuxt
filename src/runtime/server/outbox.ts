@@ -132,6 +132,16 @@ export interface ReleaseDurableJobOptions {
   error?: string
 }
 
+/**
+ * Well-known `failJob` options, always available regardless of a repository's own
+ * `FailOptions` (`unknown & T` is `T`). `cause` is the ORIGINAL thrown value — the
+ * `error` string is a rendering for the `failed_jobs` row, but a telemetry hook
+ * wants the instance so it can report the real stack instead of rebuilding one.
+ */
+export interface FailDurableJobOptions {
+  cause?: unknown
+}
+
 export interface DurableJobLifecycle<
   Job,
   CompleteResult = void,
@@ -141,7 +151,7 @@ export interface DurableJobLifecycle<
   claimJob: (id: string) => Promise<Job | null>
   resolveClaimMiss?: (id: string) => Promise<DurableJobClaimMiss>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
-  failJob: (job: Job, error: string, opts?: FailOptions) => Promise<void>
+  failJob: (job: Job, error: string, opts?: FailOptions & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
 }
 
@@ -569,7 +579,7 @@ export async function failDurableJob<Job, FailOptions>(
   lifecycle: Pick<DurableJobLifecycle<Job, unknown, FailOptions>, 'failJob'>,
   job: Job,
   error: string,
-  opts?: FailOptions,
+  opts?: FailOptions & FailDurableJobOptions,
 ): Promise<void> {
   await lifecycle.failJob(job, error, opts)
 }
@@ -990,8 +1000,9 @@ export async function runDurableJobMessage<
         // Terminal: this row is the ONLY record of the defect once the message is
         // acked, so persist the stack + cause chain, not just `.message`. The
         // release path below stays on `describeCause` — it fires on every retry
-        // and a stack there would be noise.
-        await failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error))
+        // and a stack there would be noise. `cause` hands the original throw to the
+        // lifecycle hooks so telemetry reports it directly (D1 can only hold text).
+        await failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error), { cause: error })
       }
       catch (failError) {
         const obsolete = obsoleteDelivery(failError)

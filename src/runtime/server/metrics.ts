@@ -31,8 +31,16 @@ export interface JobMetricsEvent {
   batchId: string | null
   siteId: string | null
   userId: number | null
-  /** Present for `failed` / `released` (the release reason). */
+  /** Present for `failed` / `released` (the release reason). Single-line headline. */
   error?: string
+  /**
+   * Present for `failed`: the ORIGINAL thrown value, not a rendering of it. An
+   * error-tracker sink should `captureException(cause)` so it groups on the real
+   * throw site and keeps the native stack + `cause` chain, rather than rebuilding a
+   * synthetic `new Error(error)`. Dimension-oriented sinks (Analytics Engine) must
+   * ignore it — it is an arbitrary object, not a blob.
+   */
+  cause?: unknown
   /** Optional completion result supplied by the consumer. */
   result?: unknown
   // Execution stats reported via ctx.reportStats (completed jobs). Undefined when
@@ -65,7 +73,7 @@ export interface JobMetricsSink {
 function toEvent(
   job: Pick<D1DurableJobRecord, 'id' | 'queue' | 'job_type' | 'attempts' | 'batch_id' | 'site_id' | 'user_id'>,
   status: JobMetricStatus,
-  extra: { durationMs?: number | null, error?: string },
+  extra: { durationMs?: number | null, error?: string, cause?: unknown },
 ): JobMetricsEvent {
   return {
     jobId: job.id,
@@ -78,6 +86,7 @@ function toEvent(
     siteId: job.site_id,
     userId: job.user_id,
     error: extra.error,
+    ...(extra.cause !== undefined ? { cause: extra.cause } : {}),
   }
 }
 
@@ -102,8 +111,8 @@ export function metricsSinkToRepoHooks(
         event.result = result
       return sink.record(event)
     },
-    onJobFailed({ job, error }) {
-      return sink.record(toEvent(job, 'failed', { durationMs: job.duration_ms ?? null, error }))
+    onJobFailed({ job, error, cause }) {
+      return sink.record(toEvent(job, 'failed', { durationMs: job.duration_ms ?? null, error, cause }))
     },
     onJobReleased({ job, opts }) {
       return sink.record(toEvent(job, 'released', { error: opts?.error }))
