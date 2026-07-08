@@ -103,6 +103,40 @@ export async function runDurableJobBatchMessage<
 // isolate (durable messages are deduped by `claimJob`). Mirrors the durable
 // path's control handling minus the persistence.
 
+/**
+ * Every stage the runtime reports through {@link CfJobsLogEvent}. A union, not
+ * `string`: consumers switch on it to pick a log level / catalogued name, and a new
+ * stage should break their switch rather than fall silently into a default branch.
+ *
+ * - `invalid_payload` — no `_task`, or no handler registered for it.
+ * - `unexpected`      — a lightweight handler threw; the message is retried.
+ * - `failed`          — a handler called `ctx.fail()`.
+ * - `dlq`             — a durable job exhausted its retries and was dead-lettered.
+ * - `onfinish-failed` — a batch's `onFinish` continuation threw.
+ */
+export type CfJobsLogStage
+  = | 'invalid_payload'
+    | 'unexpected'
+    | 'failed'
+    | 'dlq'
+    | 'onfinish-failed'
+
+/**
+ * Diagnostic entry from the consumer loop (never a throw). When the stage came from a
+ * defect, `cause` is the original thrown value — report it directly rather than
+ * rebuilding `new Error(error)` — and `stack` is its rendering (stack + `cause`
+ * chain). `error` is always a single-line headline, safe for an issue title.
+ */
+export interface CfJobsLogEvent {
+  stage: CfJobsLogStage
+  queue?: string
+  taskName?: string
+  jobId?: string
+  error?: string
+  stack?: string
+  cause?: unknown
+}
+
 export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logger = unknown> {
   message: Pick<QueueMessage, 'id' | 'body' | 'attempts' | 'ack' | 'retry'>
   registry: DurableJobsRuntimeRegistry<Env, Db, Logger>
@@ -111,12 +145,8 @@ export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logge
   isDuplicate?: (id: string | undefined) => boolean
   /** Mark an id as terminally handled. Retried/released messages must not be marked. */
   markDuplicate?: (id: string | undefined) => void
-  /**
-   * Diagnostic sink for dropped/invalid messages (no throw). When the entry came from
-   * a thrown defect, `cause` is the original value (report it directly) and `stack` its
-   * rendering — so a consumer never has to reconstruct `new Error(error)`.
-   */
-  onLog?: (event: { stage: string, taskName?: string, error?: string, stack?: string, cause?: unknown }) => void
+  /** Diagnostic sink for dropped/invalid messages (no throw). */
+  onLog?: (event: CfJobsLogEvent) => void
 }
 
 export type RunLightweightMessageResult
@@ -222,7 +252,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   isDlqQueue?: (queue: string) => boolean
   isDuplicate?: (id: string | undefined) => boolean
   markDuplicate?: (id: string | undefined) => void
-  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string, stack?: string, cause?: unknown }) => void
+  onLog?: (event: CfJobsLogEvent) => void
   // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
   isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
@@ -393,7 +423,7 @@ export interface CreateDurableJobsRuntimeOptions<
    */
   dedup?: Set<string>
   /** Diagnostic log sink for DLQ / dropped lightweight messages. */
-  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string, stack?: string, cause?: unknown }) => void
+  onLog?: (event: CfJobsLogEvent) => void
   // ── per-job hooks (durable path) ──
   /** Per-job scope: wrap dispatch (e.g. telemetry) + observe each settlement. */
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>

@@ -42,18 +42,23 @@ export interface AnalyticsEngineSinkOptions {
  * latency/retry aggregates.
  */
 export function defaultJobDataPoint(event: JobMetricsEvent): AnalyticsEngineDataPoint {
+  // Narrow rather than guess: only a completed run has stats, and only a
+  // failed/released one has an error. `cause` is an arbitrary thrown object and is
+  // deliberately never written (blobs total ≤5120 bytes).
+  const stats = event.status === 'completed' ? event.stats : undefined
+  const error = event.status === 'completed' ? null : event.error ?? null
   return {
     indexes: [event.queue],
-    blobs: [event.queue, event.jobType, event.status, event.error ?? null],
+    blobs: [event.queue, event.jobType, event.status, error],
     // doubles are positional — keep this order stable (the AE SQL API references
     // double1..double6). duration, attempts, then the reported execution stats.
     doubles: [
       event.durationMs ?? 0,
       event.attempts,
-      event.rowsFetched ?? 0,
-      event.rowsInserted ?? 0,
-      event.d1RowsRead ?? 0,
-      event.d1RowsWritten ?? 0,
+      stats?.rowsFetched ?? 0,
+      stats?.rowsInserted ?? 0,
+      stats?.d1RowsRead ?? 0,
+      stats?.d1RowsWritten ?? 0,
     ],
   }
 }

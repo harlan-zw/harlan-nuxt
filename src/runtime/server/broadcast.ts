@@ -304,6 +304,10 @@ function releaseToExtra(opts: ReleaseDurableJobOptions | undefined): Partial<CfJ
 }
 
 function jobEventFromMetrics(event: JobMetricsEvent): CfJobsBroadcastJobEvent {
+  // Narrow per outcome: only a completed run has stats + a result, and only a
+  // failed/released one has an error. `cause` is never broadcast — it is an
+  // arbitrary thrown object, and this payload is serialized to WebSocket clients.
+  const completed = event.status === 'completed' ? event : undefined
   return {
     jobName: null,
     jobId: event.jobId,
@@ -313,12 +317,12 @@ function jobEventFromMetrics(event: JobMetricsEvent): CfJobsBroadcastJobEvent {
     attempts: event.attempts,
     durationMs: event.durationMs,
     batchId: event.batchId,
-    error: event.error,
-    rowsFetched: event.rowsFetched,
-    rowsInserted: event.rowsInserted,
-    d1RowsRead: event.d1RowsRead,
-    d1RowsWritten: event.d1RowsWritten,
-    result: event.result,
+    error: event.status === 'completed' ? undefined : event.error,
+    rowsFetched: completed?.stats.rowsFetched,
+    rowsInserted: completed?.stats.rowsInserted,
+    d1RowsRead: completed?.stats.d1RowsRead,
+    d1RowsWritten: completed?.stats.d1RowsWritten,
+    result: completed?.result,
   }
 }
 

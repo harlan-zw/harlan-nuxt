@@ -1,4 +1,5 @@
 import type { D1DurableJobRecord, D1DurableJobRepositoryOptions } from './d1'
+import type { JobRunStats } from './types'
 
 // ============================================
 // Job metrics sink (engine-agnostic core)
@@ -13,51 +14,71 @@ import type { D1DurableJobRecord, D1DurableJobRepositoryOptions } from './d1'
 // the one concrete implementation we ship, behind its own subpath so its
 // Workers-specific `writeDataPoint` shape never loads with the core barrel.
 
-export type JobMetricStatus = 'completed' | 'failed' | 'released'
-
-/**
- * One terminal-ish job lifecycle event, engine-neutral. `released` is a
- * deliberate retry (`ctx.release()` / a handler throw) rather than a terminal
- * state, but it is worth recording for retry-rate dashboards.
- */
-export interface JobMetricsEvent {
+/** Fields every lifecycle event carries, whatever its outcome. */
+export interface JobMetricsEventBase {
   jobId: string
   queue: string
   jobType: string
-  status: JobMetricStatus
   attempts: number
-  /** Wall-clock duration when known (completed jobs); null otherwise. */
-  durationMs: number | null
   batchId: string | null
   siteId: string | null
   userId: number | null
-  /** Present for `failed` / `released` (the release reason). Single-line headline. */
-  error?: string
-  /**
-   * Present for `failed`: the ORIGINAL thrown value, not a rendering of it. An
-   * error-tracker sink should `captureException(cause)` so it groups on the real
-   * throw site and keeps the native stack + `cause` chain, rather than rebuilding a
-   * synthetic `new Error(error)`. Dimension-oriented sinks (Analytics Engine) must
-   * ignore it — it is an arbitrary object, not a blob.
-   */
-  cause?: unknown
-  /** Optional completion result supplied by the consumer. */
-  result?: unknown
-  // Execution stats reported via ctx.reportStats (completed jobs). Undefined when
-  // the handler reported none. Recorded as Analytics Engine doubles for sum/avg.
-  rowsFetched?: number
-  rowsInserted?: number
-  d1RowsRead?: number
-  d1RowsWritten?: number
 }
+
+/**
+ * One terminal-ish job lifecycle event, engine-neutral, discriminated on `status`
+ * so a sink can only read the fields that outcome actually has. `released` is a
+ * deliberate retry (`ctx.release()`) rather than a terminal state, but it is worth
+ * recording for retry-rate dashboards.
+ *
+ * Previously this was one interface with `error?`/`cause?`/`result?`/`rows*?` all
+ * optional, which made `{ status: 'completed', cause }` and `{ status: 'failed',
+ * rowsInserted }` representable — and the Analytics Engine adapter duly wrote an
+ * `error` blob and zero-filled stat doubles for completed jobs. The union removes
+ * both the illegal states and the guesswork.
+ */
+export type JobMetricsEvent
+  = | (JobMetricsEventBase & {
+    status: 'completed'
+    /** Wall-clock duration when the repository timed the run. */
+    durationMs: number | null
+    /** Whatever the consumer's `completeJob` returned. */
+    result?: unknown
+    /** Execution stats from `ctx.reportStats`; `{}` when the handler reported none. */
+    stats: JobRunStats
+  })
+  | (JobMetricsEventBase & {
+    status: 'failed'
+    durationMs: number | null
+    /** Single-line headline (`"TypeError: <message>"`) — safe for titles + blobs. */
+    error: string
+    /**
+     * The ORIGINAL thrown value, not a rendering of it. An error-tracker sink should
+     * `captureException(cause)` so it groups on the real throw site and keeps the
+     * native stack + `cause` chain, rather than rebuilding a synthetic
+     * `new Error(error)`. Absent when the failure never had a throw (a dispatch
+     * fault, `ctx.fail()`). Dimension-oriented sinks must ignore it — it is an
+     * arbitrary object, not a blob.
+     */
+    cause?: unknown
+  })
+  | (JobMetricsEventBase & {
+    status: 'released'
+    /** A release is not a completed run, so it is never timed. */
+    durationMs: null
+    /** The release reason, when `ctx.release()` supplied one. */
+    error?: string
+  })
+
+export type JobMetricStatus = JobMetricsEvent['status']
 
 const STAT_KEYS = ['rowsFetched', 'rowsInserted', 'd1RowsRead', 'd1RowsWritten'] as const
 
 /** Pull the numeric {@link JobRunStats} fields out of a completeJob result. */
-function readStats(result: unknown): Partial<Record<(typeof STAT_KEYS)[number], number>> {
+function readStats(result: unknown): JobRunStats {
   if (!result || typeof result !== 'object')
     return {}
-  const out: Partial<Record<(typeof STAT_KEYS)[number], number>> = {}
+  const out: JobRunStats = {}
   for (const k of STAT_KEYS) {
     const v = (result as Record<string, unknown>)[k]
     if (typeof v === 'number')
@@ -70,23 +91,18 @@ export interface JobMetricsSink {
   record: (event: JobMetricsEvent) => void | Promise<void>
 }
 
-function toEvent(
+/** The status-independent half of an event, lifted off the repository's D1 row. */
+function baseOf(
   job: Pick<D1DurableJobRecord, 'id' | 'queue' | 'job_type' | 'attempts' | 'batch_id' | 'site_id' | 'user_id'>,
-  status: JobMetricStatus,
-  extra: { durationMs?: number | null, error?: string, cause?: unknown },
-): JobMetricsEvent {
+): JobMetricsEventBase {
   return {
     jobId: job.id,
     queue: job.queue,
     jobType: job.job_type,
-    status,
     attempts: job.attempts,
-    durationMs: extra.durationMs ?? null,
     batchId: job.batch_id,
     siteId: job.site_id,
     userId: job.user_id,
-    error: extra.error,
-    ...(extra.cause !== undefined ? { cause: extra.cause } : {}),
   }
 }
 
@@ -106,16 +122,30 @@ export function metricsSinkToRepoHooks(
 ): Pick<D1DurableJobRepositoryOptions, 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'> {
   return {
     onJobCompleted({ job, durationMs, result }) {
-      const event: JobMetricsEvent = { ...toEvent(job, 'completed', { durationMs }), ...readStats(result) }
-      if (result !== undefined)
-        event.result = result
-      return sink.record(event)
+      return sink.record({
+        ...baseOf(job),
+        status: 'completed',
+        durationMs: durationMs ?? null,
+        stats: readStats(result),
+        ...(result !== undefined ? { result } : {}),
+      })
     },
     onJobFailed({ job, error, cause }) {
-      return sink.record(toEvent(job, 'failed', { durationMs: job.duration_ms ?? null, error, cause }))
+      return sink.record({
+        ...baseOf(job),
+        status: 'failed',
+        durationMs: job.duration_ms ?? null,
+        error,
+        ...(cause !== undefined ? { cause } : {}),
+      })
     },
     onJobReleased({ job, opts }) {
-      return sink.record(toEvent(job, 'released', { error: opts?.error }))
+      return sink.record({
+        ...baseOf(job),
+        status: 'released',
+        durationMs: null,
+        ...(opts?.error !== undefined ? { error: opts.error } : {}),
+      })
     },
   }
 }

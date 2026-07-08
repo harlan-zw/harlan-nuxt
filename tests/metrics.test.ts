@@ -31,7 +31,7 @@ describe('metricsSinkToRepoHooks', () => {
     hooks.onJobReleased!({ job: job(), opts: { error: 'rate-limited' } })
 
     expect(events).toEqual([
-      { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', status: 'completed', attempts: 2, durationMs: 4200, batchId: 'b1', siteId: 's1', userId: 7, error: undefined },
+      { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', status: 'completed', attempts: 2, durationMs: 4200, batchId: 'b1', siteId: 's1', userId: 7, stats: {} },
       { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', status: 'failed', attempts: 2, durationMs: 1234, batchId: 'b1', siteId: 's1', userId: 7, error: 'boom' },
       { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', status: 'released', attempts: 2, durationMs: null, batchId: 'b1', siteId: 's1', userId: 7, error: 'rate-limited' },
     ])
@@ -76,5 +76,25 @@ describe('console + noop sinks', () => {
 
   it('noop sink records nothing and never throws', () => {
     expect(() => noopMetricsSink.record({} as JobMetricsEvent)).not.toThrow()
+  })
+})
+
+const jobBase = { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', attempts: 2, batchId: 'b1', siteId: 's1', userId: 7 }
+
+describe('jobMetricsEvent is discriminated on status', () => {
+  it('narrows to the fields each outcome actually has', () => {
+    const evs: JobMetricsEvent[] = [
+      { ...jobBase, status: 'completed', durationMs: 1, stats: { rowsFetched: 3 } },
+      { ...jobBase, status: 'failed', durationMs: 1, error: 'TypeError: x', cause: new TypeError('x') },
+      { ...jobBase, status: 'released', durationMs: null, error: 'rate-limited' },
+    ]
+    for (const e of evs) {
+      if (e.status === 'completed')
+        expect(e.stats.rowsFetched).toBe(3)
+      else if (e.status === 'failed')
+        expect(e.cause).toBeInstanceOf(TypeError)
+      else
+        expect(e.error).toBe('rate-limited')
+    }
   })
 })

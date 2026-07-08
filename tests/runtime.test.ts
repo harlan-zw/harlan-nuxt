@@ -153,7 +153,7 @@ describe('ctx.reportStats → metrics + job row (JOB_ANALYTICS parity)', () => {
     await runtime.consumeMessage(msg(jobIds[0]!))
 
     const e = events.find(x => x.status === 'completed')!
-    expect(e).toMatchObject({ rowsFetched: 42, rowsInserted: 5, d1RowsRead: 12, d1RowsWritten: 4 })
+    expect(e).toMatchObject({ stats: { rowsFetched: 42, rowsInserted: 5, d1RowsRead: 12, d1RowsWritten: 4 } })
     expect(typeof e.durationMs).toBe('number') // derived from the reservation
     const row = d1._db.prepare('SELECT rows_fetched, rows_inserted, d1_rows_read, d1_rows_written FROM jobs WHERE id = ?').get(jobIds[0]!) as Record<string, number>
     expect(row).toMatchObject({ rows_fetched: 42, rows_inserted: 5, d1_rows_read: 12, d1_rows_written: 4 })

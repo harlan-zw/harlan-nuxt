@@ -133,10 +133,12 @@ export interface ReleaseDurableJobOptions {
 }
 
 /**
- * Well-known `failJob` options, always available regardless of a repository's own
- * `FailOptions` (`unknown & T` is `T`). `cause` is the ORIGINAL thrown value — the
- * `error` string is a rendering for the `failed_jobs` row, but a telemetry hook
- * wants the instance so it can report the real stack instead of rebuilding one.
+ * Well-known `failJob` options, always passable regardless of a repository's own
+ * `FailOptions` — hence `Partial<FailOptions> & FailDurableJobOptions` on `failJob`
+ * (`Partial<unknown>` collapses to `{}`), so the runtime can supply just a `cause`
+ * without knowing a repository's bespoke options. `cause` is the ORIGINAL thrown
+ * value: the `error` string is a rendering for the `failed_jobs` row, but a telemetry
+ * hook wants the instance so it can report the real stack instead of rebuilding one.
  */
 export interface FailDurableJobOptions {
   cause?: unknown
@@ -151,7 +153,7 @@ export interface DurableJobLifecycle<
   claimJob: (id: string) => Promise<Job | null>
   resolveClaimMiss?: (id: string) => Promise<DurableJobClaimMiss>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
-  failJob: (job: Job, error: string, opts?: FailOptions & FailDurableJobOptions) => Promise<void>
+  failJob: (job: Job, error: string, opts?: Partial<FailOptions> & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
 }
 
@@ -579,7 +581,7 @@ export async function failDurableJob<Job, FailOptions>(
   lifecycle: Pick<DurableJobLifecycle<Job, unknown, FailOptions>, 'failJob'>,
   job: Job,
   error: string,
-  opts?: FailOptions & FailDurableJobOptions,
+  opts?: Partial<FailOptions> & FailDurableJobOptions,
 ): Promise<void> {
   await lifecycle.failJob(job, error, opts)
 }
@@ -724,10 +726,12 @@ export interface RunDurableJobMessageOptions<
   Db = unknown,
   Logger = unknown,
   CompleteResult = unknown,
-  FailOptions = unknown,
 > {
   message: Pick<QueueMessage<Message>, 'body' | 'ack' | 'retry'>
-  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailOptions>, 'claimJob' | 'resolveClaimMiss' | 'completeJob' | 'failJob' | 'releaseJob'>
+  // The runtime never has bespoke fail options — it settles a terminal failure with a
+  // `cause` and nothing else. A repository's own `FailOptions` stays on
+  // `DurableJobLifecycle` / `failDurableJob` for callers that drive `failJob` directly.
+  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'completeJob' | 'failJob' | 'releaseJob'>
   registry: {
     getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
@@ -835,9 +839,8 @@ export async function runDurableJobMessage<
   Db = unknown,
   Logger = unknown,
   CompleteResult = unknown,
-  FailOptions = unknown,
 >(
-  opts: RunDurableJobMessageOptions<StoredJob, Job, Message, Env, Db, Logger, CompleteResult, FailOptions>,
+  opts: RunDurableJobMessageOptions<StoredJob, Job, Message, Env, Db, Logger, CompleteResult>,
 ): Promise<RunDurableJobMessageResult> {
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
   if (!jobId) {
