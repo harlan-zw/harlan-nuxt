@@ -121,6 +121,47 @@ export function describeCause(cause: unknown): string {
   return typeof cause === 'string' ? cause : String(cause)
 }
 
+/** Upper bound on a rendered stack, so one defect can't blow up a `failed_jobs` row. */
+export const MAX_DESCRIBED_STACK_CHARS = 4000
+
+/**
+ * Renders a defect for DIAGNOSTICS — the stack, plus the `cause` chain beneath it.
+ *
+ * `describeCause` deliberately collapses an `Error` to its `.message`, which is the
+ * right rendering for the short `message` fields of a `JobError`. But it is also what
+ * used to land in `failed_jobs.exception`, so a terminal failure was persisted as a
+ * bare sentence with no stack and no cause — undiagnosable without reproducing it
+ * (this is how a `TypeError: Cannot assign to read only property 'name'` sat in the
+ * crawl queue for 103 occurrences with nothing to point at). Use this at the
+ * persistence / observability boundary; keep `describeCause` for `message`.
+ *
+ * `error.stack` already begins with `"<name>: <message>"`, so it is used whole when
+ * present and synthesised otherwise. Cycles and runaway chains are bounded.
+ */
+export function describeCauseWithStack(cause: unknown, maxChars: number = MAX_DESCRIBED_STACK_CHARS): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = cause
+
+  while (current !== undefined && current !== null && parts.length < 5) {
+    if (typeof current === 'object') {
+      if (seen.has(current))
+        break
+      seen.add(current)
+    }
+    if (current instanceof Error) {
+      parts.push(current.stack || `${current.name}: ${current.message}`)
+      current = (current as Error & { cause?: unknown }).cause
+      continue
+    }
+    parts.push(describeCause(current))
+    break
+  }
+
+  const rendered = parts.join('\nCaused by: ') || describeCause(cause)
+  return rendered.length > maxChars ? `${rendered.slice(0, maxChars)}\n… (truncated)` : rendered
+}
+
 export const jobErrors = {
   noTask(): NoTaskError {
     return { _tag: 'no-task', message: 'No _task in payload' }

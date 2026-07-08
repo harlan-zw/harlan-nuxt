@@ -19,7 +19,7 @@ import { createD1DurableBatchStore, createJobBatch, settleBatchMember } from './
 import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastRepositoryHooks } from './broadcast'
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
-import { formatJobError } from './errors'
+import { describeCause, describeCauseWithStack, formatJobError } from './errors'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
@@ -111,8 +111,12 @@ export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logge
   isDuplicate?: (id: string | undefined) => boolean
   /** Mark an id as terminally handled. Retried/released messages must not be marked. */
   markDuplicate?: (id: string | undefined) => void
-  /** Diagnostic sink for dropped/invalid messages (no throw). */
-  onLog?: (event: { stage: string, taskName?: string, error?: string }) => void
+  /**
+   * Diagnostic sink for dropped/invalid messages (no throw). `stack` is present
+   * when the entry came from a thrown defect, so a consumer can report the real
+   * stack rather than reconstructing `new Error(error)`.
+   */
+  onLog?: (event: { stage: string, taskName?: string, error?: string, stack?: string }) => void
 }
 
 export type RunLightweightMessageResult
@@ -193,7 +197,7 @@ export async function runLightweightMessage<Env, Db, Logger>(
   catch (error) {
     // Rely on CF max_retries → DLQ for terminal exhaustion.
     const delaySeconds = resolveJobRetryDelay(definition, message.attempts)
-    opts.onLog?.({ stage: 'unexpected', taskName, error: error instanceof Error ? error.message : String(error) })
+    opts.onLog?.({ stage: 'unexpected', taskName, error: describeCause(error), stack: describeCauseWithStack(error) })
     message.retry({ delaySeconds })
     return { status: 'errored' }
   }
@@ -218,7 +222,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   isDlqQueue?: (queue: string) => boolean
   isDuplicate?: (id: string | undefined) => boolean
   markDuplicate?: (id: string | undefined) => void
-  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string, stack?: string }) => void
   // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
   isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
@@ -389,7 +393,7 @@ export interface CreateDurableJobsRuntimeOptions<
    */
   dedup?: Set<string>
   /** Diagnostic log sink for DLQ / dropped lightweight messages. */
-  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string }) => void
+  onLog?: (event: { stage: string, queue?: string, taskName?: string, jobId?: string, error?: string, stack?: string }) => void
   // ── per-job hooks (durable path) ──
   /** Per-job scope: wrap dispatch (e.g. telemetry) + observe each settlement. */
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
@@ -525,7 +529,7 @@ export function createDurableJobsRuntime<
       }
     }
     catch (error) {
-      opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: error instanceof Error ? error.message : String(error) })
+      opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: describeCause(error), stack: describeCauseWithStack(error) })
     }
   })
 

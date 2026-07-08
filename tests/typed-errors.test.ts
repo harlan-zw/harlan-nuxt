@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   defineJob,
   defineJobRegistry,
+  describeCause,
+  describeCauseWithStack,
   dispatchDurableJobBatch,
   enqueueDurableJob,
   err,
@@ -14,6 +16,7 @@ import {
   mapErr,
   mapResult,
   matchResult,
+  MAX_DESCRIBED_STACK_CHARS,
   ok,
   prepareDurableJob,
   prepareDurableJobResult,
@@ -257,5 +260,61 @@ describe('runDurableJobMessage discriminated outcome', () => {
     expect(result.status).toBe('dispatch-failed')
     if (result.status === 'dispatch-failed')
       expect(result.error?._tag).toBe('handler-not-found')
+  })
+})
+
+describe('describeCauseWithStack (diagnostic rendering)', () => {
+  it('keeps describeCause collapsing an Error to its message', () => {
+    expect(describeCause(new Error('boom'))).toBe('boom')
+    expect(describeCause('plain')).toBe('plain')
+    expect(describeCause(42)).toBe('42')
+  })
+
+  it('renders the stack, not just the message', () => {
+    const error = new Error('boom')
+    const rendered = describeCauseWithStack(error)
+    expect(rendered).toContain('boom')
+    // A real stack names the frame; the bare message never did.
+    expect(rendered).toContain('at ')
+    expect(rendered).not.toBe('boom')
+  })
+
+  it('walks the cause chain', () => {
+    const root = new TypeError('Cannot assign to read only property \'name\'')
+    const wrapped = new Error('handler threw', { cause: root })
+    const rendered = describeCauseWithStack(wrapped)
+    expect(rendered).toContain('handler threw')
+    expect(rendered).toContain('Caused by: ')
+    expect(rendered).toContain('Cannot assign to read only property')
+  })
+
+  it('synthesises a rendering when stack is absent', () => {
+    const error = new Error('no stack here')
+    error.stack = undefined
+    expect(describeCauseWithStack(error)).toBe('Error: no stack here')
+  })
+
+  it('falls back to describeCause for non-Errors', () => {
+    expect(describeCauseWithStack('plain')).toBe('plain')
+    expect(describeCauseWithStack(42)).toBe('42')
+    expect(describeCauseWithStack(null)).toBe('null')
+    expect(describeCauseWithStack(undefined)).toBe('undefined')
+  })
+
+  it('terminates on a cyclic cause chain', () => {
+    const a = new Error('a')
+    const b = new Error('b', { cause: a })
+    ;(a as Error & { cause?: unknown }).cause = b
+    const rendered = describeCauseWithStack(b)
+    expect(rendered).toContain('a')
+    expect(rendered).toContain('b')
+  })
+
+  it('truncates a runaway stack so one defect cannot blow up a failed_jobs row', () => {
+    const error = new Error('big')
+    error.stack = 'x'.repeat(MAX_DESCRIBED_STACK_CHARS * 2)
+    const rendered = describeCauseWithStack(error)
+    expect(rendered.length).toBeLessThan(MAX_DESCRIBED_STACK_CHARS + 32)
+    expect(rendered).toContain('… (truncated)')
   })
 })

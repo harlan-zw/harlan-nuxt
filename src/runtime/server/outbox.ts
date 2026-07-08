@@ -15,7 +15,7 @@ import type {
   QueueSendOptions,
 } from './types'
 import { dispatchRegisteredJob } from './dispatch'
-import { describeCause, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
+import { describeCause, describeCauseWithStack, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
 import { CF_QUEUE_MAX_MESSAGE_BYTES, sendBatchChunked, withSendBackpressure } from './queue'
@@ -987,7 +987,11 @@ export async function runDurableJobMessage<
       : (typeof maxAttempts === 'number' && job.attempts >= maxAttempts)
     if (permanent) {
       try {
-        await failDurableJob(opts.lifecycle, storedJob, describeCause(error))
+        // Terminal: this row is the ONLY record of the defect once the message is
+        // acked, so persist the stack + cause chain, not just `.message`. The
+        // release path below stays on `describeCause` — it fires on every retry
+        // and a stack there would be noise.
+        await failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error))
       }
       catch (failError) {
         const obsolete = obsoleteDelivery(failError)
