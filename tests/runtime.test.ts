@@ -312,6 +312,29 @@ describe('maxAttempts (Laravel worker model)', () => {
     expect(m.ack).toHaveBeenCalled()
     expect(m.retry).not.toHaveBeenCalled()
   })
+
+  it('persists the defect stack to failed_jobs.exception, but reports only the headline to sinks', async () => {
+    const events: Array<{ status: string, error?: string }> = []
+    const { d1, runtime } = await setup(
+      { boom: async () => { throw new TypeError('Cannot assign to read only property \'name\'') }, finish: async () => {} },
+      { metricsSink: { record: (e: { status: string, error?: string }) => void events.push(e) } },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('boom', {})], onFinish: { name: 'finish', payload: {} } })
+    d1._db.prepare('UPDATE jobs SET max_attempts = 1 WHERE id = ?').run(jobIds[0]!)
+    await runtime.consumeMessage(msg(jobIds[0]!))
+
+    // The failed_jobs row is the ONLY record of the defect once the message is acked.
+    const { exception } = d1._db.prepare('SELECT exception FROM failed_jobs').get() as { exception: string }
+    expect(exception).toContain('TypeError: Cannot assign to read only property')
+    expect(exception).toContain('at ') // a real stack frame, not a bare message
+    expect(exception.split('\n').length).toBeGreaterThan(1)
+
+    // Telemetry sinks put this string in Sentry issue titles / realtime payloads —
+    // a 4kB stack there would be noise, so they get the first line only.
+    const failed = events.find(e => e.status === 'failed')
+    expect(failed?.error).toBe('TypeError: Cannot assign to read only property \'name\'')
+    expect(failed?.error).not.toContain('\n')
+  })
 })
 
 describe('consumeBatch', () => {

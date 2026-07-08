@@ -125,6 +125,17 @@ export function describeCause(cause: unknown): string {
 export const MAX_DESCRIBED_STACK_CHARS = 4000
 
 /**
+ * The first line of a rendered defect — `"TypeError: <message>"` for anything that
+ * came through {@link describeCauseWithStack}, and the string itself for a plain
+ * single-line message. Telemetry sinks (Sentry issue titles, realtime payloads)
+ * want this, not the whole stack.
+ */
+export function headlineOf(rendered: string): string {
+  const newline = rendered.indexOf('\n')
+  return newline === -1 ? rendered : rendered.slice(0, newline)
+}
+
+/**
  * Renders a defect for DIAGNOSTICS — the stack, plus the `cause` chain beneath it.
  *
  * `describeCause` deliberately collapses an `Error` to its `.message`, which is the

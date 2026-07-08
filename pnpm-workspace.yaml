@@ -8,17 +8,17 @@ trustPolicyExclude:
 catalog:
   '@antfu/eslint-config': ^9.1.0
   '@nuxt/test-utils': ^4.0.3
-  '@vitest/coverage-v8': 4.1.9
+  '@vitest/coverage-v8': 4.1.10
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
   eslint: ^10.6.0
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
-  h3: 2.0.1-rc.22
+  h3: 2.0.1-rc.23
   magicast: ^0.5.3
   nitropack: ^2.13.4
   unbuild: ^3.6.1
-  wrangler: ^4.106.0
+  wrangler: ^4.107.0
 
 catalogs:
   dev-build:
@@ -27,7 +27,7 @@ catalogs:
     vue-tsc: ^3.3.6
   dev-test:
     happy-dom: ^20.10.6
-    vitest: ^4.1.9
+    vitest: ^4.1.10
   nuxt:
     '@nuxt/kit': ^4.4.8
     '@nuxt/module-builder': ^1.0.2

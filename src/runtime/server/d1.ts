@@ -7,7 +7,7 @@ import type {
   DurableJobRepository,
   ReleaseDurableJobOptions,
 } from './outbox'
-import { DurableJobOwnershipError } from './errors'
+import { DurableJobOwnershipError, headlineOf } from './errors'
 
 export interface D1PreparedStatementLike<T = unknown> {
   bind: (...values: unknown[]) => D1PreparedStatementLike<T>
@@ -336,7 +336,13 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND failed_at IS NULL
       `).bind(job.id, job.reserved_at, job.attempts).run()
       assertOwnedMutation(deleted, job.id)
-      fireHook(() => opts.onJobFailed?.({ job, error }))
+      // `exception` persists the full rendering (stack + `cause` chain, see
+      // `describeCauseWithStack`) because that row is the only record of the defect.
+      // The hook is telemetry — sinks put this string in a Sentry issue title, a
+      // realtime `job-status` payload, an Analytics Engine blob — so it gets the
+      // HEADLINE only (`"TypeError: <message>"`, always the stack's first line).
+      // A caller passing a plain single-line message is unaffected.
+      fireHook(() => opts.onJobFailed?.({ job, error: headlineOf(error) }))
     },
 
     async releaseJob(job, releaseOpts) {

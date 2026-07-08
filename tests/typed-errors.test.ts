@@ -8,6 +8,7 @@ import {
   enqueueDurableJob,
   err,
   formatJobError,
+  headlineOf,
   isErr,
   isJobError,
   isOk,
@@ -316,5 +317,24 @@ describe('describeCauseWithStack (diagnostic rendering)', () => {
     const rendered = describeCauseWithStack(error)
     expect(rendered.length).toBeLessThan(MAX_DESCRIBED_STACK_CHARS + 32)
     expect(rendered).toContain('… (truncated)')
+  })
+})
+
+describe('headlineOf', () => {
+  it('returns a single-line message untouched', () => {
+    expect(headlineOf('boom')).toBe('boom')
+    expect(headlineOf('')).toBe('')
+  })
+
+  it('takes only the first line of a rendered stack', () => {
+    const rendered = describeCauseWithStack(new TypeError('bad'))
+    expect(headlineOf(rendered)).toBe('TypeError: bad')
+    expect(headlineOf(rendered)).not.toContain('\n')
+  })
+
+  it('drops the cause chain', () => {
+    const rendered = describeCauseWithStack(new Error('outer', { cause: new Error('inner') }))
+    expect(headlineOf(rendered)).toBe('Error: outer')
+    expect(headlineOf(rendered)).not.toContain('inner')
   })
 })
