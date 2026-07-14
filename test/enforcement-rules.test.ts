@@ -183,6 +183,14 @@ describe('mutationBodySchemaMissingRule', () => {
     )
     expect(runRule(mutationBodySchemaMissingRule, ctx)).toBe(true)
   })
+
+  it('does not classify an idempotent POST query in a group as a mutation', () => {
+    const ctx = makeCtx(
+      'app/queries/search.ts',
+      'export const g = defineNuxtQueryGroup("search", { run: { key: "search", method: "POST", idempotent: true, path: "/api/search", response: r } })',
+    )
+    expect(runRule(mutationBodySchemaMissingRule, ctx)).toBe(false)
+  })
 })
 
 describe('serverRouteMissingContractRule', () => {

@@ -9,7 +9,7 @@ import { setupFetchTelemetryModule } from './module/telemetry'
 //
 // Exposes auto-imports: useNuxtQuery, useNuxtMutation, useNuxtRpc,
 // useNuxtRpcQuery, useNuxtSubscription, useQueryCache, invalidateNuxtQueries,
-// getQueryData, setQueryData.
+// removeNuxtQueries, getQueryData, setQueryData.
 
 export interface ModuleOptions {
   /**
@@ -55,6 +55,7 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'nuxtWebSocketSource', from: websocket },
       { name: 'useQueryCache', from: `${composables}/useQueryCache` },
       { name: 'invalidateNuxtQueries', from: `${composables}/useQueryCache` },
+      { name: 'removeNuxtQueries', from: `${composables}/useQueryCache` },
       { name: 'getQueryData', from: `${composables}/useQueryCache` },
       { name: 'setQueryData', from: `${composables}/useQueryCache` },
       { name: 'defineNuxtQueryGroup', from: rpcCore },

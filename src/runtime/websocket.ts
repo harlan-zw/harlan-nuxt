@@ -8,18 +8,21 @@ import { useWebSocket } from '@vueuse/core'
 // transport-agnostic — this is just one adapter that produces a `source`.
 //
 // What it wires for you:
-//   - each socket frame -> `ctx.push` (deserialized)
-//   - every *re*connect -> `ctx.resync()`, so the bridge's `onReconnect` runs
+//   - each socket frame -> the FIFO `ctx.push` effect (deserialized)
+//   - every *re*connect -> `ctx.resync()`, so the bridge's `onResync` runs
 //     and recovers events missed while the socket was down (the gap a bare
 //     `useNuxtQuery` refetch-on-reconnect can't see — that's keyed on the
 //     browser `online` event, not the socket)
 //   - teardown: `useWebSocket` closes on scope dispose (`autoClose` default), and
 //     the bridge hosts this source in an effect scope, so teardown flows there
 //
-// Reconnect + heartbeat are VueUse built-ins; pass them straight through.
+// Reconnect + heartbeat are VueUse built-ins; pass them straight through. The
+// callbacks cannot return an effect Promise to the browser WebSocket API, so
+// the adapter observes rejections to avoid unhandled-rejection noise; the
+// bridge itself still exposes them through `error` / `onError`.
 
 export interface NuxtWebSocketSourceOptions
-  extends Pick<UseWebSocketOptions, 'protocols' | 'heartbeat' | 'autoReconnect' | 'immediate'> {
+  extends Pick<UseWebSocketOptions, 'protocols' | 'heartbeat' | 'autoReconnect'> {
   /**
    * Turn a raw frame (`string` | `Blob` | `ArrayBuffer`) into the value handed
    * to `push`. Defaults to JSON-parsing strings (non-JSON strings pass through
@@ -40,14 +43,26 @@ export function nuxtWebSocketSource(
     let connectedOnce = false
     useWebSocket(url, {
       ...wsOptions,
+      // The adapter intentionally does not expose VueUse's `open()` control,
+      // so allowing `immediate: false` would create a socket that can never be
+      // opened. Establishment is owned by the subscription activation.
+      immediate: true,
       onConnected: () => {
-        if (connectedOnce)
-          ctx.resync()
-        else
+        if (connectedOnce) {
+          void ctx.resync().catch(() => {
+            // The bridge already reports the effect failure through onError.
+            return undefined
+          })
+        }
+        else {
           connectedOnce = true
+        }
       },
       onMessage: (_ws, event) => {
-        ctx.push(deserialize(event.data))
+        void ctx.push(deserialize(event.data)).catch(() => {
+          // The bridge already reports the effect failure through onError.
+          return undefined
+        })
       },
     })
     // No manual close: `useWebSocket` closes on scope dispose; the bridge runs

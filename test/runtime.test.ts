@@ -39,6 +39,8 @@ interface Probe {
   mutationMethod: string
   rpcDefault: { value: string, call: number }
   rpcDirect: { value: string, call: number }
+  rpcPostDirect: { limit: number, term: string }
+  rpcPostQuery: { limit: number, term: string } | null
   rpcKey: string
   rpcQuery: { value: string, call: number } | null
 }
@@ -93,6 +95,8 @@ describe('nuxt-use-query · e2e', () => {
     expect(probe.rpcQuery?.value).toBe('rpc-query')
     expect(probe.rpcDirect.value).toBe('rpc-direct')
     expect(probe.rpcDefault.value).toBe('rpc-default')
+    expect(probe.rpcPostQuery).toEqual({ limit: 10, term: 'reactive' })
+    expect(probe.rpcPostDirect).toEqual({ limit: 3, term: 'direct' })
     expect(probe.appContextFetch).toEqual({ source: 'nuxt-app' })
     expect(probe.mutationMethod).toBe('DELETE')
     expect(probe.cachedManualWrite).toEqual({ ok: true })

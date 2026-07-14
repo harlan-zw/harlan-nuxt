@@ -30,9 +30,38 @@ const echoQueries = defineNuxtQueryGroup('fixture', {
   }),
 })
 
+const searchResponseSchema = z.object({
+  limit: z.number(),
+  term: z.string(),
+})
+const searchBodySchema = z.object({
+  limit: z.number().default(10),
+  term: z.string().trim(),
+})
+const postQuery = defineNuxtRpcQuery({
+  key: ['fixture', 'search'],
+  method: 'POST',
+  idempotent: true,
+  path: '/api/search',
+  body: {
+    schema: searchBodySchema,
+    value: { term: ' reactive ', ignored: true },
+  },
+  response: searchResponseSchema,
+})
+
 const { data: rpcQuery } = await useNuxtRpcQuery(echoQueries.detail('rpc-query'))
+const { data: rpcPostQuery } = await useNuxtRpcQuery(postQuery)
 const rpc = useNuxtRpc({ fetch: $fetch as any })
 const rpcDirect = await rpc.query(echoQueries.detail('rpc-direct'))
+const rpcPostDirect = await rpc.query(defineNuxtRpcQuery({
+  key: ['fixture', 'search-direct'],
+  method: 'POST',
+  idempotent: true,
+  path: '/api/search',
+  body: { schema: searchBodySchema, value: { limit: 3, term: ' direct ' } },
+  response: searchResponseSchema,
+}))
 const rpcDefault = await useNuxtRpc().query(echoQueries.detail('rpc-default'))
 const appContextFetch = await $fetch<{ source: string }>('/api/app-context-fetch')
 const mutationOperation = defineNuxtRpcMutation({
@@ -63,6 +92,7 @@ const importedFns = [
   useNuxtRpcQuery,
   useQueryCache,
   invalidateNuxtQueries,
+  removeNuxtQueries,
   getQueryData,
   setQueryData,
   defineNuxtQueryGroup,
@@ -81,6 +111,8 @@ const probe = {
   hasAutoImports: importedFns.every(fn => typeof fn === 'function'),
   mutationMethod: mutationOperation.method,
   rpcDirect,
+  rpcPostDirect,
+  rpcPostQuery: rpcPostQuery.value,
   rpcDefault,
   rpcKey,
   rpcQuery: rpcQuery.value,

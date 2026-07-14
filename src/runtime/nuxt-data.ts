@@ -5,7 +5,11 @@
 // and `payload.data[key]` (next mount's `getCachedData` fallback).
 
 interface AsyncDataEntry {
+  /** Nuxt's live consumer count. Missing on older supported Nuxt internals. */
+  _deps?: number
   data: { value: unknown }
+  error?: { value: unknown }
+  status?: { value: string }
 }
 
 interface NuxtDataInternals {
@@ -46,7 +50,34 @@ export function writeNuxtData<T>(nuxt: unknown, key: string, value: T): void {
 
 /** Active query keys registered with Nuxt — drives prefix invalidation. */
 export function listActiveNuxtDataKeys(nuxt: unknown): string[] {
-  return Object.keys(internals(nuxt)._asyncData ?? {})
+  return Object.entries(internals(nuxt)._asyncData ?? {})
+    // Nuxt retains an entry after its final consumer unmounts, but removes its
+    // refresh hook and sets `_deps` to zero. Treating that retained entry as
+    // active can make invalidation inspect an old parked error even though no
+    // refresh ran. Older Nuxt versions without `_deps` stay conservative.
+    .filter(([, entry]) => entry != null && (entry._deps == null || entry._deps > 0))
+    .map(([key]) => key)
+}
+
+export interface NuxtDataRefreshFailure {
+  error: unknown
+  key: string
+}
+
+/** Failures parked by Nuxt after an awaited `refreshNuxtData` hook settles. */
+export function readNuxtDataRefreshFailures(nuxt: unknown, keys: readonly string[]): NuxtDataRefreshFailure[] {
+  const entries = internals(nuxt)._asyncData ?? {}
+  const failures: NuxtDataRefreshFailure[] = []
+  for (const key of keys) {
+    const entry = entries[key]
+    if (!entry || (entry.status?.value !== 'error' && entry.error?.value == null))
+      continue
+    failures.push({
+      error: entry.error?.value ?? new Error(`Query refresh failed for ${key}.`),
+      key,
+    })
+  }
+  return failures
 }
 
 /**
@@ -67,6 +98,14 @@ export function listPayloadDataKeys(nuxt: unknown): string[] {
   return [...keys]
 }
 
+/** Every query key known to Nuxt, including live and prerender-only entries. */
+export function listNuxtDataKeys(nuxt: unknown): string[] {
+  const keys = new Set(listActiveNuxtDataKeys(nuxt))
+  for (const key of listPayloadDataKeys(nuxt))
+    keys.add(key)
+  return [...keys]
+}
+
 /**
  * Per-key `lastFetched` timestamps the server stashed in the payload so the
  * client can seed with the ACTUAL fetch time instead of the hydration moment
@@ -80,4 +119,29 @@ export function readQueryMeta(nuxt: unknown): Record<string, number> | undefined
 /** Write the serialized `lastFetched` map into the payload (server, at render). */
 export function writeQueryMeta(nuxt: unknown, meta: Record<string, number>): void {
   internals(nuxt).payload.nuxtQueryMeta = meta
+}
+
+/**
+ * Remove stores that Nuxt's public `clearNuxtData` does not cover. In
+ * particular, a cleared payload key must not fall through to stale
+ * `static.data` on a payload-extracted/prerendered page.
+ */
+export function removeNuxtDataArtifacts(nuxt: unknown, keys: readonly string[]): void {
+  const n = internals(nuxt)
+  for (const key of keys) {
+    const live = n._asyncData?.[key]
+    if (live) {
+      live.data.value = undefined
+      if (live.error)
+        live.error.value = undefined
+      if (live.status)
+        live.status.value = 'idle'
+    }
+    if (key in n.payload.data)
+      delete n.payload.data[key]
+    if (n.static?.data && key in n.static.data)
+      delete n.static.data[key]
+    if (n.payload.nuxtQueryMeta && key in n.payload.nuxtQueryMeta)
+      delete n.payload.nuxtQueryMeta[key]
+  }
 }

@@ -7,12 +7,14 @@ import type {
   NuxtRpcQueryOperation,
 } from '../rpc/core'
 import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
-import { computed, toValue } from 'vue'
+import { computed, toValue, watch } from 'vue'
 import { useNuxtApp, useRequestFetch } from '#app'
 import {
   createNuxtRpcClient,
   normalizeNuxtRpcError,
   parseNuxtRpcResponse,
+  resolveNuxtRpcQueryRequest,
+  serializeInvalidNuxtRpcQueryKey,
   serializeNuxtRpcKey,
 } from '../rpc/core'
 import { useNuxtQuery } from './useNuxtQuery'
@@ -23,12 +25,14 @@ import { invalidateNuxtQueries } from './useQueryCache'
  * cache key. The type-safe alternative to hand-writing the prefix string, which
  * otherwise has to mirror `serializeNuxtRpcKey` exactly (including its per-segment
  * `encodeURIComponent`). Prefix-matches, so it also catches keys nested under it.
+ * Resolves only after matching active refetches settle and forwards refresh
+ * failures as a rejected Promise.
  */
 
-export function invalidateNuxtRpc(operationOrKey: NuxtRpcKey | { key: NuxtRpcKey }): void {
+export function invalidateNuxtRpc(operationOrKey: NuxtRpcKey | { key: NuxtRpcKey }): Promise<void> {
   const isOperation = typeof operationOrKey === 'object' && operationOrKey !== null && 'key' in operationOrKey
   const key = isOperation ? operationOrKey.key : operationOrKey
-  invalidateNuxtQueries(serializeNuxtRpcKey(key))
+  return invalidateNuxtQueries(serializeNuxtRpcKey(key))
 }
 
 // `DefaultT` must stay a generic so the `default` factory drives its own
@@ -36,10 +40,9 @@ export function invalidateNuxtRpc(operationOrKey: NuxtRpcKey | { key: NuxtRpcKey
 // to `() => Ref<undefined, undefined> | undefined`, rejecting every real value.
 export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
   UseNuxtQueryOptions<TData, TData, KeysOf<TData>, DefaultT>,
-  'key' | 'query' | 'transform'
+  'body' | 'key' | 'method' | 'query' | 'transform'
 >
 
-// eslint-disable-next-line harlanzw/vue-no-faux-composables -- Nuxt composable, wraps useNuxtQuery and normalizes its error ref.
 export function useNuxtRpcQuery<
   TResponseSchema extends z.ZodTypeAny,
   TQuery = undefined,
@@ -49,10 +52,21 @@ export function useNuxtRpcQuery<
   options: UseNuxtRpcQueryOptions<z.output<TResponseSchema>, DefaultT> = {},
 ) {
   const resolved = () => toValue(operation)
+  const request = computed(() => resolveQueryRequestState(resolved()))
+  const userOnRequest = options.onRequest
   const query = (useNuxtQuery as any)(() => resolved().path, {
     ...options,
-    key: () => serializeNuxtRpcKey(resolved().key),
+    key: () => request.value._tag === 'ok' ? request.value.request.key : request.value.key,
+    method: computed(() => request.value._tag === 'ok' ? request.value.request.method : request.value.method),
     query: computed(() => resolved().query),
+    body: computed(() => request.value._tag === 'ok' ? request.value.request.body : undefined),
+    onRequest: [
+      () => {
+        if (request.value._tag === 'err')
+          throw request.value.error
+      },
+      ...(Array.isArray(userOnRequest) ? userOnRequest : userOnRequest == null ? [] : [userOnRequest]),
+    ],
     // Same parse-and-normalize the imperative client uses, so a successful
     // payload that fails its schema surfaces an identical `NuxtRpcError`.
     transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload),
@@ -69,11 +83,74 @@ export function useNuxtRpcQuery<
   // `error.value` still writes through and re-reads as cleared, rather than
   // hitting a no-op setter on a readonly computed.
   const rawError = query.error
+  // Nuxt's AsyncData catches a thrown plain-object `NuxtRpcError` and runs it
+  // through `createError`, which can discard our discriminant/issue fields.
+  // Normalize the owned ref itself, not only the facade below: awaiting a
+  // Nuxt AsyncData thenable resolves to a second facade over this same ref, so
+  // a getter-only wrapper on the outer thenable would otherwise disappear.
+  watch([rawError, request], ([value, current]) => {
+    if (value == null)
+      return
+    const normalized = normalizeNuxtRpcQueryError(value, current)
+    if (normalized !== value)
+      rawError.value = normalized
+  }, { flush: 'sync', immediate: true })
   query.error = computed({
-    get: () => (rawError.value == null ? undefined : normalizeNuxtRpcError(rawError.value)),
+    get: () => (rawError.value == null ? undefined : normalizeNuxtRpcQueryError(rawError.value, request.value)),
     set: value => void (rawError.value = value),
   }) as typeof query.error
   return query
+}
+
+function normalizeNuxtRpcQueryError(
+  value: unknown,
+  request: ReturnType<typeof resolveQueryRequestState>,
+): NuxtRpcError {
+  if (request._tag === 'err')
+    return request.error
+
+  const direct = normalizeNuxtRpcError(value)
+  // Already tagged (including a response-validation object repaired by the
+  // watcher on its previous pass): preserve identity and avoid a write loop.
+  if (direct === value)
+    return direct
+
+  // Nuxt's `createError` keeps the original ZodError as `cause` when a plain
+  // response-validation object is thrown from `transform`, but drops that
+  // object's discriminant. Recover it before the H3Error's synthetic 500 can
+  // be mistaken for a fetch failure. The repaired plain object is written back
+  // into payload errors by the watcher above, so SSR hydration keeps the tag.
+  const cause = value && typeof value === 'object' && 'cause' in value
+    ? (value as { cause?: unknown }).cause
+    : undefined
+  const canRecoverWrappedValidation = direct.type !== 'fetch'
+    || (direct.response == null && direct.data === undefined)
+  if (cause != null && canRecoverWrappedValidation) {
+    const fromCause = normalizeNuxtRpcError(cause, 'response-validation')
+    if (fromCause.type === 'response-validation')
+      return fromCause
+  }
+  return direct
+}
+
+function resolveQueryRequestState(
+  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown>,
+) {
+  try {
+    return {
+      _tag: 'ok' as const,
+      request: resolveNuxtRpcQueryRequest(operation),
+    }
+  }
+  catch (error) {
+    const normalized = normalizeNuxtRpcError(error, 'request-validation')
+    return {
+      _tag: 'err' as const,
+      error: normalized,
+      key: serializeInvalidNuxtRpcQueryKey(operation, normalized),
+      method: operation.method === 'POST' ? 'POST' as const : 'GET' as const,
+    }
+  }
 }
 
 export interface UseNuxtRpcOptions {

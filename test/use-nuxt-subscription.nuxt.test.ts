@@ -26,9 +26,24 @@ describe('useNuxtSubscription · nuxt-env (in-process Nuxt)', () => {
     await ready()
     expect(sub.status.value).toBe('active')
 
-    ctx!.push({ key: 'sub-1', value: 42 })
+    await ctx!.push({ key: 'sub-1', value: 42 })
     // onMessage ran in Nuxt context → setQueryData reached the live cache.
     expect(getQueryData<{ value: number }>('sub-1')).toEqual({ value: 42 })
+  })
+
+  it('keeps Nuxt context available after an async message-handler boundary', async () => {
+    let ctx: NuxtSubscriptionSource | undefined
+    useNuxtSubscription<{ key: string, value: number }>({
+      source: (c) => { ctx = c },
+      onMessage: async (msg) => {
+        await Promise.resolve()
+        setQueryData(msg.key, { value: msg.value })
+      },
+    })
+    await ready()
+
+    await ctx!.push({ key: 'sub-async-context', value: 73 })
+    expect(getQueryData<{ value: number }>('sub-async-context')).toEqual({ value: 73 })
   })
 
   it('parses untrusted frames at the boundary before onMessage', async () => {
@@ -42,7 +57,7 @@ describe('useNuxtSubscription · nuxt-env (in-process Nuxt)', () => {
     })
     await ready()
 
-    ctx!.push({ n: '7' })
+    await ctx!.push({ n: '7' })
     expect(onMessage).toHaveBeenCalledWith({ n: 7 })
   })
 
@@ -58,7 +73,7 @@ describe('useNuxtSubscription · nuxt-env (in-process Nuxt)', () => {
     })
     await ready()
 
-    ctx!.push({ anything: true })
+    await expect(ctx!.push({ anything: true })).rejects.toThrow('bad frame')
     expect(onMessage).not.toHaveBeenCalled()
     expect(onError).toHaveBeenCalledTimes(1)
     expect(sub.error.value).toBeInstanceOf(Error)
@@ -117,41 +132,58 @@ describe('useNuxtSubscription · nuxt-env (in-process Nuxt)', () => {
     expect(disposed).toHaveBeenCalledTimes(1)
   })
 
-  it('runs onReconnect when the source signals a resync', async () => {
-    const onReconnect = vi.fn()
-    let ctx: NuxtSubscriptionSource | undefined
-    useNuxtSubscription({
-      source: (c) => { ctx = c },
-      onMessage: () => {},
-      onReconnect,
+  it('still stops the source effect scope when the returned cleanup throws', async () => {
+    const disposed = vi.fn()
+    const cleanupError = new Error('transport cleanup failed')
+    const onError = vi.fn()
+    const scope = effectScope()
+    scope.run(() => {
+      useNuxtSubscription({
+        source: () => {
+          onScopeDispose(disposed)
+          return () => {
+            throw cleanupError
+          }
+        },
+        onMessage: () => {},
+        onError,
+      })
     })
     await ready()
 
-    ctx!.resync()
-    expect(onReconnect).toHaveBeenCalledTimes(1)
+    scope.stop()
+    expect(disposed).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledWith(cleanupError)
   })
 
-  it('resyncOn fires onReconnect on a reconnect, not the initial connect', async () => {
-    const onReconnect = vi.fn()
-    const status = ref('connecting')
-    useNuxtSubscription({
-      source: ctx => ctx.resyncOn(status, s => s === 'open'),
+  it('awaits a typed onResync effect when the source signals recovery', async () => {
+    const onResync = vi.fn(async (_request: { cursor: string }) => {})
+    let ctx: NuxtSubscriptionSource<{ cursor: string }> | undefined
+    useNuxtSubscription<unknown, { cursor: string }>({
+      source: (c) => { ctx = c },
       onMessage: () => {},
-      onReconnect,
+      onResync,
     })
     await ready()
 
-    status.value = 'open' // initial connect — not a reconnect
-    await nextTick()
-    expect(onReconnect).not.toHaveBeenCalled()
+    await ctx!.resync({ cursor: '42' })
+    expect(onResync).toHaveBeenCalledWith({ cursor: '42' })
+  })
 
-    // Real transitions span ticks; a synchronous closed→open would coalesce to
-    // no change and the watcher would never observe the drop.
-    status.value = 'closed'
-    await nextTick()
-    status.value = 'open' // reconnect
-    await nextTick()
-    expect(onReconnect).toHaveBeenCalledTimes(1)
+  it('propagates an async message rejection while reporting it through onError', async () => {
+    const boom = new Error('cache effect failed')
+    const onError = vi.fn()
+    let ctx: NuxtSubscriptionSource | undefined
+    const sub = useNuxtSubscription({
+      source: (c) => { ctx = c },
+      onMessage: async () => { throw boom },
+      onError,
+    })
+    await ready()
+
+    await expect(ctx!.push('frame')).rejects.toBe(boom)
+    expect(onError).toHaveBeenCalledWith(boom)
+    expect(sub.error.value).toBe(boom)
   })
 
   it('an async source: its returned cleanup AND synchronous onScopeDispose both run on teardown', async () => {

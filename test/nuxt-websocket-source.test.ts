@@ -21,8 +21,8 @@ const { nuxtWebSocketSource } = await import('nuxt-use-query/websocket')
 function fakeCtx() {
   const ac = new AbortController()
   return {
-    push: vi.fn(),
-    resync: vi.fn(),
+    push: vi.fn(async () => {}),
+    resync: vi.fn(async () => {}),
     signal: ac.signal,
   } satisfies SubscriptionContextBase
 }
@@ -77,6 +77,7 @@ describe('nuxtWebSocketSource', () => {
     expect(useWebSocket).toHaveBeenCalledWith('wss://x/ws', expect.objectContaining({
       heartbeat: true,
       autoReconnect: { retries: 3 },
+      immediate: true,
       protocols: ['v1'],
     }))
   })

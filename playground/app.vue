@@ -15,7 +15,10 @@ const countQuery = useNuxtQuery<{ count: number }>('/api/realtime-count', {
 const sub = useNuxtSubscription<{ tick: number }>({
   source: (ctx) => {
     let n = 0
-    const id = setInterval(() => ctx.push({ tick: ++n }), 2000)
+    const id = setInterval(() => void ctx.push({ tick: ++n }).catch(() => {
+      // The subscription bridge already reports failed effects through onError.
+      return undefined
+    }), 2000)
     return () => clearInterval(id)
   },
   onMessage: () => invalidateNuxtQueries('realtime-count'),

@@ -1,6 +1,14 @@
 import type { QueryCache } from '../cache'
-import { refreshNuxtData, useNuxtApp } from '#app'
-import { listActiveNuxtDataKeys, readNuxtData, writeNuxtData } from '../nuxt-data'
+import { clearNuxtData, refreshNuxtData, useNuxtApp } from '#app'
+import {
+  listActiveNuxtDataKeys,
+  listNuxtDataKeys,
+  readNuxtData,
+  readNuxtDataRefreshFailures,
+  readQueryMeta,
+  removeNuxtDataArtifacts,
+  writeNuxtData,
+} from '../nuxt-data'
 import { resolveQueryCache } from '../query-cache-hydration'
 
 // Resolve the per-Nuxt-app query cache. Attached lazily to `useNuxtApp()` so
@@ -22,23 +30,85 @@ export function useQueryCache(): QueryCache {
  * Drops `lastFetched` timestamps so the next SWR check sees the queries as
  * stale. No-prefix form invalidates every active key.
  *
+ * The returned Promise settles after every matched active refresh. Nuxt parks
+ * HTTP failures in async-data state while resolving `refreshNuxtData`; this
+ * helper converts that state into a `NuxtQueryRefreshError` rejection.
+ *
  * This is the Nuxt-primitive replacement for a hand-rolled refresh registry:
  * Nuxt already tracks every keyed `useFetch` / `useAsyncData`, so we ride that.
  */
+export type NuxtQueryMatcher = string | ((key: string) => boolean)
+
+/** One or more matched active queries ended their awaited refresh in error. */
+export class NuxtQueryRefreshError extends Error {
+  readonly failures: ReturnType<typeof readNuxtDataRefreshFailures>
+
+  constructor(failures: ReturnType<typeof readNuxtDataRefreshFailures>) {
+    super(`Failed to refresh ${failures.length} active ${failures.length === 1 ? 'query' : 'queries'}.`)
+    this.name = 'NuxtQueryRefreshError'
+    this.failures = failures
+  }
+}
+
+function resolveMatcher(matcher?: NuxtQueryMatcher): (key: string) => boolean {
+  return typeof matcher === 'function'
+    ? matcher
+    : (key: string) => !matcher || key.startsWith(matcher)
+}
+
 // eslint-disable-next-line harlanzw/vue-require-composable-prefix -- imperative helper, no reactivity of its own
-export function invalidateNuxtQueries(prefix?: string | ((key: string) => boolean)): void {
+export async function invalidateNuxtQueries(prefix?: NuxtQueryMatcher): Promise<void> {
   const cache = useQueryCache()
   const nuxt = useNuxtApp()
-  const matches = typeof prefix === 'function'
-    ? prefix
-    : (k: string) => !prefix || k.startsWith(prefix)
+  const matches = resolveMatcher(prefix)
   const keys = listActiveNuxtDataKeys(nuxt).filter(matches)
   for (const k of cache.lastFetched.keys()) {
     if (matches(k))
       cache.lastFetched.delete(k)
   }
-  if (keys.length > 0)
-    void refreshNuxtData(keys)
+  if (keys.length === 0)
+    return
+  await refreshNuxtData(keys)
+  // Nuxt's refresh promise resolves after a failed useAsyncData execution and
+  // parks the failure in the entry. Turn that stored state back into a rejected
+  // effect promise so realtime ACK/cursor callers cannot report false freshness.
+  const failures = readNuxtDataRefreshFailures(nuxt, keys)
+  if (failures.length > 0)
+    throw new NuxtQueryRefreshError(failures)
+}
+
+/**
+ * Remove matching query data and freshness metadata without refetching. This is
+ * the safe primitive for logout/access-context changes: invalidating an old
+ * namespace could otherwise refetch it with a new credential.
+ */
+// eslint-disable-next-line harlanzw/vue-require-composable-prefix -- imperative helper
+export function removeNuxtQueries(prefix?: NuxtQueryMatcher): void {
+  const cache = useQueryCache()
+  const nuxt = useNuxtApp()
+  const matches = resolveMatcher(prefix)
+  const candidates = new Set([
+    ...listNuxtDataKeys(nuxt),
+    ...cache.lastFetched.keys(),
+    ...cache.gcTimers.keys(),
+    ...Object.keys(readQueryMeta(nuxt) ?? {}),
+  ])
+  const keys = [...candidates].filter(matches)
+  if (keys.length === 0)
+    return
+
+  // Explicit keys include live-only entries that Nuxt's predicate overload
+  // would miss because it enumerates payload.data internally.
+  clearNuxtData(keys)
+  removeNuxtDataArtifacts(nuxt, keys)
+  for (const key of keys) {
+    cache.lastFetched.delete(key)
+    const timer = cache.gcTimers.get(key)
+    if (timer != null) {
+      clearTimeout(timer)
+      cache.gcTimers.delete(key)
+    }
+  }
 }
 
 /**

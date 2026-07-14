@@ -32,6 +32,60 @@ describe('rpc type contracts', () => {
     expectTypeOf(mutationResult).toEqualTypeOf<{ id: string }>()
   })
 
+  it('requires an explicitly idempotent schema-backed body for POST queries', async () => {
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: '1' })) as any })
+    const searchBody = z.object({ term: z.string() })
+    const search = defineNuxtRpcQuery({
+      key: ['sites', 'search'],
+      method: 'POST',
+      idempotent: true,
+      path: '/api/sites/search',
+      body: { schema: searchBody, value: { term: 'docs' } },
+      response: siteSchema,
+    })
+
+    expectTypeOf(await rpc.query(search)).toEqualTypeOf<{ id: string }>()
+
+    // @ts-expect-error cached POST queries must explicitly assert idempotency.
+    defineNuxtRpcQuery({
+      key: 'missing-idempotency',
+      method: 'POST',
+      path: '/api/sites/search',
+      body: { schema: searchBody, value: { term: 'docs' } },
+      response: siteSchema,
+    })
+
+    // @ts-expect-error cached POST queries require their schema/value body pair.
+    defineNuxtRpcQuery({
+      key: 'missing-body',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/sites/search',
+      response: siteSchema,
+    })
+
+    // @ts-expect-error GET queries cannot carry a body.
+    defineNuxtRpcQuery({
+      key: 'get-with-body',
+      path: '/api/sites',
+      body: { schema: searchBody, value: { term: 'docs' } },
+      response: siteSchema,
+    })
+
+    defineNuxtRpcQuery({
+      key: 'invalid-body-input',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/sites/search',
+      body: {
+        schema: searchBody,
+        // @ts-expect-error body value must match the schema input type.
+        value: { term: 123 },
+      },
+      response: siteSchema,
+    })
+  })
+
   it('requires body schema or body null for body methods', () => {
     defineNuxtRpcMutation({
       body: null,

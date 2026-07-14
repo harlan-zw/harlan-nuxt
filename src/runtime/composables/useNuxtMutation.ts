@@ -33,7 +33,7 @@ export interface UseNuxtMutationOptions<TArgs, TResult, TContext = unknown> {
    * passed through to `onSuccess` / `onError` / `onSettled` as `context`.
    */
   onMutate?: (args: TArgs) => TContext | Promise<TContext>
-  /** Runs after a successful mutation, once invalidation has been triggered. */
+  /** Runs after a successful mutation, once every invalidation has settled. */
   onSuccess?: (result: TResult, args: TArgs, context: TContext | undefined) => void
   /**
    * Runs on failure. The optimistic-update rollback site — call
@@ -135,18 +135,33 @@ export function useNuxtMutation<TArgs = void, TResult = unknown, TContext = unkn
       return settle({ _tag: 'err', error: e }, args, context)
     }
 
+    let result: TResult
     try {
-      const result = await opts.mutation(args)
-      const keys = typeof opts.invalidates === 'function'
-        ? opts.invalidates(args, result)
-        : (opts.invalidates ?? [])
-      for (const prefix of keys)
-        invalidateNuxtQueries(prefix)
-      return settle({ _tag: 'ok', data: result }, args, context)
+      result = await opts.mutation(args)
     }
     catch (e) {
       return settle({ _tag: 'err', error: e }, args, context)
     }
+
+    // Everything below this line is post-commit and deliberately outside the
+    // mutation catch boundary. Await refresh completion so success observers
+    // see converged reads, but never reinterpret either a dynamic-key resolver
+    // failure or a refresh failure as a mutation failure (which could trigger
+    // an invalid optimistic rollback).
+    try {
+      const keys = typeof opts.invalidates === 'function'
+        ? opts.invalidates(args, result)
+        : (opts.invalidates ?? [])
+      const invalidations = await Promise.allSettled(keys.map(prefix => invalidateNuxtQueries(prefix)))
+      for (const invalidation of invalidations) {
+        if (invalidation.status === 'rejected')
+          console.error('[nuxt-use-query] post-mutation query invalidation failed:', invalidation.reason)
+      }
+    }
+    catch (invalidationError) {
+      console.error('[nuxt-use-query] post-mutation query invalidation failed:', invalidationError)
+    }
+    return settle({ _tag: 'ok', data: result }, args, context)
   }
 
   async function mutate(args: TArgs): Promise<TResult> {

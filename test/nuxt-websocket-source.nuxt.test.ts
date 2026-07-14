@@ -1,6 +1,6 @@
 // `nuxtWebSocketSource` driven through the REAL bridge (the isolated unit test
 // mocks vueuse and calls the factory directly; this proves the reconnect →
-// `ctx.resync` → `onReconnect` and frame → `onMessage` chain end-to-end).
+// `ctx.resync` → `onResync` and frame → `onMessage` chain end-to-end).
 
 import { useNuxtSubscription } from 'nuxt-use-query/subscription'
 import { nuxtWebSocketSource } from 'nuxt-use-query/websocket'
@@ -20,23 +20,40 @@ vi.mock('@vueuse/core', async importOriginal => ({
 const ready = () => new Promise(r => setTimeout(r, 50))
 
 describe('nuxtWebSocketSource · through the bridge (nuxt-env)', () => {
-  it('delivers frames to onMessage and fires onReconnect only on reconnect', async () => {
+  it('delivers frames to onMessage and runs onResync only on reconnect', async () => {
     const onMessage = vi.fn()
-    const onReconnect = vi.fn()
+    const onResync = vi.fn()
     useNuxtSubscription<{ k: number }>({
       source: nuxtWebSocketSource('wss://example.com/ws'),
       onMessage,
-      onReconnect,
+      onResync,
     })
     await ready()
 
     hoisted.opts.onConnected() // initial connect
-    expect(onReconnect).not.toHaveBeenCalled()
+    expect(onResync).not.toHaveBeenCalled()
 
     hoisted.opts.onMessage(null, { data: '{"k":1}' })
-    expect(onMessage).toHaveBeenCalledWith({ k: 1 })
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledWith({ k: 1 }))
 
-    hoisted.opts.onConnected() // reconnect → onReconnect
-    expect(onReconnect).toHaveBeenCalledTimes(1)
+    hoisted.opts.onConnected() // reconnect → onResync
+    await vi.waitFor(() => expect(onResync).toHaveBeenCalledTimes(1))
+  })
+
+  it('observes socket callback rejections while the bridge reports the effect error', async () => {
+    const boom = new Error('cache effect rejected')
+    const onError = vi.fn()
+    const sub = useNuxtSubscription({
+      source: nuxtWebSocketSource('wss://example.com/ws'),
+      onMessage: async () => { throw boom },
+      onError,
+    })
+    await ready()
+
+    // VueUse/WebSocket callbacks cannot await a Promise. The adapter attaches
+    // the observer, while the bridge still exposes the original failure.
+    hoisted.opts.onMessage(null, { data: '{"k":1}' })
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(boom))
+    expect(sub.error.value).toBe(boom)
   })
 })

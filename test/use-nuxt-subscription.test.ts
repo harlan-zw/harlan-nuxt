@@ -19,15 +19,15 @@ function harness(source: (ctx: SubscriptionContextBase) => any) {
   const statuses: string[] = []
   const errors: unknown[] = []
   const messages: unknown[] = []
-  const reconnects = vi.fn()
+  const resyncs = vi.fn()
   const controller = createSubscriptionController({
     source,
     handleMessage: raw => void messages.push(raw),
-    handleReconnect: reconnects,
+    handleResync: resyncs,
     handleError: err => void errors.push(err),
     setStatus: s => void statuses.push(s),
   })
-  return { controller, statuses, errors, messages, reconnects }
+  return { controller, statuses, errors, messages, resyncs }
 }
 
 const flush = () => new Promise(r => setTimeout(r, 0))
@@ -47,7 +47,7 @@ describe('createSubscriptionController', () => {
     expect(statuses).toEqual(['connecting', 'active'])
   })
 
-  it('delivers pushes while active and drops them after deactivate', () => {
+  it('delivers pushes while active and rejects them after deactivate', async () => {
     let ctx!: SubscriptionContextBase
     const { controller, messages } = harness((c) => {
       ctx = c
@@ -55,12 +55,94 @@ describe('createSubscriptionController', () => {
     })
 
     controller.activate()
-    ctx.push('a')
-    ctx.push('b')
+    await ctx.push('a')
+    await ctx.push('b')
     controller.deactivate()
-    ctx.push('c') // arrives after teardown — must be dropped
+    await expect(ctx.push('c')).rejects.toMatchObject({ name: 'AbortError' })
 
     expect(messages).toEqual(['a', 'b'])
+  })
+
+  it('runs message effects in FIFO order', async () => {
+    const first = deferred<void>()
+    const order: string[] = []
+    let ctx!: SubscriptionContextBase
+    const controller = createSubscriptionController({
+      source: (c) => { ctx = c },
+      handleMessage: async (raw) => {
+        order.push(`start:${raw}`)
+        if (raw === 'a')
+          await first.promise
+        order.push(`end:${raw}`)
+      },
+      handleResync: () => {},
+      handleError: () => {},
+      setStatus: () => {},
+    })
+    controller.activate()
+
+    const a = ctx.push('a')
+    const b = ctx.push('b')
+    await Promise.resolve()
+    expect(order).toEqual(['start:a'])
+
+    first.resolve(undefined)
+    await Promise.all([a, b])
+    expect(order).toEqual(['start:a', 'end:a', 'start:b', 'end:b'])
+  })
+
+  it('propagates an effect rejection and recovers the FIFO for later work', async () => {
+    const boom = new Error('effect failed')
+    const errors: unknown[] = []
+    const messages: unknown[] = []
+    let ctx!: SubscriptionContextBase
+    const controller = createSubscriptionController({
+      source: (c) => { ctx = c },
+      handleMessage: (raw) => {
+        if (raw === 'bad')
+          throw boom
+        messages.push(raw)
+      },
+      handleResync: () => {},
+      handleError: error => void errors.push(error),
+      setStatus: () => {},
+    })
+    controller.activate()
+
+    await expect(ctx.push('bad')).rejects.toBe(boom)
+    await expect(ctx.push('good')).resolves.toBeUndefined()
+    expect(errors).toEqual([boom])
+    expect(messages).toEqual(['good'])
+  })
+
+  it('rejects queued work that becomes stale during teardown', async () => {
+    const first = deferred<void>()
+    const effects: unknown[] = []
+    const errors: unknown[] = []
+    let ctx!: SubscriptionContextBase
+    const controller = createSubscriptionController({
+      source: (c) => { ctx = c },
+      handleMessage: async (raw) => {
+        effects.push(raw)
+        if (raw === 'in-flight')
+          await first.promise
+      },
+      handleResync: () => {},
+      handleError: error => void errors.push(error),
+      setStatus: () => {},
+    })
+    controller.activate()
+
+    const inFlight = ctx.push('in-flight')
+    const queued = ctx.push('queued')
+    await Promise.resolve()
+    controller.deactivate()
+    first.resolve(undefined)
+
+    await expect(inFlight).resolves.toBeUndefined()
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' })
+    expect(effects).toEqual(['in-flight'])
+    expect(errors).toEqual([])
   })
 
   it('deactivate runs the returned cleanup and aborts the signal', () => {
@@ -161,7 +243,7 @@ describe('createSubscriptionController', () => {
     expect(statuses).toEqual(['connecting', 'idle'])
   })
 
-  it('a push from a stale async establishment is dropped', async () => {
+  it('a push from a stale async establishment rejects', async () => {
     const d = deferred<() => void>()
     let ctx!: SubscriptionContextBase
     const { controller, messages } = harness((c) => {
@@ -174,7 +256,7 @@ describe('createSubscriptionController', () => {
     d.resolve(() => {})
     await flush()
 
-    ctx.push('late') // transport still holds the old ctx
+    await expect(ctx.push('late')).rejects.toMatchObject({ name: 'AbortError' })
     expect(messages).toEqual([])
   })
 
@@ -191,19 +273,40 @@ describe('createSubscriptionController', () => {
     expect(statuses).toEqual(['connecting', 'error'])
   })
 
-  it('resync runs the reconnect handler only while active', () => {
+  it('resync runs its handler only while active and rejects after teardown', async () => {
     let ctx!: SubscriptionContextBase
-    const { controller, reconnects } = harness((c) => {
+    const { controller, resyncs } = harness((c) => {
       ctx = c
       return () => {}
     })
 
     controller.activate()
-    ctx.resync()
+    await ctx.resync()
     controller.deactivate()
-    ctx.resync() // post-teardown — ignored
+    await expect(ctx.resync()).rejects.toMatchObject({ name: 'AbortError' })
 
-    expect(reconnects).toHaveBeenCalledTimes(1)
+    expect(resyncs).toHaveBeenCalledTimes(1)
+  })
+
+  it('queues typed resync requests in the same FIFO as messages', async () => {
+    interface Request { cursor: string }
+    let ctx!: SubscriptionContextBase<Request>
+    const effects: string[] = []
+    const controller = createSubscriptionController<Request>({
+      source: (c) => { ctx = c },
+      handleMessage: raw => void effects.push(`message:${raw}`),
+      handleResync: request => void effects.push(`resync:${request.cursor}`),
+      handleError: () => {},
+      setStatus: () => {},
+    })
+    controller.activate()
+
+    await Promise.all([
+      ctx.push('a'),
+      ctx.resync({ cursor: '17' }),
+      ctx.push('b'),
+    ])
+    expect(effects).toEqual(['message:a', 'resync:17', 'message:b'])
   })
 
   it('a cleanup that throws is reported, not propagated', () => {

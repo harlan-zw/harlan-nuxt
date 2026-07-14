@@ -6,15 +6,53 @@ import { runIsolatedHooks, toOutcome } from '../lifecycle'
 
 export type NuxtRpcKey = string | readonly [string, ...unknown[]]
 
-export interface NuxtRpcQueryOperation<TResponseSchema extends z.ZodTypeAny, TQuery = undefined> {
+export interface NuxtRpcGetQueryOperation<TResponseSchema extends z.ZodTypeAny, TQuery = undefined> {
   /** Stable cache key. Keep helpers beside operations for shared invalidation. */
   key: NuxtRpcKey
+  /** GET remains the default for existing query definitions. */
+  method?: 'GET'
   /** API endpoint owned by this operation. Consumers should not hardcode it at call sites. */
   path: string
   query?: TQuery
+  body?: never
   /** Zod response contract. `useNuxtRpcQuery` parses every payload through this. */
   response: TResponseSchema
 }
+
+export interface NuxtRpcQueryBody<TBodySchema extends z.ZodTypeAny> {
+  /** Parse at the request boundary before either keying or sending the body. */
+  schema: TBodySchema
+  /** Raw caller input; the parsed output is sent and included in the cache key. */
+  value: z.input<TBodySchema>
+}
+
+export interface NuxtRpcPostQueryOperation<
+  TResponseSchema extends z.ZodTypeAny,
+  TQuery = undefined,
+  TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
+> {
+  /** A POST can still be a cacheable read when selected by the query factory. */
+  key: NuxtRpcKey
+  method: 'POST'
+  /** Required safety assertion for a cached POST read; mutations use their own factory. */
+  idempotent: true
+  path: string
+  query?: TQuery
+  body: NuxtRpcQueryBody<TBodySchema>
+  response: TResponseSchema
+}
+
+/**
+ * Query operation union. The body-schema generic is intentionally last so
+ * existing `NuxtRpcQueryOperation<Response, Query>` annotations keep their
+ * meaning while also accepting generated cached-POST operations.
+ */
+export type NuxtRpcQueryOperation<
+  TResponseSchema extends z.ZodTypeAny,
+  TQuery = undefined,
+  TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
+> = NuxtRpcGetQueryOperation<TResponseSchema, TQuery>
+  | NuxtRpcPostQueryOperation<TResponseSchema, TQuery, TBodySchema>
 
 type NuxtRpcBodyMethod = 'PATCH' | 'POST' | 'PUT'
 type NuxtRpcBodylessMethod = 'DELETE'
@@ -54,12 +92,157 @@ export function serializeNuxtRpcKey(key: NuxtRpcKey): string {
     : key.map(part => encodeURIComponent(String(part))).join(':')
 }
 
+const RPC_BODY_KEY_SEGMENT = '$body'
+const RPC_INVALID_BODY_KEY_SEGMENT = '$invalid-body'
+
+export interface ResolvedNuxtRpcQueryRequest {
+  body?: unknown
+  key: string
+  method: 'GET' | 'POST'
+  path: string
+  query?: unknown
+}
+
+/**
+ * Validate and resolve a query request exactly once. Cached POST bodies use the
+ * parsed Zod output both on the wire and in a deterministic key suffix, so two
+ * semantically identical objects cannot diverge because of insertion order.
+ */
+export function resolveNuxtRpcQueryRequest(
+  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown, z.ZodTypeAny>,
+): ResolvedNuxtRpcQueryRequest {
+  const base = serializeNuxtRpcKey(operation.key)
+  if (operation.method !== 'POST') {
+    return {
+      key: base,
+      method: 'GET',
+      path: operation.path,
+      query: operation.query,
+    }
+  }
+
+  const body = parseNuxtRpcBody(operation.body.schema, operation.body.value)
+  const canonicalBody = serializeCanonicalJson(body)
+  return {
+    body,
+    key: `${base}:${encodeURIComponent(RPC_BODY_KEY_SEGMENT)}:${encodeURIComponent(canonicalBody)}`,
+    method: 'POST',
+    path: operation.path,
+    query: operation.query,
+  }
+}
+
+/** Exact key used by `useNuxtRpcQuery`, including a cached POST's body suffix. */
+export function serializeNuxtRpcQueryKey(
+  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown, z.ZodTypeAny>,
+): string {
+  return resolveNuxtRpcQueryRequest(operation).key
+}
+
+/** Stable fallback key used only to park a declarative request-validation error. */
+export function serializeInvalidNuxtRpcQueryKey(operation: { key: NuxtRpcKey }, error: NuxtRpcError): string {
+  const issueSignature = error.type === 'request-validation'
+    ? JSON.stringify(error.issues)
+    : error.type
+  return `${serializeNuxtRpcKey(operation.key)}:${encodeURIComponent(RPC_INVALID_BODY_KEY_SEGMENT)}:${encodeURIComponent(issueSignature)}`
+}
+
+/**
+ * Canonical JSON serialization for cache identity. It intentionally accepts
+ * only wire-safe JSON values. Optional object properties with `undefined` are
+ * omitted just like JSON.stringify; unsupported array/root values fail closed.
+ */
+export function serializeCanonicalJson(value: unknown): string {
+  const ancestors = new Set<object>()
+
+  function visit(input: unknown, inObjectProperty = false): string | undefined {
+    if (input === null)
+      return 'null'
+    if (typeof input === 'string' || typeof input === 'boolean')
+      return JSON.stringify(input)
+    if (typeof input === 'number') {
+      if (!Number.isFinite(input))
+        throw new TypeError('Cached query bodies must contain only finite numbers.')
+      return JSON.stringify(input)
+    }
+    if (input === undefined && inObjectProperty)
+      return undefined
+    if (input === undefined || typeof input === 'bigint' || typeof input === 'function' || typeof input === 'symbol')
+      throw new TypeError('Cached query bodies must be JSON-serializable.')
+    if (typeof input !== 'object')
+      throw new TypeError('Cached query bodies must be JSON-serializable.')
+    if (ancestors.has(input))
+      throw new TypeError('Cached query bodies cannot contain circular references.')
+
+    ancestors.add(input)
+    try {
+      if (Array.isArray(input)) {
+        if (typeof (input as { toJSON?: unknown }).toJSON === 'function')
+          throw new TypeError('Cached query body arrays cannot define toJSON().')
+        const items: string[] = []
+        for (let index = 0; index < input.length; index++) {
+          // JSON.stringify turns a sparse slot into `null`. Silently skipping
+          // it would make `[,,]` alias `[]` in the cache while sending a
+          // different body on the wire, so sparse arrays fail closed just like
+          // explicit `undefined` array members.
+          if (!Object.hasOwn(input, index))
+            throw new TypeError('Cached query body arrays cannot be sparse.')
+          const descriptor = Object.getOwnPropertyDescriptor(input, String(index))!
+          if (!('value' in descriptor))
+            throw new TypeError('Cached query body arrays cannot contain accessors.')
+          const serialized = visit(descriptor.value)
+          if (serialized === undefined)
+            throw new TypeError('Cached query body arrays cannot contain undefined values.')
+          items.push(serialized)
+        }
+        return `[${items.join(',')}]`
+      }
+
+      const prototype = Object.getPrototypeOf(input)
+      if (prototype !== Object.prototype && prototype !== null)
+        throw new TypeError('Cached query bodies must contain only plain JSON objects.')
+      const entries: string[] = []
+      for (const key of Object.keys(input as Record<string, unknown>).sort()) {
+        const descriptor = Object.getOwnPropertyDescriptor(input, key)!
+        if (!('value' in descriptor))
+          throw new TypeError('Cached query body objects cannot contain accessors.')
+        const serialized = visit(descriptor.value, true)
+        if (serialized !== undefined)
+          entries.push(`${JSON.stringify(key)}:${serialized}`)
+      }
+      return `{${entries.join(',')}}`
+    }
+    finally {
+      ancestors.delete(input)
+    }
+  }
+
+  const serialized = visit(value)
+  if (serialized === undefined)
+    throw new TypeError('Cached query bodies must be JSON-serializable.')
+  return serialized
+}
+
 export function defineNuxtQueryGroup<TGroup extends Record<string, NuxtRpcOperationDefinition>>(_namespace: string, group: TGroup): TGroup {
   return group
 }
 
 export function defineNuxtRpcQuery<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
-  operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
+  operation: NuxtRpcGetQueryOperation<TResponseSchema, TQuery>,
+): NuxtRpcGetQueryOperation<TResponseSchema, TQuery>
+export function defineNuxtRpcQuery<
+  TResponseSchema extends z.ZodTypeAny,
+  TQuery = undefined,
+  TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  operation: NuxtRpcPostQueryOperation<TResponseSchema, TQuery, TBodySchema>,
+): NuxtRpcPostQueryOperation<TResponseSchema, TQuery, TBodySchema>
+export function defineNuxtRpcQuery<
+  TResponseSchema extends z.ZodTypeAny,
+  TQuery = undefined,
+  TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
+>(
+  operation: NuxtRpcQueryOperation<TResponseSchema, TQuery, TBodySchema>,
 ) {
   return operation
 }
@@ -192,15 +375,19 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
     callOptions: NuxtRpcCallOptions = {},
   ): Promise<NuxtRpcResult<z.output<TResponseSchema>>> {
+    const method = operation.method === 'POST' ? 'POST' : 'GET'
     const context: NuxtRpcOperationContext = {
       kind: 'query',
       key: operation.key,
-      method: 'GET',
+      method,
       path: operation.path,
     }
     return run(context, callOptions.silent, async () => {
-      const response = await fetch<z.output<TResponseSchema>>(operation.path, {
-        ...(operation.query === undefined ? {} : { query: operation.query }),
+      const request = resolveNuxtRpcQueryRequest(operation)
+      const response = await fetch<z.output<TResponseSchema>>(request.path, {
+        ...(request.method === 'GET' ? {} : { method: request.method }),
+        ...(request.query === undefined ? {} : { query: request.query }),
+        ...(request.body === undefined ? {} : { body: request.body }),
       } as any)
       return parseNuxtRpcResponse(operation.response, response)
     })

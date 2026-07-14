@@ -19,12 +19,15 @@ import { useNuxtQuery } from 'nuxt-use-query/query'
 import {
   getQueryData,
   invalidateNuxtQueries,
+  NuxtQueryRefreshError,
+  removeNuxtQueries,
   setQueryData,
   useQueryCache,
 } from 'nuxt-use-query/query-cache'
-import { invalidateNuxtRpc } from 'nuxt-use-query/rpc'
+import { defineNuxtRpcQuery, invalidateNuxtRpc, useNuxtRpcQuery } from 'nuxt-use-query/rpc'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
+import { z } from 'zod'
 import { clearNuxtData, useNuxtApp } from '#app'
 import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
 
@@ -35,6 +38,45 @@ registerEndpoint('/api/echo-env', {
   handler: () => {
     echoCalls()
     return { call: echoCalls.mock.calls.length }
+  },
+})
+
+const refreshFailureCalls = vi.fn()
+let rejectRefresh = false
+registerEndpoint('/api/refresh-failure-env', {
+  method: 'GET',
+  handler: () => {
+    refreshFailureCalls()
+    if (rejectRefresh)
+      throw new Error('refresh failed over HTTP')
+    return { ok: true }
+  },
+})
+
+const invalidPostCalls = vi.fn()
+registerEndpoint('/api/invalid-post-env', {
+  method: 'POST',
+  handler: () => {
+    invalidPostCalls()
+    return { ok: true }
+  },
+})
+
+registerEndpoint('/api/invalid-response-env', {
+  method: 'GET',
+  handler: () => ({ count: 'not-a-number' }),
+})
+
+const pendingRemovalCalls = vi.fn()
+let releasePendingRemoval: (() => void) | undefined
+registerEndpoint('/api/pending-removal-env', {
+  method: 'GET',
+  handler: async () => {
+    pendingRemovalCalls()
+    await new Promise<void>((resolve) => {
+      releasePendingRemoval = resolve
+    })
+    return { late: true }
   },
 })
 
@@ -71,9 +113,11 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     const bCallBefore = b.data.value?.call
     const echoCountBefore = echoCalls.mock.calls.length
 
-    invalidateNuxtQueries('inv-')
-    // `refreshNuxtData` resolves asynchronously; wait one microtask + a tick.
-    await new Promise(r => setTimeout(r, 50))
+    const refresh = invalidateNuxtQueries('inv-')
+    // Freshness is cleared synchronously, before the returned refresh effect
+    // settles and stamps it again.
+    expect(cache.lastFetched.has('inv-a')).toBe(false)
+    await refresh
 
     // The matching key was refetched (call counter advanced).
     expect(a.data.value?.call).toBeGreaterThan(aCallBefore!)
@@ -84,6 +128,110 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     // `lastFetched` was dropped at invalidation time and re-stamped by the
     // re-fetch's pending → success transition.
     expect(cache.lastFetched.has('inv-a')).toBe(true)
+  })
+
+  it('rejects when a real HTTP refetch parks an error in active async data', async () => {
+    rejectRefresh = false
+    refreshFailureCalls.mockClear()
+    const query = await useNuxtQuery<{ ok: boolean }>('/api/refresh-failure-env', {
+      key: 'refresh-failure',
+    })
+    expect(query.data.value).toEqual({ ok: true })
+
+    rejectRefresh = true
+    try {
+      const refresh = invalidateNuxtQueries('refresh-failure')
+      await expect(refresh).rejects.toBeInstanceOf(NuxtQueryRefreshError)
+      await expect(refresh).rejects.toMatchObject({
+        failures: [expect.objectContaining({ key: 'refresh-failure' })],
+      })
+      expect(query.status.value).toBe('error')
+      expect(query.error.value).toBeTruthy()
+      // ofetch may retry the failing 500, so assert a genuine second request
+      // rather than coupling the API contract to transport retry defaults.
+      expect(refreshFailureCalls.mock.calls.length).toBeGreaterThanOrEqual(2)
+    }
+    finally {
+      rejectRefresh = false
+    }
+  })
+
+  it('parks an invalid declarative POST body without issuing an HTTP request', async () => {
+    invalidPostCalls.mockClear()
+    const scope = effectScope()
+    try {
+      const pending = scope.run(() => useNuxtRpcQuery(defineNuxtRpcQuery({
+        key: 'invalid-post-env',
+        method: 'POST',
+        idempotent: true,
+        path: '/api/invalid-post-env',
+        body: {
+          schema: z.object({ term: z.string() }),
+          value: { term: 123 } as any,
+        },
+        response: z.object({ ok: z.boolean() }),
+      })))!
+      const query = await pending
+
+      expect(invalidPostCalls).not.toHaveBeenCalled()
+      expect(query.status.value).toBe('error')
+      expect(query.error.value).toMatchObject({
+        type: 'request-validation',
+        issues: [expect.objectContaining({ path: 'term' })],
+      })
+    }
+    finally {
+      scope.stop()
+    }
+  })
+
+  it('preserves response-validation tags across Nuxt AsyncData error wrapping', async () => {
+    const scope = effectScope()
+    try {
+      const pending = scope.run(() => useNuxtRpcQuery(defineNuxtRpcQuery({
+        key: 'invalid-response-env',
+        path: '/api/invalid-response-env',
+        response: z.object({ count: z.number() }),
+      })))!
+      const query = await pending
+
+      expect(query.status.value).toBe('error')
+      expect(query.error.value).toMatchObject({
+        type: 'response-validation',
+        issues: [expect.objectContaining({ path: 'count' })],
+      })
+    }
+    finally {
+      scope.stop()
+    }
+  })
+
+  it('does not report an unmounted query\'s parked error as an active refresh failure', async () => {
+    rejectRefresh = false
+    refreshFailureCalls.mockClear()
+    const scope = effectScope()
+    try {
+      const pending = scope.run(() => useNuxtQuery<{ ok: boolean }>('/api/refresh-failure-env', {
+        key: 'inactive-refresh-failure',
+      }))!
+      const query = await pending
+
+      rejectRefresh = true
+      await expect(invalidateNuxtQueries('inactive-refresh-failure')).rejects.toBeInstanceOf(NuxtQueryRefreshError)
+      expect(query.status.value).toBe('error')
+      scope.stop()
+      const callsAfterUnmount = refreshFailureCalls.mock.calls.length
+
+      // Nuxt retains `_asyncData[key]` with its old error but removes the refresh
+      // hook when `_deps` reaches zero. It is inactive: invalidation should only
+      // clear freshness, not re-read that stale error as a new failed refresh.
+      await expect(invalidateNuxtQueries('inactive-refresh-failure')).resolves.toBeUndefined()
+      expect(refreshFailureCalls.mock.calls.length).toBe(callsAfterUnmount)
+    }
+    finally {
+      scope.stop()
+      rejectRefresh = false
+    }
   })
 
   it('useNuxtMutation declaring an invalidates prefix refetches matching reads end-to-end', async () => {
@@ -100,12 +248,79 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
       invalidates: ['mut-'],
     })
     await mutation.mutate()
-    await new Promise(r => setTimeout(r, 50))
 
     // The read was refetched by the mutation's invalidates entry, with no
     // hand-wired refresh wiring at the callsite — proves the mutation →
     // `invalidateNuxtQueries` → Nuxt's `_asyncData` + `refreshNuxtData` chain.
     expect(read.data.value?.call).toBeGreaterThan(readBefore!)
+  })
+
+  it('removeNuxtQueries clears every data/freshness store without refetching', async () => {
+    const cache = useQueryCache()
+    echoCalls.mockClear()
+    const query = await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'remove-live' })
+    expect(query.data.value).toBeDefined()
+
+    const nuxt = useNuxtApp() as unknown as {
+      payload: { data: Record<string, unknown>, nuxtQueryMeta?: Record<string, number> }
+      static: { data: Record<string, unknown> }
+    }
+    nuxt.static ??= { data: {} }
+    nuxt.static.data ??= {}
+    nuxt.static.data['remove-live'] = { stale: true }
+    nuxt.payload.nuxtQueryMeta ??= {}
+    nuxt.payload.nuxtQueryMeta['remove-live'] = 123
+    cache.lastFetched.set('remove-live', 123)
+    cache.gcTimers.set('remove-live', setTimeout(() => {}, 60_000))
+    const callsBeforeRemove = echoCalls.mock.calls.length
+
+    removeNuxtQueries('remove-')
+
+    expect(query.data.value).toBeUndefined()
+    expect(query.status.value).toBe('idle')
+    expect(getQueryData('remove-live')).toBeUndefined()
+    expect(nuxt.payload.data).not.toHaveProperty('remove-live')
+    expect(nuxt.static.data).not.toHaveProperty('remove-live')
+    expect(nuxt.payload.nuxtQueryMeta).not.toHaveProperty('remove-live')
+    expect(cache.lastFetched.has('remove-live')).toBe(false)
+    expect(cache.gcTimers.has('remove-live')).toBe(false)
+    await new Promise(r => setTimeout(r, 10))
+    expect(echoCalls.mock.calls.length).toBe(callsBeforeRemove)
+  })
+
+  it('prevents an already-pending request from resurrecting removed data', async () => {
+    pendingRemovalCalls.mockClear()
+    releasePendingRemoval = undefined
+    const scope = effectScope()
+    try {
+      const query = scope.run(() => useNuxtQuery<{ late: boolean }>('/api/pending-removal-env', {
+        key: 'remove-pending',
+      }))!
+      await vi.waitFor(() => expect(pendingRemovalCalls).toHaveBeenCalledOnce())
+
+      const nuxt = useNuxtApp() as unknown as {
+        _asyncDataPromises: Record<string, Promise<unknown> | undefined>
+        payload: { data: Record<string, unknown>, _errors: Record<string, unknown> }
+      }
+      removeNuxtQueries('remove-pending')
+      expect(query.data.value).toBeUndefined()
+      expect(query.status.value).toBe('idle')
+      expect(nuxt._asyncDataPromises['remove-pending']).toBeUndefined()
+      expect(nuxt.payload.data).not.toHaveProperty('remove-pending')
+      expect(nuxt.payload._errors['remove-pending']).toBeUndefined()
+
+      releasePendingRemoval!()
+      await query
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(query.data.value).toBeUndefined()
+      expect(query.status.value).toBe('idle')
+      expect(nuxt.payload.data).not.toHaveProperty('remove-pending')
+      expect(pendingRemovalCalls).toHaveBeenCalledOnce()
+    }
+    finally {
+      releasePendingRemoval?.()
+      scope.stop()
+    }
   })
 
   it('retainQuery release schedules a real clearNuxtData(key) eviction', async () => {
@@ -211,8 +426,7 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'pro:echo:s1' })
     const before = echoCalls.mock.calls.length
 
-    invalidateNuxtRpc({ key: ['pro', 'echo', 's1'] })
-    await new Promise(r => setTimeout(r, 50))
+    await invalidateNuxtRpc({ key: ['pro', 'echo', 's1'] })
 
     expect(echoCalls.mock.calls.length).toBe(before + 1)
   })
@@ -227,8 +441,7 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'pred-drop' })
     const baseline = echoCalls.mock.calls.length
 
-    invalidateNuxtQueries(k => k.endsWith('-1') || k.endsWith('-2'))
-    await new Promise(r => setTimeout(r, 50))
+    await invalidateNuxtQueries(k => k.endsWith('-1') || k.endsWith('-2'))
 
     // Only the two `-1`/`-2` keys refetched; `-drop` was untouched.
     expect(echoCalls.mock.calls.length).toBe(baseline + 2)
@@ -311,8 +524,7 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'all-b' })
     const countAfterInitial = echoCalls.mock.calls.length
 
-    invalidateNuxtQueries()
-    await new Promise(r => setTimeout(r, 50))
+    await invalidateNuxtQueries()
 
     // Both keys refetched, so the endpoint was hit twice more.
     expect(echoCalls.mock.calls.length).toBeGreaterThanOrEqual(countAfterInitial + 2)
@@ -329,7 +541,7 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     })
     expect(cache.lastFetched.has('inactive-sites:1')).toBe(true)
 
-    invalidateNuxtQueries('inactive-sites:')
+    await invalidateNuxtQueries('inactive-sites:')
     expect(cache.lastFetched.has('inactive-sites:1')).toBe(false)
 
     const q = await useNuxtQuery<{ call: number, fromPayload?: boolean }>('/api/echo-env', {

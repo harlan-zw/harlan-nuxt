@@ -5,8 +5,7 @@ import { onNuxtReady, useNuxtApp } from '#app'
 // `useNuxtSubscription` — a transport-agnostic bridge from a realtime message
 // stream into the query cache. It deliberately does NOT own a connection:
 // the caller injects the transport via `source`, and the bridge turns each
-// message into explicit cache operations (the caller calls the already
-// auto-imported `invalidateNuxtQueries` / `setQueryData` inside `onMessage`).
+// message into explicit, awaitable cache effects.
 //
 // Why a bridge and not a socket: the connection (auth, reconnect, channel
 // multiplexing) is infrastructure that already lives in the host app
@@ -14,11 +13,10 @@ import { onNuxtReady, useNuxtApp } from '#app'
 // compete with that. What every consumer re-invents instead is the
 // "message -> data freshness" wiring; that is the seam this standardises.
 //
-// Boundary it does NOT cover: missed events while the socket was down. The
-// bridge only sees messages that arrive. Cold-start recovery stays with
-// `useNuxtQuery`'s mount refetch; mid-session reconnect recovery is the
-// caller's `source` calling `ctx.resync()` -> the bridge runs `onReconnect`
-// (typically a full `invalidateNuxtQueries(prefix)`).
+// `push` and `resync` share one FIFO effect queue. A durable transport can await
+// the returned Promise before advancing its cursor/ACK; a required effect
+// rejection is both reported through `error`/`onError` and propagated back to
+// the source.
 
 export type NuxtSubscriptionStatus = 'idle' | 'connecting' | 'active' | 'error'
 
@@ -26,35 +24,37 @@ export type NuxtSubscriptionStatus = 'idle' | 'connecting' | 'active' | 'error'
  * Parse an untrusted socket frame into a trusted `TMessage` once, at the
  * boundary, before `onMessage` ever sees it. Either a plain function, or any
  * object exposing a synchronous `parse(raw)` that throws on invalid input
- * (a Zod schema). The thrown error is routed to `onError`.
+ * (a Zod schema). The thrown error is routed to `onError` and rejects the
+ * corresponding push.
  */
 export type NuxtSubscriptionParser<TMessage>
   = | ((raw: unknown) => TMessage)
     | { parse: (raw: unknown) => TMessage }
 
 /** The part of the source context the pure controller builds. */
-export interface SubscriptionContextBase {
-  /** Deliver a raw frame. Dropped if the subscription is torn down / disabled. */
-  push: (raw: unknown) => void
+export type NuxtSubscriptionResyncArgs<TResync> = [TResync] extends [void]
+  ? []
+  : [request: TResync]
+
+export interface SubscriptionContextBase<TResync = void> {
+  /**
+   * Deliver a raw frame and resolve after its effect settles. Rejects with the
+   * effect error, or `AbortError` if this activation is stale before execution.
+   */
+  push: (raw: unknown) => Promise<void>
   /** Aborted when the subscription is disabled or its scope disposes. */
   signal: AbortSignal
-  /** Signal a transport reconnect so the bridge runs `onReconnect`. */
-  resync: () => void
+  /**
+   * Run an explicit resynchronization effect in the same FIFO as messages.
+   * It has the same rejection/teardown semantics as `push`.
+   */
+  resync: (...args: NuxtSubscriptionResyncArgs<TResync>) => Promise<void>
 }
 
 /** Handed to `source` so it can feed the bridge without importing internals. */
-export interface NuxtSubscriptionSource extends SubscriptionContextBase {
-  /**
-   * Wire a transport connection-status signal to `resync`: whenever `status`
-   * transitions back into a connected state *after having been connected once*,
-   * the bridge runs `onReconnect`. Removes the hand-rolled "second open is a
-   * reconnect" bookkeeping. Call it inside `source` with the status ref the
-   * transport exposes, e.g. `ctx.resyncOn(status, s => s === 'open')`.
-   */
-  resyncOn: (status: MaybeRefOrGetter<unknown>, isConnected: (status: unknown) => boolean) => void
-}
+export type NuxtSubscriptionSource<TResync = void> = SubscriptionContextBase<TResync>
 
-export interface UseNuxtSubscriptionOptions<TMessage> {
+export interface UseNuxtSubscriptionOptions<TMessage, TResync = void> {
   /**
    * Establish the message stream. Runs client-only, after hydration. Wire
    * teardown to `ctx.signal` and/or return a cleanup function. May be async;
@@ -68,14 +68,14 @@ export interface UseNuxtSubscriptionOptions<TMessage> {
    * those composables SYNCHRONOUSLY (before any `await`): only the synchronous
    * portion of an async source is captured by the scope.
    */
-  source: (ctx: NuxtSubscriptionSource) => void | (() => void) | Promise<void | (() => void)>
+  source: (ctx: NuxtSubscriptionSource<TResync>) => void | (() => void) | Promise<void | (() => void)>
   /** Map a parsed message to cache operations. Explicit by design. */
-  onMessage: (message: TMessage) => void
+  onMessage: (message: TMessage) => void | Promise<void>
   /** Parse-at-boundary for untrusted frames. Omit to pass frames through as-is. */
   schema?: NuxtSubscriptionParser<TMessage>
-  /** Re-sync after a transport reconnect. Caller's `source` triggers it via `ctx.resync()`. */
-  onReconnect?: () => void
-  /** Per-message, parse, and establishment failures. No silent swallow. */
+  /** Explicit gap/recovery effect. The source must await `ctx.resync(request)`. */
+  onResync?: (request: TResync) => void | Promise<void>
+  /** Per-message, parse, resync, and establishment failures. No silent swallow. */
   onError?: (error: unknown) => void
   /** Gate the subscription. Default `true`. */
   enabled?: MaybeRefOrGetter<boolean>
@@ -86,23 +86,23 @@ export interface NuxtSubscription {
    * Bridge ESTABLISHMENT state, NOT live socket health (the bridge never sees
    * the transport, only its messages): `idle` before/after, `connecting` while
    * an async `source` resolves, `active` once established, `error` if `source`
-   * itself fails. Per-message / parse / reconnect failures surface through
+   * itself fails. Per-message / parse / resync failures surface through
    * `error` + `onError`, not `status` (a parse blip shouldn't read as a dropped
    * connection); watch `error` if you need those.
    */
   status: Ref<NuxtSubscriptionStatus>
-  /** Most recent error from `source` / parse / `onMessage` / `onReconnect`. */
+  /** Most recent error from `source` / parse / `onMessage` / `onResync`. */
   error: Ref<unknown>
 }
 
 type SourceCleanup = void | (() => void)
 
-export interface SubscriptionControllerDeps {
-  source: (ctx: SubscriptionContextBase) => SourceCleanup | Promise<SourceCleanup>
-  /** Already wrapped: parse + deliver in context + catch. Called per frame. */
-  handleMessage: (raw: unknown) => void
-  /** Already wrapped: run `onReconnect` in context + catch. */
-  handleReconnect: () => void
+export interface SubscriptionControllerDeps<TResync = void> {
+  source: (ctx: SubscriptionContextBase<TResync>) => SourceCleanup | Promise<SourceCleanup>
+  /** Parse + deliver in Nuxt context. Rejections are reported and propagated. */
+  handleMessage: (raw: unknown) => void | Promise<void>
+  /** Run an explicit recovery effect in Nuxt context. */
+  handleResync: (request: TResync) => void | Promise<void>
   handleError: (error: unknown) => void
   setStatus: (status: NuxtSubscriptionStatus) => void
 }
@@ -114,9 +114,10 @@ export interface SubscriptionControllerDeps {
  * The race it closes: an async `source` can resolve its cleanup *after* the
  * subscription was already disabled. A monotonic `epoch` stamps each activate;
  * a cleanup that comes back from a stale epoch is invoked-and-discarded rather
- * than stored, and `push` from a stale epoch is dropped.
+ * than stored. Work queued against a stale epoch rejects with an `AbortError`,
+ * so a transport can never mistake a dropped effect for an ACK.
  */
-export function createSubscriptionController(deps: SubscriptionControllerDeps) {
+export function createSubscriptionController<TResync = void>(deps: SubscriptionControllerDeps<TResync>) {
   let epoch = 0
   let active = false
   let controller: AbortController | undefined
@@ -153,12 +154,44 @@ export function createSubscriptionController(deps: SubscriptionControllerDeps) {
     controller = ac
     deps.setStatus('connecting')
 
-    // A frame / resync only counts while THIS activation owns the bridge.
+    // A frame / resync only counts while THIS activation owns the bridge. Each
+    // activation gets its own tail so stale work can never block a later retry.
     const isCurrent = (): boolean => active && epoch === myEpoch && !ac.signal.aborted
-    const ctx: SubscriptionContextBase = {
+    let effectTail = Promise.resolve()
+
+    function enqueue(effect: () => void | Promise<void>): Promise<void> {
+      if (!isCurrent())
+        return Promise.reject(subscriptionAbortError())
+      const task = effectTail.then(async () => {
+        // It may have become stale while waiting behind an earlier effect.
+        if (!isCurrent())
+          throw subscriptionAbortError()
+        await effect()
+      })
+      const reported = task.catch((error) => {
+        // Teardown is expected control flow. It still rejects the caller's
+        // Promise, but should not turn a clean disable/unmount into an error UI.
+        if (!isAbortError(error))
+          deps.handleError(error)
+        throw error
+      })
+      // Recovery tail: an individual rejection reaches its caller but does not
+      // permanently poison delivery of later frames.
+      effectTail = reported.catch(() => {
+        // The caller owns the reported rejection; only the private queue tail
+        // recovers so one failed effect cannot poison later delivery.
+        return undefined
+      })
+      return reported
+    }
+
+    const ctx: SubscriptionContextBase<TResync> = {
       signal: ac.signal,
-      push: raw => void (isCurrent() && deps.handleMessage(raw)),
-      resync: () => void (isCurrent() && deps.handleReconnect()),
+      push: raw => enqueue(() => deps.handleMessage(raw)),
+      resync: ((...args: NuxtSubscriptionResyncArgs<TResync>) => {
+        const request = (args as unknown as [TResync])[0]
+        return enqueue(() => deps.handleResync(request))
+      }) as SubscriptionContextBase<TResync>['resync'],
     }
 
     let result: SourceCleanup | Promise<SourceCleanup>
@@ -209,11 +242,32 @@ export function createSubscriptionController(deps: SubscriptionControllerDeps) {
   return { activate, deactivate }
 }
 
+class SubscriptionEpochAbortError extends Error {
+  constructor() {
+    super('Subscription activation is no longer active.')
+    this.name = 'AbortError'
+  }
+}
+
+function subscriptionAbortError(): Error {
+  return new SubscriptionEpochAbortError()
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof SubscriptionEpochAbortError
+}
+
 function composeCleanup(inner: SourceCleanup, stopScope: () => void): () => void {
   return () => {
-    if (typeof inner === 'function')
-      inner()
-    stopScope()
+    try {
+      if (typeof inner === 'function')
+        inner()
+    }
+    finally {
+      // A throwing transport cleanup is reported by the controller, but it
+      // must never strand the detached source scope (and its watchers/socket).
+      stopScope()
+    }
   }
 }
 
@@ -224,33 +278,15 @@ function composeCleanup(inner: SourceCleanup, stopScope: () => void): () => void
  * component's scope, where `onScopeDispose` would otherwise be a no-op.
  */
 // eslint-disable-next-line harlanzw/vue-require-composable-prefix -- factory that wraps a source in a scope, not a composable
-function hostSourceInScope<TMessage>(
-  source: UseNuxtSubscriptionOptions<TMessage>['source'],
-): (ctx: SubscriptionContextBase) => SourceCleanup | Promise<SourceCleanup> {
+function hostSourceInScope<TMessage, TResync>(
+  source: UseNuxtSubscriptionOptions<TMessage, TResync>['source'],
+): (ctx: SubscriptionContextBase<TResync>) => SourceCleanup | Promise<SourceCleanup> {
   return (base) => {
     const scope = effectScope(true)
     const stopScope = (): void => void scope.stop()
-    // Augment with `resyncOn`. The watch it creates registers on the scope below
-    // (it's called during `source` execution inside `scope.run`), so it's torn
-    // down with the subscription. `immediate` captures the initial connected
-    // state so the FIRST reconnect isn't mistaken for the initial connect.
-    const ctx: NuxtSubscriptionSource = {
-      ...base,
-      resyncOn: (status, isConnected) => {
-        let connectedOnce = false
-        watch(() => toValue(status), (value) => {
-          if (!isConnected(value))
-            return
-          if (connectedOnce)
-            base.resync()
-          else
-            connectedOnce = true
-        }, { immediate: true })
-      },
-    }
     let result: SourceCleanup | Promise<SourceCleanup>
     try {
-      result = scope.run(() => source(ctx)) as SourceCleanup | Promise<SourceCleanup>
+      result = scope.run(() => source(base)) as SourceCleanup | Promise<SourceCleanup>
     }
     catch (error) {
       stopScope()
@@ -277,8 +313,8 @@ function resolveParser<TMessage>(schema?: NuxtSubscriptionParser<TMessage>): (ra
   return raw => schema.parse(raw)
 }
 
-export function useNuxtSubscription<TMessage = unknown>(
-  options: UseNuxtSubscriptionOptions<TMessage>,
+export function useNuxtSubscription<TMessage = unknown, TResync = void>(
+  options: UseNuxtSubscriptionOptions<TMessage, TResync>,
 ): NuxtSubscription {
   const status = ref<NuxtSubscriptionStatus>('idle')
   const error = ref<unknown>(undefined)
@@ -296,44 +332,38 @@ export function useNuxtSubscription<TMessage = unknown>(
   // global cache helpers (and `useToast` etc.) resolve their Nuxt context.
   const handleError = (err: unknown): void => {
     error.value = err
-    if (options.onError)
-      void nuxtApp.runWithContext(() => options.onError!(err))
-    else
+    if (options.onError) {
+      try {
+        const observed = nuxtApp.runWithContext(() => options.onError!(err))
+        void Promise.resolve(observed).catch(observerError => console.error(
+          '[nuxt-use-query] subscription onError observer rejected:',
+          observerError,
+        ))
+      }
+      catch (observerError) {
+        console.error('[nuxt-use-query] subscription onError observer threw:', observerError)
+      }
+    }
+    else {
       console.error('[nuxt-use-query] subscription error', err)
+    }
   }
 
-  const handleMessage = (raw: unknown): void => {
-    let message: TMessage
-    try {
-      message = parse(raw)
-    }
-    catch (err) {
-      handleError(err)
+  const handleMessage = async (raw: unknown): Promise<void> => {
+    const message = parse(raw)
+    await nuxtApp.runWithContext(() => options.onMessage(message))
+  }
+
+  const handleResync = async (request: TResync): Promise<void> => {
+    if (!options.onResync)
       return
-    }
-    try {
-      void nuxtApp.runWithContext(() => options.onMessage(message))
-    }
-    catch (err) {
-      handleError(err)
-    }
+    await nuxtApp.runWithContext(() => options.onResync!(request))
   }
 
-  const handleReconnect = (): void => {
-    if (!options.onReconnect)
-      return
-    try {
-      void nuxtApp.runWithContext(() => options.onReconnect!())
-    }
-    catch (err) {
-      handleError(err)
-    }
-  }
-
-  const controller = createSubscriptionController({
+  const controller = createSubscriptionController<TResync>({
     source: hostSourceInScope(options.source),
     handleMessage,
-    handleReconnect,
+    handleResync,
     handleError,
     setStatus: (s) => {
       // A fresh attempt clears the previous failure.

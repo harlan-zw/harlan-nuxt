@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { shallowRef } from 'vue'
 import { z } from 'zod'
 
 const appFetch = vi.fn()
@@ -34,6 +35,10 @@ const {
   useNuxtRpc,
   useNuxtRpcQuery,
 } = await import('nuxt-use-query/rpc')
+const {
+  serializeCanonicalJson,
+  serializeNuxtRpcQueryKey,
+} = await import('../src/runtime/rpc/core')
 
 describe('defineNuxtRpcQuery', () => {
   it('preserves operation contracts for query consumers', () => {
@@ -53,6 +58,65 @@ describe('serializeNuxtRpcKey', () => {
     expect(serializeNuxtRpcKey('sites:1')).toBe('sites:1')
     expect(serializeNuxtRpcKey(['sites', 'abc/123', 7])).toBe('sites:abc%2F123:7')
   })
+
+  it('canonicalizes plain JSON objects independently of insertion order', () => {
+    expect(serializeCanonicalJson({ z: 1, a: { y: 2, x: 1 } }))
+      .toBe('{"a":{"x":1,"y":2},"z":1}')
+  })
+
+  it('rejects sparse arrays instead of aliasing their `[null]` wire body to `[]`', () => {
+    const sparse: unknown[] = []
+    sparse.length = 1
+    expect(JSON.stringify(sparse)).toBe('[null]')
+    expect(() => serializeCanonicalJson(sparse)).toThrow(/cannot be sparse/)
+    expect(serializeCanonicalJson([])).toBe('[]')
+  })
+
+  it('rejects stateful JSON hooks/accessors that could change between keying and transport serialization', () => {
+    const withToJson = [1] as number[] & { toJSON?: () => number[] }
+    withToJson.toJSON = () => [2]
+    expect(() => serializeCanonicalJson(withToJson)).toThrow(/cannot define toJSON/)
+
+    const withGetter: Record<string, unknown> = {}
+    Object.defineProperty(withGetter, 'value', {
+      enumerable: true,
+      get: () => Math.random(),
+    })
+    expect(() => serializeCanonicalJson(withGetter)).toThrow(/cannot contain accessors/)
+  })
+
+  it('includes the parsed POST body in the exact query key', () => {
+    const schema = z.object({ term: z.string().trim(), limit: z.number().default(10) })
+    const first = defineNuxtRpcQuery({
+      key: ['search', 'sites'],
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema, value: { limit: 10, term: ' docs ' } },
+      response: z.array(z.string()),
+    })
+    const equivalent = defineNuxtRpcQuery({
+      key: ['search', 'sites'],
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema, value: { term: 'docs', limit: 10 } },
+      response: z.array(z.string()),
+    })
+    const different = defineNuxtRpcQuery({
+      key: ['search', 'sites'],
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema, value: { term: 'other', limit: 10 } },
+      response: z.array(z.string()),
+    })
+
+    expect(serializeNuxtRpcQueryKey(first)).toBe(serializeNuxtRpcQueryKey(equivalent))
+    expect(serializeNuxtRpcQueryKey(first)).not.toBe(serializeNuxtRpcQueryKey(different))
+    expect(serializeNuxtRpcQueryKey(first)).toContain('%24body')
+    expect(serializeNuxtRpcQueryKey(first)).toContain(encodeURIComponent('{"limit":10,"term":"docs"}'))
+  })
 })
 
 describe('useNuxtRpcQuery', () => {
@@ -70,6 +134,74 @@ describe('useNuxtRpcQuery', () => {
     expect(result.opts.query.value).toEqual({ period: 'week' })
     expect(result.opts.transform({ id: 'abc' })).toEqual({ id: 'abc' })
     expect(() => result.opts.transform({ id: 123 })).toThrow()
+  })
+
+  it('validates a reactive POST body once and uses its parsed output for key and request', () => {
+    const parse = vi.fn((value: unknown) => value)
+    const schema = z.preprocess(parse, z.object({ term: z.string().trim() }))
+    const raw = { term: ' docs ', ignored: true }
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      query: { locale: 'en' },
+      body: { schema, value: raw },
+      response: z.array(z.string()),
+    })) as any
+
+    expect(result.opts.key()).toContain(encodeURIComponent('{"term":"docs"}'))
+    expect(result.opts.method.value).toBe('POST')
+    expect(result.opts.body.value).toEqual({ term: 'docs' })
+    expect(result.opts.query.value).toEqual({ locale: 'en' })
+    expect(parse).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-resolves the POST body and cache key when the operation changes', () => {
+    const schema = z.object({ term: z.string().trim() })
+    const operation = shallowRef(defineNuxtRpcQuery({
+      key: 'reactive-search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema, value: { term: ' first ' } },
+      response: z.array(z.string()),
+    }))
+    const result = useNuxtRpcQuery(operation) as any
+    const firstKey = result.opts.key()
+    expect(result.opts.body.value).toEqual({ term: 'first' })
+
+    operation.value = defineNuxtRpcQuery({
+      key: 'reactive-search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema, value: { term: ' second ' } },
+      response: z.array(z.string()),
+    })
+
+    expect(result.opts.body.value).toEqual({ term: 'second' })
+    expect(result.opts.key()).not.toBe(firstKey)
+  })
+
+  it('parks declarative POST request validation at a deterministic invalid key', () => {
+    const operation = defineNuxtRpcQuery({
+      key: 'search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/search',
+      body: { schema: z.object({ term: z.string() }), value: { term: 123 } as any },
+      response: z.array(z.string()),
+    })
+    const result = useNuxtRpcQuery(operation) as any
+
+    expect(result.opts.key()).toContain('%24invalid-body')
+    expect(result.opts.method.value).toBe('POST')
+    expect(result.opts.body.value).toBeUndefined()
+    expect(() => result.opts.onRequest[0]()).toThrow(expect.objectContaining({
+      type: 'request-validation',
+      issues: [expect.objectContaining({ path: 'term' })],
+    }))
   })
 
   it('normalizes a raw HTTP FetchError parked in error.value into a NuxtRpcError', () => {
@@ -148,6 +280,51 @@ describe('useNuxtRpc', () => {
 
     expect(fetch).toHaveBeenCalledWith('/api/sites/1', { query: { period: 'week' } })
     expect(result).toEqual({ id: 'abc' })
+  })
+
+  it('sends the parsed body for an idempotent POST query', async () => {
+    const fetch = vi.fn(async () => ({ ids: ['1'] }))
+    const parse = vi.fn((value: unknown) => value)
+    const rpc = useNuxtRpc({ fetch: fetch as any })
+
+    const result = await rpc.query(defineNuxtRpcQuery({
+      key: 'site-search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/sites/search',
+      query: { locale: 'en' },
+      body: {
+        schema: z.preprocess(parse, z.object({ term: z.string().trim() })),
+        value: { term: ' docs ', ignored: true },
+      },
+      response: z.object({ ids: z.array(z.string()) }),
+    }))
+
+    expect(fetch).toHaveBeenCalledWith('/api/sites/search', {
+      method: 'POST',
+      query: { locale: 'en' },
+      body: { term: 'docs' },
+    })
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ ids: ['1'] })
+  })
+
+  it('rejects an invalid POST query body before fetching', async () => {
+    const fetch = vi.fn()
+    const rpc = useNuxtRpc({ fetch: fetch as any })
+
+    await expect(rpc.query(defineNuxtRpcQuery({
+      key: 'site-search',
+      method: 'POST',
+      idempotent: true,
+      path: '/api/sites/search',
+      body: { schema: z.object({ term: z.string() }), value: { term: 123 } as any },
+      response: z.object({ ids: z.array(z.string()) }),
+    }))).rejects.toMatchObject({
+      type: 'request-validation',
+      issues: [{ path: 'term' }],
+    })
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('parses mutation bodies before fetching and parses mutation responses', async () => {

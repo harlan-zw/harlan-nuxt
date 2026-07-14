@@ -13,7 +13,8 @@ vi.mock('../src/runtime/composables/useQueryCache', () => ({
 const { useNuxtMutation } = await import('nuxt-use-query/mutation')
 
 beforeEach(() => {
-  invalidateSpy.mockClear()
+  invalidateSpy.mockReset()
+  invalidateSpy.mockResolvedValue(undefined)
 })
 
 describe('useNuxtMutation success path', () => {
@@ -60,6 +61,76 @@ describe('useNuxtMutation success path', () => {
     await p
     expect(m.pending.value).toBe(false)
     expect(m.isPending.value).toBe(false)
+  })
+
+  it('awaits invalidation before settling success observers', async () => {
+    let release!: () => void
+    invalidateSpy.mockReturnValue(new Promise<void>((resolve) => {
+      release = resolve
+    }))
+    const onSuccess = vi.fn()
+    const m = useNuxtMutation({
+      mutation: async () => 'committed',
+      invalidates: ['sites:'],
+      onSuccess,
+    })
+
+    const mutation = m.mutate()
+    await vi.waitFor(() => expect(invalidateSpy).toHaveBeenCalledOnce())
+    expect(onSuccess).not.toHaveBeenCalled()
+    expect(m.pending.value).toBe(true)
+
+    release()
+    await expect(mutation).resolves.toBe('committed')
+    expect(onSuccess).toHaveBeenCalledOnce()
+    expect(m.pending.value).toBe(false)
+  })
+
+  it('reports a failed post-commit invalidation without rolling back the mutation', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const refreshError = new Error('refresh failed')
+    invalidateSpy.mockRejectedValue(refreshError)
+    const onError = vi.fn()
+    const onSuccess = vi.fn()
+    const m = useNuxtMutation({
+      mutation: async () => 'committed',
+      invalidates: ['sites:'],
+      onError,
+      onSuccess,
+    })
+
+    await expect(m.mutate()).resolves.toBe('committed')
+    expect(onSuccess).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    expect(m.error.value).toBeNull()
+    expect(spy).toHaveBeenCalledWith(
+      '[nuxt-use-query] post-mutation query invalidation failed:',
+      refreshError,
+    )
+    spy.mockRestore()
+  })
+
+  it('does not reinterpret a throwing post-commit invalidation resolver as a mutation failure', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const resolverError = new Error('could not derive invalidation keys')
+    const onError = vi.fn()
+    const onSuccess = vi.fn()
+    const m = useNuxtMutation({
+      mutation: async () => 'committed',
+      invalidates: () => { throw resolverError },
+      onError,
+      onSuccess,
+    })
+
+    await expect(m.mutate()).resolves.toBe('committed')
+    expect(onSuccess).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    expect(m.error.value).toBeNull()
+    expect(spy).toHaveBeenCalledWith(
+      '[nuxt-use-query] post-mutation query invalidation failed:',
+      resolverError,
+    )
+    spy.mockRestore()
   })
 })
 

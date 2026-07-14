@@ -231,8 +231,15 @@ function collectOperationObject(node: any, calls: RpcOperationCall[]): void {
     const props = getObjectProperties(node)
     if (!props.has('path') && !props.has('key') && !props.has('method'))
       return
+    // Factory calls already carry their operation category in the callee. A
+    // direct object nested in `defineNuxtQueryGroup` has no call context, but
+    // queries require a cache `key` while mutations do not. That remains true
+    // for cached POST reads and avoids adding a public `kind` discriminator.
+    const isQuery = props.has('key') || !props.has('method')
     calls.push({
-      calleeName: props.has('method') ? 'defineNuxtRpcMutation' : 'defineNuxtRpcQuery',
+      calleeName: isQuery
+        ? 'defineNuxtRpcQuery'
+        : 'defineNuxtRpcMutation',
       argument: node,
     })
     return
