@@ -74,8 +74,7 @@ async function migrate(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_failed_jobs_trace ON failed_jobs (trace_id)',
   ]
 
-  for (const statement of statements)
-    await db.exec(statement)
+  await db.exec([...statements, 'PRAGMA optimize'].join(';\n'))
 }
 
 async function reset(db: D1Database) {

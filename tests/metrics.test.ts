@@ -22,13 +22,13 @@ function job(over: Record<string, unknown> = {}) {
 }
 
 describe('metricsSinkToRepoHooks', () => {
-  it('maps completed/failed/released hook payloads to events', () => {
+  it('maps completed/failed/released hook payloads to events', async () => {
     const events: JobMetricsEvent[] = []
     const hooks = metricsSinkToRepoHooks({ record: e => void events.push(e) })
 
-    hooks.onJobCompleted!({ job: job(), durationMs: 4200, result: undefined })
-    hooks.onJobFailed!({ job: job(), error: 'boom' })
-    hooks.onJobReleased!({ job: job(), opts: { error: 'rate-limited' } })
+    await hooks.onJobCompleted!({ job: job(), durationMs: 4200, result: undefined })
+    await hooks.onJobFailed!({ job: job(), error: 'boom' })
+    await hooks.onJobReleased!({ job: job(), opts: { error: 'rate-limited' } })
 
     expect(events).toEqual([
       { jobId: 'j1', queue: 'crawl', jobType: 'crawl/site', status: 'completed', attempts: 2, durationMs: 4200, batchId: 'b1', siteId: 's1', userId: 7, stats: {} },
@@ -37,16 +37,16 @@ describe('metricsSinkToRepoHooks', () => {
     ])
   })
 
-  it('falls back to null durationMs on completed when the payload omits it', () => {
+  it('falls back to null durationMs on completed when the payload omits it', async () => {
     const events: JobMetricsEvent[] = []
     const hooks = metricsSinkToRepoHooks({ record: e => void events.push(e) })
-    hooks.onJobCompleted!({ job: job({ duration_ms: null }), durationMs: null })
+    await hooks.onJobCompleted!({ job: job({ duration_ms: null }), durationMs: null })
     expect(events[0]!.durationMs).toBeNull()
   })
 })
 
 describe('combineMetricsSinks', () => {
-  it('fans out to every sink and isolates a throwing one', () => {
+  it('fans out to every sink and isolates a throwing one', async () => {
     const a = vi.fn()
     const c = vi.fn()
     const sink = combineMetricsSinks(
@@ -55,15 +55,14 @@ describe('combineMetricsSinks', () => {
       { record: c },
     )
     const event = { jobId: 'j', queue: 'q', jobType: 't', status: 'completed', attempts: 1, durationMs: 1, batchId: null, siteId: null, userId: null } as JobMetricsEvent
-    expect(() => sink.record(event)).not.toThrow()
+    await expect(sink.record(event)).resolves.toBeUndefined()
     expect(a).toHaveBeenCalledWith(event)
     expect(c).toHaveBeenCalledWith(event) // reached despite the middle sink throwing
   })
 
   it('swallows an async sink rejection', async () => {
     const sink = combineMetricsSinks({ record: () => Promise.reject(new Error('async boom')) })
-    expect(() => sink.record({} as JobMetricsEvent)).not.toThrow()
-    await Promise.resolve()
+    await expect(sink.record({} as JobMetricsEvent)).resolves.toBeUndefined()
   })
 })
 

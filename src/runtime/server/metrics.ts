@@ -8,8 +8,8 @@ import type { JobRunStats } from './types'
 // A `JobMetricsSink` is the seam for recording per-job telemetry (completion
 // time, error rate, retries) to whatever engine a consumer wants — Cloudflare
 // Analytics Engine (`#cf-jobs/cloudflare`), a D1 stats table, console, Datadog,
-// … The repository already fires fire-and-forget lifecycle hooks; this layer
-// just normalizes their snake_case D1 payloads into a stable, transport-neutral
+// … The repository awaits lifecycle hooks while isolating their failures; this
+// layer normalizes snake_case D1 payloads into a stable, transport-neutral
 // `JobMetricsEvent` and lets a sink fan out. The CF Analytics Engine adapter is
 // the one concrete implementation we ship, behind its own subpath so its
 // Workers-specific `writeDataPoint` shape never loads with the core barrel.
@@ -114,8 +114,8 @@ function baseOf(
  * createD1DurableJobRepository(db, { ...metricsSinkToRepoHooks(sink) })
  * ```
  *
- * The repo invokes these via its own `fireHook` (swallows sync throws + async
- * rejections), so a misbehaving sink can never break a job's lifecycle.
+ * The repo awaits these while swallowing sync throws + async rejections, so the
+ * Worker keeps them alive without allowing a misbehaving sink to break a job.
  */
 export function metricsSinkToRepoHooks(
   sink: JobMetricsSink,
@@ -157,17 +157,15 @@ export function metricsSinkToRepoHooks(
  */
 export function combineMetricsSinks(...sinks: JobMetricsSink[]): JobMetricsSink {
   return {
-    record(event) {
-      for (const sink of sinks) {
+    async record(event) {
+      await Promise.all(sinks.map(async (sink) => {
         try {
-          const result = sink.record(event)
-          if (result && typeof (result as Promise<unknown>).then === 'function')
-            (result as Promise<unknown>).catch(() => {})
+          await sink.record(event)
         }
         catch {
           // one sink's failure must not block the rest
         }
-      }
+      }))
     },
   }
 }

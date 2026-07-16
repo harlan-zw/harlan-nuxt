@@ -53,11 +53,6 @@ function job(overrides: Record<string, unknown> = {}) {
   } as never
 }
 
-async function flushBroadcast(): Promise<void> {
-  for (let i = 0; i < 10; i++)
-    await Promise.resolve()
-}
-
 describe('cf-jobs broadcast protocol', () => {
   it('builds job channels and durable-object topics', () => {
     expect(cfJobChannel('j1')).toBe('job:j1')
@@ -121,8 +116,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
     const { env, published } = createBroadcastEnv()
     const hooks = createCfJobsBroadcastRepositoryHooks(env)
 
-    hooks.onJobCompleted!({ job: job(), durationMs: 25, result: { reportId: 'r1' } })
-    await flushBroadcast()
+    await hooks.onJobCompleted!({ job: job(), durationMs: 25, result: { reportId: 'r1' } })
 
     expect(published.map(p => p.topic).sort()).toEqual([
       'cf-jobs:batch:b1',
@@ -146,8 +140,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
     const { env, published } = createBroadcastEnv()
     const hooks = createCfJobsBroadcastRepositoryHooks(env, { includeResult: false })
 
-    hooks.onJobCompleted!({ job: job({ batch_id: null, site_id: null, user_id: null }), durationMs: 25, result: { secret: true } })
-    await flushBroadcast()
+    await hooks.onJobCompleted!({ job: job({ batch_id: null, site_id: null, user_id: null }), durationMs: 25, result: { secret: true } })
 
     const envelope = JSON.parse(published.find(p => p.topic === 'cf-jobs:job:j1')!.data as string)
     expect(envelope.data.result).toBeUndefined()
@@ -175,8 +168,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
       },
     })
 
-    hooks.onJobCompleted!({ job: job(), durationMs: 25, result: { reportId: 'r1' } })
-    await flushBroadcast()
+    await hooks.onJobCompleted!({ job: job(), durationMs: 25, result: { reportId: 'r1' } })
 
     expect(published.map(p => p.topic)).toEqual(['cf-jobs:tenant:t1'])
     expect(JSON.parse(published[0]!.data as string)).toEqual({
@@ -195,8 +187,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
       },
     })
 
-    hooks.onJobFailed!({ job: job(), error: 'boom' })
-    await flushBroadcast()
+    await hooks.onJobFailed!({ job: job(), error: 'boom' })
 
     expect(published.map(p => p.topic).sort()).toEqual([
       'cf-jobs:job:j1',
@@ -208,8 +199,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
     const { env, published } = createBroadcastEnv()
     const onProgress = createCfJobsBroadcastBatchProgressHandler(env)
 
-    onProgress({ batchId: 'b1', name: 'crawl', siteId: 's1', completed: 2, total: 3, failed: 1, finishedAt: null })
-    await flushBroadcast()
+    await onProgress({ batchId: 'b1', name: 'crawl', siteId: 's1', completed: 2, total: 3, failed: 1, finishedAt: null })
 
     expect(published.map(p => p.topic).sort()).toEqual([
       'cf-jobs:batch:b1',
@@ -228,8 +218,7 @@ describe('cf-jobs broadcast lifecycle adapters', () => {
       },
     })
 
-    onProgress({ batchId: 'b1', name: 'crawl', siteId: 's1', completed: 2, total: 3, failed: 1, finishedAt: null })
-    await flushBroadcast()
+    await onProgress({ batchId: 'b1', name: 'crawl', siteId: 's1', completed: 2, total: 3, failed: 1, finishedAt: null })
 
     expect(published.map(p => p.topic).sort()).toEqual([
       'cf-jobs:batch:b1',

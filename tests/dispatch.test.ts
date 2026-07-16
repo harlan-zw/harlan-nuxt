@@ -54,6 +54,7 @@ import {
   resolveCloudflareQueueName,
   resolveLogicalQueueName,
   resolveQueueJobType,
+  sendBatchChunked,
   validateJobQueueBindings,
 } from '../src/runtime/server/queue'
 
@@ -796,6 +797,24 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     ])
   })
 
+  it('uses current Cloudflare batch options and splits batches by byte size', async () => {
+    const sendBatch = vi.fn(async () => ({
+      metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } },
+    }))
+    const queue = {
+      send: vi.fn(async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } })),
+      sendBatch,
+    }
+    const messages = [1, 2, 3].map(id => ({ id, data: 'x'.repeat(86_000) }))
+
+    await sendBatchChunked(queue, messages, { delaySeconds: 7, contentType: 'json' })
+
+    expect(sendBatch).toHaveBeenCalledTimes(2)
+    expect(sendBatch.mock.calls[0]?.[1]).toEqual({ delaySeconds: 7 })
+    expect(sendBatch.mock.calls[0]?.[0]).toEqual(messages.slice(0, 2).map(body => ({ body, contentType: 'json' })))
+    expect(sendBatch.mock.calls[1]?.[0]).toEqual([{ body: messages[2], contentType: 'json' }])
+  })
+
   it('exposes exponential backoff for retry policy', () => {
     expect(exponentialBackoff(0)).toBe(30)
     expect(exponentialBackoff(4, { baseSeconds: 10, maxSeconds: 60 })).toBe(60)
@@ -1205,7 +1224,8 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     await repository.failJob(claimed!, 'failed')
     await repository.findDispatchableJobs({ now: 300, createdBefore: 200, limit: 5 })
 
-    expect(db.execStatements).toHaveLength(d1DurableJobMigrationSql.length)
+    expect(db.execStatements).toHaveLength(1)
+    expect(db.execStatements[0]).toBe(d1DurableJobMigrationSql.join(';\n'))
     expect(db.queries.some(query => query.includes('INSERT OR IGNORE INTO jobs'))).toBe(true)
     expect(db.queries.some(query => query.includes('UPDATE jobs') && query.includes('RETURNING *'))).toBe(true)
     expect(db.queries.some(query => query.includes('INSERT OR REPLACE INTO failed_jobs'))).toBe(true)
@@ -1384,9 +1404,9 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     ).resolves.toBe(await createJobUniqueKey('demo/unique-bigint', { id: 10n, when: date }))
   })
 
-  it('clamps configured backoff delay to the Cloudflare 43200s ceiling', () => {
-    expect(resolveJobBackoff(99_999, 1)).toBe(43200)
-    expect(resolveJobRetryDelay({ backoff: () => 99_999 }, 1)).toBe(43200)
+  it('clamps configured backoff delay to the Cloudflare 86400s ceiling', () => {
+    expect(resolveJobBackoff(99_999, 1)).toBe(86400)
+    expect(resolveJobRetryDelay({ backoff: () => 99_999 }, 1)).toBe(86400)
   })
 
   it('preserves the original handler error when failed hook itself throws', async () => {
@@ -1741,14 +1761,30 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(result.inserted).toHaveLength(4)
   })
 
-  it('d1 repo fires lifecycle hooks fire-and-forget', async () => {
+  it('d1 repo awaits lifecycle hooks while isolating observer failures', async () => {
     const db = createFakeD1()
     const events: Array<{ type: string, id: string }> = []
     const repository = createD1DurableJobRepository(db, {
-      onJobClaimed: ({ job }) => { events.push({ type: 'claimed', id: job.id }) },
-      onJobCompleted: ({ job }) => { events.push({ type: 'completed', id: job.id }) },
-      onJobFailed: ({ job }) => { events.push({ type: 'failed', id: job.id }) },
-      onJobReleased: ({ job }) => { events.push({ type: 'released', id: job.id }) },
+      async onJobClaimed({ job }) {
+        await Promise.resolve()
+        events.push({ type: 'claimed', id: job.id })
+        throw new Error('observer')
+      },
+      async onJobCompleted({ job }) {
+        await Promise.resolve()
+        events.push({ type: 'completed', id: job.id })
+        throw new Error('observer')
+      },
+      async onJobFailed({ job }) {
+        await Promise.resolve()
+        events.push({ type: 'failed', id: job.id })
+        throw new Error('observer')
+      },
+      async onJobReleased({ job }) {
+        await Promise.resolve()
+        events.push({ type: 'released', id: job.id })
+        throw new Error('observer')
+      },
     })
     db.nextFirst = {
       id: 'h_1',
@@ -1823,6 +1859,43 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(failures).toHaveLength(1)
     expect(failures[0]?.jobType).toBe('demo/dlq')
     expect(batch.ackedAll).toBe(true)
+  })
+
+  it('does not acknowledge a DLQ batch when failure persistence fails', async () => {
+    const error = new Error('failed_jobs unavailable')
+    const onDispatchError = vi.fn()
+    const batch = createQueueBatch('sync-dlq', [
+      { _task: 'demo/dlq', jobId: 'job_x', value: 1 },
+    ])
+
+    const run = processRegisteredQueueBatch({ env: {}, batch }, {
+      registry: defineJobRegistry([
+        defineJob({ name: 'demo/dlq', queue: 'sync', async handle() {} }),
+      ]),
+      queues: { sync: 'QUEUE_SYNC' },
+      createContext: () => ({}) as never,
+      dlqQueues: { 'sync-dlq': { persist: true } },
+      dlqRepository: { recordFailure: vi.fn().mockRejectedValue(error) },
+      onDispatchError,
+    })
+
+    await expect(run).rejects.toBe(error)
+    expect(onDispatchError).toHaveBeenCalledWith(expect.objectContaining({ error }))
+    expect(batch.ackedAll).toBe(false)
+  })
+
+  it('rejects persist:true when no DLQ failure repository is configured', async () => {
+    const batch = createQueueBatch('sync-dlq', [
+      { _task: 'demo/dlq', jobId: 'job_x', value: 1 },
+    ])
+
+    await expect(processRegisteredQueueBatch({ env: {}, batch }, {
+      registry: defineJobRegistry([]),
+      queues: { sync: 'QUEUE_SYNC' },
+      createContext: () => ({}) as never,
+      dlqQueues: { 'sync-dlq': { persist: true } },
+    })).rejects.toThrow('requires dlqRepository')
+    expect(batch.ackedAll).toBe(false)
   })
 
   it('defineJob now allows omitting queue (default applied at registry build)', async () => {

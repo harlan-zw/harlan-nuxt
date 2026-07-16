@@ -19,22 +19,26 @@ Typed Cloudflare Queue jobs for Nuxt, with Laravel-style ergonomics.
 
 ## Features
 
-- 📁 **File-based jobs**: drop a `defineJob` in `server/jobs`, get a generated typed registry, no central list to maintain.
-- 🔒 **End-to-end types**: `JobName` and `JobPayload` are inferred per job, so unknown names and wrong payloads fail at compile time.
-- ☁️ **Cloudflare Queues**: send to queue bindings and consume batches through a Nitro hook, with per-queue routing.
-- 🗄️ **Durable D1 jobs**: persist a record before enqueue so work survives restarts and delivery gaps, with retry, release, and DLQ.
-- ⏰ **Scheduled tasks**: co-locate a cron with its handler; `nitro.tasks`, `scheduledTasks`, and Cloudflare `triggers.crons` are derived from it.
-- 📡 **Realtime broadcasting**: opt into Nitro WebSockets backed by a Durable Object, then watch job lifecycle, batch progress, and app-specific job results from Nuxt composables.
-- 🧪 **Laravel-style testing**: run handlers inline, fake the queue, drain the outbox, or drive the whole `queue:work` loop on a virtual clock.
-- 🛠️ **`cf-jobs` CLI**: `artisan queue:*`-style status, retry, flush, and migrate against local or remote D1, plus a `work` dev worker that runs durable jobs out-of-band so WebSockets stream live progress in `nuxt dev`.
+- 📁 **File-based jobs:** put a `defineJob` file in `server/jobs` and the module builds the registry.
+- 🔒 **Typed dispatch:** job names, payloads, queues, and broadcast messages are inferred from your files.
+- ☁️ **Cloudflare Queues:** route jobs across multiple producer bindings and consume them through Nitro's `cloudflare:queue` hook.
+- 🗄️ **Optional D1 durability:** persist jobs before dispatch, recover missed sends, track attempts, and keep failed jobs.
+- ⏰ **Scheduled tasks:** declare the cron beside the task and generate Nitro and Cloudflare scheduling config from it.
+- 📡 **Realtime progress:** publish job and batch events over Nitro WebSockets and a Durable Object.
+- 🧪 **Queue test harnesses:** run jobs inline, record dispatches, or drive retries on a virtual clock.
+- 🛠️ **Operations CLI:** inspect, retry, prune, and migrate local or remote D1 job tables.
 
-## Install
+## Quick start
+
+The basic path sends a typed message directly to Cloudflare Queues. D1 is optional and covered under [Durable jobs](#durable-jobs).
+
+### 1. Install the module
 
 ```bash
 pnpm add nuxt-cf-jobs
 ```
 
-Add the module and map your logical queue names to Cloudflare bindings:
+Map each logical queue name to the binding exposed by Cloudflare:
 
 ```ts
 // nuxt.config.ts
@@ -46,109 +50,92 @@ export default defineNuxtConfig({
       analytics: {
         binding: 'QUEUE_ANALYTICS',
         queueName: 'analytics-production',
-        jobType: 'analytics',
       },
     },
-    jobsDir: 'server/jobs',
+    defaultQueue: 'default',
   },
 })
 ```
 
-The string form (`default`) uses the logical name as the Cloudflare queue name. The object form lets the Cloudflare queue name differ from the logical name.
+`default` and `analytics` are logical names used by your jobs. `QUEUE_DEFAULT` and `QUEUE_ANALYTICS` are Worker binding names. The object form lets the Cloudflare queue name differ from the logical name.
 
-## Define Jobs
+Jobs are scanned from `server/jobs` by default. Private files, declarations, and test files are ignored.
 
-Create default-exported jobs under `server/jobs`:
+### 2. Configure Cloudflare
+
+Merge matching producers, consumers, and observability settings into the `wrangler.jsonc` used by your Nuxt deployment. See Cloudflare's [Queues configuration](https://developers.cloudflare.com/queues/configuration/configure-queues/) and [Workers observability](https://developers.cloudflare.com/workers/observability/) docs for the full set of options.
+
+```jsonc
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "compatibility_date": "YYYY-MM-DD",
+  "compatibility_flags": ["nodejs_compat"],
+  "queues": {
+    "producers": [
+      { "binding": "QUEUE_DEFAULT", "queue": "default" },
+      { "binding": "QUEUE_ANALYTICS", "queue": "analytics-production" }
+    ],
+    "consumers": [
+      { "queue": "default" },
+      { "queue": "analytics-production" }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  }
+}
+```
+
+Choose and test a real `compatibility_date` before deploying. After changing bindings, regenerate Worker types:
+
+```bash
+pnpm exec wrangler types
+```
+
+The module reads JSONC, JSON, and TOML. At build time it compares the root queue config with `cfJobs.queues`, warns about drift, and writes a reference snippet to `.nuxt/cf-jobs/wrangler.suggested.toml`.
+
+[Wrangler environments](https://developers.cloudflare.com/workers/wrangler/environments/) do not inherit bindings or variables. Repeat them inside every named environment you deploy. Put local secrets in an ignored `.dev.vars` file and set deployed secrets with `pnpm exec wrangler secret put NAME`.
+
+### 3. Define a job
 
 ```ts
 // server/jobs/sync/table.ts
-import { cfJobsChannel, defineJob } from '#cf-jobs/server'
+import { defineJob } from '#cf-jobs/server'
 
 export default defineJob({
   name: 'sync/table',
   queue: 'default',
+  tries: 3,
+  backoff: [10, 60, 300],
   async handle(payload: {
     siteId: string
-    userId: number
     table: string
     priority?: 'low' | 'normal'
-  }, ctx) {
-    ctx.log.info('syncing table', payload.table)
-  },
-  broadcast({ payload, status }) {
-    return {
-      channel: cfJobsChannel('site', payload.siteId),
-      event: 'sync.table.updated',
-      data: {
-        siteId: payload.siteId,
-        table: payload.table,
-        status,
-      },
-    } as const
+  }) {
+    console.info(`Syncing ${payload.table} for ${payload.siteId}`)
   },
 })
 ```
 
-Job names come from the file path, so this file registers as `sync/table`. Duplicate derived names fail during template generation. Private and test files are ignored by default:
+Use string literals for `name` and `queue`. The module extracts routing metadata without executing the job file. An explicit `name` wins; the path relative to `jobsDir` is the generation fallback. Duplicate names stop the build.
 
-```ts
-jobsIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts']
-```
+Useful job options include:
 
-## Typed Registry
+| Option | Purpose |
+| --- | --- |
+| `input` | Validate payloads with a `safeParse()` compatible schema. |
+| `tries` | Set the total attempt limit. `maxAttempts` is supported as an alias. |
+| `backoff` | Set a retry delay, a delay sequence, or a function of the attempt number. |
+| `middleware` | Wrap the handler with shared job middleware. |
+| `failed` | Run job-specific failure handling. |
+| `unique` / `uniqueId` | Deduplicate active durable jobs by payload or a custom key. |
+| `broadcast` | Replace the default lifecycle channels with an app-specific event. |
 
-The generated registry is available as `#cf-jobs/app`:
+### 4. Register the consumer
 
-```ts
-import type { JobName, JobPayload } from '#cf-jobs/app'
-import { buildJobPayload, getJobDefinition, getQueue, prepareJob } from '#cf-jobs/app'
-
-const name: JobName = 'sync/table'
-
-const payload = {
-  siteId: 'site_1',
-  userId: 123,
-  table: 'pages',
-  priority: 'low',
-} satisfies JobPayload<'sync/table'>
-
-const message = buildJobPayload(name, payload)
-const definition = getJobDefinition(name)
-```
-
-TypeScript rejects unknown job names and invalid payload shapes wherever the payload type can be inferred from the job definition. If a job declares `broadcast`, the generated app registry also exposes `JobBroadcastMessage<'sync/table'>`, `JobBroadcastEnvelope<'sync/table'>`, `BroadcastMessage`, and `BroadcastEnvelope`.
-
-## Send Jobs
-
-Use `getQueue(event, jobDefinition)` inside server routes, event handlers, or Nitro plugins, anywhere you have an `H3Event` or a Cloudflare env-like source:
-
-```ts
-// server/api/sync.post.ts
-import { getJobDefinition, getQueue } from '#cf-jobs/app'
-
-export default defineEventHandler(async (event) => {
-  const job = getJobDefinition('sync/table')
-  if (!job)
-    throw createError({ statusCode: 500, statusMessage: 'Job not registered' })
-
-  const queue = getQueue(event, job)
-  const queued = await queue.send({
-    siteId: 'site_1',
-    userId: 123,
-    table: 'pages',
-  })
-
-  return { queued }
-})
-```
-
-`queue.send()` returns `false` when the configured Cloudflare binding is unavailable, so development and unsupported runtimes fail explicitly instead of throwing.
-
-In `nuxt dev`, the module installs a dev-only Nitro plugin that builds in-memory queue bindings from your `cfJobs.queues` config and forwards messages to the `cloudflare:queue` hook.
-
-## Consume Queue Batches
-
-Register a queue consumer from a Nitro plugin:
+Create one Nitro plugin for lightweight queue messages:
 
 ```ts
 // server/plugins/cf-jobs.ts
@@ -168,115 +155,213 @@ export default defineNitroPlugin((nitroApp) => {
           control.handled = true
           control.action = 'released'
           control.delaySeconds = delaySeconds
-          message.retry({ delaySeconds })
         },
         async fail(error: string) {
           control.handled = true
           control.action = 'failed'
           control.error = error
-          message.ack()
+        },
+      }
+    },
+    onInvalidPayload: input => console.warn(input.error),
+    onDispatchError: input => console.error(input.error),
+  })
+})
+```
+
+The consumer owns `ack()` and `retry()`. Your `ctx.release()` and `ctx.fail()` implementations only record the requested action on `control`.
+
+By default, the consumer uses `payload.jobId` as the runtime job ID. When it is absent, it derives a stable ID from the payload. Override this with `getJobId` when your payload has another identifier.
+
+### 5. Dispatch a job
+
+The generated `#cf-jobs/app` registry keeps the name and payload connected:
+
+```ts
+// server/api/sync.post.ts
+import { getJobDefinition, getQueue } from '#cf-jobs/app'
+
+export default defineEventHandler(async (event) => {
+  const job = getJobDefinition('sync/table')
+  if (!job)
+    throw createError({ statusCode: 500, statusMessage: 'Job not registered' })
+
+  const queued = await getQueue(event, job).send({
+    siteId: 'site_1',
+    table: 'pages',
+    priority: 'normal',
+  })
+
+  return { queued }
+})
+```
+
+`send()` returns `false` when the binding is missing and logs one warning for that job and binding. Cloudflare send errors still reject.
+
+During `nuxt dev`, the module creates in-memory queue bindings from `cfJobs.queues` and forwards messages to the same `cloudflare:queue` hook.
+
+## Typed registry
+
+`#cf-jobs/app` is generated from your job files:
+
+```ts
+import type { JobName, JobPayload } from '#cf-jobs/app'
+import { buildJobPayload, getJobDefinition, loadJobDefinition } from '#cf-jobs/app'
+
+const name: JobName = 'sync/table'
+
+const payload = {
+  siteId: 'site_1',
+  table: 'pages',
+  priority: 'low',
+} satisfies JobPayload<'sync/table'>
+
+const message = buildJobPayload(name, payload)
+const route = getJobDefinition(name)
+const fullDefinition = await loadJobDefinition(name)
+```
+
+`getJobDefinition()` reads static routing metadata without loading the handler module. Use `loadJobDefinition()` when you need the full definition. Jobs with `broadcast` also generate `JobBroadcastMessage<Name>` and `JobBroadcastEnvelope<Name>` types.
+
+Runtime validation is available when you want to fail a custom startup check:
+
+```ts
+import { assertQueueBindings, validateQueueBindings } from '#cf-jobs/app'
+
+const issues = validateQueueBindings()
+assertQueueBindings()
+```
+
+## Choose a delivery mode
+
+| | Lightweight | Durable |
+| --- | --- | --- |
+| Dispatch | `getQueue(...).send(payload)` | `prepareJob()` then `runtime.enqueue(record)` |
+| Storage | Cloudflare Queue only | D1 row plus Cloudflare Queue message |
+| Consumer | `registerQueueConsumer()` | `runtime.consumeBatch()` |
+| Best for | Short, idempotent work | Work that needs recovery, history, batches, or live progress |
+| CLI state | No | Yes |
+
+Both modes use the same `defineJob` files and generated types. Cloudflare Queues provide at-least-once delivery, so handlers should be safe to run again. The durable path adds a D1 claim before each run and keeps the lifecycle visible to the CLI.
+
+## Durable jobs
+
+### Add D1
+
+Add a D1 binding to Wrangler alongside the queues:
+
+```jsonc
+{
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "my-app-jobs",
+      "database_id": "<database-id>"
+    }
+  ]
+}
+```
+
+Create the local tables, then apply the same migration remotely when you are ready:
+
+```bash
+pnpm cf-jobs migrate
+pnpm cf-jobs migrate --remote
+```
+
+### Create the runtime
+
+Keep runtime construction in one server utility so the queue consumer and producers share the same bindings and context:
+
+```ts
+// server/utils/cf-jobs-runtime.ts
+import { createDurableRuntime } from '#cf-jobs/app'
+
+export interface JobsEnv {
+  DB: D1Database
+  QUEUE_DEFAULT: Queue
+  QUEUE_ANALYTICS: Queue
+}
+
+export function createJobsRuntime(env: JobsEnv) {
+  return createDurableRuntime({
+    db: env.DB,
+    env,
+    createJobContext({ job, control }) {
+      return {
+        env,
+        db: env.DB,
+        log: console,
+        jobId: job.id,
+        batchId: job.batchId,
+        attempt: job.attempts,
+        async release(delaySeconds: number) {
+          control.handled = true
+          control.action = 'released'
+          control.delaySeconds = delaySeconds
+        },
+        async fail(error: string) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
         },
       }
     },
   })
+}
+```
+
+Consume both durable `{ jobId }` messages and lightweight `{ _task }` messages through that runtime:
+
+```ts
+// server/plugins/cf-jobs-durable.ts
+import type { JobsEnv } from '~/server/utils/cf-jobs-runtime'
+import { createJobsRuntime } from '~/server/utils/cf-jobs-runtime'
+
+export default defineNitroPlugin((nitroApp) => {
+  nitroApp.hooks.hook('cloudflare:queue', async ({ batch, env }) => {
+    await createJobsRuntime(env as JobsEnv).consumeBatch(batch)
+  })
 })
 ```
 
-`registerQueueConsumer()` wires the generated registry and `runtimeConfig.cfJobs.queues` for you; you provide the application-specific context. Other options:
+Use this plugin instead of the lightweight `registerQueueConsumer()` plugin from the quick start. Registering both would process the same hook twice.
+
+### Enqueue a durable job
 
 ```ts
-registerQueueConsumer(nitroApp, {
-  createContext,
-  getJobId: ({ payload }) => String(payload.jobId),
-  retryDelaySeconds: () => 30,
-  onInvalidPayload: input => console.warn(input.error),
-  onDispatchError: input => console.error(input.error),
-})
-```
-
-Without `getJobId`, the consumer uses `payload.jobId` when present, otherwise a stable serialized payload ID.
-
-## Durable D1 Jobs
-
-For work that should survive process restarts or queue delivery issues, persist a durable record first, then enqueue a lightweight queue message:
-
-```ts
+// server/api/sync-durable.post.ts
+import type { JobsEnv } from '~/server/utils/cf-jobs-runtime'
 import { prepareJob } from '#cf-jobs/app'
-import { createD1DurableJobRepository, createQueuePublisher, enqueueDurableJob } from '#cf-jobs/server'
+import { createJobsRuntime } from '~/server/utils/cf-jobs-runtime'
 
 export default defineEventHandler(async (event) => {
-  const env = event.context.cloudflare?.env as {
-    DB: D1Database
-    QUEUE_DEFAULT: Queue
-  }
-
-  const repository = createD1DurableJobRepository(env.DB)
-  await repository.migrate()
-
-  const publisher = createQueuePublisher(env, queue =>
-    queue === 'default' ? 'QUEUE_DEFAULT' : undefined)
-
+  const env = event.context.cloudflare?.env as JobsEnv
+  const runtime = createJobsRuntime(env)
   const record = await prepareJob({
     name: 'sync/table',
     payload: {
       siteId: 'site_1',
-      userId: 123,
       table: 'pages',
     },
   })
 
-  return await enqueueDurableJob(repository, publisher, record)
+  return await runtime.enqueue(record)
 })
 ```
 
-Consume durable queue messages with `runDurableJobMessage()` and the D1 repository:
+`runtime.enqueue()` returns one of four explicit states:
 
-```ts
-import { jobRegistry } from '#cf-jobs/app'
-import { createD1DurableJobRepository, runDurableJobMessage } from '#cf-jobs/server'
+- `enqueued`: the D1 row was inserted and the queue accepted the message.
+- `duplicate`: a matching active unique job already exists.
+- `not-dispatched`: the row is safe in D1, but the queue binding was unavailable.
+- `dispatch-failed`: the row is safe in D1, and `cause` contains the send error.
 
-export default defineNitroPlugin((nitroApp) => {
-  nitroApp.hooks.hook('cloudflare:queue', async ({ batch, env }) => {
-    const repository = createD1DurableJobRepository(env.DB)
+The generated `prepareJob()` validates the payload, resolves the queue, applies attempts and uniqueness, and checks the Cloudflare message size before inserting anything.
 
-    for (const message of batch.messages) {
-      await runDurableJobMessage({
-        message,
-        lifecycle: repository,
-        registry: jobRegistry,
-        toDispatchableJob: repository.toDispatchableJob,
-        createJobContext({ job, storedJob, control }) {
-          return {
-            env,
-            db: env.DB,
-            log: console,
-            jobId: job.id,
-            batchId: job.batchId,
-            attempt: job.attempts,
-            async release(delaySeconds: number) {
-              control.handled = true
-              control.action = 'released'
-              control.delaySeconds = delaySeconds
-              await repository.releaseJob(storedJob, { delaySeconds })
-              message.retry({ delaySeconds })
-            },
-            async fail(error: string) {
-              control.handled = true
-              control.action = 'failed'
-              control.error = error
-              await repository.failJob(storedJob, error)
-            },
-          }
-        },
-      })
-    }
-  })
-})
-```
+### Recovery
 
-`createD1DurableJobRepository()` exposes `migrate`, `insertJob`, `claimJob`, `completeJob`, `failJob`, `releaseJob`, `findDispatchableJobs`, `findStaleReservedJobs`, `releaseStaleReservedJobs`, and `toDispatchableJob`.
-
-The module also registers a `cf-jobs:reconcile` scheduled task by default. It releases jobs reserved for more than 5 minutes, immediately re-dispatches those reclaimed jobs, and re-dispatches due unreserved rows only after they are at least 10 minutes old so normal queue backlog is not amplified with duplicate messages.
+The module registers `cf-jobs:reconcile` by default. Every two minutes it reclaims stale reservations, re-dispatches older due rows that have no queue message, and closes orphaned batches when it has enough terminal evidence.
 
 ```ts
 export default defineNuxtConfig({
@@ -288,22 +373,25 @@ export default defineNuxtConfig({
       orphanedBatchSeconds: 7 * 86400,
       limit: 100,
     },
-    // or disable when the app owns recovery itself:
+    // Set false only when the app owns durable recovery.
     // reconcile: false,
   },
 })
 ```
 
+Pin `d1Binding` when the Worker exposes more than one D1-like binding.
+
 ## Broadcasting
 
-Broadcasting follows the same shape as Laravel Echo: clients subscribe to named channels and receive event envelopes. The built-in channels are `job:<id>`, `batch:<id>`, and `queue:<name>`. Use `cfJobsChannel(scope, id)` or your own helper for app-defined channels such as `team:<id>` or `site:<id>`.
+Broadcasting uses named channels. Built-in lifecycle channels are `job:<id>`, `batch:<id>`, and `queue:<name>`. App channels can use `cfJobsChannel('site', siteId)` or any valid `scope:id` string.
 
-Enable the Nitro WebSocket endpoint:
+Enable the WebSocket route and use Nitro's Cloudflare Durable preset:
 
 ```ts
+// nuxt.config.ts
 export default defineNuxtConfig({
   cfJobs: {
-    broadcast: true, // route: /__cf-jobs/ws
+    broadcast: true, // /__cf-jobs/ws
   },
   nitro: {
     preset: 'cloudflare-durable',
@@ -319,47 +407,17 @@ export default defineNuxtConfig({
 })
 ```
 
-Wire the durable runtime to publish lifecycle and batch events:
+Add `broadcast: true` to the durable runtime from the previous section:
 
 ```ts
-import { jobRegistry } from '#cf-jobs/app'
-import { createDurableJobsRuntime } from '#cf-jobs/server'
-
-export default defineNitroPlugin((nitroApp) => {
-  nitroApp.hooks.hook('cloudflare:queue', async ({ batch, env }) => {
-    const runtime = createDurableJobsRuntime({
-      db: env.DB,
-      env,
-      registry: jobRegistry,
-      resolveQueueBinding: queue => queue === 'default' ? 'QUEUE_DEFAULT' : undefined,
-      createJobContext: ({ job, control }) => ({
-        env,
-        db: env.DB,
-        log: console,
-        jobId: job.id,
-        batchId: job.batchId,
-        attempt: job.attempts,
-        release: async (delaySeconds: number) => {
-          control.handled = true
-          control.action = 'released'
-          control.delaySeconds = delaySeconds
-        },
-        fail: async (error: string) => {
-          control.handled = true
-          control.action = 'failed'
-          control.error = error
-        },
-      }),
-      broadcast: true,
-      completeResult: ({ job }) => ({ jobId: job.id }),
-    })
-
-    await runtime.consumeBatch(batch)
-  })
+return createDurableRuntime({
+  // Keep the existing db, env, and createJobContext options.
+  broadcast: true,
+  completeResult: ({ job }) => ({ jobId: job.id }),
 })
 ```
 
-Use the Nuxt composables in app code:
+Watch jobs and batches from Vue code:
 
 ```vue
 <script setup lang="ts">
@@ -369,23 +427,35 @@ const { state, result, error } = useCfJob(jobId)
 const { progress, finished } = useCfJobBatch('batch_123')
 
 useCfJobsChannel(cfJobsChannel('site', 'site_1'), (event) => {
-  if (event.event === 'lighthouse.completed')
+  if (event.event === 'sync.table.updated')
     console.log(event.data)
 })
 </script>
 ```
 
-Publish app-specific events on the same transport from any server code:
+Add a job-specific event when its lifecycle changes:
 
 ```ts
-import { cfJobsChannel, publishCfJobsBroadcast } from '#cf-jobs/server'
+// server/jobs/sync/table.ts
+import { cfJobsChannel, defineJob } from '#cf-jobs/server'
 
-await publishCfJobsBroadcast(env, cfJobsChannel('site', siteId), 'lighthouse.completed', {
-  score: 98,
+export default defineJob({
+  name: 'sync/table',
+  queue: 'default',
+  async handle(payload: { siteId: string, table: string }) {
+    // ...
+  },
+  broadcast({ payload, status }) {
+    return {
+      channel: cfJobsChannel('site', payload.siteId),
+      event: 'sync.table.updated',
+      data: { table: payload.table, status },
+    } as const
+  },
 })
 ```
 
-By default, enabling `cfJobs.broadcast` registers the transport. If a channel is private, deny subscriptions with a Nitro hook:
+You can also publish from arbitrary server code with `publishCfJobsBroadcast()`. Protect private channels with the authorization hook:
 
 ```ts
 export default defineNitroPlugin((nitroApp) => {
@@ -396,177 +466,123 @@ export default defineNitroPlugin((nitroApp) => {
 })
 ```
 
-## Scheduled Tasks (cron)
+## Scheduled tasks
 
-Queue jobs handle per-request deferred work; **scheduled tasks** handle cron work. `defineScheduledTask` co-locates the cron schedule with its handler, and the module derives `nitro.tasks`, `nitro.scheduledTasks`, and the Cloudflare `triggers.crons` from it, so there is no central list to keep in sync (and no way for the three to drift apart).
+`defineScheduledTask` keeps the task name, cron, and handler together. The module derives `nitro.tasks`, `nitro.scheduledTasks`, and Cloudflare `triggers.crons` from the files it finds.
 
 ```ts
 // server/tasks/cleanup.ts
 export default defineScheduledTask({
-  name: 'db:cleanup', // nitro task name (also the runTask id)
-  cron: '0 3 * * *', // or cron: ['0 3 * * *', '0 */6 * * *']
-  description: 'Nightly cleanup',
+  name: 'db:cleanup',
+  cron: '0 3 * * *',
+  description: 'Delete expired records',
   run() {
-    // ...same shape as nitro defineTask's run
     return { result: 'ok' }
   },
 })
 ```
 
-Enable scanning via `cfJobs.tasksDir`:
+Enable app task discovery:
 
 ```ts
+// nuxt.config.ts
 export default defineNuxtConfig({
   cfJobs: {
-    // `true` → auto-discover `server/tasks` in the app AND every extended layer
-    // (nuxt.options._layers), so a new layer with cron work needs no host config.
     tasksDir: true,
-    // ...or be explicit: tasksDir: ['server/tasks', '../some-layer/server/tasks']
   },
 })
 ```
 
-Notes:
+`tasksDir: true` scans `server/tasks` in the app and every extended Nuxt layer. Pass a path or path array when you want explicit directories.
 
-- `name` and `cron` must be **string literals**. The module reads them statically at build time, without executing the file (which usually imports DB/server utils that won't load outside nitro). Computed values are skipped with a warning.
-- Plain nitro `defineTask` files in the same dirs are still registered (runnable via `runTask`), just not scheduled.
-- `nitro.scheduledTasks` is populated only outside dev by default, so crons don't fire locally. Override with `cfJobs.scheduledTasks: true | false`. The deploy-only `triggers.crons` is always written.
-- Opt-in: nothing is scanned or registered unless `tasksDir` is set.
+- `name` and `cron` must be string literals because they are read at build time.
+- `cron` accepts one expression or an array. Cloudflare Cron Triggers run in UTC.
+- Plain Nitro `defineTask` files in the same directories are registered for manual use.
+- App task discovery is opt-in. The built-in recovery task is separate and remains enabled unless `reconcile: false`.
+- Scheduled execution is disabled during development by default. Set `scheduledTasks: true` to exercise crons locally.
+
+If your Wrangler file already contains `triggers.crons`, the module checks it for drift and writes `.nuxt/cf-jobs/crons.suggested.toml`.
 
 ## CLI
 
-The package ships a `cf-jobs` binary, an `artisan queue:*`-style tool for inspecting and managing the durable D1 job tables. It queries D1 through `wrangler d1 execute`, so it works against both the local miniflare database (default) and production (`--remote`), auto-detecting the D1 binding from your wrangler config.
+The `cf-jobs` binary reads the durable D1 tables through Wrangler. Local D1 is the default; add `--remote` for the deployed database.
+
+| Command | Use |
+| --- | --- |
+| `cf-jobs status` | Show ready, reserved, delayed, failed, and lagging jobs by queue. |
+| `cf-jobs jobs` | List active jobs with queue, type, state, and limit filters. |
+| `cf-jobs failed` | List failed jobs and their exceptions. |
+| `cf-jobs retry` | Requeue a failed job, a queue's failures, or all failures. |
+| `cf-jobs forget` / `flush` | Delete one failed job or a group of failures. |
+| `cf-jobs clear` | Delete active jobs, optionally filtered by queue or state. |
+| `cf-jobs prune` | Remove terminal rows past the requested retention windows. |
+| `cf-jobs migrate` | Create the job and batch tables and indexes. |
+| `cf-jobs schedule` / `tasks` | Inspect scheduled or discovered Nitro tasks. |
+| `cf-jobs work` | Drain durable jobs through a running `nuxt dev` server. |
+| `cf-jobs watch` | Stream completed and failed dev jobs as NDJSON. |
+
+Examples:
 
 ```bash
-# backpressure overview: per-queue ready/reserved/delayed, ready-lag, failures, stuck reservations
-pnpm cf-jobs            # alias for `cf-jobs status`
 pnpm cf-jobs status --remote
-
-# inspect jobs
 pnpm cf-jobs jobs --queue billing --state ready --limit 20
-pnpm cf-jobs failed                       # artisan queue:failed
-pnpm cf-jobs schedule                     # artisan schedule:list (cron + next run)
-pnpm cf-jobs tasks                        # every discovered task
-
-# manage (prompt for confirmation; pass --yes to skip, required when non-interactive)
-pnpm cf-jobs retry <id>                   # artisan queue:retry, re-queue a failed job
-pnpm cf-jobs retry --queue billing        # re-queue a whole queue's failures
-pnpm cf-jobs forget <id>                  # artisan queue:forget
-pnpm cf-jobs flush                        # artisan queue:flush, delete all failed jobs
-pnpm cf-jobs clear --state reserved       # artisan queue:clear, drop active jobs (e.g. stuck reservations)
-pnpm cf-jobs migrate                      # create the job tables/indexes in D1
+pnpm cf-jobs retry <id>
+pnpm cf-jobs retry --queue billing
+pnpm cf-jobs clear --state reserved
+pnpm cf-jobs prune --completed-hours 24 --failed-hours 168
 ```
 
-Every command accepts `--config <wrangler path>`, `--db <binding>`, `--remote`, `--json`, and `--jobs-table` / `--failed-table` overrides. `status` flags queues whose oldest ready job is lagging and reservations stuck for more than five minutes (a crashed or timed-out consumer). Run `cf-jobs <command> --help` for the full argument list.
+Mutating commands ask for confirmation. Pass `--yes` for scripts and other non-interactive runs. Shared options include `--config`, `--db`, `--remote`, `--json`, `--jobs-table`, and `--failed-table`. Run `pnpm cf-jobs <command> --help` for command-specific flags.
 
-`cf-jobs` shells out to `wrangler`, resolving the binary from `node_modules/.bin` and falling back to `wrangler` on `PATH` (override with `CF_JOBS_WRANGLER_BIN`).
+### Out-of-band development worker
 
-### Dev worker (`cf-jobs work`)
-
-In production the queue consumer is a separate Worker invocation, so a running job is naturally decoupled from the request that enqueued it. Under `nuxt dev` the in-memory dev queue runs a job the instant it's enqueued, in the same process, before a client has a chance to observe it. That hides the asynchronous behaviour you actually want to test, most painfully a WebSocket streaming live job progress: the job finishes before the socket is even connected.
-
-`cf-jobs work` restores that decoupling. It is a long-running dev worker that drains durable jobs **out-of-band**, on its own clock, by driving the running dev server:
+The in-memory dev queue normally runs a job immediately in the Nuxt process. Start `cf-jobs work` when you need the request to return before durable work begins, especially when testing WebSocket progress:
 
 ```bash
-# in one terminal
+# terminal 1
 pnpm nuxt dev
 
-# in another: poll the dev server, run whatever durable jobs are ready
+# terminal 2
 pnpm cf-jobs work
-pnpm cf-jobs work --queue sync-critical   # only one logical queue
-pnpm cf-jobs work --once                  # drain everything ready now, then exit (handy in scripts/CI)
-pnpm cf-jobs work --interval 1000         # idle poll interval in ms (backs off to 5s); default 500
+pnpm cf-jobs work --queue sync-critical
+pnpm cf-jobs work --once
+pnpm cf-jobs work --interval 1000
 ```
 
-So a client connects to your WebSocket, enqueues a job (the request returns immediately, job persisted in D1), then `cf-jobs work` picks it up a tick later and runs it. Because the worker drives a dev-only endpoint (`POST /__cf-jobs/work`) that fires your app's registered `cloudflare:queue` consumer **in the dev process**, the job runs with the app's real context and an in-memory WebSocket broadcast reaches the connected client, exactly as it would in production via a Durable Object.
+The command polls `POST /__cf-jobs/work`, a development-only route, then runs the app's real queue consumer in the dev process. While the poller holds its short lease, durable rows wait for it. Stop the command and the normal in-memory queue resumes after roughly 15 seconds.
 
-On a TTY it shows a **live dashboard** (repainted each tick) so you can watch jobs flow through: per-queue ready/lanes/done/failed, plus a table of recent outcomes with how long ago they ran and how long they took. Pass `--no-watch` for the append-only line log, or `--json` for one machine-readable line per interval (CI/scripts).
+Concurrency and batch size come from the Wrangler consumer config. Values on `cfJobs.queues` override them in development. When neither source sets a value, the dev worker uses one lane and batches of 10.
 
-```
-cf-jobs work · localhost:3030 · up 2m13s · 142 done · 1 failed · ~6/s
+`work` only defers durable jobs because lightweight messages have no D1 row to drain. It is a `nuxt dev` companion, not a production Worker.
 
-QUEUE        READY  LANES  DONE  FAIL
-crawl           24    3/4    84     1
-reports          0    0/1    18     0
+### Read-only monitoring
 
-recent
-  JOB              QUEUE    AGO      TOOK / ERROR
-✓ crawl/site-scan  crawl    12s ago  142ms
-✓ crawl/site-scan  crawl    18s ago  98ms
-✗ reports/weekly   reports  2m ago   DataForSEO 401 Unauthorized
-```
-
-**No flag or restart needed to switch modes.** While `cf-jobs work` is running, its polling tells the dev server to stop auto-running durable jobs and leave them in D1 for the worker (the poll refreshes a short in-process lease — no pid file, no env var). Stop the worker and, once the lease lapses (~15s), the dev queue resumes running jobs immediately as before. So you opt into the realistic out-of-band lifecycle simply by starting the worker, and opt out by stopping it.
-
-**One poller, demand-driven fan-out.** A single `cf-jobs work` process reads a cheap per-queue demand snapshot each interval and opens concurrent drain *lanes* sized to each queue's concurrency budget (`LANES` = in-flight / budget). Each lane is **self-sustaining**: the moment a batch response returns with more work, it pulls the next one — throughput is gated by how fast the dev server drains, not by the poll clock. A long job in one queue occupies one of its lanes and never stalls the others, and an idle system backs the snapshot poll off automatically.
-
-The lane budget is taken from your wrangler **`[[queues.consumers]]`** (`max_concurrency` / `max_batch_size`) automatically in dev — no need to restate it. A value set on the `cfJobs.queues` entry (`{ maxConcurrency, maxBatchSize }`) overrides wrangler; a queue with neither defaults to serial (1 lane), batch of 10. So a consumer declaring `max_concurrency = 4, max_batch_size = 10` drains 10-at-a-time across 4 concurrent lanes, exactly like production.
-
-### Agent monitoring (`cf-jobs watch`)
-
-`cf-jobs watch` is a **read-only** companion for agents (or any tooling) that need to observe jobs in real time and react to failures. It streams one NDJSON event per terminal job to stdout, with the **full untruncated exception** on failures so an agent can read the stack and fix the issue:
+`cf-jobs watch` streams one NDJSON object for every terminal dev job. Failures include the full stored exception.
 
 ```bash
-cf-jobs watch                    # every completed/failed job as it happens
-cf-jobs watch --failures-only    # only failures (full stack traces)
-cf-jobs watch --queue crawl      # one queue
-cf-jobs watch --backfill 300     # also replay the last 5 minutes on start
+pnpm cf-jobs watch
+pnpm cf-jobs watch --failures-only
+pnpm cf-jobs watch --queue crawl
+pnpm cf-jobs watch --backfill 300
 ```
 
-```
-{"ts":"2026-06-11T07:16:03.000Z","event":"failed","id":"j1","queue":"crawl","type":"crawl/site-scan","error":"Error: boom\n    at handler (x.ts:1:1)\n    at run (x.ts:2:2)"}
-{"ts":"2026-06-11T07:16:05.000Z","event":"completed","id":"j2","queue":"crawl","type":"crawl/site-scan","durationMs":142}
-```
+`watch` never drains jobs and never holds the worker lease. You can run it beside `cf-jobs work` or while the normal dev queue is active.
 
-Unlike `work`, `watch` never drains and never holds the lease (`lease=0`), so it's pure observation: it doesn't change which process runs your jobs. Run it alongside `cf-jobs work` (or on its own while jobs auto-run) and tail the stream.
+## Testing
 
-Three things to know:
-
-- This is a **`nuxt dev` companion, not a production worker.** It assumes one process, so the request that runs the job shares memory (and thus WebSocket maps) with the rest of the dev server. Under multi-isolate setups (e.g. `wrangler dev`) the broadcast can land in a different isolate. The `/__cf-jobs/work` endpoint is registered only in dev and is an unauthenticated job executor, so it is never built into a deployment.
-- Deferral targets the **durable** path. While the worker holds the lease, a non-durable fire-and-forget `.send()` has no D1 row for the worker to find, so it won't run until you stop the worker. Use durable jobs (`enqueueDurableJob`) for anything you want the worker to drive.
-- Unlike the D1-querying commands above, `work` talks HTTP to the running dev server. It takes `--url` (default `http://localhost:3000`), `--db <binding>` to disambiguate when several D1 bindings exist, and `--json` to emit one machine-readable line per active tick.
-
-## Runtime Validation
-
-The generated registry validates jobs at startup and fails loudly for invalid definitions, duplicate names, and missing or invalid queue names. Queue binding checks are available from `#cf-jobs/app`:
+The testing entry point has no Nitro dependency:
 
 ```ts
-import { assertQueueBindings, validateQueueBindings } from '#cf-jobs/app'
-
-const issues = validateQueueBindings()
-assertQueueBindings()
+import {
+  createJobTestHarness,
+  createQueueTestHarness,
+  createFakeQueue,
+} from 'nuxt-cf-jobs/testing'
 ```
 
-## Testing Jobs
+### Run handlers inline
 
-`createJobTestHarness(registry, options?)` gives Laravel-style ergonomics for testing jobs without a running queue or worker. It infers typed job names and payloads from the registry you pass.
-
-### Test setup
-
-`createJobTestHarness` lives on the **`nuxt-cf-jobs/testing`** subpath, which is itself nitropack-free. What you pair it with is not: your generated registry (`#cf-jobs/app`) and `defineJob` / `defineJobRegistry` (from `nuxt-cf-jobs/server`) transitively import `nitropack/runtime`, which only resolves inside a built Nuxt app. So:
-
-- **Under `@nuxt/test-utils`** (recommended): nothing to configure. `#cf-jobs/app`, `#cf-jobs/server`, and `nitropack/runtime` all resolve.
-- **Plain vitest**: alias the generated registry to its prepared location and stub `nitropack/runtime` with identity exports:
-
-  ```ts
-  // vitest.config.ts
-  import { fileURLToPath } from 'node:url'
-
-  export default {
-    resolve: { alias: {
-      // run `nuxi prepare` first so the generated registry exists:
-      '#cf-jobs/app': fileURLToPath(new URL('./.nuxt/cf-jobs/registry.ts', import.meta.url)),
-      // identity stub re-exporting defineTask / defineNitroPlugin / useRuntimeConfig:
-      'nitropack/runtime': fileURLToPath(new URL('./tests/stubs/nitropack-runtime.ts', import.meta.url)),
-    } },
-  }
-  ```
-
-  The module's own [`vitest.config.ts`](./vitest.config.ts) applies the same alias and stub pattern to source.
-
-### Build a harness
-
-The fastest path is an **inline registry**, which needs no `#cf-jobs/app` resolution:
+Use an inline registry for a small unit test, or pass `jobRegistry` from `#cf-jobs/app` inside a prepared Nuxt test:
 
 ```ts
 import { defineJob, defineJobRegistry } from 'nuxt-cf-jobs/server'
@@ -576,174 +592,127 @@ const registry = defineJobRegistry([
   defineJob({
     name: 'order/ship',
     queue: 'standard',
-    async handle(payload: { orderId: string }, ctx) { /* ... */ },
+    async handle(payload: { orderId: string }) {
+      await shipOrder(payload.orderId)
+    },
   }),
 ])
 
 const h = createJobTestHarness(registry, {
-  env: {}, // opaque to the harness; surfaced as ctx.env
-  db: {}, // your test double / drizzle instance; surfaced as ctx.db
+  env: {},
+  db: {},
   log: console,
 })
+
+const result = await h.runInline('order/ship', { orderId: 'A1' })
+expect(result.success).toBe(true)
+h.assertRan('order/ship')
+h.assertNothingFailed()
 ```
 
-To test your real jobs, pass `jobRegistry` from `#cf-jobs/app` instead (with the setup above). `env` / `db` / `log` are opaque to the harness and handed to each handler's `ctx`.
+Unhandled handler errors reject `runInline()`. Calls to `ctx.release()` and `ctx.fail()` are recorded for `assertReleased()` and `assertFailed()`.
 
-### Run a job inline (the `sync` driver)
-
-`runInline` looks up the handler, builds the `_task` envelope, runs middleware and `handle`, and returns the result. Unhandled errors propagate so you can use `expect(...).rejects`. Assert on side effects (DB rows, sent mail, events):
+### Record dispatched jobs
 
 ```ts
-it('ships the order', async () => {
-  const res = await h.runInline('order/ship', { orderId: 'A1' })
+const fake = h.fakeJobs(['QUEUE_STANDARD'])
 
-  expect(res.success).toBe(true)
-  expect(res.released).toBe(false) // handler did not call ctx.release()
-  expect(res.failed).toBe(false) // handler did not call ctx.fail()
-  // ...assert your side effects
-})
+await myProducer(fake.env)
 
-// exercise retry / failure branches
-const released = await h.runInline('order/ship', { orderId: 'A2' }, { attempt: 2 })
-expect(released.delaySeconds).toBe(30)
+fake.assertSent('order/ship')
+fake.assertSentTimes('order/ship', 1)
+fake.assertSentOn('standard', 'order/ship')
+fake.assertSentWithDelay('order/ship', 60)
+fake.assertNotSent('email/send')
 ```
 
-The harness records every `runInline` / `drainOutbox` outcome, so you can assert what ran after the fact (Laravel's `assertFailed` / `assertNothingFailed`):
+The recorder also provides `assertChained()` for continuations and `assertBatched()` for `sendBatch()` calls.
+
+### Drive the queue on a virtual clock
+
+`createQueueTestHarness()` covers producer, queue, consumer, handler, and delayed redelivery without real timers:
 
 ```ts
-await h.runInline('order/ship', { orderId: 'A1' })
-await h.runInline('order/ship', { orderId: 'A2', fail: true })
-
-h.assertRan('order/ship') // ran and succeeded at least once
-h.assertRan('order/ship', result => result.success)
-h.assertFailed('order/ship') // a run called ctx.fail() (or threw)
-h.assertReleased('order/ship') // a run called ctx.release()
-// h.assertNothingFailed() // would throw here
-```
-
-### Assert what was dispatched (`Queue::fake()`)
-
-`fakeJobs(bindings)` returns a recording fake env plus assertions. Spread `env` into whatever your producer reads from, run your code, then assert:
-
-```ts
-it('queues a confirmation email', async () => {
-  const fake = h.fakeJobs(['QUEUE_STANDARD'])
-
-  await myEndpoint({ env: fake.env })
-
-  fake.assertSent('email/send')
-  fake.assertSent('email/send', payload => payload.orderId === 'A1')
-  fake.assertSentTimes('email/send', 1)
-  fake.assertSentOn('standard', 'email/send')
-  fake.assertSentWithDelay('email/send', 60) // queued with a 60s delay
-  fake.assertNotSent('order/ship')
-
-  // chains + batches (Laravel's assertPushedWithChain / Bus::assertBatched)
-  fake.assertChained('order/ship', ['email/send']) // `then` continuation chain
-  fake.assertBatched(names => names.length === 2) // jobs dispatched via sendBatch
-})
-```
-
-### Drain the durable outbox once (`queue:work --once`)
-
-`drainOutbox` claims durable records one at a time, runs each inline, and routes the outcome to `onComplete` / `onReleased` / `onFailed`. Wire `next` to your D1 (or in-memory) outbox; payloads are `JSON.parse`d by default:
-
-The four callbacks are your own outbox functions (claim a record, then persist each outcome), not module exports:
-
-```ts
-const summary = await h.drainOutbox({
-  next: () => claimNext(), // your "reserve the next durable record" query, or undefined when empty
-  onComplete: record => markComplete(record),
-  onReleased: (record, delaySeconds) => markReleased(record, delaySeconds),
-  onFailed: (record, error) => markFailed(record, String(error)),
-})
-
-expect(summary).toEqual({ processed: 3, completed: 2, released: 0, failed: 1 })
-```
-
-### Run the whole queue (`queue:work`)
-
-`createQueueTestHarness` drives the full pipeline in-process on a **virtual clock**: dispatch onto a producer binding, `work()` a pass like `queue:work --once`, `advanceTime()` to fire delayed/released/backoff retries, and `runUntilEmpty()` to drain everything including chained continuations. No real timers, fully deterministic.
-
-```ts
-import { createQueueTestHarness } from 'nuxt-cf-jobs/testing'
-
 const q = createQueueTestHarness({
-  registry, // inline, or jobRegistry from #cf-jobs/app
-  queues: { critical: 'QUEUE_CRITICAL', standard: 'QUEUE_STANDARD' }, // logicalName: binding
+  registry,
+  queues: { standard: 'QUEUE_STANDARD' },
 })
 
-// producer → queue → consumer → handler.
-// A raw message body MUST carry `_task: <jobName>` alongside the payload fields;
-// a message without `_task` is silently retried, not run.
-q.env.QUEUE_CRITICAL.send({ _task: 'order/process', orderId: 'A1' })
-await q.work()
-q.assertProcessed('order/process')
+await q.env.QUEUE_STANDARD.send({
+  _task: 'order/ship',
+  orderId: 'A1',
+})
 
-// release/backoff redelivery
+await q.work()
+q.assertProcessed('order/ship')
+
 q.advanceTime(30)
-await q.work()
-q.assertReleased('order/process', { delay: 30 })
-q.assertRetried('order/process', 1)
-
-// drain a chain/continuation to completion
 await q.runUntilEmpty()
 q.assertNothingPending()
 ```
 
-`env[binding]` and `send(binding, ...)` use the **binding** name (`QUEUE_CRITICAL`); the assertions use the **job name** (`order/process`). `queues` maps logical-queue to binding, matching your `cfJobs.queues` config.
+Raw queue messages need `_task: <job-name>`. Bindings such as `QUEUE_STANDARD` are used to send; assertions use job names such as `order/ship`.
 
-By default the harness dispatches through the registry, so `assertProcessed` / `assertFailed` / `assertReleased` reuse the inline run log. Pass `consumer` to drive **your own** `cloudflare:queue` batch processor instead. In that mode the run-log assertions throw a clear error (they have nothing to read), so assert via your durable store plus the queue-mechanics helpers (`assertRetried`, `assertDispatched`, `pending()`):
+Pass a `consumer` callback to exercise your own queue processor. In that mode, assert against your store plus queue mechanics such as `assertRetried()`, `assertDispatched()`, and `pending()`.
 
-```ts
-const q = createQueueTestHarness({
-  registry: jobRegistry,
-  queues: { critical: 'QUEUE_CRITICAL' },
-  consumer: (batch, env) => myConsumer(batch, env), // your real telemetry/DLQ/retry
-})
-```
+### Test setup
 
-The lower-level fakes (`createFakeQueue`, `createFakeQueueEnv`, `createQueueMessage`, `createQueueBatch`) live on the same `nuxt-cf-jobs/testing` subpath, for hand-wiring `processRegisteredQueueBatch`. Their producer contract (`send` / `sendBatch`, `delaySeconds`, per-message overrides) matches the dev polyfill (`createDevQueueRuntime`) and real Cloudflare Queues, so a passing fake-based test reflects dev and production producer behaviour. The module's own suite asserts that equivalence directly.
+`@nuxt/test-utils` resolves `#cf-jobs/app`, `#cf-jobs/server`, and `nitropack/runtime` for you. This is the simplest way to test real generated jobs.
 
-## Public Imports
+For plain Vitest, run `nuxt prepare`, alias `#cf-jobs/app` to `.nuxt/cf-jobs/registry.js`, and provide a `nitropack/runtime` identity stub if your test imports the server barrel. The package's own [`vitest.config.ts`](./vitest.config.ts) shows the complete setup.
 
-Prefer the narrow subpaths:
+## Configuration reference
 
-```ts
-import { createD1DurableJobRepository } from 'nuxt-cf-jobs/d1'
-import { defineJob } from 'nuxt-cf-jobs/server'
-import { createFakeQueue, createJobTestHarness } from 'nuxt-cf-jobs/testing'
-```
+### Module options
 
-Available package subpaths:
+| Option | Default | Description |
+| --- | --- | --- |
+| `queues` | `{}` | Logical queue names mapped to bindings or queue option objects. |
+| `defaultQueue` | None | Queue used when a job omits `queue`. |
+| `jobsDir` | `server/jobs` | One directory or an array, resolved from the Nuxt root. |
+| `jobsPattern` | `**/*.ts` | Glob used inside each jobs directory. |
+| `jobsIgnore` | Private, declaration, test, and spec files | Extra ignore globs. |
+| `tasksDir` | Disabled | `true`, a path, or paths used to discover Nitro tasks. |
+| `tasksPattern` | `**/*.ts` | Glob used inside each task directory. |
+| `tasksIgnore` | Private, declaration, test, and spec files | Extra task ignore globs. |
+| `scheduledTasks` | Production only | Override local scheduled task execution. |
+| `broadcast` | `false` | Enable the default WebSocket route or provide route and Durable Object settings. |
+| `reconcile` | Enabled | Configure or disable durable recovery. |
+| `validateWrangler` | `true` | Compare module queues and crons with Wrangler config. |
+| `wranglerPath` | Auto-detected | Explicit Wrangler config path relative to the Nuxt root. |
+| `registryAlias` | `#cf-jobs/app` | Add another alias for the generated registry. |
 
-- `nuxt-cf-jobs`: the Nuxt module
-- `nuxt-cf-jobs/server`: server runtime barrel (durable, queue, dispatch, registry)
-- `nuxt-cf-jobs/testing`: test helpers (`createJobTestHarness`, `createQueueTestHarness`, `createFakeQueue*`), nitropack-free
-- `nuxt-cf-jobs/d1`: D1 durable repository adapter (non-nuxt contexts)
-- `nuxt-cf-jobs/schema`: Drizzle schema (non-nuxt contexts)
+Queue option objects accept `binding`, `queueName`, `jobType`, `maxBatchSize`, `maxBatchTimeout`, `maxConcurrency`, `maxRetries`, `retryDelay`, `deadLetterQueue`, and `deadLetterQueueBinding`.
 
-Inside a Nuxt app, prefer the generated aliases `#cf-jobs/server` (runtime helpers) and `#cf-jobs/app` (your typed registry).
+Wrangler remains the production source for consumer batching, concurrency, retries, and dead-letter routing. Matching values in `cfJobs.queues` help validation and configure the out-of-band dev worker.
 
-## Tests
+## Imports
 
-The suite runs as two vitest projects, plus an opt-in wrangler tier:
+Inside a Nuxt app, use `#cf-jobs/app` for the generated registry and `#cf-jobs/server` for runtime helpers.
+
+Published package subpaths:
+
+| Import | Contents |
+| --- | --- |
+| `nuxt-cf-jobs` | Nuxt module. |
+| `nuxt-cf-jobs/server` | Server runtime, registry, durable jobs, dispatch, and scheduling. |
+| `nuxt-cf-jobs/cloudflare` | Cloudflare-specific metrics helpers. |
+| `nuxt-cf-jobs/d1` | D1 repository adapter for non-Nuxt contexts. |
+| `nuxt-cf-jobs/schema` | Drizzle table definitions for non-Nuxt contexts. |
+| `nuxt-cf-jobs/testing` | Nitro-free queue fakes and test harnesses. |
+
+## Development
 
 ```bash
-pnpm test       # unit project (happy-dom): runtime + test-helper specs
-pnpm test:nitro # nitro project (*.nitro.test.ts): real Nuxt server via @nuxt/test-utils
+pnpm test
+pnpm test:nitro
 pnpm typecheck
+pnpm lint
 pnpm build
-pnpm test:e2e   # wrangler/workerd round-trip (real queue consumer)
+pnpm test:e2e
 ```
 
-Three tiers of increasing fidelity:
-
-- **unit**: fakes and harness, plus a producer-contract parity check (the fakes behave like the dev polyfill and Cloudflare) and the dev-polyfill to consumer delivery loop.
-- **`test:nitro`**: the generated registry driven through the real runtime inside a built Nuxt server (nitropack v2), via `@nuxt/test-utils`.
-- **`test:e2e`**: the real Cloudflare Queues/D1 round-trip over workerd, including the consumer delivery path. `registerQueueConsumer`'s runtime-config resolution only works under the Cloudflare runtime, so this tier is where it runs end to end.
-
-`pnpm test:e2e` starts Wrangler fixtures and needs the local Cloudflare/Wrangler toolchain.
+`test` runs the unit project. `test:nitro` runs the generated registry in a real Nuxt server. `test:e2e` starts Wrangler fixtures and exercises the Cloudflare Queues and D1 round trip through workerd.
 
 ## License
 

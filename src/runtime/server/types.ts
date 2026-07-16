@@ -8,22 +8,26 @@ export interface QueueSendOptions {
   contentType?: QueueMessageContentType
 }
 
+export interface QueueSendBatchOptions {
+  delaySeconds?: number
+}
+
 export interface QueueRetryOptions {
   delaySeconds?: number
 }
 
 export interface QueueMessage<T = unknown> {
-  id?: string
-  body: T
-  attempts: number
-  timestamp?: Date | number
+  readonly id?: string
+  readonly body: T
+  readonly attempts: number
+  readonly timestamp?: Date | number
   ack: () => void
   retry: (opts?: QueueRetryOptions) => void
 }
 
 export interface QueueBatch<T = unknown> {
-  queue: string
-  messages: Array<QueueMessage<T>>
+  readonly queue: string
+  readonly messages: ReadonlyArray<QueueMessage<T>>
   ackAll?: () => void
   retryAll?: (opts?: QueueRetryOptions) => void
 }
@@ -34,14 +38,16 @@ export interface QueuePayload<T = unknown, Env extends Record<string, unknown> =
 }
 
 export interface CloudflareQueueSendBatchMessage<T = unknown> {
-  body: T
-  contentType?: QueueMessageContentType
-  delaySeconds?: number
+  readonly body: T
+  readonly contentType?: QueueMessageContentType
+  readonly delaySeconds?: number
 }
 
 export interface CloudflareQueue<T = unknown> {
-  send: (message: T, opts?: QueueSendOptions) => Promise<void>
-  sendBatch?: (messages: Array<CloudflareQueueSendBatchMessage<T>>, opts?: QueueSendOptions) => Promise<void>
+  /** Cloudflare returns queue metrics; callers may ignore them, but the binding is not `Promise<void>`. */
+  send: (message: T, opts?: QueueSendOptions) => Promise<unknown>
+  /** `contentType` is per-message for batches; batch-wide options only support `delaySeconds`. */
+  sendBatch?: (messages: Iterable<CloudflareQueueSendBatchMessage<T>>, opts?: QueueSendBatchOptions) => Promise<unknown>
 }
 
 export interface QueueBindingConfig {

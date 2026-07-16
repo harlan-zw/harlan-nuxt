@@ -81,7 +81,7 @@
     "test:nitro": "vitest run --project nitro",
     "test:types": "nuxt prepare tests/fixtures/nuxt-demo && vue-tsc --noEmit -p tests/fixtures/nuxt-demo/tsconfig.json",
     "test:e2e": "CF_JOBS_E2E=1 vitest run --no-file-parallelism tests/wrangler-dev.e2e.test.ts tests/wrangler-d1.e2e.test.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tests/tsconfig.json && pnpm test:types",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tests/tsconfig.json && tsc --noEmit -p tests/cloudflare-tsconfig.json && pnpm test:types",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },
@@ -97,6 +97,7 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
     "@nuxt/module-builder": "catalog:nuxt",
     "@nuxt/test-utils": "catalog:",
     "@types/node": "catalog:dev-build",

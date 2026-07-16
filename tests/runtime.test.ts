@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -503,6 +503,36 @@ describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
     expect(rows(d1, 'jobs')).toBe(2)
     expect(rows(d1, 'failed_jobs')).toBe(1)
   })
+
+  it.each(['claim', 'fail', 'settle'] as const)('retries and reports a DLQ %s failure instead of acknowledging it', async (stage) => {
+    const error = new Error(`${stage} unavailable`)
+    const message = { body: { jobId: 'job_1' }, attempts: 5, ack: vi.fn(), retry: vi.fn() }
+    const logs: Array<{ stage: string, error?: string, cause?: unknown }> = []
+    const storedJob = { id: 'job_1' }
+
+    await consumeQueueBatch({
+      batch: { queue: 'jobs-dlq', messages: [message] },
+      repository: {
+        claimJob: stage === 'claim' ? async () => { throw error } : async () => storedJob,
+        failJob: stage === 'fail' ? async () => { throw error } : async () => {},
+      } as never,
+      store: {
+        getJobBatchId: stage === 'settle' ? async () => { throw error } : async () => null,
+      } as never,
+      registry: {} as never,
+      createJobContext: (() => ({})) as never,
+      claimRetryDelaySeconds: 17,
+      onLog: event => logs.push(event),
+    })
+
+    expect(message.ack).not.toHaveBeenCalled()
+    expect(message.retry).toHaveBeenCalledWith({ delaySeconds: 17 })
+    expect(logs).toContainEqual(expect.objectContaining({
+      stage: 'dlq-failed',
+      error: `${stage} unavailable`,
+      cause: error,
+    }))
+  })
 })
 
 describe('gscdump-parity hooks', () => {
@@ -533,13 +563,18 @@ describe('gscdump-parity hooks', () => {
     expect(conts).toEqual(['then', 'finally'])
   })
 
-  it('settles and acks after completion even when terminal continuations throw', async () => {
+  it('reports a failed continuation, still runs finally, then settles and acks', async () => {
+    const stages: string[] = []
+    const logs: Array<{ stage: string, error?: string }> = []
     const { d1, runtime } = await setup(
       { work: async () => {}, finish: async () => {} },
       {
-        dispatchContinuations: () => {
-          throw new Error('continuation sink down')
+        dispatchContinuations: ({ stage }: { stage: string }) => {
+          stages.push(stage)
+          if (stage === 'then')
+            throw new Error('continuation sink down')
         },
+        onLog: (event: { stage: string, error?: string }) => logs.push(event),
       },
     )
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
@@ -548,6 +583,14 @@ describe('gscdump-parity hooks', () => {
     const result = await runtime.consumeMessage(m)
 
     expect(result.run.status).toBe('completed')
+    expect(stages).toEqual(['then', 'finally'])
+    expect(result.run).toMatchObject({
+      continuationFailures: [{ stage: 'then', cause: expect.any(Error) }],
+    })
+    expect(logs).toContainEqual(expect.objectContaining({
+      stage: 'continuation-failed',
+      error: 'continuation sink down',
+    }))
     expect(result.settled?.batchComplete).toBe(true)
     expect(m.ack).toHaveBeenCalled()
     expect(m.retry).not.toHaveBeenCalled()

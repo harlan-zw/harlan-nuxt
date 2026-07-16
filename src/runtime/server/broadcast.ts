@@ -133,21 +133,21 @@ export function createCfJobsBroadcastRepositoryHooks<
   runtime: CfJobsBroadcastRuntimeOptions<Env, Db, Logger> = {},
 ): Pick<D1DurableJobRepositoryOptions<Queue>, 'onJobClaimed' | 'onJobCompleted' | 'onJobFailed' | 'onJobReleased'> {
   return {
-    onJobClaimed({ job }) {
-      void publishJobEvent(env, job, 'claimed', {}, opts, runtime)
+    async onJobClaimed({ job }) {
+      await publishJobEvent(env, job, 'claimed', {}, opts, runtime)
     },
-    onJobCompleted({ job, durationMs, result }) {
+    async onJobCompleted({ job, durationMs, result }) {
       const extra: Partial<CfJobsBroadcastJobEvent> = { durationMs }
       const selected = selectCompleteResult(job, result, opts.includeResult)
       if (selected !== undefined)
         extra.result = selected
-      void publishJobEvent(env, job, 'completed', extra, opts, runtime)
+      await publishJobEvent(env, job, 'completed', extra, opts, runtime)
     },
-    onJobFailed({ job, error }) {
-      void publishJobEvent(env, job, 'failed', { durationMs: job.duration_ms ?? null, error }, opts, runtime)
+    async onJobFailed({ job, error }) {
+      await publishJobEvent(env, job, 'failed', { durationMs: job.duration_ms ?? null, error }, opts, runtime)
     },
-    onJobReleased({ job, opts: releaseOpts }) {
-      void publishJobEvent(env, job, 'released', releaseToExtra(releaseOpts), opts, runtime)
+    async onJobReleased({ job, opts: releaseOpts }) {
+      await publishJobEvent(env, job, 'released', releaseToExtra(releaseOpts), opts, runtime)
     },
   }
 }
@@ -157,9 +157,9 @@ export function createCfJobsBroadcastMetricsSink(
   opts: CfJobsBroadcastOptions = {},
 ): JobMetricsSink {
   return {
-    record(event) {
+    async record(event) {
       const data = jobEventFromMetrics(event)
-      void publishMetricJobEvent(env, data, event, opts)
+      await publishMetricJobEvent(env, data, event, opts)
     },
   }
 }
@@ -167,8 +167,8 @@ export function createCfJobsBroadcastMetricsSink(
 export function createCfJobsBroadcastBatchProgressHandler(
   env: CfJobsBroadcastEnv | undefined,
   opts: CfJobsBroadcastOptions = {},
-): (progress: BatchProgress) => void {
-  return (progress) => {
+): (progress: BatchProgress) => Promise<void> {
+  return async (progress) => {
     const data: CfJobsBroadcastBatchProgressEvent = {
       batchId: progress.batchId,
       name: progress.name,
@@ -177,7 +177,7 @@ export function createCfJobsBroadcastBatchProgressHandler(
       failed: progress.failed,
       finishedAt: progress.finishedAt,
     }
-    void publishBatchProgressEvent(env, data, progress, opts)
+    await publishBatchProgressEvent(env, data, progress, opts)
   }
 }
 

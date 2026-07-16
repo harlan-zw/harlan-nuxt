@@ -1,5 +1,7 @@
 catalogMode: prefer
 cleanupUnusedCatalogs: true
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260715.1'
 shellEmulator: true
 trustPolicy: no-downgrade
 trustPolicyExclude:
@@ -7,24 +9,25 @@ trustPolicyExclude:
 
 catalog:
   '@antfu/eslint-config': ^9.1.0
+  '@cloudflare/workers-types': ^5.20260715.1
   '@nuxt/test-utils': ^4.0.3
   '@vitest/coverage-v8': 4.1.10
   citty: ^0.2.2
   drizzle-orm: 1.0.0-rc.3
-  eslint: ^10.6.0
+  eslint: ^10.7.0
   eslint-plugin-harlanzw: latest
   eslint-plugin-vue: latest
-  h3: 2.0.1-rc.23
+  h3: 2.0.1-rc.25
   magicast: ^0.5.3
   nitropack: ^2.13.4
   unbuild: ^3.6.1
-  wrangler: ^4.107.0
+  wrangler: ^4.110.0
 
 catalogs:
   dev-build:
-    '@types/node': ^26.1.0
+    '@types/node': ^26.1.1
     typescript: ^6.0.3
-    vue-tsc: ^3.3.6
+    vue-tsc: ^3.3.7
   dev-test:
     happy-dom: ^20.10.6
     vitest: ^4.1.10

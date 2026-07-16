@@ -2,7 +2,7 @@ import type { JobRegistryLike } from './dispatch'
 import type { DurableJobFailureRepository } from './outbox'
 import type { AnyJobDefinition, JobMessageOf, JobPayloadOf } from './registry'
 import type { QueueSource } from './runtime-env'
-import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendOptions } from './types'
+import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendBatchOptions, QueueSendOptions } from './types'
 import { dispatchRegisteredJob } from './dispatch'
 import { formatJobError } from './errors'
 import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
@@ -14,17 +14,85 @@ import { resolveQueueSourceEnv, runtimeConfigSource } from './runtime-env'
 export { CF_QUEUE_MAX_DELAY_SECONDS } from './internal'
 
 export const CF_QUEUE_MAX_BATCH_SIZE = 100
-export const CF_QUEUE_MAX_BATCH_BYTES = 256 * 1024
-export const CF_QUEUE_MAX_MESSAGE_BYTES = 128 * 1024
+export const CF_QUEUE_MAX_BATCH_BYTES = 256_000
+export const CF_QUEUE_MAX_MESSAGE_BYTES = 128_000
+const CF_QUEUE_MESSAGE_METADATA_BYTES = 100
 const TRANSIENT_QUEUE_ERROR_RE = /\b(?:429|rate limit|too many requests|backpressure)\b/i
 
-function chunkBatch<T>(items: readonly T[], size: number): T[][] {
-  if (items.length <= size)
-    return [items as T[]]
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size)
-    out.push(items.slice(i, i + size))
-  return out
+function utf8ByteLength(value: string): number {
+  return typeof Buffer !== 'undefined' ? Buffer.byteLength(value, 'utf8') : new TextEncoder().encode(value).byteLength
+}
+
+function estimateQueueMessageBytes(message: CloudflareQueueSendBatchMessage<unknown>): number | undefined {
+  let bodyBytes: number | undefined
+  switch (message.contentType ?? 'json') {
+    case 'bytes':
+      if (message.body instanceof ArrayBuffer)
+        bodyBytes = message.body.byteLength
+      else if (ArrayBuffer.isView(message.body))
+        bodyBytes = message.body.byteLength
+      break
+    case 'text':
+      if (typeof message.body === 'string')
+        bodyBytes = utf8ByteLength(message.body)
+      break
+    case 'json': {
+      try {
+        const serialized = JSON.stringify(message.body)
+        if (serialized !== undefined)
+          bodyBytes = utf8ByteLength(serialized)
+      }
+      catch {
+        // Let the platform report invalid JSON payloads. They cannot be safely
+        // size-estimated here, so isolate them in their own sendBatch call.
+      }
+      break
+    }
+    case 'v8':
+      // V8 structured-clone byte size is not exposed in Workers. A singleton
+      // batch still respects the 256 KB batch cap whenever the 128 KB item cap is met.
+      break
+  }
+  return bodyBytes === undefined ? undefined : bodyBytes + CF_QUEUE_MESSAGE_METADATA_BYTES
+}
+
+function chunkQueueBatchMessages<T>(
+  messages: readonly CloudflareQueueSendBatchMessage<T>[],
+): Array<Array<CloudflareQueueSendBatchMessage<T>>> {
+  const chunks: Array<Array<CloudflareQueueSendBatchMessage<T>>> = []
+  let current: Array<CloudflareQueueSendBatchMessage<T>> = []
+  let currentBytes = 0
+
+  const flush = () => {
+    if (current.length > 0)
+      chunks.push(current)
+    current = []
+    currentBytes = 0
+  }
+
+  for (const message of messages) {
+    const bytes = estimateQueueMessageBytes(message)
+    if (bytes !== undefined && bytes > CF_QUEUE_MAX_MESSAGE_BYTES) {
+      throw new RangeError(
+        `Cloudflare Queue message is approximately ${bytes} bytes; the maximum is ${CF_QUEUE_MAX_MESSAGE_BYTES} bytes including metadata`,
+      )
+    }
+
+    // Unknown structured-clone sizes get a singleton call. This prevents an
+    // otherwise valid V8 message from pushing a mixed batch over 256 KB.
+    if (bytes === undefined) {
+      flush()
+      chunks.push([message])
+      continue
+    }
+
+    if (current.length >= CF_QUEUE_MAX_BATCH_SIZE || currentBytes + bytes > CF_QUEUE_MAX_BATCH_BYTES)
+      flush()
+    current.push(message)
+    currentBytes += bytes
+  }
+  flush()
+  return chunks
 }
 
 export interface SendBackpressureOptions {
@@ -77,15 +145,22 @@ export async function sendBatchChunked<T>(
   const sendOpts: QueueSendOptions | undefined = opts && (opts.delaySeconds !== undefined || opts.contentType !== undefined)
     ? { delaySeconds: opts.delaySeconds, contentType: opts.contentType }
     : undefined
-  for (const slice of chunkBatch(messages, CF_QUEUE_MAX_BATCH_SIZE)) {
+  const batchOpts: QueueSendBatchOptions | undefined = opts?.delaySeconds === undefined
+    ? undefined
+    : { delaySeconds: opts.delaySeconds }
+  const batchMessages: Array<CloudflareQueueSendBatchMessage<T>> = messages.map(body => ({
+    body,
+    ...(opts?.contentType === undefined ? {} : { contentType: opts.contentType }),
+  }))
+  for (const slice of chunkQueueBatchMessages(batchMessages)) {
     if (typeof cfQueue.sendBatch === 'function') {
       await withSendBackpressure(
-        () => cfQueue.sendBatch!(slice.map(body => ({ body })), sendOpts),
+        () => cfQueue.sendBatch!(slice, batchOpts),
         opts,
       )
     }
     else {
-      await Promise.all(slice.map(message => withSendBackpressure(() => cfQueue.send(message, sendOpts), opts)))
+      await Promise.all(slice.map(message => withSendBackpressure(() => cfQueue.send(message.body, sendOpts), opts)))
     }
   }
 }
@@ -95,7 +170,7 @@ export async function sendBatchMessagesChunked<T>(
   messages: Array<CloudflareQueueSendBatchMessage<T>>,
   opts?: SendBackpressureOptions,
 ): Promise<void> {
-  for (const slice of chunkBatch(messages, CF_QUEUE_MAX_BATCH_SIZE)) {
+  for (const slice of chunkQueueBatchMessages(messages)) {
     if (typeof cfQueue.sendBatch === 'function') {
       await withSendBackpressure(() => cfQueue.sendBatch!(slice), opts)
     }
@@ -645,16 +720,24 @@ export async function processRegisteredQueueBatch<Env extends Record<string, unk
         const taskName = typeof body._task === 'string' ? body._task : undefined
         const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
         const dlqInput: DlqMessageInput<typeof payload.env> = { env: payload.env, batch: payload.batch, message, taskName, jobId }
-        if (handler?.persist && opts.dlqRepository) {
+        if (handler?.persist) {
+          if (!opts.dlqRepository)
+            throw new Error(`DLQ queue "${payload.batch.queue}" has persist:true but requires dlqRepository`)
           const definition = taskName ? opts.registry.getJobDefinition?.(taskName) : undefined
-          await opts.dlqRepository.recordFailure({
-            id: jobId,
-            queue: definition?.queue ?? payload.batch.queue,
-            jobType: definition?.jobType ?? taskName ?? payload.batch.queue,
-            payload: typeof message.body === 'string' ? message.body : JSON.stringify(message.body),
-            exception: `[DLQ ${payload.batch.queue}]`,
-            attempts: message.attempts,
-          }).catch(error => opts.onDispatchError?.({ env: payload.env, batch: payload.batch, message, error }))
+          try {
+            await opts.dlqRepository.recordFailure({
+              id: jobId,
+              queue: definition?.queue ?? payload.batch.queue,
+              jobType: definition?.jobType ?? taskName ?? payload.batch.queue,
+              payload: typeof message.body === 'string' ? message.body : JSON.stringify(message.body),
+              exception: `[DLQ ${payload.batch.queue}]`,
+              attempts: message.attempts,
+            })
+          }
+          catch (error) {
+            await opts.onDispatchError?.({ env: payload.env, batch: payload.batch, message, error })
+            throw error
+          }
         }
         await handler?.onMessage?.(dlqInput)
         await opts.onDlq?.(dlqInput)
@@ -788,7 +871,14 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
         ? opts.dlqBinding({ logicalQueue: input.logicalQueue, definition })
         : opts.dlqBinding ?? resolveDlqBinding(queues, input.logicalQueue)
       if (dlqBindingName) {
-        const sent = await sendQueueMessage(input.env as Record<string, unknown>, dlqBindingName, input.message.body).catch(() => false)
+        let sent: boolean
+        try {
+          sent = await sendQueueMessage(input.env as Record<string, unknown>, dlqBindingName, input.message.body)
+        }
+        catch (dlqError) {
+          await opts.onDispatchError?.({ ...input, taskName, definition, job, error: dlqError })
+          throw dlqError
+        }
         if (sent) {
           await opts.onDlq?.({ ...input, taskName, definition, job })
           markTerminal()

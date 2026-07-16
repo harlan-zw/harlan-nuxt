@@ -1,4 +1,6 @@
-import { resolve } from 'node:path'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames, parseTaskSource } from '../src/tasks'
 import { crossCheckCrons, parseWranglerConfig } from '../src/wrangler'
@@ -115,5 +117,13 @@ describe('parseWranglerConfig crons', () => {
     const tmp = resolve(__dirname, 'fixtures/wrangler.toml')
     // The shared fixture has no triggers; assert undefined rather than [].
     expect(parseWranglerConfig(tmp).crons).toBeUndefined()
+  })
+
+  it('rejects malformed JSONC with the config path and parse cause', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cf-jobs-wrangler-'))
+    const path = join(dir, 'wrangler.jsonc')
+    writeFileSync(path, '{ "queues": {')
+
+    expect(() => parseWranglerConfig(path)).toThrow(`Invalid Wrangler JSON config "${path}"`)
   })
 })

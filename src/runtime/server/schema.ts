@@ -50,6 +50,8 @@ export const cfJobs = sqliteTable('jobs', {
   durationMs: integer('duration_ms'),
 }, t => [
   index('idx_jobs_claimable').on(t.queue, t.reservedAt, t.availableAt),
+  index('idx_jobs_dispatchable').on(t.availableAt).where(sql`reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL`),
+  index('idx_jobs_stale_reserved').on(t.reservedAt).where(sql`reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
   index('idx_jobs_user').on(t.userId),
   index('idx_jobs_site').on(t.siteId),
   index('idx_jobs_partner').on(t.partnerId),
@@ -80,6 +82,7 @@ export const cfFailedJobs = sqliteTable('failed_jobs', {
   index('idx_failed_jobs_queue').on(t.queue),
   index('idx_failed_jobs_site').on(t.siteId),
   index('idx_failed_jobs_trace').on(t.traceId),
+  index('idx_failed_jobs_batch').on(t.batchId),
   index('idx_failed_jobs_failed_at').on(t.failedAt),
 ])
 

@@ -70,6 +70,8 @@ function classify(stage: CfJobsLogStage): 'warn' | 'error' {
     case 'invalid_payload':
     case 'unexpected':
     case 'failed':
+    case 'dlq-failed':
+    case 'continuation-failed':
     case 'onfinish-failed': return 'error'
     default: {
       const exhaustive: never = stage

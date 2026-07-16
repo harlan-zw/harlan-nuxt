@@ -78,10 +78,8 @@ export function inlineRegistryTemplateInNitroDev(nuxt: Nuxt, registryTemplatePat
 
 export async function buildRegistryPlan(options: ModuleOptions, rootDir: string, templateDir: string): Promise<RegistryBuildPlan> {
   const files = await resolveJobFiles(options, rootDir)
-  await assertUniqueGeneratedJobNames(files, options, rootDir)
-
   const entries = await Promise.all(files.map(async (file): Promise<RegistryBuildPlanEntry> => {
-    const meta = extractJobMeta(await readFile(file, 'utf8').catch(() => ''))
+    const meta = extractJobMeta(await readFile(file, 'utf8'))
     return {
       file,
       meta,
@@ -89,6 +87,7 @@ export async function buildRegistryPlan(options: ModuleOptions, rootDir: string,
       importPath: toImportPath(templateDir, file).replace(JOB_FILE_EXTENSION_RE, ''),
     }
   }))
+  assertUniqueGeneratedJobNames(entries)
 
   return { entries, defaultQueue: options.defaultQueue }
 }
@@ -214,17 +213,15 @@ async function resolveJobFiles(options: ModuleOptions, rootDir: string): Promise
   return [...new Set(files.flat())]
 }
 
-async function assertUniqueGeneratedJobNames(files: string[], options: ModuleOptions, rootDir: string): Promise<void> {
+function assertUniqueGeneratedJobNames(entries: RegistryBuildPlanEntry[]): void {
   const seen = new Map<string, string>()
   const duplicates: string[] = []
-  for (const file of files) {
-    const meta = extractJobMeta(await readFile(file, 'utf8').catch(() => ''))
-    const name = meta.name ?? toJobName(file, options, rootDir)
-    const previous = seen.get(name)
+  for (const entry of entries) {
+    const previous = seen.get(entry.name)
     if (previous)
-      duplicates.push(`${name} (${previous}, ${file})`)
+      duplicates.push(`${entry.name} (${previous}, ${entry.file})`)
     else
-      seen.set(name, file)
+      seen.set(entry.name, entry.file)
   }
 
   if (duplicates.length > 0)

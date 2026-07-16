@@ -128,15 +128,13 @@ function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProduce
   return { producers, consumers }
 }
 
-function parseJsoncQueues(source: string): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } {
-  const stripped = stripJsoncComments(source)
-  let parsed: { queues?: { producers?: unknown[], consumers?: unknown[] } } = {}
-  try {
-    parsed = JSON.parse(stripped)
-  }
-  catch {
-    return { producers: [], consumers: [] }
-  }
+interface WranglerJsonConfig {
+  queues?: { producers?: unknown[], consumers?: unknown[] }
+  triggers?: { crons?: unknown }
+  d1_databases?: unknown[]
+}
+
+function parseJsoncQueues(parsed: WranglerJsonConfig): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } {
   const queues = parsed.queues ?? {}
   const producers = Array.isArray(queues.producers) ? queues.producers : []
   const consumers = Array.isArray(queues.consumers) ? queues.consumers : []
@@ -181,15 +179,7 @@ function parseTomlCrons(source: string): string[] | undefined {
   return parseStringArrayLiteral(cronsMatch[1]!)
 }
 
-function parseJsoncCrons(source: string): string[] | undefined {
-  const stripped = stripJsoncComments(source)
-  let parsed: { triggers?: { crons?: unknown } } = {}
-  try {
-    parsed = JSON.parse(stripped)
-  }
-  catch {
-    return undefined
-  }
+function parseJsoncCrons(parsed: WranglerJsonConfig): string[] | undefined {
   const crons = parsed.triggers?.crons
   if (!Array.isArray(crons))
     return undefined
@@ -220,14 +210,7 @@ function parseTomlD1Databases(source: string): WranglerD1Database[] {
   return out
 }
 
-function parseJsoncD1Databases(source: string): WranglerD1Database[] {
-  let parsed: { d1_databases?: unknown[] } = {}
-  try {
-    parsed = JSON.parse(stripJsoncComments(source))
-  }
-  catch {
-    return []
-  }
+function parseJsoncD1Databases(parsed: WranglerJsonConfig): WranglerD1Database[] {
   const list = Array.isArray(parsed.d1_databases) ? parsed.d1_databases : []
   return list
     .filter((d): d is Record<string, unknown> => !!d && typeof d === 'object' && typeof (d as { binding?: unknown }).binding === 'string')
@@ -241,9 +224,21 @@ function parseJsoncD1Databases(source: string): WranglerD1Database[] {
 export function parseWranglerConfig(path: string): WranglerConfig {
   const source = readFileSync(path, 'utf8')
   const isJson = path.endsWith('.jsonc') || path.endsWith('.json')
-  const parsed = isJson ? parseJsoncQueues(source) : parseTomlQueueBlocks(source)
-  const crons = isJson ? parseJsoncCrons(source) : parseTomlCrons(source)
-  const d1Databases = isJson ? parseJsoncD1Databases(source) : parseTomlD1Databases(source)
+  let json: WranglerJsonConfig | undefined
+  if (isJson) {
+    try {
+      const parsed = JSON.parse(stripJsoncComments(source)) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new TypeError('top-level value must be an object')
+      json = parsed as WranglerJsonConfig
+    }
+    catch (cause) {
+      throw new SyntaxError(`Invalid Wrangler JSON config "${path}": ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+    }
+  }
+  const parsed = json ? parseJsoncQueues(json) : parseTomlQueueBlocks(source)
+  const crons = json ? parseJsoncCrons(json) : parseTomlCrons(source)
+  const d1Databases = json ? parseJsoncD1Databases(json) : parseTomlD1Databases(source)
   return { path, producers: parsed.producers, consumers: parsed.consumers, crons, d1Databases }
 }
 

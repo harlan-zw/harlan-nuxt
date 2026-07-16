@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -158,6 +158,24 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     await expect(generateRegistryTypesTemplate(options, root, join(root, '.nuxt/cf-jobs')))
       .rejects
       .toThrow('Duplicate nuxt-cf-jobs generated job names')
+  })
+
+  it('surfaces job source read failures instead of generating fallback metadata', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-unreadable-'))
+    const jobsDir = join(root, 'server/jobs')
+    const file = join(jobsDir, 'unreadable.ts')
+    mkdirSync(jobsDir, { recursive: true })
+    writeFileSync(file, `export default defineJob({ name: 'unreadable', queue: 'default', handle() {} })`)
+    chmodSync(file, 0o000)
+
+    try {
+      await expect(generateRegistryTemplate(options, root, join(root, '.nuxt/cf-jobs')))
+        .rejects
+        .toThrow(file)
+    }
+    finally {
+      chmodSync(file, 0o600)
+    }
   })
 })
 

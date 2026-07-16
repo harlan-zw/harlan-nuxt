@@ -112,6 +112,8 @@ export async function runDurableJobBatchMessage<
  * - `unexpected`      — a lightweight handler threw; the message is retried.
  * - `failed`          — a handler called `ctx.fail()`.
  * - `dlq`             — a durable job exhausted its retries and was dead-lettered.
+ * - `dlq-failed`      — durable DLQ bookkeeping failed; the message was retried.
+ * - `continuation-failed` — a terminal payload continuation failed to dispatch.
  * - `onfinish-failed` — a batch's `onFinish` continuation threw.
  */
 export type CfJobsLogStage
@@ -119,6 +121,8 @@ export type CfJobsLogStage
     | 'unexpected'
     | 'failed'
     | 'dlq'
+    | 'dlq-failed'
+    | 'continuation-failed'
     | 'onfinish-failed'
 
 /**
@@ -271,6 +275,24 @@ function defaultIsDlqQueue(queue: string): boolean {
   return queue.includes('-dlq')
 }
 
+function reportContinuationFailures(
+  run: RunDurableJobMessageResult,
+  onLog: ((event: CfJobsLogEvent) => void) | undefined,
+  jobId: string | undefined,
+): void {
+  if (!('continuationFailures' in run))
+    return
+  for (const failure of run.continuationFailures ?? []) {
+    onLog?.({
+      stage: 'continuation-failed',
+      jobId,
+      error: describeCause(failure.cause),
+      stack: describeCauseWithStack(failure.cause),
+      cause: failure.cause,
+    })
+  }
+}
+
 /**
  * Process one CF queue batch end-to-end — the loop both apps hand-roll:
  * - a DLQ-queue batch settles each durable member (failed) so a CF-exhausted
@@ -287,24 +309,42 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
     for (const message of opts.batch.messages) {
       const body = (message.body ?? {}) as Record<string, unknown>
       const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
-      opts.onLog?.({ stage: 'dlq', queue: opts.batch.queue, taskName: typeof body._task === 'string' ? body._task : undefined, jobId })
-      if (jobId) {
-        // Laravel's "exhausted → failed_jobs" transition. Claim FIRST: only when
-        // the claim succeeds do WE own the terminal transition, so we failJob
-        // (move out of `jobs` — no leak, no sweep re-dispatch) and settle exactly
-        // once. A claim MISS means the row is already terminal, which means the
-        // path that made it terminal (the consumer's fail/exhausted branch, or a
-        // duplicate DLQ delivery) already settled it — settling again would
-        // double-decrement `pending_jobs` and fire onFinish early.
-        const claimed = await opts.repository.claimJob(jobId).catch(() => null)
-        if (claimed) {
-          await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)').catch(() => {})
-          await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
-            .then(r => r.progress && opts.onBatchProgress ? opts.onBatchProgress(r.progress) : undefined)
-            .catch(() => {})
+      const taskName = typeof body._task === 'string' ? body._task : undefined
+      opts.onLog?.({ stage: 'dlq', queue: opts.batch.queue, taskName, jobId })
+      try {
+        if (jobId) {
+          // Laravel's "exhausted → failed_jobs" transition. Claim FIRST: only when
+          // the claim succeeds do WE own the terminal transition, so we failJob
+          // (move out of `jobs` — no leak, no sweep re-dispatch) and settle exactly
+          // once. A claim MISS means the row is already terminal, which means the
+          // path that made it terminal (the consumer's fail/exhausted branch, or a
+          // duplicate DLQ delivery) already settled it — settling again would
+          // double-decrement `pending_jobs` and fire onFinish early.
+          const claimed = await opts.repository.claimJob(jobId)
+          if (claimed) {
+            await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)')
+            const settled = await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
+            if (settled.progress && opts.onBatchProgress)
+              await opts.onBatchProgress(settled.progress)
+          }
         }
+        message.ack()
       }
-      message.ack()
+      catch (error) {
+        opts.onLog?.({
+          stage: 'dlq-failed',
+          queue: opts.batch.queue,
+          taskName,
+          jobId,
+          error: describeCause(error),
+          stack: describeCauseWithStack(error),
+          cause: error,
+        })
+        const delaySeconds = typeof opts.claimRetryDelaySeconds === 'function'
+          ? opts.claimRetryDelaySeconds({ error })
+          : opts.claimRetryDelaySeconds ?? 10
+        message.retry({ delaySeconds })
+      }
     }
     return
   }
@@ -332,7 +372,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
       })
     }
     else if (jobId) {
-      await runDurableJobBatchMessage({
+      const result = await runDurableJobBatchMessage({
         message: message as unknown as ConsumerMessage,
         lifecycle: opts.repository,
         registry: opts.registry,
@@ -350,6 +390,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
+      reportContinuationFailures(result.run, opts.onLog, jobId)
     }
     else {
       await runLightweightMessage({
@@ -456,18 +497,16 @@ function composeLifecycleHooks<Queue extends string>(
   }
 }
 
-function composeHook<T>(hooks: Array<((input: T) => void | Promise<void>) | undefined>): (input: T) => void {
-  return (input) => {
-    for (const hook of hooks) {
+function composeHook<T>(hooks: Array<((input: T) => void | Promise<void>) | undefined>): (input: T) => Promise<void> {
+  return async (input) => {
+    await Promise.all(hooks.map(async (hook) => {
       try {
-        const result = hook?.(input)
-        if (result && typeof (result as Promise<void>).then === 'function')
-          (result as Promise<void>).catch(() => {})
+        await hook?.(input)
       }
       catch {
         // Lifecycle observers must not affect job execution.
       }
-    }
+    }))
   }
 }
 
@@ -480,8 +519,7 @@ function composeBatchProgress(
   if (!user)
     return broadcast
   return async (progress) => {
-    broadcast(progress)
-    await user(progress)
+    await Promise.all([broadcast(progress), user(progress)])
   }
 }
 
@@ -576,23 +614,27 @@ export function createDurableJobsRuntime<
       publisher,
       ...batchOpts,
     }),
-    consumeMessage: message => runDurableJobBatchMessage({
-      message,
-      lifecycle: repository,
-      registry: opts.registry,
-      store,
-      toDispatchableJob: repository.toDispatchableJob,
-      createJobContext: opts.createJobContext,
-      retryDelaySeconds: opts.retryDelaySeconds,
-      claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
-      maxAttemptsOf: stored => stored.max_attempts,
-      completeResult: opts.completeResult,
-      createJobScope: opts.createJobScope,
-      isPermanentFailure: opts.isPermanentFailure,
-      dispatchContinuations: opts.dispatchContinuations,
-      dispatchOnFinish,
-      onBatchProgress,
-    }),
+    consumeMessage: async (message) => {
+      const result = await runDurableJobBatchMessage({
+        message,
+        lifecycle: repository,
+        registry: opts.registry,
+        store,
+        toDispatchableJob: repository.toDispatchableJob,
+        createJobContext: opts.createJobContext,
+        retryDelaySeconds: opts.retryDelaySeconds,
+        claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
+        maxAttemptsOf: stored => stored.max_attempts,
+        completeResult: opts.completeResult,
+        createJobScope: opts.createJobScope,
+        isPermanentFailure: opts.isPermanentFailure,
+        dispatchContinuations: opts.dispatchContinuations,
+        dispatchOnFinish,
+        onBatchProgress,
+      })
+      reportContinuationFailures(result.run, opts.onLog, message.body.jobId)
+      return result
+    },
     consumeBatch: batch => consumeQueueBatch({
       batch,
       repository,

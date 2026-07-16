@@ -40,9 +40,9 @@ interface CfJobsBroadcastNitroApp {
 }
 
 const hooks: CfJobsWebSocketHooks = {
-  open(peer) {
+  async open(peer) {
     sendSystem(peer, 'ready', { id: peer.id })
-    void callHook('cf-jobs:broadcast:open', { id: peer.id })
+    await callHook('cf-jobs:broadcast:open', { id: peer.id })
   },
   async message(peer, message) {
     const command = parseCfJobsBroadcastCommand(message.text())
@@ -79,10 +79,10 @@ const hooks: CfJobsWebSocketHooks = {
       rejected,
     })
   },
-  close(peer) {
+  async close(peer) {
     for (const topic of peer.topics)
       peer.unsubscribe(topic)
-    void callHook('cf-jobs:broadcast:close', { id: peer.id })
+    await callHook('cf-jobs:broadcast:close', { id: peer.id })
   },
   error(peer) {
     peer.close()

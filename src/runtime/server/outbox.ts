@@ -802,6 +802,12 @@ export interface DurableJobScope<StoredJob> {
   onSettled?: (settlement: DurableJobSettlement<StoredJob>) => void | Promise<void>
 }
 
+/** A terminal continuation that could not be dispatched after the job settled. */
+export interface DurableJobContinuationFailure {
+  stage: DurableJobContinuationStage
+  cause: unknown
+}
+
 /**
  * Outcome of {@link runDurableJobMessage}, discriminated on `status` so each
  * variant carries exactly the data it can produce:
@@ -810,6 +816,8 @@ export interface DurableJobScope<StoredJob> {
  * - `dispatch-failed`: the handler could not run; `error` is the typed `JobError`.
  * - `failed` / `released`: the handler ran and called `ctx.fail()` / `ctx.release()`.
  * - `completed`: the handler ran to completion.
+ * - terminal results expose `continuationFailures` when a `then`/`catch`/`finally`
+ *   continuation could not be dispatched; later stages are still attempted.
  * - `errored`: the handler threw an unexpected defect; the message is retried and
  *   `error` carries the defect as a `handler-threw` `JobError` (`error.cause` is the
  *   original throw). Distinct from `released` (a deliberate `ctx.release()`).
@@ -823,12 +831,12 @@ export interface DurableJobScope<StoredJob> {
 export type RunDurableJobMessageResult
   = | { status: 'invalid-message' }
     | { status: DurableJobClaimMiss }
-    | { status: 'dispatch-failed', dispatch: DispatchResult, error?: JobError }
-    | { status: 'failed', dispatch: DispatchResult }
+    | { status: 'dispatch-failed', dispatch: DispatchResult, error?: JobError, continuationFailures?: DurableJobContinuationFailure[] }
+    | { status: 'failed', dispatch: DispatchResult, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'released', dispatch: DispatchResult }
-    | { status: 'completed', dispatch: DispatchResult }
+    | { status: 'completed', dispatch: DispatchResult, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'errored', error: JobError }
-    | { status: 'exhausted', error: JobError }
+    | { status: 'exhausted', error: JobError, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'claim-error', error: JobError }
 
 export async function runDurableJobMessage<
@@ -894,15 +902,26 @@ export async function runDurableJobMessage<
   const settle = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
     await scope?.onSettled?.({ storedJob, status, durationMs: Date.now() - startedMs, permanent, error })
   }
-  const continuations = async (...stages: DurableJobContinuationStage[]): Promise<void> => {
-    for (const stage of stages)
-      await opts.dispatchContinuations?.({ storedJob, stage })
-  }
   const observeSettlement = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
-    await settle(status, permanent, error).catch(() => {})
+    try {
+      await settle(status, permanent, error)
+    }
+    catch {
+      // The scope callback is an observer of an already-persisted transition.
+      // It must never turn a completed/finalized job back into a queue retry.
+    }
   }
-  const dispatchTerminalContinuations = async (...stages: DurableJobContinuationStage[]): Promise<void> => {
-    await continuations(...stages).catch(() => {})
+  const dispatchTerminalContinuations = async (...stages: DurableJobContinuationStage[]): Promise<DurableJobContinuationFailure[]> => {
+    const failures: DurableJobContinuationFailure[] = []
+    for (const stage of stages) {
+      try {
+        await opts.dispatchContinuations?.({ storedJob, stage })
+      }
+      catch (cause) {
+        failures.push({ stage, cause })
+      }
+    }
+    return failures
   }
   const obsoleteDelivery = (error: unknown): RunDurableJobMessageResult | null => {
     if (!isDurableJobOwnershipError(error))
@@ -932,9 +951,9 @@ export async function runDurableJobMessage<
         }
       }
       await observeSettlement('dispatch-failed', true, dispatch.error)
-      await dispatchTerminalContinuations('catch', 'finally')
+      const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
       opts.message.ack()
-      return { status: 'dispatch-failed', dispatch, error: dispatch.error }
+      return { status: 'dispatch-failed', dispatch, error: dispatch.error, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
     }
 
     if (dispatch.control?.handled) {
@@ -951,9 +970,9 @@ export async function runDurableJobMessage<
           throw error
         }
         await observeSettlement('failed', true, dispatch.control.error)
-        await dispatchTerminalContinuations('catch', 'finally')
+        const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
         opts.message.ack()
-        return { status: 'failed', dispatch }
+        return { status: 'failed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
       }
       const delaySeconds = dispatch.control.delaySeconds ?? 0
       try {
@@ -986,9 +1005,9 @@ export async function runDurableJobMessage<
       throw error
     }
     await observeSettlement('completed', false)
-    await dispatchTerminalContinuations('then', 'finally')
+    const continuationFailures = await dispatchTerminalContinuations('then', 'finally')
     opts.message.ack()
-    return { status: 'completed', dispatch }
+    return { status: 'completed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
   }
   catch (error) {
     // Terminal-failure decision: the caller's predicate (e.g. "never fail on
@@ -1014,9 +1033,9 @@ export async function runDurableJobMessage<
         throw failError
       }
       await observeSettlement('exhausted', true, error)
-      await dispatchTerminalContinuations('catch', 'finally')
+      const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
       opts.message.ack()
-      return { status: 'exhausted', error: jobErrors.handlerThrew(error) }
+      return { status: 'exhausted', error: jobErrors.handlerThrew(error), ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
     }
     const delaySeconds = typeof opts.retryDelaySeconds === 'function'
       ? opts.retryDelaySeconds({ error, job: storedJob })

@@ -79,20 +79,20 @@ export interface D1DurableJobRepositoryOptions<Queue extends string = string> {
    * double-claimed. Default unset = only unreserved rows are claimable.
    */
   reclaimAfterSeconds?: number
-  /** Fire-and-forget hook invoked after a successful claim. Errors are swallowed. */
-  onJobClaimed?: (input: { job: D1DurableJobRecord<Queue> }) => void
-  /** Fire-and-forget hook invoked after `completeJob` writes succeed. Errors are swallowed. */
-  onJobCompleted?: (input: { job: D1DurableJobRecord<Queue>, durationMs: number | null, result?: unknown }) => void
+  /** Awaited after a successful claim. Errors are swallowed so observers cannot break the lifecycle. */
+  onJobClaimed?: (input: { job: D1DurableJobRecord<Queue> }) => void | Promise<void>
+  /** Awaited after `completeJob` writes succeed. Errors are swallowed. */
+  onJobCompleted?: (input: { job: D1DurableJobRecord<Queue>, durationMs: number | null, result?: unknown }) => void | Promise<void>
   /**
-   * Fire-and-forget hook invoked after `failJob` writes succeed. Errors are swallowed.
+   * Awaited after `failJob` writes succeed. Errors are swallowed.
    *
    * `error` is the HEADLINE (`"TypeError: <message>"`) — safe for issue titles,
    * realtime payloads and Analytics Engine blobs. `cause` is the ORIGINAL thrown
    * value: report it as-is (`captureException(cause)`) to keep the native stack.
    */
-  onJobFailed?: (input: { job: D1DurableJobRecord<Queue>, error: string, cause?: unknown }) => void
-  /** Fire-and-forget hook invoked after `releaseJob` writes succeed. Errors are swallowed. */
-  onJobReleased?: (input: { job: D1DurableJobRecord<Queue>, opts: ReleaseDurableJobOptions | undefined }) => void
+  onJobFailed?: (input: { job: D1DurableJobRecord<Queue>, error: string, cause?: unknown }) => void | Promise<void>
+  /** Awaited after `releaseJob` writes succeed. Errors are swallowed. */
+  onJobReleased?: (input: { job: D1DurableJobRecord<Queue>, opts: ReleaseDurableJobOptions | undefined }) => void | Promise<void>
 }
 
 export interface D1InsertJobsChunkResult {
@@ -139,6 +139,11 @@ export const d1DurableJobMigrationSql = [
   'CREATE INDEX IF NOT EXISTS idx_job_batches_parent ON job_batches (parent_batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_finished_at ON job_batches (finished_at)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON jobs (queue, reserved_at, available_at)',
+  // Recovery scans are global (not queue-scoped), so the queue-first index above
+  // cannot serve them. Keep these partial indexes bounded to live rows and align
+  // their leading columns with the range + ORDER BY used by each recovery query.
+  'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_stale_reserved ON jobs (reserved_at) WHERE reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs (user_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_site ON jobs (site_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_partner ON jobs (partner_id)',
@@ -152,7 +157,11 @@ export const d1DurableJobMigrationSql = [
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_queue ON failed_jobs (queue)',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_site ON failed_jobs (site_id)',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_trace ON failed_jobs (trace_id)',
+  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_batch ON failed_jobs (batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_failed_at ON failed_jobs (failed_at)',
+  // Refresh planner statistics after creating indexes. Cloudflare recommends
+  // PRAGMA optimize after schema/index changes; migrate() is a maintenance path.
+  'PRAGMA optimize',
 ]
 
 export function createD1DurableJobRepository<Queue extends string = string>(
@@ -192,8 +201,9 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 
   return {
     async migrate() {
-      for (const statement of d1DurableJobMigrationSql)
-        await db.exec(statement)
+      // D1 exec() is intended for static maintenance work and accepts multiple
+      // statements. One call avoids a network round trip per table/index.
+      await db.exec(d1DurableJobMigrationSql.join(';\n'))
     },
 
     async insertJob(record) {
@@ -261,7 +271,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         RETURNING *
       `).bind(now, id, reclaimBefore, now).first<D1DurableJobRecord<Queue>>()
       if (job)
-        fireHook(() => opts.onJobClaimed?.({ job }))
+        await runLifecycleHook(() => opts.onJobClaimed?.({ job }))
       return job
     },
 
@@ -308,11 +318,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job.attempts,
       ).run()
       assertOwnedMutation(resultUpdate, job.id)
-      fireHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
+      await runLifecycleHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
     },
 
     async failJob(job, error, failOpts) {
-      const insert = await db.prepare(`
+      const insertStatement = db.prepare(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
           exception, attempts, max_attempts, failed_at
@@ -331,17 +341,20 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job.id,
         job.reserved_at,
         job.attempts,
-      ).run()
-      assertOwnedMutation(insert, job.id)
-      const deleted = await db.prepare(`
+      )
+      const deleteStatement = db.prepare(`
         DELETE FROM ${jobsTable}
         WHERE id = ?
           AND reserved_at = ?
           AND attempts = ?
           AND completed_at IS NULL
           AND failed_at IS NULL
-      `).bind(job.id, job.reserved_at, job.attempts).run()
-      assertOwnedMutation(deleted, job.id)
+      `).bind(job.id, job.reserved_at, job.attempts)
+      const [insert, deleted] = typeof db.batch === 'function'
+        ? await db.batch([insertStatement, deleteStatement])
+        : [await insertStatement.run(), await deleteStatement.run()]
+      assertOwnedMutation(insert!, job.id)
+      assertOwnedMutation(deleted!, job.id)
       // `exception` persists the full rendering (stack + `cause` chain, see
       // `describeCauseWithStack`) because that row is the only record of the defect.
       // The hook is telemetry — sinks put this string in a Sentry issue title, a
@@ -349,7 +362,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // HEADLINE only (`"TypeError: <message>"`, always the stack's first line).
       // A caller passing a plain single-line message is unaffected. `cause` carries the
       // original throw so an error tracker reports it directly, stack and all.
-      fireHook(() => opts.onJobFailed?.({ job, error: headlineOf(error), cause: failOpts?.cause }))
+      await runLifecycleHook(() => opts.onJobFailed?.({ job, error: headlineOf(error), cause: failOpts?.cause }))
     },
 
     async releaseJob(job, releaseOpts) {
@@ -363,7 +376,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND failed_at IS NULL
       `).bind(resolveAvailableAt(releaseOpts), releaseOpts?.error ?? null, job.id, job.reserved_at, job.attempts).run()
       assertOwnedMutation(result, job.id)
-      fireHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
+      await runLifecycleHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
     },
 
     async recordFailure(input) {
@@ -453,10 +466,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     // throw). Honour the Laravel cap here: move stale rows that have already hit
     // `attempts >= max_attempts` to `failed_jobs` instead. `INSERT OR REPLACE`
     // keeps it idempotent, and the DELETE only removes rows that made it into
-    // `failed_jobs`, so a mid-tick failure can't lose a job (it just retries the
-    // move next tick). `max_attempts IS NOT NULL` leaves uncapped jobs untouched.
+    // `failed_jobs`. Native D1 uses one transactional batch for the move; small
+    // test adapters without batch support retain the idempotent sequential
+    // fallback. `max_attempts IS NOT NULL` leaves uncapped jobs untouched.
     async failStaleReservedJobs(query) {
-      await db.prepare(`
+      const insertStatement = db.prepare(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
           exception, attempts, max_attempts, failed_at
@@ -477,9 +491,9 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         query.error ?? 'stale-reservation: exhausted retries',
         query.staleBefore,
         query.limit ?? 100,
-      ).run()
+      )
 
-      const deleted = await db.prepare(`
+      const deleteStatement = db.prepare(`
         DELETE FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
           AND reserved_at <= ?
@@ -488,8 +502,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND max_attempts IS NOT NULL
           AND attempts >= max_attempts
           AND id IN (SELECT id FROM ${failedJobsTable})
-      `).bind(query.staleBefore).run()
-      return deleted.meta?.changes ?? 0
+      `).bind(query.staleBefore)
+      const [, deleted] = typeof db.batch === 'function'
+        ? await db.batch([insertStatement, deleteStatement])
+        : [await insertStatement.run(), await deleteStatement.run()]
+      return deleted!.meta?.changes ?? 0
     },
 
     toDispatchableJob(job) {
@@ -627,14 +644,13 @@ function readResultStat(result: unknown): (key: 'durationMs' | 'rowsFetched' | '
   }
 }
 
-function fireHook(fn: () => void | Promise<void>): void {
+async function runLifecycleHook(fn: () => void | Promise<void>): Promise<void> {
   try {
-    const result = fn()
-    if (result && typeof (result as Promise<unknown>).then === 'function')
-      (result as Promise<unknown>).catch(() => {})
+    await fn()
   }
   catch {
-    // hooks are fire-and-forget
+    // Observers are awaited so Workers do not terminate their promises early,
+    // but they never affect the already-persisted job lifecycle transition.
   }
 }
 
