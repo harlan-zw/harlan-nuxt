@@ -277,7 +277,7 @@ Keep runtime construction in one server utility so the queue consumer and produc
 // server/utils/cf-jobs-runtime.ts
 import { createDurableRuntime } from '#cf-jobs/app'
 
-export interface JobsEnv {
+export interface JobsEnv extends Record<string, unknown> {
   DB: D1Database
   QUEUE_DEFAULT: Queue
   QUEUE_ANALYTICS: Queue
