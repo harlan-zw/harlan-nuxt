@@ -33,9 +33,6 @@ catalogs:
     pathe:
       specifier: ^2.0.3
       version: 2.0.3
-    unbuild:
-      specifier: ^3.6.1
-      version: 3.6.1
     zod:
       specifier: 4.4.3
       version: 4.4.3
@@ -76,9 +73,6 @@ catalogs:
     '@nuxt/module-builder':
       specifier: ^1.0.2
       version: 1.0.2
-    '@nuxt/schema':
-      specifier: ^4.5.0
-      version: 4.5.0
     nuxt:
       specifier: ^4.5.0
       version: 4.5.0
@@ -101,9 +95,6 @@ importers:
       '@nuxt/kit':
         specifier: catalog:nuxt
         version: 4.5.0(magic-string@1.0.0)(magicast@0.5.3)(oxc-parser@0.140.0)(rolldown@1.2.0)(unplugin@3.3.0(esbuild@0.28.1)(rolldown@1.2.0)(rollup@4.62.2)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))
-      '@nuxt/schema':
-        specifier: catalog:nuxt
-        version: 4.5.0
       '@vueuse/core':
         specifier: 'catalog:'
         version: 14.3.0(vue@3.5.40(typescript@6.0.3))
@@ -122,9 +113,6 @@ importers:
       pathe:
         specifier: 'catalog:'
         version: 2.0.3
-      zod:
-        specifier: 'catalog:'
-        version: 4.4.3
     devDependencies:
       '@antfu/eslint-config':
         specifier: catalog:dev-lint
@@ -162,9 +150,6 @@ importers:
       typescript:
         specifier: catalog:dev-build
         version: 6.0.3
-      unbuild:
-        specifier: 'catalog:'
-        version: 3.6.1(typescript@6.0.3)(vue-sfc-transformer@0.1.17(@vue/compiler-core@3.5.40)(esbuild@0.28.1)(vue@3.5.40(typescript@6.0.3)))(vue-tsc@3.3.7(typescript@6.0.3))(vue@3.5.40(typescript@6.0.3))
       vitest:
         specifier: catalog:dev-test
         version: 4.1.10(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(happy-dom@20.11.0)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
@@ -177,6 +162,9 @@ importers:
       vue-tsc:
         specifier: catalog:dev-build
         version: 3.3.7(typescript@6.0.3)
+      zod:
+        specifier: 'catalog:'
+        version: 4.4.3
 
   playground: {}
 

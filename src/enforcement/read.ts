@@ -54,7 +54,7 @@ export async function readSourceFilesFromDisk(rootDir: string, options: Resolved
   }))
 }
 
-export function createIgnoreMatcher(patterns: string[]): (path: string) => boolean {
+function createIgnoreMatcher(patterns: string[]): (path: string) => boolean {
   const matchers = patterns.map((pattern) => {
     const normalized = normalize(pattern).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')
     const hasDirectory = normalized.includes('/')

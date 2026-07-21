@@ -198,7 +198,7 @@ export default defineNitroPlugin((nitroApp) => {
   // global/per-host threshold. Returns null for `false`/0 so callers can skip
   // capture entirely.
   function effectiveLargePayloadThreshold(request: unknown, opts: Record<string, unknown> | undefined): number | null {
-    const override = readFetchLargePayloadThreshold(opts?.largePayloadThreshold)
+    const override = readFetchThreshold(opts?.largePayloadThreshold)
     const resolved = override ?? resolveLargePayloadThreshold(options.largePayloadThreshold, requestHost(request))
     return typeof resolved === 'number' && resolved > 0 ? resolved : null
   }
@@ -259,7 +259,7 @@ export default defineNitroPlugin((nitroApp) => {
         logger.warn(formatFetchTimeoutTelemetryEvent(timeoutEvent))
     }
 
-    const slowThreshold = readFetchSlowThreshold(opts?.slowFetchThreshold)
+    const slowThreshold = readFetchThreshold(opts?.slowFetchThreshold)
       ?? resolveSlowFetchThreshold(options.slowFetchThreshold, requestHost(request))
     if (ok && typeof slowThreshold === 'number' && slowThreshold > 0 && durationMs >= slowThreshold) {
       const slowEvent: SlowFetchTelemetryEvent = {
@@ -686,22 +686,9 @@ function readFetchTimeout(value: unknown): number | false | undefined {
   return Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
 }
 
-// Per-call slow-fetch threshold override (ms): `$fetch(url, { slowFetchThreshold })`.
-// `false`/`0` mutes detection for that one call; `undefined` defers to the
-// configured global/per-host threshold.
-function readFetchSlowThreshold(value: unknown): number | false | undefined {
-  if (value == null)
-    return undefined
-  if (value === false || value === 'false' || value === 0 || value === '0')
-    return false
-  const threshold = Number(value)
-  return Number.isFinite(threshold) && threshold > 0 ? Math.floor(threshold) : undefined
-}
-
-// Per-call large-payload threshold override (bytes): `$fetch(url, {
-// largePayloadThreshold })`. `false`/`0` mutes detection for that one call;
-// `undefined` defers to the configured global/per-host threshold.
-function readFetchLargePayloadThreshold(value: unknown): number | false | undefined {
+// Per-call telemetry threshold override. `false`/`0` mutes detection for one
+// call; `undefined` defers to the configured global/per-host threshold.
+function readFetchThreshold(value: unknown): number | false | undefined {
   if (value == null)
     return undefined
   if (value === false || value === 'false' || value === 0 || value === '0')

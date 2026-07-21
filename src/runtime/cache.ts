@@ -99,11 +99,3 @@ function scheduleQueryEviction(cache: QueryCache, key: string, remainingMs: numb
   }, delay)
   cache.gcTimers.set(key, timer)
 }
-
-/** Test-only: clears every map between cases. */
-export function resetQueryCache(cache: QueryCache): void {
-  cache.lastFetched.clear()
-  cache.refCounts.clear()
-  for (const t of cache.gcTimers.values()) clearTimeout(t)
-  cache.gcTimers.clear()
-}

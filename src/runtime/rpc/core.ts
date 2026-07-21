@@ -459,7 +459,7 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
   return { execute, executeSafe, query, querySafe }
 }
 
-export function formatNuxtRpcValidationIssues(error: ZodError): NuxtRpcValidationIssue[] {
+function formatNuxtRpcValidationIssues(error: ZodError): NuxtRpcValidationIssue[] {
   return error.issues.map(formatNuxtRpcValidationIssue)
 }
 

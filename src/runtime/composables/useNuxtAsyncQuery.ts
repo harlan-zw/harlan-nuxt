@@ -1,14 +1,13 @@
 import type { AsyncDataOptions, NuxtApp } from 'nuxt/app'
 import type { MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
-import type { QueryTelemetryFinishEvent, QueryTelemetryStartEvent } from '../telemetry'
 import type { NuxtQuery } from './useNuxtQuery'
 import { computed, toValue } from 'vue'
-import { useAsyncData, useNuxtApp, useRuntimeConfig } from '#app'
+import { useAsyncData } from '#app'
 import { isQueryStale } from '../cache'
 import { readNuxtData } from '../nuxt-data'
 import { applyQueryLifecycle } from '../query-lifecycle'
-import { callTelemetryHook, NUXT_USE_QUERY_TELEMETRY_HOOKS } from '../telemetry'
+import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
 // Handler-based sibling of `useNuxtQuery`. Where `useNuxtQuery` is bound to a
@@ -61,51 +60,29 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
   } = opts
 
   const cache = useQueryCache()
-  const telemetryEnabled = isQueryTelemetryEnabled()
-  const telemetryHooks = telemetryEnabled ? useNuxtApp().hooks : undefined
+  const telemetry = useQueryTelemetry()
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
 
-  const wrappedHandler = telemetryEnabled
+  const wrappedHandler = telemetry._tag === 'enabled'
     ? async (app: NuxtApp, context: NuxtAsyncQueryHandlerContext) => {
-      const startedAt = Date.now()
       const request = key.value
-      const startEvent: QueryTelemetryStartEvent = {
-        client: import.meta.client,
+      const state = telemetry.start({
         key: request,
         request,
-        server: import.meta.server,
-        startedAt,
-      }
-      callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, startEvent)
+      })
       return handler(app, context).then(
         (result) => {
-          emitFinish('success', startedAt, request)
+          telemetry.finish({ _tag: 'started', state, status: 'success' })
           return result
         },
         (error) => {
-          emitFinish('error', startedAt, request, error)
+          telemetry.finish({ _tag: 'started', error, state, status: 'error' })
           throw error
         },
       )
     }
     : handler
-
-  function emitFinish(status: 'error' | 'success', startedAt: number, request: string, error?: unknown): void {
-    const endedAt = Date.now()
-    const event: QueryTelemetryFinishEvent = {
-      client: import.meta.client,
-      durationMs: Math.max(0, endedAt - startedAt),
-      endedAt,
-      error,
-      key: request,
-      request,
-      server: import.meta.server,
-      startedAt,
-      status,
-    }
-    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
-  }
 
   const query = useAsyncData<ResT, ErrorT, DataT>(
     () => key.value,
@@ -140,16 +117,4 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
     refetchOnWindowFocus,
     staleTime,
   }) as unknown as NuxtQuery<DataT, ErrorT | undefined>
-}
-
-function isQueryTelemetryEnabled(): boolean {
-  try {
-    const config = useRuntimeConfig() as {
-      public?: { nuxtUseQuery?: { telemetry?: { enabled?: unknown } } }
-    }
-    return config.public?.nuxtUseQuery?.telemetry?.enabled === true
-  }
-  catch {
-    return false
-  }
 }

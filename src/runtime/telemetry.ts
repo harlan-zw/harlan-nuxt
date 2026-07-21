@@ -580,25 +580,7 @@ function thresholdOption(value: unknown, fallback: number | false): number | fal
  * detection outright.
  */
 export function normalizeSlowFetchThreshold(value: unknown, fallback: SlowFetchThreshold): SlowFetchThreshold {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const map = value as Partial<SlowFetchThresholdMap>
-    const fallbackDefault = typeof fallback === 'object' ? fallback.default : fallback
-    const hosts: Record<string, number | false> = {}
-    if (map.hosts && typeof map.hosts === 'object') {
-      for (const [host, threshold] of Object.entries(map.hosts)) {
-        const normalized = slowThresholdValue(threshold)
-        if (normalized != null)
-          hosts[normalizeHostKey(host)] = normalized
-      }
-    }
-    const normalizedDefault = slowThresholdValue(map.default)
-    return {
-      default: normalizedDefault ?? fallbackDefault,
-      hosts,
-    }
-  }
-  const normalized = slowThresholdValue(value)
-  return normalized ?? fallback
+  return normalizeHostThreshold(value, fallback)
 }
 
 /**
@@ -607,17 +589,7 @@ export function normalizeSlowFetchThreshold(value: unknown, fallback: SlowFetchT
  * fetches, which pass `undefined`) fall through to the map default.
  */
 export function resolveSlowFetchThreshold(threshold: SlowFetchThreshold, host: string | undefined): number | false {
-  if (threshold === false)
-    return false
-  if (typeof threshold === 'number')
-    return threshold
-  if (host) {
-    const key = normalizeHostKey(host)
-    const hostThreshold = threshold.hosts[key]
-    if (hostThreshold !== undefined)
-      return hostThreshold
-  }
-  return threshold.default
+  return resolveHostThreshold(threshold, host)
 }
 
 /**
@@ -628,25 +600,7 @@ export function resolveSlowFetchThreshold(threshold: SlowFetchThreshold, host: s
  * semantics stay distinct at the type level.
  */
 export function normalizeLargePayloadThreshold(value: unknown, fallback: LargePayloadThreshold): LargePayloadThreshold {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const map = value as Partial<LargePayloadThresholdMap>
-    const fallbackDefault = typeof fallback === 'object' ? fallback.default : fallback
-    const hosts: Record<string, number | false> = {}
-    if (map.hosts && typeof map.hosts === 'object') {
-      for (const [host, threshold] of Object.entries(map.hosts)) {
-        const normalized = slowThresholdValue(threshold)
-        if (normalized != null)
-          hosts[normalizeHostKey(host)] = normalized
-      }
-    }
-    const normalizedDefault = slowThresholdValue(map.default)
-    return {
-      default: normalizedDefault ?? fallbackDefault,
-      hosts,
-    }
-  }
-  const normalized = slowThresholdValue(value)
-  return normalized ?? fallback
+  return normalizeHostThreshold(value, fallback)
 }
 
 /**
@@ -655,6 +609,39 @@ export function normalizeLargePayloadThreshold(value: unknown, fallback: LargePa
  * fetches, which pass `undefined`) fall through to the map default.
  */
 export function resolveLargePayloadThreshold(threshold: LargePayloadThreshold, host: string | undefined): number | false {
+  return resolveHostThreshold(threshold, host)
+}
+
+interface HostThresholdMap {
+  default: number | false
+  hosts: Record<string, number | false>
+}
+
+type HostThreshold = number | false | HostThresholdMap
+
+function normalizeHostThreshold(value: unknown, fallback: HostThreshold): HostThreshold {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const map = value as Partial<HostThresholdMap>
+    const fallbackDefault = typeof fallback === 'object' ? fallback.default : fallback
+    const hosts: Record<string, number | false> = {}
+    if (map.hosts && typeof map.hosts === 'object') {
+      for (const [host, threshold] of Object.entries(map.hosts)) {
+        const normalized = thresholdValue(threshold)
+        if (normalized != null)
+          hosts[normalizeHostKey(host)] = normalized
+      }
+    }
+    const normalizedDefault = thresholdValue(map.default)
+    return {
+      default: normalizedDefault ?? fallbackDefault,
+      hosts,
+    }
+  }
+  const normalized = thresholdValue(value)
+  return normalized ?? fallback
+}
+
+function resolveHostThreshold(threshold: HostThreshold, host: string | undefined): number | false {
   if (threshold === false)
     return false
   if (typeof threshold === 'number')
@@ -668,7 +655,7 @@ export function resolveLargePayloadThreshold(threshold: LargePayloadThreshold, h
   return threshold.default
 }
 
-function slowThresholdValue(value: unknown): number | false | null {
+function thresholdValue(value: unknown): number | false | null {
   if (value === false || value === 'false' || value === 0 || value === '0')
     return false
   const number = Number(value)

@@ -1,5 +1,5 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
-import type { ModuleTelemetryOptions } from './module/telemetry'
+import type { ModuleRuntimeConfig, ModuleTelemetryOptions } from './module/telemetry'
 import { addImports, addPlugin, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
 import { setupFetchTelemetryModule } from './module/telemetry'
 
@@ -90,7 +90,7 @@ export {}
 
     setupFetchTelemetryModule(
       options.telemetry,
-      nuxt.options.runtimeConfig as Record<string, any>,
+      nuxt.options.runtimeConfig as ModuleRuntimeConfig,
       resolver.resolve('./runtime/server/plugins/fetch-telemetry'),
     )
 

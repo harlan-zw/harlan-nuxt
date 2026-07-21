@@ -4,9 +4,20 @@ import { DEFAULT_FETCH_TELEMETRY_OPTIONS } from '../runtime/telemetry'
 
 export type ModuleTelemetryOptions = boolean | Partial<FetchTelemetryRuntimeOptions>
 
+export interface ModuleRuntimeConfig {
+  nuxtUseQuery?: {
+    telemetry?: Partial<FetchTelemetryRuntimeOptions>
+  }
+  public?: {
+    nuxtUseQuery?: {
+      telemetry?: Pick<FetchTelemetryRuntimeOptions, 'enabled'>
+    }
+  }
+}
+
 export function setupFetchTelemetryModule(
   input: ModuleTelemetryOptions | undefined,
-  runtimeConfig: Record<string, any>,
+  runtimeConfig: ModuleRuntimeConfig,
   serverPlugin: string,
 ): void {
   const telemetry = resolveModuleTelemetryOptions(input)
@@ -18,7 +29,7 @@ export function setupFetchTelemetryModule(
   addServerPlugin(serverPlugin)
 }
 
-export function resolveModuleTelemetryOptions(input: ModuleTelemetryOptions | undefined): FetchTelemetryRuntimeOptions {
+function resolveModuleTelemetryOptions(input: ModuleTelemetryOptions | undefined): FetchTelemetryRuntimeOptions {
   if (input === false || input == null) {
     return {
       ...DEFAULT_FETCH_TELEMETRY_OPTIONS,
@@ -34,7 +45,7 @@ export function resolveModuleTelemetryOptions(input: ModuleTelemetryOptions | un
   }
 }
 
-function setRuntimeTelemetryConfig(runtimeConfig: Record<string, any>, telemetry: FetchTelemetryRuntimeOptions): void {
+function setRuntimeTelemetryConfig(runtimeConfig: ModuleRuntimeConfig, telemetry: FetchTelemetryRuntimeOptions): void {
   runtimeConfig.nuxtUseQuery ??= {}
   runtimeConfig.nuxtUseQuery.telemetry = {
     ...runtimeConfig.nuxtUseQuery.telemetry,
@@ -42,7 +53,7 @@ function setRuntimeTelemetryConfig(runtimeConfig: Record<string, any>, telemetry
   }
 }
 
-function setPublicRuntimeTelemetryConfig(runtimeConfig: Record<string, any>, telemetry: FetchTelemetryRuntimeOptions): void {
+function setPublicRuntimeTelemetryConfig(runtimeConfig: ModuleRuntimeConfig, telemetry: FetchTelemetryRuntimeOptions): void {
   runtimeConfig.public ??= {}
   runtimeConfig.public.nuxtUseQuery ??= {}
   runtimeConfig.public.nuxtUseQuery.telemetry = {

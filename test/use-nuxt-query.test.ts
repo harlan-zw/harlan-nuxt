@@ -21,7 +21,11 @@ vi.mock('#app', () => ({
     return fetchState
   },
   useNuxtApp: () => ({ hooks: { callHook } }),
-  useRuntimeConfig: () => runtimeConfig,
+  useRuntimeConfig: () => {
+    if (runtimeConfig instanceof Error)
+      throw runtimeConfig
+    return runtimeConfig
+  },
   clearNuxtData: vi.fn(),
 }))
 
@@ -110,6 +114,15 @@ describe('useNuxtQuery keepPreviousData', () => {
     expect(query.isPlaceholderData.value).toBe(false)
     expect(query.isPending.value).toBe(false)
     expect(query.isFetching.value).toBe(true)
+  })
+})
+
+describe('useNuxtQuery runtime config', () => {
+  it('surfaces runtime config failures', () => {
+    const error = new Error('runtime config unavailable')
+    runtimeConfig = error
+
+    expect(() => useNuxtQuery('/api/x', { key: 'q' })).toThrow(error)
   })
 })
 

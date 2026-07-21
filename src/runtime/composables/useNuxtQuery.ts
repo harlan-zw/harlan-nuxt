@@ -5,13 +5,13 @@ import type {
 } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
-import type { QueryTelemetryFinishEvent, QueryTelemetryStartEvent } from '../telemetry'
+import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, toValue } from 'vue'
-import { useFetch, useNuxtApp, useRuntimeConfig } from '#app'
+import { useFetch } from '#app'
 import { isQueryStale } from '../cache'
 import { readNuxtData } from '../nuxt-data'
 import { applyQueryLifecycle } from '../query-lifecycle'
-import { callTelemetryHook, NUXT_USE_QUERY_TELEMETRY_HOOKS } from '../telemetry'
+import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
 export type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
@@ -62,23 +62,6 @@ export type NuxtQuery<DataT, ErrorT> = AsyncData<DataT, ErrorT> & {
 
 const QUERY_TELEMETRY_STATE = Symbol('nuxt-use-query-state')
 
-interface QueryTelemetryRuntimeConfig {
-  public?: {
-    nuxtUseQuery?: {
-      telemetry?: {
-        enabled?: unknown
-      }
-    }
-  }
-}
-
-interface QueryTelemetryState {
-  finished: boolean
-  key: string
-  request: string
-  startedAt: number
-}
-
 export function useNuxtQuery<
   ResT = void,
   ErrorT = unknown,
@@ -120,57 +103,38 @@ export function useNuxtQuery(
   } = opts
 
   const cache = useQueryCache()
-  const telemetryEnabled = isQueryTelemetryEnabled()
-  const telemetryHooks = telemetryEnabled ? useNuxtApp().hooks : undefined
+  const telemetry = useQueryTelemetry()
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
 
   function emitQueryStart(context: unknown): void {
-    if (!telemetryEnabled)
+    if (telemetry._tag === 'disabled')
       return
-    const startedAt = Date.now()
-    const state: QueryTelemetryState = {
-      finished: false,
+    const state = telemetry.start({
       key: key.value,
       request: describeQueryRequest(request),
-      startedAt,
-    }
+    })
     setQueryTelemetryState(context, state)
-    const event: QueryTelemetryStartEvent = {
-      client: import.meta.client,
-      key: state.key,
-      request: state.request,
-      server: import.meta.server,
-      startedAt,
-    }
-    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, event)
   }
 
   function emitQueryFinish(status: 'error' | 'success', context: unknown, error?: unknown): void {
-    if (!telemetryEnabled)
+    if (telemetry._tag === 'disabled')
       return
     const state = getQueryTelemetryState(context)
-    if (state?.finished)
-      return
-    if (state)
-      state.finished = true
-    const endedAt = Date.now()
-    const startedAt = state?.startedAt ?? endedAt
-    const event: QueryTelemetryFinishEvent = {
-      client: import.meta.client,
-      durationMs: Math.max(0, endedAt - startedAt),
-      endedAt,
-      error,
-      key: state?.key ?? key.value,
-      request: state?.request ?? describeQueryRequest(request),
-      server: import.meta.server,
-      startedAt,
-      status,
-    }
-    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
+    telemetry.finish(state
+      ? { _tag: 'started', error, state, status }
+      : {
+          _tag: 'unstarted',
+          descriptor: {
+            key: key.value,
+            request: describeQueryRequest(request),
+          },
+          error,
+          status,
+        })
   }
 
-  const telemetryFetchOptions = telemetryEnabled
+  const telemetryFetchOptions = telemetry._tag === 'enabled'
     ? {
         onRequest: async (context: unknown) => {
           emitQueryStart(context)
@@ -248,16 +212,6 @@ export function useNuxtQuery(
     refetchOnWindowFocus,
     staleTime,
   }) as NuxtQuery<any, any>
-}
-
-function isQueryTelemetryEnabled(): boolean {
-  try {
-    const config = useRuntimeConfig() as QueryTelemetryRuntimeConfig
-    return config.public?.nuxtUseQuery?.telemetry?.enabled === true
-  }
-  catch {
-    return false
-  }
 }
 
 async function callFetchHook(hook: unknown, context: unknown): Promise<void> {

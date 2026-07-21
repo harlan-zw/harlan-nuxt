@@ -1,7 +1,7 @@
 {
   "name": "nuxt-use-query",
   "type": "module",
-  "version": "0.8.1",
+  "version": "1.0.0",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
@@ -22,6 +22,7 @@
   "bugs": {
     "url": "https://github.com/harlan-zw/nuxt-use-query/issues"
   },
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
@@ -117,18 +118,17 @@
     "test:attw": "attw --pack"
   },
   "peerDependencies": {
-    "nuxt": ">=3.0.0 <5.0.0"
+    "nuxt": ">=3.0.0 <5.0.0",
+    "zod": "^4.0.0"
   },
   "dependencies": {
     "@nuxt/kit": "catalog:nuxt",
-    "@nuxt/schema": "catalog:nuxt",
     "@vueuse/core": "catalog:",
     "consola": "catalog:",
     "nitropack": "catalog:",
     "oxc-parser": "catalog:",
     "oxc-walker": "catalog:",
-    "pathe": "catalog:",
-    "zod": "catalog:"
+    "pathe": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:dev-lint",
@@ -143,10 +143,10 @@
     "happy-dom": "catalog:dev-test",
     "nuxt": "catalog:nuxt",
     "typescript": "catalog:dev-build",
-    "unbuild": "catalog:",
     "vitest": "catalog:dev-test",
     "vue": "catalog:vue",
     "vue-router": "catalog:vue",
-    "vue-tsc": "catalog:dev-build"
+    "vue-tsc": "catalog:dev-build",
+    "zod": "catalog:"
   }
 }

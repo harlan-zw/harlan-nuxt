@@ -1,12 +1,10 @@
 export {
-  directoryPatternToRegExp,
   matchesAnyDirectory,
   resolveContractQueryEnforcementOptions,
 } from './options'
 
 export {
   apiLiteralOutsideQueryRule,
-  contractRules,
   missingContractImportRule,
   mutationBodySchemaMissingRule,
   operationResponseSchemaMissingRule,
@@ -20,11 +18,6 @@ export {
 } from './scan'
 export type {
   ContractQueryEnforcementOptions,
-  ContractQueryEnforcerOptions,
-  ContractQuerySourceFile,
-  ContractQueryViolation,
-  ContractQueryViolationCode,
   ContractRule,
-  ResolvedContractQueryEnforcementOptions,
   RuleContext,
 } from './types'

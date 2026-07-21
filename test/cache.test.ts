@@ -2,7 +2,6 @@ import {
   createQueryCache,
   isQueryStale,
   markQueryFetched,
-  resetQueryCache,
   retainQuery,
 } from 'nuxt-use-query/cache'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +13,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 let cache = createQueryCache()
 beforeEach(() => {
   cache = createQueryCache()
-  resetQueryCache(cache)
 })
 
 describe('staleness helpers', () => {

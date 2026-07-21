@@ -18,7 +18,6 @@ export {
   defineNuxtQueryGroup,
   defineNuxtRpcMutation,
   defineNuxtRpcQuery,
-  formatNuxtRpcValidationIssues,
   isAuthRpcError,
   isRetryableRpcError,
   normalizeNuxtRpcError,
