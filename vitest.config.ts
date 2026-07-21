@@ -7,6 +7,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 const r = (path: string) => resolve(rootDir, path)
 
 const packageAliases = {
+  'nuxt-use-query/async-query': r('src/runtime/composables/useNuxtAsyncQuery.ts'),
   'nuxt-use-query/cache': r('src/runtime/cache.ts'),
   'nuxt-use-query/mutation': r('src/runtime/composables/useNuxtMutation.ts'),
   'nuxt-use-query/query': r('src/runtime/composables/useNuxtQuery.ts'),

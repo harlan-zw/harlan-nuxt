@@ -5,7 +5,8 @@ import type {
   RuleContext,
 } from './types'
 import { normalize } from 'pathe'
-import { matchesAnyDirectory, resolveContractQueryEnforcementOptions } from './options'
+import { createSourceAstAnalyzer } from './ast'
+import { createDirectoryMatcher, resolveContractQueryEnforcementOptions } from './options'
 import { extractScriptSource, parseSourceAst } from './parse'
 import { readSourceFilesFromDisk } from './read'
 import { contractRules } from './rules'
@@ -18,6 +19,9 @@ export function createContractQueryEnforcer(options: ContractQueryEnforcerOption
       const resolved = resolveContractQueryEnforcementOptions(scanOptions)
       const files = await readSourceFiles(rootDir, resolved)
       const violations: ContractQueryViolation[] = []
+      const analyzeAst = createSourceAstAnalyzer(resolved.apiPrefixes, resolved.contractDirs)
+      const isQueryFile = createDirectoryMatcher(resolved.queryDirs)
+      const isServerApiFile = createDirectoryMatcher(resolved.serverApiDirs)
 
       for (const sourceFile of files) {
         const file = normalize(sourceFile.file)
@@ -27,11 +31,12 @@ export function createContractQueryEnforcer(options: ContractQueryEnforcerOption
 
         const ast = parseSourceAst(file, source)
         const ctx: RuleContext = {
+          analysis: analyzeAst(ast),
           file,
           ast,
           options: resolved,
-          isQueryFile: matchesAnyDirectory(file, resolved.queryDirs),
-          isServerApiFile: matchesAnyDirectory(file, resolved.serverApiDirs),
+          isQueryFile: isQueryFile(file),
+          isServerApiFile: isServerApiFile(file),
         }
 
         runRulesForFile(ctx, violations)

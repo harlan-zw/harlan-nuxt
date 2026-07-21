@@ -26,6 +26,7 @@ vi.mock('#app', () => ({
 }))
 
 vi.mock('@vueuse/core', () => ({
+  createSharedComposable: (composable: (...args: any[]) => unknown) => composable,
   useDocumentVisibility: () => ref('visible'),
   useEventListener: vi.fn(),
   useIntervalFn: (fn: any, interval: any) => {
@@ -37,6 +38,7 @@ vi.mock('@vueuse/core', () => ({
     }
     return { pause: lastIntervalFn.pause, resume: lastIntervalFn.resume }
   },
+  useOnline: () => ref(true),
 }))
 
 vi.mock('../src/runtime/composables/useQueryCache', async () => {
@@ -54,7 +56,7 @@ beforeEach(async () => {
   cache.refCounts.clear()
   for (const t of cache.gcTimers.values()) clearTimeout(t)
   cache.gcTimers.clear()
-  fetchState = { data: ref<any>(null), status: ref('idle'), refresh: vi.fn(() => Promise.resolve()) }
+  fetchState = { data: ref<any>(undefined), status: ref('idle'), refresh: vi.fn(() => Promise.resolve()) }
   callHook = vi.fn(() => Promise.resolve())
   runtimeConfig = { public: { nuxtUseQuery: { telemetry: { enabled: false } } } }
   void nextTick
@@ -69,14 +71,14 @@ describe('useNuxtQuery keepPreviousData', () => {
   it('holds the previous result while a new key loads, flagging isPlaceholderData', async () => {
     const { displayData, isPlaceholderData } = useNuxtQuery<{ n: number }>('/api/x', { key: 'q' })
 
-    expect(displayData.value).toBeNull()
+    expect(displayData.value).toBeUndefined()
     expect(isPlaceholderData.value).toBe(false)
 
     fetchState.data.value = { n: 1 }
     await tick()
     expect(displayData.value).toEqual({ n: 1 })
 
-    fetchState.data.value = null
+    fetchState.data.value = undefined
     await tick()
     expect(displayData.value).toEqual({ n: 1 })
     expect(isPlaceholderData.value).toBe(true)
@@ -91,9 +93,23 @@ describe('useNuxtQuery keepPreviousData', () => {
     const { displayData } = useNuxtQuery<{ n: number }>('/api/x', { key: 'q', keepPreviousData: false })
     fetchState.data.value = { n: 1 }
     await tick()
-    fetchState.data.value = null
+    fetchState.data.value = undefined
     await tick()
-    expect(displayData.value).toBeNull()
+    expect(displayData.value).toBeUndefined()
+  })
+
+  it('treats null as resolved data, not as an empty placeholder', async () => {
+    const query = useNuxtQuery<null>('/api/x', { key: 'q' })
+
+    fetchState.data.value = null
+    fetchState.status.value = 'success'
+    await tick()
+    fetchState.status.value = 'pending'
+
+    expect(query.displayData.value).toBeNull()
+    expect(query.isPlaceholderData.value).toBe(false)
+    expect(query.isPending.value).toBe(false)
+    expect(query.isFetching.value).toBe(true)
   })
 })
 
@@ -132,12 +148,13 @@ describe('useNuxtQuery fetch stamping', () => {
     )
   })
 
-  it('does not emit Nuxt app telemetry hooks when telemetry is disabled', async () => {
+  it('does not install transport interceptors when telemetry is disabled', () => {
     useNuxtQuery('/api/x', { key: 'q' })
 
-    await lastUseFetchOpts.onRequest({})
-    await lastUseFetchOpts.onResponse({})
-
+    expect(lastUseFetchOpts).not.toHaveProperty('onRequest')
+    expect(lastUseFetchOpts).not.toHaveProperty('onRequestError')
+    expect(lastUseFetchOpts).not.toHaveProperty('onResponse')
+    expect(lastUseFetchOpts).not.toHaveProperty('onResponseError')
     expect(callHook).not.toHaveBeenCalled()
   })
 
@@ -223,13 +240,19 @@ describe('useNuxtQuery fetch stamping', () => {
 })
 
 describe('useNuxtQuery enabled gate', () => {
-  it('passes immediate: false to useFetch when initially disabled', () => {
-    useNuxtQuery('/api/x', { key: 'q', enabled: false })
+  it('passes the reactive gate and immediate: false to useFetch when initially disabled', () => {
+    const enabled = ref(false)
+    useNuxtQuery('/api/x', { key: 'q', enabled })
+    expect(lastUseFetchOpts.enabled.value).toBe(false)
     expect(lastUseFetchOpts.immediate).toBe(false)
+
+    enabled.value = true
+    expect(lastUseFetchOpts.enabled.value).toBe(true)
   })
 
   it('passes immediate: true (default) when enabled', () => {
     useNuxtQuery('/api/x', { key: 'q' })
+    expect(lastUseFetchOpts.enabled.value).toBe(true)
     expect(lastUseFetchOpts.immediate).toBe(true)
   })
 

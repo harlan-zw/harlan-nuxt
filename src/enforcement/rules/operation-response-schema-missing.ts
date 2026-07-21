@@ -1,11 +1,11 @@
 import type { ContractRule } from '../types'
-import { findRpcOperationCalls, getObjectProperties } from '../ast'
+import { getObjectProperties } from '../ast'
 
 export const operationResponseSchemaMissingRule: ContractRule = {
   code: 'operation-response-schema-missing',
   applies: ctx => ctx.isQueryFile,
   detect: (ctx) => {
-    for (const call of findRpcOperationCalls(ctx.ast)) {
+    for (const call of ctx.analysis.rpcOperationCalls) {
       if (call.calleeName === 'defineNuxtQueryGroup')
         continue
       if (call.argument?.type !== 'ObjectExpression')

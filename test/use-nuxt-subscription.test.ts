@@ -1,4 +1,5 @@
 import type { SubscriptionContextBase } from 'nuxt-use-query/subscription'
+import { runInNewContext } from 'node:vm'
 import { createSubscriptionController } from 'nuxt-use-query/subscription'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -42,6 +43,7 @@ describe('createSubscriptionController', () => {
     expect(source).toHaveBeenCalledTimes(1)
     const ctx = source.mock.calls[0][0] as SubscriptionContextBase
     expect(ctx.signal).toBeInstanceOf(AbortSignal)
+    expect(ctx.fail).toBeTypeOf('function')
     expect(ctx.push).toBeTypeOf('function')
     expect(ctx.resync).toBeTypeOf('function')
     expect(statuses).toEqual(['connecting', 'active'])
@@ -113,6 +115,19 @@ describe('createSubscriptionController', () => {
     await expect(ctx.push('good')).resolves.toBeUndefined()
     expect(errors).toEqual([boom])
     expect(messages).toEqual(['good'])
+  })
+
+  it('reports source-side failures through the same FIFO', async () => {
+    const boom = new Error('decode failed')
+    let ctx!: SubscriptionContextBase
+    const { controller, errors } = harness((c) => {
+      ctx = c
+    })
+    controller.activate()
+
+    await expect(ctx.fail(boom)).rejects.toBe(boom)
+
+    expect(errors).toEqual([boom])
   })
 
   it('rejects queued work that becomes stale during teardown', async () => {
@@ -220,6 +235,21 @@ describe('createSubscriptionController', () => {
     expect(statuses).toEqual(['connecting'])
 
     d.resolve(cleanup)
+    await flush()
+    expect(statuses).toEqual(['connecting', 'active'])
+
+    controller.deactivate()
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+
+  it('recognizes an async source Promise from another realm', async () => {
+    const cleanup = vi.fn()
+    const promise = runInNewContext('Promise.resolve(cleanup)', { cleanup }) as Promise<() => void>
+    const { controller, statuses } = harness(() => promise)
+
+    controller.activate()
+    expect(statuses).toEqual(['connecting'])
+
     await flush()
     expect(statuses).toEqual(['connecting', 'active'])
 

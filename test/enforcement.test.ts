@@ -1,7 +1,33 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createContractQueryEnforcer, formatContractQueryViolations } from '../src/enforcement'
+import { resolveContractQueryEnforcementOptions } from '../src/enforcement/options'
 
 describe('contract query enforcer', () => {
+  it('adds custom ignore globs without dropping safe defaults', () => {
+    const options = resolveContractQueryEnforcementOptions({ ignore: ['**/*.generated.ts'] })
+
+    expect(options.ignore).toContain('node_modules')
+    expect(options.ignore).toContain('**/*.generated.ts')
+  })
+
+  it('skips source files matched by custom ignore globs', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'nuxt-use-query-enforcement-'))
+    await mkdir(join(rootDir, 'app'), { recursive: true })
+    await writeFile(join(rootDir, 'app', 'kept.ts'), 'await $fetch("/api/kept")')
+    await writeFile(join(rootDir, 'app', 'skipped.generated.ts'), 'await $fetch("/api/skipped")')
+
+    const enforcer = createContractQueryEnforcer()
+    const violations = await enforcer.scan(rootDir, {
+      ignore: ['**/*.generated.ts'],
+      scanDirs: ['app'],
+    }).finally(() => rm(rootDir, { force: true, recursive: true }))
+
+    expect(violations.map(violation => violation.file)).toEqual(['app/kept.ts'])
+  })
+
   it('scans supplied source files through the factory adapter', async () => {
     const enforcer = createContractQueryEnforcer({
       readSourceFiles: async () => [

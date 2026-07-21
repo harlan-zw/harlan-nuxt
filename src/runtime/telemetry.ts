@@ -177,11 +177,13 @@ export interface QueryTelemetryFinishEvent extends QueryTelemetryStartEvent {
 
 type TelemetryHookResult = Promise<void> | void
 
+export interface NuxtUseQueryRuntimeNuxtHooks {
+  'nuxt-use-query:telemetry:query:start': (event: QueryTelemetryStartEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:query:finish': (event: QueryTelemetryFinishEvent) => TelemetryHookResult
+}
+
 declare module 'nuxt/app' {
-  interface RuntimeNuxtHooks {
-    'nuxt-use-query:telemetry:query:start': (event: QueryTelemetryStartEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:query:finish': (event: QueryTelemetryFinishEvent) => TelemetryHookResult
-  }
+  interface RuntimeNuxtHooks extends NuxtUseQueryRuntimeNuxtHooks {}
 }
 
 declare module 'nitropack/types' {

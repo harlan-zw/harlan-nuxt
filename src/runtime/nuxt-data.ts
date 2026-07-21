@@ -31,7 +31,10 @@ export function readNuxtData<T = unknown>(nuxt: unknown, key: string): T | undef
   const live = n._asyncData?.[key]?.data.value as T | undefined
   if (live !== undefined)
     return live
-  return (n.payload.data?.[key] ?? n.static?.data?.[key]) as T | undefined
+  const payload = n.payload.data?.[key] as T | undefined
+  if (payload !== undefined)
+    return payload
+  return n.static?.data?.[key] as T | undefined
 }
 
 /**
@@ -49,14 +52,19 @@ export function writeNuxtData<T>(nuxt: unknown, key: string, value: T): void {
 }
 
 /** Active query keys registered with Nuxt — drives prefix invalidation. */
-export function listActiveNuxtDataKeys(nuxt: unknown): string[] {
-  return Object.entries(internals(nuxt)._asyncData ?? {})
+export function listActiveNuxtDataKeys(nuxt: unknown, matches?: (key: string) => boolean): string[] {
+  const entries = internals(nuxt)._asyncData ?? {}
+  const keys: string[] = []
+  for (const key of Object.keys(entries)) {
+    const entry = entries[key]
     // Nuxt retains an entry after its final consumer unmounts, but removes its
     // refresh hook and sets `_deps` to zero. Treating that retained entry as
     // active can make invalidation inspect an old parked error even though no
     // refresh ran. Older Nuxt versions without `_deps` stay conservative.
-    .filter(([, entry]) => entry != null && (entry._deps == null || entry._deps > 0))
-    .map(([key]) => key)
+    if (entry != null && (entry._deps == null || entry._deps > 0) && (!matches || matches(key)))
+      keys.push(key)
+  }
+  return keys
 }
 
 export interface NuxtDataRefreshFailure {
@@ -100,7 +108,8 @@ export function listPayloadDataKeys(nuxt: unknown): string[] {
 
 /** Every query key known to Nuxt, including live and prerender-only entries. */
 export function listNuxtDataKeys(nuxt: unknown): string[] {
-  const keys = new Set(listActiveNuxtDataKeys(nuxt))
+  const n = internals(nuxt)
+  const keys = new Set(Object.keys(n._asyncData ?? {}))
   for (const key of listPayloadDataKeys(nuxt))
     keys.add(key)
   return [...keys]

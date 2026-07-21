@@ -10,6 +10,7 @@ import {
   resolveContractQueryEnforcementOptions,
   serverRouteMissingContractRule,
 } from '../src/enforcement'
+import { createSourceAstAnalyzer } from '../src/enforcement/ast'
 import { parseSourceAst } from '../src/enforcement/parse'
 
 // Per-rule tests. Each rule is exercised against a tiny source string — this
@@ -17,9 +18,11 @@ import { parseSourceAst } from '../src/enforcement/parse'
 
 function makeCtx(file: string, source: string, overrides: Partial<RuleContext['options']> = {}): RuleContext {
   const options = resolveContractQueryEnforcementOptions(overrides)
+  const ast = parseSourceAst(file, source)
   return {
+    analysis: createSourceAstAnalyzer(options.apiPrefixes, options.contractDirs)(ast),
     file,
-    ast: parseSourceAst(file, source),
+    ast,
     options,
     isQueryFile: matchesAnyDirectory(file, options.queryDirs),
     isServerApiFile: matchesAnyDirectory(file, options.serverApiDirs),

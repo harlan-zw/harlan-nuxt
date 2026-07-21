@@ -61,7 +61,7 @@ export async function invalidateNuxtQueries(prefix?: NuxtQueryMatcher): Promise<
   const cache = useQueryCache()
   const nuxt = useNuxtApp()
   const matches = resolveMatcher(prefix)
-  const keys = listActiveNuxtDataKeys(nuxt).filter(matches)
+  const keys = listActiveNuxtDataKeys(nuxt, matches)
   for (const k of cache.lastFetched.keys()) {
     if (matches(k))
       cache.lastFetched.delete(k)

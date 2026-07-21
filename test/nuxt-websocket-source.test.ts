@@ -21,6 +21,7 @@ const { nuxtWebSocketSource } = await import('nuxt-use-query/websocket')
 function fakeCtx() {
   const ac = new AbortController()
   return {
+    fail: vi.fn(async () => {}),
     push: vi.fn(async () => {}),
     resync: vi.fn(async () => {}),
     signal: ac.signal,
@@ -51,6 +52,20 @@ describe('nuxtWebSocketSource', () => {
 
     hoisted.lastOptions.onMessage(null, { data: 'anything' })
     expect(ctx.push).toHaveBeenCalledWith({ forced: true })
+  })
+
+  it('reports a thrown deserializer through the subscription bridge', async () => {
+    const error = new Error('invalid frame')
+    const ctx = fakeCtx()
+    nuxtWebSocketSource('wss://x/ws', {
+      deserialize: () => { throw error },
+    })(ctx)
+
+    hoisted.lastOptions.onMessage(null, { data: 'bad' })
+    await Promise.resolve()
+
+    expect(ctx.fail).toHaveBeenCalledWith(error)
+    expect(ctx.push).not.toHaveBeenCalled()
   })
 
   it('re-syncs on reconnect but NOT on the first connect', () => {

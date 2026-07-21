@@ -431,7 +431,7 @@ Use `telemetry: true` for the defaults. Set `timeout: false` to disable the defa
 `largePayloadThreshold` defaults to `300_000` bytes (mirroring Sentry's Large HTTP Payload detector). Like `slowFetchThreshold`, it accepts a per-host map so you can mute an upstream whose big responses are expected while keeping detection everywhere else, a plain `false`/`0` to turn it off globally, or a per-`$fetch`-call override:
 
 ```ts
-largePayloadThreshold: {
+const largePayloadThreshold = {
   default: 300_000,
   hosts: {
     // a data/export API whose big responses are expected — silence it

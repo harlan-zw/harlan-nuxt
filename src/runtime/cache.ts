@@ -22,6 +22,8 @@ export interface QueryCache {
 
 export type QueryStaleTime = number | 'static'
 
+const MAX_TIMER_DELAY = 2 ** 31 - 1
+
 export function createQueryCache(): QueryCache {
   return {
     lastFetched: new Map(),
@@ -78,15 +80,24 @@ export function retainQuery(
       return
     }
     cache.refCounts.delete(key)
-    if (gcTime <= 0)
+    if (gcTime <= 0 || !Number.isFinite(gcTime))
       return
-    const timer = setTimeout(() => {
-      cache.gcTimers.delete(key)
-      cache.lastFetched.delete(key)
-      evict()
-    }, gcTime)
-    cache.gcTimers.set(key, timer)
+    scheduleQueryEviction(cache, key, gcTime, evict)
   }
+}
+
+function scheduleQueryEviction(cache: QueryCache, key: string, remainingMs: number, evict: () => void): void {
+  const delay = Math.min(remainingMs, MAX_TIMER_DELAY)
+  const timer = setTimeout(() => {
+    if (remainingMs > MAX_TIMER_DELAY) {
+      scheduleQueryEviction(cache, key, remainingMs - MAX_TIMER_DELAY, evict)
+      return
+    }
+    cache.gcTimers.delete(key)
+    cache.lastFetched.delete(key)
+    evict()
+  }, delay)
+  cache.gcTimers.set(key, timer)
 }
 
 /** Test-only: clears every map between cases. */

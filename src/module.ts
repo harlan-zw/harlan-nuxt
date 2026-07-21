@@ -1,6 +1,6 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
 import type { ModuleTelemetryOptions } from './module/telemetry'
-import { addImports, addPlugin, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addImports, addPlugin, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
 import { setupFetchTelemetryModule } from './module/telemetry'
 
 // `nuxt-use-query` — TanStack-Query-shaped wrapper over Nuxt's `useFetch` /
@@ -63,6 +63,26 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'defineNuxtRpcQuery', from: rpcCore },
       { name: 'serializeNuxtRpcKey', from: rpcCore },
     ])
+
+    // A generated template participates in the consuming Nuxt project's
+    // `#app` alias resolution. Keep the public `nuxt/app` augmentation too for
+    // layers that import Nuxt runtime APIs explicitly.
+    addTypeTemplate({
+      filename: 'types/nuxt-use-query.d.ts',
+      getContents: () => `
+import type { NuxtUseQueryRuntimeNuxtHooks } from 'nuxt-use-query/telemetry'
+
+declare module '#app' {
+  interface RuntimeNuxtHooks extends NuxtUseQueryRuntimeNuxtHooks {}
+}
+
+declare module 'nuxt/app' {
+  interface RuntimeNuxtHooks extends NuxtUseQueryRuntimeNuxtHooks {}
+}
+
+export {}
+`,
+    })
 
     // Server-only: serializes the per-request `lastFetched` map into the
     // payload so the client seeds exact fetch timestamps.

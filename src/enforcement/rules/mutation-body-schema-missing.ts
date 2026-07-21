@@ -1,5 +1,5 @@
 import type { ContractRule } from '../types'
-import { findRpcOperationCalls, getLiteralString, getObjectProperties } from '../ast'
+import { getLiteralString, getObjectProperties } from '../ast'
 
 const BODY_METHODS = new Set(['POST', 'PATCH', 'PUT'])
 
@@ -7,7 +7,7 @@ export const mutationBodySchemaMissingRule: ContractRule = {
   code: 'mutation-body-schema-missing',
   applies: ctx => ctx.isQueryFile,
   detect: (ctx) => {
-    for (const call of findRpcOperationCalls(ctx.ast)) {
+    for (const call of ctx.analysis.rpcOperationCalls) {
       if (call.calleeName !== 'defineNuxtRpcMutation')
         continue
       if (call.argument?.type !== 'ObjectExpression')

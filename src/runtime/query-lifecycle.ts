@@ -1,10 +1,11 @@
 import type { ComputedRef, Ref } from 'vue'
 import type { QueryStaleTime } from './cache'
 import type { useQueryCache } from './composables/useQueryCache'
-import { useDocumentVisibility, useEventListener, useIntervalFn } from '@vueuse/core'
+import { useIntervalFn } from '@vueuse/core'
 import { computed, getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from 'vue'
 import { clearNuxtData } from '#app'
 import { isQueryStale, markQueryFetched, retainQuery } from './cache'
+import { useSharedQueryDocumentVisibility, useSharedQueryReconnectSignal } from './query-browser-state'
 
 // The post-fetch lifecycle shared by every query primitive, regardless of how
 // the underlying request is made (`useFetch` URL or `useAsyncData` handler).
@@ -55,11 +56,11 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
 
   const previousData = shallowRef()
   watch(query.data, (value) => {
-    if (value != null)
+    if (value !== undefined)
       previousData.value = value
   }, { immediate: true })
   const isPlaceholderData = computed(() => {
-    return keepPreviousData && query.data.value == null && previousData.value !== undefined
+    return keepPreviousData && query.data.value === undefined && previousData.value !== undefined
   })
   const displayData = computed(() => {
     return isPlaceholderData.value ? previousData.value : query.data.value
@@ -67,7 +68,7 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
 
   query.displayData = displayData
   query.isPlaceholderData = isPlaceholderData
-  query.isPending = computed(() => query.status.value === 'pending' && query.data.value == null)
+  query.isPending = computed(() => query.status.value === 'pending' && query.data.value === undefined)
   query.isFetching = computed(() => query.status.value === 'pending')
 
   let release: (() => void) | undefined
@@ -93,15 +94,20 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
   }
 
   if (import.meta.client) {
-    const visibility = useDocumentVisibility()
-    watch(visibility, (state) => {
-      if (state === 'visible')
-        refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnWindowFocus)
-    })
+    if (refetchOnWindowFocus) {
+      const visibility = useSharedQueryDocumentVisibility()
+      watch(visibility, (state) => {
+        if (state === 'visible')
+          refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnWindowFocus)
+      })
+    }
 
-    useEventListener(window, 'online', () => {
-      refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnReconnect)
-    })
+    if (refetchOnReconnect) {
+      const reconnectSignal = useSharedQueryReconnectSignal()
+      watch(reconnectSignal, () => {
+        refetchIfAllowed(query, enabled.value, key.value, cache, staleTime, refetchOnReconnect)
+      })
+    }
   }
 
   if (refetchInterval !== false && refetchInterval != null) {
@@ -142,7 +148,7 @@ function shouldRefetchOnMount(
 }
 
 function hasResolvedQueryData(query: { data: { value: unknown }, status: { value: string } }): boolean {
-  return query.status.value === 'success' || query.data.value != null
+  return query.status.value === 'success' || query.data.value !== undefined
 }
 
 function refetchIfAllowed(

@@ -8,6 +8,13 @@ export interface RpcOperationCall {
   argument: any | null
 }
 
+export interface SourceAstAnalysis {
+  hasApiLiteral: boolean
+  hasContractImport: boolean
+  hasZodUsage: boolean
+  rpcOperationCalls: RpcOperationCall[]
+}
+
 const RPC_DEFINE_NAMES = new Set([
   'defineNuxtRpcQuery',
   'defineNuxtRpcMutation',
@@ -45,115 +52,65 @@ const ZOD_SCHEMA_FACTORY_NAMES = new Set([
   'void',
 ])
 
-/** Walk once and yield every `defineNuxtRpc*` / `defineNuxtQueryGroup` call. */
-export function findRpcOperationCalls(ast: any): RpcOperationCall[] {
-  const calls: RpcOperationCall[] = []
-  walk(ast.program, {
-    enter(node: any) {
-      if (node.type !== 'CallExpression')
-        return
-      const name = getCalleeName(node.callee)
-      if (!name || !RPC_DEFINE_NAMES.has(name))
-        return
-      if (name === 'defineNuxtQueryGroup') {
-        calls.push({ calleeName: name, argument: node.arguments?.[1] ?? null })
-        collectQueryGroupOperationObjects(node.arguments?.[1], calls)
-        return
-      }
-      calls.push({ calleeName: name, argument: node.arguments?.[0] ?? null })
-    },
-  })
-  return calls
-}
-
-/** True iff the file contains any string/template literal hitting an api prefix. */
-export function hasApiLiteral(ast: any, apiPrefixes: string[]): boolean {
-  let found = false
-  walk(ast.program, {
-    enter(node: any) {
-      if (found)
-        return
-      if (isApiLiteralNode(node, apiPrefixes))
-        found = true
-    },
-  })
-  return found
-}
-
 /**
- * True iff the file references zod — either imports `zod` / `zod/v4`, or
- * uses a `z.<member>` expression somewhere in the program. Used to scope the
- * server-route-missing-contract rule to files that actually define schemas.
+ * Compile option-dependent matchers once per scan, then collect every fact the
+ * rules need in one AST traversal per file.
  */
-export function hasZodUsage(ast: any): boolean {
-  let found = false
-  const zodNamespaces = new Set<string>()
-  const zodFactories = new Set<string>()
+export function createSourceAstAnalyzer(apiPrefixes: string[], contractDirs: string[]): (ast: any) => SourceAstAnalysis {
+  const normalizedApiPrefixes = apiPrefixes.map(normalizeApiPrefix)
+  const contractPatterns = contractDirs.map(directoryPatternToRegExp)
 
-  walk(ast.program, {
-    enter(node: any) {
-      if (node.type !== 'ImportDeclaration')
-        return
-      const source = node.source?.value
-      if (typeof source !== 'string' || (source !== 'zod' && !source.startsWith('zod/')))
-        return
-      for (const specifier of node.specifiers ?? []) {
-        if (specifier.type === 'ImportNamespaceSpecifier') {
-          zodNamespaces.add(specifier.local?.name)
-          continue
+  return (ast: any): SourceAstAnalysis => {
+    const rpcOperationCalls: RpcOperationCall[] = []
+    const zodNamespaces = new Set<string>()
+    const zodFactories = new Set<string>()
+    const zodMemberCallNamespaces = new Set<string>()
+    const zodFactoryCalls = new Set<string>()
+    let hasApiLiteral = false
+    let hasContractImport = false
+
+    walk(ast.program, {
+      enter(node: any) {
+        if (!hasApiLiteral && isApiLiteralNode(node, normalizedApiPrefixes))
+          hasApiLiteral = true
+
+        if (node.type === 'ImportDeclaration') {
+          const source = node.source?.value
+          if (typeof source !== 'string')
+            return
+          if (!hasContractImport && contractPatterns.some(pattern => pattern.test(source)))
+            hasContractImport = true
+          if (source !== 'zod' && !source.startsWith('zod/'))
+            return
+          collectZodImports(node, zodNamespaces, zodFactories)
+          return
         }
-        if (specifier.type !== 'ImportSpecifier')
-          continue
-        const imported = getPropertyName(specifier.imported)
-        const local = specifier.local?.name
-        if (!local)
-          continue
-        if (imported === 'z')
-          zodNamespaces.add(local)
-        if (imported && ZOD_SCHEMA_FACTORY_NAMES.has(imported))
-          zodFactories.add(local)
-      }
-    },
-  })
 
-  walk(ast.program, {
-    enter(node: any) {
-      if (found)
-        return
-      if (
-        node.type === 'CallExpression'
-        && node.callee?.type === 'MemberExpression'
-        && node.callee.object?.type === 'Identifier'
-        && zodNamespaces.has(node.callee.object.name)
-        && ZOD_SCHEMA_FACTORY_NAMES.has(getPropertyName(node.callee.property) ?? '')
-      ) {
-        found = true
-      }
-      if (
-        node.type === 'CallExpression'
-        && node.callee?.type === 'Identifier'
-        && zodFactories.has(node.callee.name)
-      ) {
-        found = true
-      }
-    },
-  })
-  return found
-}
+        if (node.type !== 'CallExpression')
+          return
 
-/** True iff any `import ... from '<contract-dir>...'` is present. */
-export function hasContractImport(ast: any, contractDirs: string[]): boolean {
-  let found = false
-  walk(ast.program, {
-    enter(node: any) {
-      if (found || node.type !== 'ImportDeclaration')
-        return
-      const sourceValue = node.source?.value
-      if (typeof sourceValue === 'string' && isContractImport(sourceValue, contractDirs))
-        found = true
-    },
-  })
-  return found
+        collectRpcOperationCall(node, rpcOperationCalls)
+        if (node.callee?.type === 'MemberExpression' && node.callee.object?.type === 'Identifier') {
+          const factory = getPropertyName(node.callee.property)
+          if (factory && ZOD_SCHEMA_FACTORY_NAMES.has(factory))
+            zodMemberCallNamespaces.add(node.callee.object.name)
+        }
+        else if (node.callee?.type === 'Identifier') {
+          zodFactoryCalls.add(node.callee.name)
+        }
+      },
+    })
+
+    const hasZodUsage = setsIntersect(zodMemberCallNamespaces, zodNamespaces)
+      || setsIntersect(zodFactoryCalls, zodFactories)
+
+    return {
+      hasApiLiteral,
+      hasContractImport,
+      hasZodUsage,
+      rpcOperationCalls,
+    }
+  }
 }
 
 export function getObjectProperties(node: any): Map<string, any> {
@@ -190,25 +147,59 @@ function getPropertyName(node: any): string | null {
   return null
 }
 
-function isApiLiteralNode(node: any, apiPrefixes: string[]): boolean {
+function isApiLiteralNode(node: any, normalizedApiPrefixes: string[]): boolean {
   if (node.type === 'Literal' && typeof node.value === 'string')
-    return apiPrefixes.some(prefix => matchesPrefix(node.value, prefix))
+    return normalizedApiPrefixes.some(prefix => matchesNormalizedPrefix(node.value, prefix))
 
   if (node.type === 'TemplateElement') {
     const value = node.value?.cooked ?? node.value?.raw
-    return typeof value === 'string' && apiPrefixes.some(prefix => matchesPrefix(value, prefix))
+    return typeof value === 'string' && normalizedApiPrefixes.some(prefix => matchesNormalizedPrefix(value, prefix))
   }
 
   return false
 }
 
-function matchesPrefix(value: string, prefix: string): boolean {
-  const normalized = normalizeApiPrefix(prefix)
-  return value === normalized || value.startsWith(`${normalized}/`) || value.startsWith(`${normalized}?`)
+function matchesNormalizedPrefix(value: string, prefix: string): boolean {
+  return value === prefix || value.startsWith(`${prefix}/`) || value.startsWith(`${prefix}?`)
 }
 
-function isContractImport(importSource: string, contractDirs: string[]): boolean {
-  return contractDirs.some(dir => directoryPatternToRegExp(dir).test(importSource))
+function collectRpcOperationCall(node: any, calls: RpcOperationCall[]): void {
+  const name = getCalleeName(node.callee)
+  if (!name || !RPC_DEFINE_NAMES.has(name))
+    return
+  if (name === 'defineNuxtQueryGroup') {
+    calls.push({ calleeName: name, argument: node.arguments?.[1] ?? null })
+    collectQueryGroupOperationObjects(node.arguments?.[1], calls)
+    return
+  }
+  calls.push({ calleeName: name, argument: node.arguments?.[0] ?? null })
+}
+
+function collectZodImports(node: any, namespaces: Set<string>, factories: Set<string>): void {
+  for (const specifier of node.specifiers ?? []) {
+    if (specifier.type === 'ImportNamespaceSpecifier') {
+      namespaces.add(specifier.local?.name)
+      continue
+    }
+    if (specifier.type !== 'ImportSpecifier')
+      continue
+    const imported = getPropertyName(specifier.imported)
+    const local = specifier.local?.name
+    if (!local)
+      continue
+    if (imported === 'z')
+      namespaces.add(local)
+    if (imported && ZOD_SCHEMA_FACTORY_NAMES.has(imported))
+      factories.add(local)
+  }
+}
+
+function setsIntersect(left: Set<string>, right: Set<string>): boolean {
+  for (const value of left) {
+    if (right.has(value))
+      return true
+  }
+  return false
 }
 
 function normalizeApiPrefix(prefix: string): string {

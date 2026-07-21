@@ -49,25 +49,34 @@ export function nuxtWebSocketSource(
       immediate: true,
       onConnected: () => {
         if (connectedOnce) {
-          void ctx.resync().catch(() => {
-            // The bridge already reports the effect failure through onError.
-            return undefined
-          })
+          observeBridgeEffect(ctx.resync())
         }
         else {
           connectedOnce = true
         }
       },
       onMessage: (_ws, event) => {
-        void ctx.push(deserialize(event.data)).catch(() => {
-          // The bridge already reports the effect failure through onError.
-          return undefined
-        })
+        let message: unknown
+        try {
+          message = deserialize(event.data)
+        }
+        catch (error) {
+          observeBridgeEffect(ctx.fail(error))
+          return
+        }
+        observeBridgeEffect(ctx.push(message))
       },
     })
     // No manual close: `useWebSocket` closes on scope dispose; the bridge runs
     // this source inside an effect scope, so a single close flows from teardown.
   }
+}
+
+function observeBridgeEffect(effect: Promise<void>): void {
+  void effect.catch(() => {
+    // The bridge already reports the effect failure through onError.
+    return undefined
+  })
 }
 
 function defaultDeserialize(data: unknown): unknown {

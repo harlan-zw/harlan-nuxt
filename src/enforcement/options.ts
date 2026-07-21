@@ -49,7 +49,7 @@ export function resolveContractQueryEnforcementOptions(options: ContractQueryEnf
     apiPrefixes: options.apiPrefixes ?? ['/api'],
     queryDirs: options.queryDirs ?? DEFAULT_QUERY_DIRS,
     contractDirs: options.contractDirs ?? DEFAULT_CONTRACT_DIRS,
-    ignore: options.ignore ?? DEFAULT_IGNORE,
+    ignore: [...new Set([...DEFAULT_IGNORE, ...(options.ignore ?? [])])],
     requireServerContracts: options.requireServerContracts ?? false,
     serverApiDirs: options.serverApiDirs ?? DEFAULT_SERVER_API_DIRS,
     scanDirs: options.scanDirs ?? DEFAULT_SCAN_DIRS,
@@ -57,7 +57,12 @@ export function resolveContractQueryEnforcementOptions(options: ContractQueryEnf
 }
 
 export function matchesAnyDirectory(file: string, patterns: string[]): boolean {
-  return patterns.some(pattern => directoryPatternToRegExp(pattern).test(file))
+  return createDirectoryMatcher(patterns)(file)
+}
+
+export function createDirectoryMatcher(patterns: string[]): (file: string) => boolean {
+  const matchers = patterns.map(directoryPatternToRegExp)
+  return (file: string) => matchers.some(pattern => pattern.test(file))
 }
 
 export function directoryPatternToRegExp(pattern: string): RegExp {

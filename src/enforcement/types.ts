@@ -1,3 +1,5 @@
+import type { SourceAstAnalysis } from './ast'
+
 export interface ContractQueryEnforcementOptions {
   /**
    * Fail the Nuxt build on architecture violations. Disabled by default so
@@ -69,6 +71,7 @@ export interface ContractQueryEnforcerOptions {
  * matches so each rule can guard itself without re-running glob logic.
  */
 export interface RuleContext {
+  analysis: SourceAstAnalysis
   file: string
   ast: any
   options: ResolvedContractQueryEnforcementOptions

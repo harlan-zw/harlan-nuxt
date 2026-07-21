@@ -37,6 +37,8 @@ export type NuxtSubscriptionResyncArgs<TResync> = [TResync] extends [void]
   : [request: TResync]
 
 export interface SubscriptionContextBase<TResync = void> {
+  /** Report a source-side failure through the ordered effect channel. */
+  fail: (error: unknown) => Promise<void>
   /**
    * Deliver a raw frame and resolve after its effect settles. Rejects with the
    * effect error, or `AbortError` if this activation is stale before execution.
@@ -186,6 +188,7 @@ export function createSubscriptionController<TResync = void>(deps: SubscriptionC
     }
 
     const ctx: SubscriptionContextBase<TResync> = {
+      fail: error => enqueue(() => Promise.reject(error)),
       signal: ac.signal,
       push: raw => enqueue(() => deps.handleMessage(raw)),
       resync: ((...args: NuxtSubscriptionResyncArgs<TResync>) => {
@@ -203,7 +206,7 @@ export function createSubscriptionController<TResync = void>(deps: SubscriptionC
       return
     }
 
-    if (result instanceof Promise) {
+    if (isPromiseLike(result)) {
       result.then(
         (resolved) => {
           const fn = typeof resolved === 'function' ? resolved : undefined
@@ -257,6 +260,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof SubscriptionEpochAbortError
 }
 
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return (typeof value === 'object' || typeof value === 'function')
+    && value !== null
+    && typeof (value as PromiseLike<T>).then === 'function'
+}
+
 function composeCleanup(inner: SourceCleanup, stopScope: () => void): () => void {
   return () => {
     try {
@@ -292,7 +301,7 @@ function hostSourceInScope<TMessage, TResync>(
       stopScope()
       throw error
     }
-    if (result instanceof Promise) {
+    if (isPromiseLike(result)) {
       return result.then(
         inner => composeCleanup(inner, stopScope),
         (error) => {

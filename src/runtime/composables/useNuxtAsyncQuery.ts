@@ -1,4 +1,4 @@
-import type { AsyncDataOptions } from 'nuxt/app'
+import type { AsyncDataOptions, NuxtApp } from 'nuxt/app'
 import type { MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
 import type { QueryTelemetryFinishEvent, QueryTelemetryStartEvent } from '../telemetry'
@@ -35,8 +35,17 @@ export interface UseNuxtAsyncQueryOptions<ResT, DataT = ResT>
   getCachedData?: AsyncDataOptions<ResT, DataT>['getCachedData']
 }
 
+export interface NuxtAsyncQueryHandlerContext {
+  signal: AbortSignal
+}
+
+export type NuxtAsyncQueryHandler<ResT> = (
+  nuxtApp: NuxtApp,
+  context: NuxtAsyncQueryHandlerContext,
+) => Promise<ResT>
+
 export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
-  handler: (ctx?: any) => Promise<ResT>,
+  handler: NuxtAsyncQueryHandler<ResT>,
   opts: UseNuxtAsyncQueryOptions<ResT, DataT>,
 ): NuxtQuery<DataT, ErrorT | undefined> {
   const {
@@ -52,29 +61,30 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
   } = opts
 
   const cache = useQueryCache()
-  const nuxtApp = useNuxtApp()
   const telemetryEnabled = isQueryTelemetryEnabled()
+  const telemetryHooks = telemetryEnabled ? useNuxtApp().hooks : undefined
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
 
   const wrappedHandler = telemetryEnabled
-    ? async (ctx?: any) => {
+    ? async (app: NuxtApp, context: NuxtAsyncQueryHandlerContext) => {
       const startedAt = Date.now()
+      const request = key.value
       const startEvent: QueryTelemetryStartEvent = {
         client: import.meta.client,
-        key: key.value,
-        request: key.value,
+        key: request,
+        request,
         server: import.meta.server,
         startedAt,
       }
-      callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, startEvent)
-      return handler(ctx).then(
+      callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, startEvent)
+      return handler(app, context).then(
         (result) => {
-          emitFinish('success', startedAt, key.value)
+          emitFinish('success', startedAt, request)
           return result
         },
         (error) => {
-          emitFinish('error', startedAt, key.value, error)
+          emitFinish('error', startedAt, request, error)
           throw error
         },
       )
@@ -94,7 +104,7 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
       startedAt,
       status,
     }
-    callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
+    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
   }
 
   const query = useAsyncData<ResT, ErrorT, DataT>(
@@ -102,6 +112,7 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
     wrappedHandler,
     {
       ...asyncOptions,
+      enabled,
       immediate: asyncOptions.immediate ?? enabled.value,
       dedupe: asyncOptions.dedupe ?? 'defer',
       getCachedData: (cacheKey: string, app: any, context: any) => {

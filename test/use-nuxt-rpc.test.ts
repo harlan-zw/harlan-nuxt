@@ -56,7 +56,15 @@ describe('defineNuxtRpcQuery', () => {
 describe('serializeNuxtRpcKey', () => {
   it('keeps string keys and serializes tuple keys', () => {
     expect(serializeNuxtRpcKey('sites:1')).toBe('sites:1')
-    expect(serializeNuxtRpcKey(['sites', 'abc/123', 7])).toBe('sites:abc%2F123:7')
+    expect(serializeNuxtRpcKey(['sites', 'abc/123', 7])).toBe('sites:abc%2F123:%24number%3A7')
+  })
+
+  it('does not collide across key-part types or object values', () => {
+    expect(serializeNuxtRpcKey(['sites', 1])).not.toBe(serializeNuxtRpcKey(['sites', '1']))
+    expect(serializeNuxtRpcKey(['sites', true])).not.toBe(serializeNuxtRpcKey(['sites', 'true']))
+    expect(serializeNuxtRpcKey(['sites', { page: 1 }])).not.toBe(serializeNuxtRpcKey(['sites', { page: 2 }]))
+    expect(serializeNuxtRpcKey(['sites', { page: 1, sort: 'asc' }]))
+      .toBe(serializeNuxtRpcKey(['sites', { sort: 'asc', page: 1 }]))
   })
 
   it('canonicalizes plain JSON objects independently of insertion order', () => {

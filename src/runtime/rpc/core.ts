@@ -89,7 +89,25 @@ export type NuxtRpcOperationDefinition
 export function serializeNuxtRpcKey(key: NuxtRpcKey): string {
   return typeof key === 'string'
     ? key
-    : key.map(part => encodeURIComponent(String(part))).join(':')
+    : key.map(part => encodeURIComponent(serializeNuxtRpcKeyPart(part))).join(':')
+}
+
+function serializeNuxtRpcKeyPart(part: unknown): string {
+  if (typeof part === 'string')
+    return part.startsWith('$') ? `$string:${part}` : part
+  if (typeof part === 'number')
+    return `$number:${String(part)}`
+  if (typeof part === 'bigint')
+    return `$bigint:${String(part)}`
+  if (typeof part === 'boolean')
+    return `$boolean:${part ? 'true' : 'false'}`
+  if (part === null)
+    return '$null'
+  if (part === undefined)
+    return '$undefined'
+  if (typeof part === 'object')
+    return `$json:${serializeCanonicalJson(part)}`
+  throw new TypeError('RPC query keys cannot contain functions or symbols.')
 }
 
 const RPC_BODY_KEY_SEGMENT = '$body'

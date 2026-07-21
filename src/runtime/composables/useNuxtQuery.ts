@@ -120,8 +120,8 @@ export function useNuxtQuery(
   } = opts
 
   const cache = useQueryCache()
-  const nuxtApp = useNuxtApp()
   const telemetryEnabled = isQueryTelemetryEnabled()
+  const telemetryHooks = telemetryEnabled ? useNuxtApp().hooks : undefined
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
 
@@ -143,7 +143,7 @@ export function useNuxtQuery(
       server: import.meta.server,
       startedAt,
     }
-    callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, event)
+    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryStart, event)
   }
 
   function emitQueryFinish(status: 'error' | 'success', context: unknown, error?: unknown): void {
@@ -167,11 +167,54 @@ export function useNuxtQuery(
       startedAt,
       status,
     }
-    callTelemetryHook(nuxtApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
+    callTelemetryHook(telemetryHooks!, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
   }
+
+  const telemetryFetchOptions = telemetryEnabled
+    ? {
+        onRequest: async (context: unknown) => {
+          emitQueryStart(context)
+          try {
+            await callFetchHook(fetchOptions.onRequest, context)
+          }
+          catch (error) {
+            emitQueryFinish('error', context, error)
+            throw error
+          }
+        },
+        onRequestError: async (context: any) => {
+          try {
+            await callFetchHook(fetchOptions.onRequestError, context)
+          }
+          finally {
+            emitQueryFinish('error', context, context?.error)
+          }
+        },
+        onResponse: async (context: unknown) => {
+          try {
+            await callFetchHook(fetchOptions.onResponse, context)
+          }
+          catch (error) {
+            emitQueryFinish('error', context, error)
+            throw error
+          }
+          if (!isPendingResponseError(context, fetchOptions.ignoreResponseError))
+            emitQueryFinish('success', context)
+        },
+        onResponseError: async (context: any) => {
+          try {
+            await callFetchHook(fetchOptions.onResponseError, context)
+          }
+          finally {
+            emitQueryFinish('error', context, toResponseError(context))
+          }
+        },
+      }
+    : undefined
 
   const query = useFetch(request as any, {
     ...fetchOptions,
+    enabled,
     key,
     immediate: fetchOptions.immediate ?? enabled.value,
     // Nuxt's default dedupe is 'cancel' which aborts the in-flight request on
@@ -190,43 +233,7 @@ export function useNuxtQuery(
         return undefined
       return readNuxtData(nuxtApp, cacheKey)
     },
-    onRequest: async (context: unknown) => {
-      emitQueryStart(context)
-      try {
-        await callFetchHook(fetchOptions.onRequest, context)
-      }
-      catch (error) {
-        emitQueryFinish('error', context, error)
-        throw error
-      }
-    },
-    onRequestError: async (context: any) => {
-      try {
-        await callFetchHook(fetchOptions.onRequestError, context)
-      }
-      finally {
-        emitQueryFinish('error', context, context?.error)
-      }
-    },
-    onResponse: async (context: unknown) => {
-      try {
-        await callFetchHook(fetchOptions.onResponse, context)
-      }
-      catch (error) {
-        emitQueryFinish('error', context, error)
-        throw error
-      }
-      if (!isPendingResponseError(context, fetchOptions.ignoreResponseError))
-        emitQueryFinish('success', context)
-    },
-    onResponseError: async (context: any) => {
-      try {
-        await callFetchHook(fetchOptions.onResponseError, context)
-      }
-      finally {
-        emitQueryFinish('error', context, toResponseError(context))
-      }
-    },
+    ...telemetryFetchOptions,
   } as any) as NuxtQuery<any, any>
 
   return applyQueryLifecycle(query as any, {

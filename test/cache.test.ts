@@ -116,4 +116,28 @@ describe('retainQuery (gcTime eviction)', () => {
     vi.advanceTimersByTime(10 ** 9)
     expect(evict).not.toHaveBeenCalled()
   })
+
+  it('gcTime: Infinity disables eviction', () => {
+    const evict = vi.fn()
+    const release = retainQuery(cache, 'k', Number.POSITIVE_INFINITY, evict)
+
+    release()
+    vi.runAllTimers()
+
+    expect(evict).not.toHaveBeenCalled()
+    expect(cache.gcTimers.has('k')).toBe(false)
+  })
+
+  it('does not overflow long finite gcTime values into immediate eviction', () => {
+    const evict = vi.fn()
+    const maxTimerDelay = 2 ** 31 - 1
+    const release = retainQuery(cache, 'k', maxTimerDelay + 1_000, evict)
+
+    release()
+    vi.advanceTimersByTime(maxTimerDelay)
+    expect(evict).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(1_000)
+    expect(evict).toHaveBeenCalledOnce()
+  })
 })
