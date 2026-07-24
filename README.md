@@ -574,9 +574,9 @@ The testing entry point has no Nitro dependency:
 
 ```ts
 import {
+  createFakeQueue,
   createJobTestHarness,
   createQueueTestHarness,
-  createFakeQueue,
 } from 'nuxt-cf-jobs/testing'
 ```
 
