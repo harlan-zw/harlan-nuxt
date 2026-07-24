@@ -178,7 +178,8 @@ export function findD1Binding(
 ): D1BindingMatch | undefined {
   if (preferred) {
     const db = env[preferred]
-    return isD1Database(db) ? { binding: preferred, db } : undefined
+    if (isD1Database(db))
+      return { binding: preferred, db }
   }
   const matches = Object.entries(env).filter((entry): entry is [string, D1DatabaseLike] => isD1Database(entry[1]))
   const first = matches[0]
@@ -190,7 +191,12 @@ export function findD1Binding(
 }
 
 function isD1Database(value: unknown): value is D1DatabaseLike {
-  return !!value && typeof value === 'object'
-    && typeof (value as { prepare?: unknown }).prepare === 'function'
-    && typeof (value as { exec?: unknown }).exec === 'function'
+  try {
+    return !!value && typeof value === 'object'
+      && typeof (value as { prepare?: unknown }).prepare === 'function'
+      && typeof (value as { exec?: unknown }).exec === 'function'
+  }
+  catch {
+    return false
+  }
 }

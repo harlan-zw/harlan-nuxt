@@ -77,7 +77,26 @@ describe('findD1Binding', () => {
 
   it('honours an explicit preferred binding', () => {
     expect(findD1Binding({ DB: db }, 'DB')?.binding).toBe('DB')
-    expect(findD1Binding({ DB: db }, 'NOPE')).toBeUndefined()
+  })
+
+  it('falls back to auto-detection when the preferred binding is unavailable', () => {
+    expect(findD1Binding({ DB: db }, 'NOPE')?.binding).toBe('DB')
+  })
+
+  it('skips a poisoned preferred binding and finds the current D1 binding', () => {
+    const poisoned = new Proxy({}, {
+      get() {
+        throw new Error('Attempted to use poisoned stub')
+      },
+    })
+
+    expect(findD1Binding({
+      OLD_DB: poisoned,
+      DB: db,
+    }, 'OLD_DB')).toEqual({
+      binding: 'DB',
+      db,
+    })
   })
 
   it('returns undefined when no binding looks like D1', () => {
