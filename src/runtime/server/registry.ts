@@ -38,10 +38,9 @@ interface DefineJobBaseOptions<
  * A build-time registry entry that defers loading the handler module. The
  * static routing fields are AST-extracted from the job's `defineJob({...})`
  * call so the producer/consumer can route, validate queues and resolve attempts
- * WITHOUT importing (and evaluating) the handler — `load()` pulls the full
- * definition only when a handler/`input`/`failed` is actually needed (dispatch,
- * or a producer of a job that declares `input`/`unique`). This is what keeps a
- * worker from evaluating all job modules to run one job.
+ * WITHOUT importing (and evaluating) the handler. `load()` pulls the full
+ * definition for dispatch and durable producer preparation. This keeps a worker
+ * from evaluating every job module to run or prepare one job.
  */
 export interface LazyJobEntry<Name extends string = string, Queue extends string = string> {
   name: Name
@@ -281,7 +280,8 @@ export function defineJobRegistry<
   // `input`/`unique`/`uniqueId` in memory, so producer-side validation + dedup
   // keep working); lazy entries return static routing metadata only — typed as a
   // full definition for callers, but `handle`/`input` are absent at runtime (the
-  // real module materializes at dispatch via `loadJobDefinition`).
+  // real module materializes at dispatch or durable preparation via
+  // `loadJobDefinition`).
   function getJobDefinition<Name extends JobNameOf<Jobs>>(name: Name): JobDefinitionByName<Jobs, Name> | undefined
   function getJobDefinition(name: string): AnyJobDefinition | undefined
   function getJobDefinition(name: string) {

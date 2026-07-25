@@ -1,6 +1,7 @@
 import type { LazyJobEntry } from '../src/runtime/server/registry'
 import { describe, expect, it, vi } from 'vitest'
 import { dispatchRegisteredJob } from '../src/runtime/server/dispatch'
+import { prepareRegisteredDurableJob } from '../src/runtime/server/outbox'
 import { defineJob, defineJobRegistry } from '../src/runtime/server/registry'
 
 // A lazy entry mirrors what the generated `registry.ts` emits: static routing
@@ -67,5 +68,65 @@ describe('lazy registry entries', () => {
 
     expect(result.error?._tag).toBe('handler-not-found')
     expect(load).not.toHaveBeenCalled()
+  })
+
+  it('loads the full definition for producer-side payload validation', async () => {
+    const input = {
+      safeParse(payload: unknown) {
+        return payload && typeof payload === 'object' && typeof (payload as { id?: unknown }).id === 'string'
+          ? { success: true as const, data: payload as { id: string } }
+          : { success: false as const, error: new Error('id required') }
+      },
+    }
+    const load = vi.fn(async () => defineJob({
+      name: 'indexing/persist',
+      queue: 'default',
+      input,
+      async handle() {},
+    }))
+    const registry = defineJobRegistry([{
+      name: 'indexing/persist',
+      queue: 'default',
+      hasInput: true,
+      load,
+    } as LazyJobEntry] as never)
+
+    await expect(prepareRegisteredDurableJob(registry, {
+      name: 'indexing/persist',
+      payload: { missing: true },
+    } as never)).rejects.toMatchObject({
+      jobError: { _tag: 'invalid-payload' },
+    })
+
+    expect(load).toHaveBeenCalledOnce()
+  })
+
+  it('loads and caches custom uniqueId logic on the producer path', async () => {
+    const load = vi.fn(async () => defineJob({
+      name: 'indexing/persist',
+      queue: 'default',
+      unique: true,
+      uniqueId: (payload: { id: string }) => payload.id,
+      async handle() {},
+    }))
+    const registry = defineJobRegistry([{
+      name: 'indexing/persist',
+      queue: 'default',
+      unique: true,
+      hasUniqueId: true,
+      load,
+    } as LazyJobEntry] as never)
+
+    const first = await prepareRegisteredDurableJob(registry, {
+      name: 'indexing/persist',
+      payload: { id: 'same', attempt: 1 },
+    } as never)
+    const second = await prepareRegisteredDurableJob(registry, {
+      name: 'indexing/persist',
+      payload: { id: 'same', attempt: 2 },
+    } as never)
+
+    expect(first.uniqueKey).toBe(second.uniqueKey)
+    expect(load).toHaveBeenCalledOnce()
   })
 })

@@ -119,8 +119,13 @@ export interface DurableJobFailureRepository {
 }
 
 export interface DurableJobRegistryLike<Env = unknown, Db = unknown, Logger = unknown> {
-  /** May resolve asynchronously for lazily-loaded jobs. Unused on the producer path. */
+  /** May resolve asynchronously for lazily-loaded jobs. */
   getHandler?: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
+  /**
+   * Loads the full definition when producer policy depends on executable fields
+   * such as `input` or `uniqueId`.
+   */
+  loadJobDefinition?: (name: string) => Promise<JobDefinition<string, unknown, string, Env, Db, Logger> | undefined>
   getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
   getJobRoute?: (name: string) => DurableJobRoute<string> | undefined
 }
@@ -361,9 +366,18 @@ export async function prepareRegisteredDurableJob<
   registry: TypedDurableJobRegistryLike<Jobs>,
   opts: PrepareRegisteredDurableJobOptions<Jobs, Name>,
 ): Promise<DurableJobRecord<JobQueueByName<Jobs, Name>>> {
+  const definition = registry.loadJobDefinition
+    ? await registry.loadJobDefinition(opts.name)
+    : registry.getJobDefinition?.(opts.name)
+
   return prepareDurableJob({
     ...opts,
     registry,
+    definition: definition as PrepareDurableJobOptions<
+      Name,
+      JobPayloadByName<Jobs, Name> & object,
+      JobQueueByName<Jobs, Name>
+    >['definition'],
   })
 }
 

@@ -221,7 +221,7 @@ const route = getJobDefinition(name)
 const fullDefinition = await loadJobDefinition(name)
 ```
 
-`getJobDefinition()` reads static routing metadata without loading the handler module. Use `loadJobDefinition()` when you need the full definition. Jobs with `broadcast` also generate `JobBroadcastMessage<Name>` and `JobBroadcastEnvelope<Name>` types.
+`getJobDefinition()` returns static routing and literal policy metadata without loading the job module. It does not include executable fields such as `handle`, `input`, or `uniqueId`. Use `loadJobDefinition()` when you need the full definition. The durable `prepareJob()` helper does this automatically. Jobs with `broadcast` also generate `JobBroadcastMessage<Name>` and `JobBroadcastEnvelope<Name>` types.
 
 Runtime validation is available when you want to fail a custom startup check:
 
@@ -357,7 +357,7 @@ export default defineEventHandler(async (event) => {
 - `not-dispatched`: the row is safe in D1, but the queue binding was unavailable.
 - `dispatch-failed`: the row is safe in D1, and `cause` contains the send error.
 
-The generated `prepareJob()` validates the payload, resolves the queue, applies attempts and uniqueness, and checks the Cloudflare message size before inserting anything.
+The generated `prepareJob()` loads the full job definition, validates the payload, resolves the queue, applies attempts and uniqueness, and checks the serialized payload against the durable D1 storage limit before inserting anything.
 
 ### Recovery
 
