@@ -268,6 +268,21 @@ describe('settleBatchMember', () => {
     expect(fired).toBe(1)
   })
 
+  it('does not settle an already finished batch again when a member is retried', async () => {
+    const { db, repo, store, publisher } = await setupBatchEnv()
+    const jobs = await Promise.all([prepareJob('scan/crawl', { siteId: 's1' })])
+    const { batchId, jobIds } = await createJobBatch({ store, repository: repo, publisher, jobs })
+
+    const first = await settleBatchMember({ store, jobId: jobIds[0], failed: true })
+    expect(first.batchComplete).toBe(true)
+
+    const retry = await settleBatchMember({ store, batchId })
+    expect(retry).toEqual({ batchComplete: false, onFinishDispatched: false })
+
+    const batchRow = db._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches WHERE id = ?').get(batchId) as { pending_jobs: number, failed_jobs: number }
+    expect(batchRow).toEqual({ pending_jobs: 0, failed_jobs: 1 })
+  })
+
   it('returns inert when the job has no batch', async () => {
     const { store } = await setupBatchEnv()
     const res = await settleBatchMember({ store, jobId: 'nope' })

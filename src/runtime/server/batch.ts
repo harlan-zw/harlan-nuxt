@@ -58,7 +58,7 @@ export interface DurableBatchStore {
   /**
    * Atomically decrement `pending_jobs` (and `failed_jobs` when `failed`), set
    * `finished_at` on the 1→0 transition, and return the resulting row. Returns
-   * `null` when the batch does not exist.
+   * `null` when the batch does not exist or has already settled.
    */
   decrementPending: (batchId: string, opts?: { failed?: boolean }) => Promise<DurableBatchRecord | null>
   /** Resolve the batch a job belongs to (checks active then failed jobs). */
@@ -152,7 +152,7 @@ export function createD1DurableBatchStore(
             failed_jobs = failed_jobs + ?,
             updated_at = unixepoch(),
             finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
-        WHERE id = ?
+        WHERE id = ? AND pending_jobs > 0
         RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
       `).bind(decOpts?.failed ? 1 : 0, batchId).first<Record<string, unknown>>()
       return row ? mapBatchRow(row) : null
