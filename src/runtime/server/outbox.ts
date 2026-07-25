@@ -18,13 +18,22 @@ import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
-import { CF_QUEUE_MAX_MESSAGE_BYTES, sendBatchChunked, withSendBackpressure } from './queue'
+import { sendBatchChunked, withSendBackpressure } from './queue'
 import { parseJobInput } from './registry'
 import { err, ok, unwrapResult } from './result'
 
 function byteLength(value: string): number {
   return typeof Buffer !== 'undefined' ? Buffer.byteLength(value, 'utf8') : new TextEncoder().encode(value).byteLength
 }
+
+/**
+ * Maximum serialized durable payload size.
+ *
+ * Durable payloads live in D1. Queue messages only carry `{ jobId, queue }`, so
+ * the Cloudflare Queue message limit does not apply here. This leaves 100,000
+ * bytes below D1's 2,000,000-byte row limit for storage overhead.
+ */
+export const DURABLE_JOB_MAX_PAYLOAD_BYTES = 1_900_000
 
 export interface DurableJobRoute<Queue extends string = string> {
   queue: Queue
@@ -316,8 +325,8 @@ export async function prepareDurableJobResult<
   const payload = buildJobPayload(opts.name, parsedPayload.data as Payload)
   const serialized = JSON.stringify(continuations ? { ...payload, _continuations: continuations } : payload)
   const bytes = byteLength(serialized)
-  if (bytes > CF_QUEUE_MAX_MESSAGE_BYTES)
-    return err(jobErrors.payloadTooLarge(opts.name, bytes, CF_QUEUE_MAX_MESSAGE_BYTES))
+  if (bytes > DURABLE_JOB_MAX_PAYLOAD_BYTES)
+    return err(jobErrors.payloadTooLarge(opts.name, bytes, DURABLE_JOB_MAX_PAYLOAD_BYTES))
 
   return ok({
     id: opts.id ?? crypto.randomUUID(),

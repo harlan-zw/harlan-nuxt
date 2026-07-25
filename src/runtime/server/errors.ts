@@ -189,7 +189,7 @@ export const jobErrors = {
       task,
       bytes,
       limit,
-      message: `Job payload exceeds Cloudflare Queue limit of ${limit} bytes for task: ${task}`,
+      message: `Job payload exceeds durable storage limit of ${limit} bytes for task: ${task}`,
     }
   },
   noRoute(task: string): NoRouteError {

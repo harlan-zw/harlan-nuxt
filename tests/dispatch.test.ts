@@ -815,6 +815,20 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(sendBatch.mock.calls[1]?.[0]).toEqual([{ body: messages[2], contentType: 'json' }])
   })
 
+  it('keeps the Cloudflare Queue 128KB limit for direct messages', async () => {
+    const queue = {
+      send: vi.fn(async () => undefined),
+      sendBatch: vi.fn(async () => undefined),
+    }
+
+    await expect(sendBatchChunked(queue, [{ huge: 'x'.repeat(130_000) }]))
+      .rejects
+      .toThrow(/maximum is 128000 bytes/)
+
+    expect(queue.send).not.toHaveBeenCalled()
+    expect(queue.sendBatch).not.toHaveBeenCalled()
+  })
+
   it('exposes exponential backoff for retry policy', () => {
     expect(exponentialBackoff(0)).toBe(30)
     expect(exponentialBackoff(4, { baseSeconds: 10, maxSeconds: 60 })).toBe(60)
@@ -1385,16 +1399,6 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
 
     await expect(publisher.sendBatch(payloads as never)).resolves.toBe(true)
     expect(batches).toEqual([100, 100, 50])
-  })
-
-  it('rejects job payloads larger than the Cloudflare 128KB limit', async () => {
-    const huge = 'x'.repeat(130 * 1024)
-    await expect(prepareDurableJob({
-      name: 'demo/huge',
-      payload: { huge },
-      route: { queue: 'default', jobType: 'demo' },
-      now: 100,
-    })).rejects.toThrow(/exceeds Cloudflare Queue limit/)
   })
 
   it('produces stable unique keys when payloads contain BigInt or Date values', async () => {

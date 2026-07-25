@@ -5,6 +5,7 @@ import {
   describeCause,
   describeCauseWithStack,
   dispatchDurableJobBatch,
+  DURABLE_JOB_MAX_PAYLOAD_BYTES,
   enqueueDurableJob,
   err,
   formatJobError,
@@ -100,15 +101,32 @@ describe('prepareDurableJobResult returns typed failures instead of throwing', (
     expect(result).toMatchObject({ ok: false, error: { _tag: 'no-route', task: 'orphan' } })
   })
 
-  it('returns payload-too-large with the offending byte count', async () => {
+  it('accepts durable payloads larger than the Cloudflare Queue message limit', async () => {
     const result = await prepareDurableJobResult({
-      name: 'demo/huge',
-      payload: { huge: 'x'.repeat(130 * 1024) },
+      name: 'demo/stored',
+      payload: { stored: 'x'.repeat(150_000) },
       route: { queue: 'default', jobType: 'demo' },
     })
-    expect(result).toMatchObject({ ok: false, error: { _tag: 'payload-too-large', task: 'demo/huge' } })
-    if (isErr(result) && result.error._tag === 'payload-too-large')
+    expect(isOk(result)).toBe(true)
+  })
+
+  it('returns payload-too-large with the offending durable storage byte count', async () => {
+    const result = await prepareDurableJobResult({
+      name: 'demo/huge',
+      payload: { huge: 'x'.repeat(DURABLE_JOB_MAX_PAYLOAD_BYTES) },
+      route: { queue: 'default', jobType: 'demo' },
+    })
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        _tag: 'payload-too-large',
+        task: 'demo/huge',
+        limit: DURABLE_JOB_MAX_PAYLOAD_BYTES,
+      },
+    })
+    if (isErr(result) && result.error._tag === 'payload-too-large') {
       expect(result.error.bytes).toBeGreaterThan(result.error.limit)
+    }
   })
 
   it('returns ok with the record on success', async () => {
