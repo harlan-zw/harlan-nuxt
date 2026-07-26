@@ -31,6 +31,7 @@ describe('recoverDurableJobs', () => {
 
     expect(repository.findStaleReservedJobs).toHaveBeenCalledWith({ staleBefore: 700, limit: 10 })
     expect(repository.releaseStaleReservedJobs).toHaveBeenCalledWith({
+      now: 1_000,
       staleBefore: 700,
       availableAt: 1_000,
       error: 'stale-reservation',
@@ -39,23 +40,29 @@ describe('recoverDurableJobs', () => {
     expect(repository.findDispatchableJobs).toHaveBeenCalledWith({
       now: 1_000,
       createdBefore: 400,
+      staleReleasedBefore: 880,
       limit: 10,
     })
-    expect(sent).toEqual([{ queue: 'q', ids: ['stale-1', 'dupe', 'orphaned'] }])
+    expect(sent).toEqual([{ queue: 'q', ids: ['orphaned'] }])
     expect(result).toMatchObject({
       released: 2,
       terminalized: 0,
-      swept: 3,
+      swept: 1,
       dispatched: 1,
     })
   })
 
   it('terminalizes exhausted stale reservations BEFORE finding/releasing retriable ones', async () => {
     const callOrder: string[] = []
+    const terminalizedJobs = [
+      { id: 'dead-1', queue: 'q', batchId: 'batch-1' },
+      { id: 'dead-2', queue: 'q', batchId: null },
+      { id: 'dead-3', queue: 'q', batchId: 'batch-2' },
+    ]
     const repository = {
       failStaleReservedJobs: vi.fn(async () => {
         callOrder.push('fail')
-        return 3
+        return terminalizedJobs
       }),
       findStaleReservedJobs: vi.fn(async () => {
         callOrder.push('find')
@@ -65,22 +72,27 @@ describe('recoverDurableJobs', () => {
       findDispatchableJobs: vi.fn(async () => [] as Array<{ id: string, queue: string }>),
     }
     const publisher = { sendBatch: vi.fn(async () => true) }
+    const onTerminalized = vi.fn(async () => {})
 
     const result = await recoverDurableJobs(repository, publisher, {
       now: 1_000,
       staleSeconds: 300,
       limit: 10,
       staleError: 'stale-reservation',
+      onTerminalized,
     })
 
     // exhausted jobs are cleared before the revive path runs, so they can't be
     // re-dispatched into the endless reaper loop.
     expect(callOrder).toEqual(['fail', 'find'])
     expect(repository.failStaleReservedJobs).toHaveBeenCalledWith({
+      now: 1_000,
       staleBefore: 700,
       error: 'stale-reservation: exhausted retries',
       limit: 10,
     })
+    expect(onTerminalized).toHaveBeenCalledWith(terminalizedJobs)
     expect(result.terminalized).toBe(3)
+    expect(result.terminalizedJobs).toEqual(terminalizedJobs)
   })
 })

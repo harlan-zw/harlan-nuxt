@@ -1,7 +1,7 @@
 {
   "name": "nuxt-cf-jobs",
   "type": "module",
-  "version": "0.14.0",
+  "version": "0.14.5",
   "packageManager": "pnpm@11.2.1",
   "description": "Nuxt module for typed Cloudflare queue jobs.",
   "author": {
@@ -67,7 +67,7 @@
     }
   },
   "bin": {
-    "cf-jobs": "./dist/cli/index.mjs"
+    "cf-jobs": "dist/cli/index.mjs"
   },
   "files": [
     "dist"

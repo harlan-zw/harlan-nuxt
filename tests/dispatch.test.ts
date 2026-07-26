@@ -1244,7 +1244,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(db.queries.some(query => query.includes('UPDATE jobs') && query.includes('RETURNING *'))).toBe(true)
     expect(db.queries.some(query => query.includes('INSERT OR REPLACE INTO failed_jobs'))).toBe(true)
     expect(db.queries.some(query => query.includes('created_at <= ?'))).toBe(true)
-    expect(db.bindings).toContainEqual([300, 200, 200, 5])
+    expect(db.bindings).toContainEqual([300, 200, 200, null, null, 5])
   })
 
   it('exports Drizzle schema for persisted job stores', () => {

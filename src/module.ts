@@ -35,7 +35,7 @@ declare module '@nuxt/schema' {
 }
 
 interface ResolvedBroadcastOptions extends Required<Pick<BroadcastOptions, 'route' | 'durableObjectBinding' | 'durableObjectName'>> {}
-interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'staleSeconds' | 'orphanedSeconds' | 'orphanedBatchSeconds' | 'limit'>> {
+interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'staleSeconds' | 'orphanedSeconds' | 'redeliveryGraceSeconds' | 'orphanedBatchSeconds' | 'limit'>> {
   d1Binding?: string
 }
 
@@ -154,6 +154,7 @@ function resolveReconcileOptions(input: ModuleOptions['reconcile']): ResolvedRec
   return {
     staleSeconds: opts.staleSeconds ?? 300,
     orphanedSeconds: opts.orphanedSeconds ?? 600,
+    redeliveryGraceSeconds: opts.redeliveryGraceSeconds ?? 120,
     orphanedBatchSeconds: opts.orphanedBatchSeconds ?? 7 * 86400,
     limit: opts.limit ?? 100,
     ...(opts.d1Binding ? { d1Binding: opts.d1Binding } : {}),

@@ -1,7 +1,8 @@
+import type { SettleBatchMemberOptions } from '../batch'
 import { useRuntimeConfig } from 'nitropack/runtime'
 // @ts-expect-error - #cf-jobs/app is the generated registry alias, resolved by Nuxt
 import { jobRegistry } from '#cf-jobs/app'
-import { createD1DurableBatchStore, recoverOrphanedBatches } from '../batch'
+import { createD1DurableBatchStore, recoverOrphanedBatches, settleBatchMember } from '../batch'
 import { createD1DurableJobRepository } from '../d1'
 import { findD1Binding } from '../dev-worker'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob } from '../outbox'
@@ -18,8 +19,8 @@ import { defineScheduledTask } from '../scheduled'
 //   2. `onFinish` / a release path persists a follow-up row but the queue send is
 //      skipped (no binding) or throws → the row is `ready` but undispatched.
 //
-// This task, on a short cron, reclaims (1) via `releaseStaleReservedDurableJobs`
-// and re-dispatches both (1, now released) and old due rows from (2).
+// This task reclaims (1) via `releaseStaleReservedDurableJobs`, lets the original
+// Cloudflare redelivery win during a short grace, then sweeps any row still due.
 // Module-owned so every consuming app gets the backstop without copying it.
 //
 // Resilient by construction: every early-out returns a tagged skip rather than
@@ -31,6 +32,7 @@ interface ReconcileRuntimeConfig {
       d1Binding?: string
       staleSeconds?: number
       orphanedSeconds?: number
+      redeliveryGraceSeconds?: number
       orphanedBatchSeconds?: number
       limit?: number
     }
@@ -113,6 +115,7 @@ export default defineScheduledTask({
 
     const staleSeconds = reconcile.staleSeconds ?? 300
     const orphanedSeconds = reconcile.orphanedSeconds ?? 600
+    const redeliveryGraceSeconds = reconcile.redeliveryGraceSeconds ?? 120
     const orphanedBatchSeconds = reconcile.orphanedBatchSeconds ?? 7 * 86400
     const limit = reconcile.limit ?? 100
     const nowSeconds = Math.floor(Date.now() / 1000)
@@ -121,42 +124,59 @@ export default defineScheduledTask({
     // a recurring unhandled worker exception (Sentry noise, red tail). Degrade to
     // a tagged skip + one warning so a misconfigured env is visible but inert.
     try {
+      const dispatchOnFinish: NonNullable<SettleBatchMemberOptions['dispatchOnFinish']> = async ({ continuation, batch }) => {
+        const record = await prepareDurableJob({
+          name: continuation.name,
+          payload: continuation.payload,
+          registry: jobRegistry,
+          delaySeconds: continuation.delaySeconds,
+        })
+        const result = await enqueueDurableJob(
+          repo,
+          publisher,
+          record,
+          continuation.delaySeconds ? { delaySeconds: continuation.delaySeconds } : undefined,
+        )
+        if (result.status !== 'enqueued' && result.status !== 'duplicate') {
+          console.warn(
+            `[cf-jobs:reconcile] recovered batch "${batch.id}" onFinish "${continuation.name}" persisted but was not dispatched: ${result.status}`,
+          )
+        }
+      }
       const recovered = await recoverDurableJobs(repo, publisher, {
         now: nowSeconds,
         staleSeconds,
         orphanedSeconds,
+        redeliveryGraceSeconds,
         limit,
         staleError: 'stale-reservation',
+        onTerminalized: async (jobs) => {
+          for (const job of jobs) {
+            await settleBatchMember({
+              store,
+              jobId: job.id,
+              failed: true,
+              dispatchOnFinish,
+            }).catch((error) => {
+              console.warn(
+                `[cf-jobs:reconcile] terminalized job "${job.id}" but failed to settle its batch: ${(error as Error)?.message ?? error}`,
+              )
+            })
+          }
+        },
       })
       const orphanedBatches = await recoverOrphanedBatches({
         store,
-        before: nowSeconds - orphanedBatchSeconds,
+        before: recovered.terminalized > 0 ? nowSeconds : nowSeconds - orphanedBatchSeconds,
         now: nowSeconds,
         limit,
-        dispatchOnFinish: async ({ continuation, batch }) => {
-          const record = await prepareDurableJob({
-            name: continuation.name,
-            payload: continuation.payload,
-            registry: jobRegistry,
-            delaySeconds: continuation.delaySeconds,
-          })
-          const result = await enqueueDurableJob(
-            repo,
-            publisher,
-            record,
-            continuation.delaySeconds ? { delaySeconds: continuation.delaySeconds } : undefined,
-          )
-          if (result.status !== 'enqueued' && result.status !== 'duplicate') {
-            console.warn(
-              `[cf-jobs:reconcile] recovered orphaned batch "${batch.id}" onFinish "${continuation.name}" persisted but was not dispatched: ${result.status}`,
-            )
-          }
-        },
+        dispatchOnFinish,
       })
 
       const result = {
         released: recovered.released,
         terminalized: recovered.terminalized,
+        terminalizedJobIds: recovered.terminalizedJobs.slice(0, 10).map(job => job.id),
         swept: recovered.swept,
         dispatched: recovered.dispatched,
         orphanedBatches: orphanedBatches.recovered,

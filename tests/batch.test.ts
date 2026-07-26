@@ -22,6 +22,20 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
     async exec(query: string) {
       db.exec(query)
     },
+    async batch(statements) {
+      db.exec('BEGIN')
+      const results: Array<{ success?: boolean, meta?: { changes?: number } }> = []
+      try {
+        for (const statement of statements)
+          results.push(await statement.run())
+        db.exec('COMMIT')
+        return results
+      }
+      catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    },
     prepare<T = unknown>(query: string): D1PreparedStatementLike<T> {
       const stmt = db.prepare(query)
       let bound: unknown[] = []
@@ -79,7 +93,7 @@ function countRows(db: { _db: DatabaseSync }, table: string): number {
 
 describe('createJobBatch', () => {
   it('inserts a batch row, persists members with the batch id, and dispatches them', async () => {
-    const { db, repo, store, publisher, sent } = await setupBatchEnv()
+    const { db, store, publisher, sent } = await setupBatchEnv()
 
     const jobs = await Promise.all([
       prepareJob('scan/crawl', { siteId: 's1' }),
@@ -89,7 +103,6 @@ describe('createJobBatch', () => {
 
     const result = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       name: 'onboarding:s1',
@@ -117,10 +130,9 @@ describe('createJobBatch', () => {
   })
 
   it('is a no-op for an empty job list (a zero-member batch would never finish)', async () => {
-    const { db, repo, store, publisher, sent } = await setupBatchEnv()
+    const { db, store, publisher, sent } = await setupBatchEnv()
     const result = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs: [],
       onFinish: { name: 'assess/site', payload: { siteId: 's1' } },
@@ -130,8 +142,8 @@ describe('createJobBatch', () => {
     expect(sent).toHaveLength(0)
   })
 
-  it('throws and does not dispatch when durable member inserts are partial', async () => {
-    const { db, repo, store, publisher, sent } = await setupBatchEnv()
+  it('rolls back the batch and every member when durable member inserts conflict', async () => {
+    const { db, store, publisher, sent } = await setupBatchEnv()
     const definition = { unique: true }
     const jobs = await Promise.all([
       prepareDurableJob({ name: 'scan/unique', payload: { siteId: 's1' }, route: { queue: 'default', jobType: 'scan/unique' }, definition }),
@@ -140,22 +152,20 @@ describe('createJobBatch', () => {
 
     await expect(createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       name: 'deduped',
-    })).rejects.toThrow('inserted 1/2 job')
+    })).rejects.toThrow('atomically')
 
     expect(sent).toHaveLength(0)
-    expect(countRows(db, 'jobs')).toBe(1)
-    const batchRow = db._db.prepare('SELECT pending_jobs FROM job_batches').get() as { pending_jobs: number }
-    expect(batchRow.pending_jobs).toBe(2)
+    expect(countRows(db, 'jobs')).toBe(0)
+    expect(countRows(db, 'job_batches')).toBe(0)
   })
 })
 
 describe('settleBatchMember', () => {
   it('fires onFinish exactly once, on the settle that brings pending to 0', async () => {
-    const { repo, store, publisher } = await setupBatchEnv()
+    const { store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all([
       prepareJob('scan/crawl', { siteId: 's1' }),
       prepareJob('scan/crux', { siteId: 's1' }),
@@ -163,7 +173,6 @@ describe('settleBatchMember', () => {
     ])
     const { batchId, jobIds } = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       onFinish: { name: 'assess/site', payload: { siteId: 's1' } },
@@ -192,13 +201,12 @@ describe('settleBatchMember', () => {
   })
 
   it('elects a single winner under concurrent settles', async () => {
-    const { repo, store, publisher } = await setupBatchEnv()
+    const { store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all(
       Array.from({ length: 8 }, (_, i) => prepareJob('scan/x', { i })),
     )
     const { jobIds } = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       onFinish: { name: 'done', payload: {} },
@@ -220,14 +228,13 @@ describe('settleBatchMember', () => {
   })
 
   it('counts failed members and still fires onFinish on terminal', async () => {
-    const { db, repo, store, publisher } = await setupBatchEnv()
+    const { db, store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all([
       prepareJob('scan/crawl', { siteId: 's1' }),
       prepareJob('scan/crux', { siteId: 's1' }),
     ])
     const { jobIds } = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       onFinish: { name: 'assess/site', payload: { siteId: 's1' } },
@@ -254,7 +261,7 @@ describe('settleBatchMember', () => {
   it('resolves the batch from a member that has moved to failed_jobs', async () => {
     const { repo, store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all([prepareJob('scan/crawl', { siteId: 's1' })])
-    const { jobIds } = await createJobBatch({ store, repository: repo, publisher, jobs, onFinish: { name: 'done', payload: {} } })
+    const { jobIds } = await createJobBatch({ store, publisher, jobs, onFinish: { name: 'done', payload: {} } })
 
     // simulate the consumer moving the job to failed_jobs before settling
     const claimed = await repo.claimJob(jobIds[0]!)
@@ -269,9 +276,9 @@ describe('settleBatchMember', () => {
   })
 
   it('does not settle an already finished batch again when a member is retried', async () => {
-    const { db, repo, store, publisher } = await setupBatchEnv()
+    const { db, store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all([prepareJob('scan/crawl', { siteId: 's1' })])
-    const { batchId, jobIds } = await createJobBatch({ store, repository: repo, publisher, jobs })
+    const { batchId, jobIds } = await createJobBatch({ store, publisher, jobs })
 
     const first = await settleBatchMember({ store, jobId: jobIds[0], failed: true })
     expect(first.batchComplete).toBe(true)
@@ -290,13 +297,13 @@ describe('settleBatchMember', () => {
   })
 
   it('closes old orphaned pending batches without active jobs', async () => {
-    const { db, repo, store, publisher } = await setupBatchEnv()
+    const { db, store, publisher } = await setupBatchEnv()
     const [terminalJob, activeJob] = await Promise.all([
       prepareJob('scan/terminal', {}),
       prepareJob('scan/active', {}),
     ])
-    const terminal = await createJobBatch({ store, repository: repo, publisher, jobs: [terminalJob] })
-    const active = await createJobBatch({ store, repository: repo, publisher, jobs: [activeJob] })
+    const terminal = await createJobBatch({ store, publisher, jobs: [terminalJob] })
+    const active = await createJobBatch({ store, publisher, jobs: [activeJob] })
     const old = 1000
     const now = old + 8 * 86400
 
@@ -312,12 +319,12 @@ describe('settleBatchMember', () => {
   })
 
   it('does not close an orphaned batch when terminal member evidence is missing', async () => {
-    const { db, repo, store, publisher } = await setupBatchEnv()
+    const { db, store, publisher } = await setupBatchEnv()
     const jobs = await Promise.all([
       prepareJob('scan/terminal', {}),
       prepareJob('scan/pruned', {}),
     ])
-    const { batchId, jobIds } = await createJobBatch({ store, repository: repo, publisher, jobs })
+    const { batchId, jobIds } = await createJobBatch({ store, publisher, jobs })
     const old = 1000
     const now = old + 8 * 86400
 
@@ -344,7 +351,6 @@ describe('settleBatchMember', () => {
     ])
     const { batchId, jobIds } = await createJobBatch({
       store,
-      repository: repo,
       publisher,
       jobs,
       onFinish: { name: 'assess/site', payload: { siteId: 's1' } },
@@ -386,7 +392,7 @@ describe('settleBatchMember', () => {
 
 describe('parent batches', () => {
   it('fires the parent onFinish once every child batch completes', async () => {
-    const { repo, store, publisher } = await setupBatchEnv()
+    const { store, publisher } = await setupBatchEnv()
 
     const fired: string[] = []
     const dispatchOnFinish = async ({ continuation }: { continuation: { name: string } }) => {
@@ -402,8 +408,8 @@ describe('parent batches', () => {
     const childAJobs = await Promise.all([prepareJob('a', { n: 1 }), prepareJob('a', { n: 2 })])
     const childBJobs = await Promise.all([prepareJob('b', { n: 1 })])
 
-    const childA = await createJobBatch({ store, repository: repo, publisher, jobs: childAJobs, parentBatchId: parentId, onFinish: { name: 'childA/done', payload: {} } })
-    const childB = await createJobBatch({ store, repository: repo, publisher, jobs: childBJobs, parentBatchId: parentId, onFinish: { name: 'childB/done', payload: {} } })
+    const childA = await createJobBatch({ store, publisher, jobs: childAJobs, parentBatchId: parentId, onFinish: { name: 'childA/done', payload: {} } })
+    const childB = await createJobBatch({ store, publisher, jobs: childBJobs, parentBatchId: parentId, onFinish: { name: 'childB/done', payload: {} } })
 
     // drain child A
     await settleBatchMember({ store, jobId: childA.jobIds[0], dispatchOnFinish })
@@ -419,7 +425,7 @@ describe('parent batches', () => {
   })
 
   it('recovers an orphaned parent batch from finished child batches', async () => {
-    const { db, repo, store, publisher } = await setupBatchEnv()
+    const { db, store, publisher } = await setupBatchEnv()
     const old = 1000
     const now = old + 8 * 86400
     const fired: string[] = []
@@ -431,8 +437,8 @@ describe('parent batches', () => {
     })
     const childAJobs = await Promise.all([prepareJob('a', {})])
     const childBJobs = await Promise.all([prepareJob('b', {})])
-    const childA = await createJobBatch({ store, repository: repo, publisher, jobs: childAJobs, parentBatchId: parentId })
-    const childB = await createJobBatch({ store, repository: repo, publisher, jobs: childBJobs, parentBatchId: parentId })
+    const childA = await createJobBatch({ store, publisher, jobs: childAJobs, parentBatchId: parentId })
+    const childB = await createJobBatch({ store, publisher, jobs: childBJobs, parentBatchId: parentId })
 
     db._db.prepare('UPDATE job_batches SET created_at = ? WHERE id IN (?, ?, ?)').run(old, parentId, childA.batchId, childB.batchId)
     db._db.prepare('UPDATE job_batches SET pending_jobs = 0, finished_at = ? WHERE id IN (?, ?)').run(old, childA.batchId, childB.batchId)

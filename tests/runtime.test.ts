@@ -12,6 +12,20 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
   return {
     _db: db,
     async exec(query) { db.exec(query) },
+    async batch(statements) {
+      db.exec('BEGIN')
+      const results: Array<{ success?: boolean, meta?: { changes?: number } }> = []
+      try {
+        for (const statement of statements)
+          results.push(await statement.run())
+        db.exec('COMMIT')
+        return results
+      }
+      catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+    },
     prepare<T = unknown>(query: string): D1PreparedStatementLike<T> {
       const stmt = db.prepare(query)
       let bound: unknown[] = []
@@ -485,6 +499,43 @@ describe('runtime.prune', () => {
 })
 
 describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
+  it('records an in-flight DLQ arrival before acknowledging the message', async () => {
+    const logs: Array<{ stage: string }> = []
+    const { d1, runtime } = await setup({ work: async () => {} }, { onLog: event => logs.push(event as never) })
+    const job = await prepare('work', {})
+    await runtime.repository.insertJob(job)
+    expect(await runtime.repository.claimJob(job.id)).not.toBeNull()
+    const message = { body: { jobId: job.id }, attempts: 5, ack: vi.fn(), retry: vi.fn() }
+
+    await runtime.consumeBatch({ queue: 'jobs-dlq', messages: [message] })
+
+    expect(message.ack).toHaveBeenCalled()
+    expect(message.retry).not.toHaveBeenCalled()
+    const row = d1._db.prepare('SELECT retry_reasons FROM jobs WHERE id = ?').get(job.id) as { retry_reasons: string }
+    expect(JSON.parse(row.retry_reasons)).toEqual([
+      expect.objectContaining({
+        _tag: 'dlq-arrival',
+        messageAttempts: 5,
+      }),
+    ])
+    expect(logs).toContainEqual(expect.objectContaining({ stage: 'dlq' }))
+  })
+
+  it('classifies a DLQ delivery for a completed row as obsolete', async () => {
+    const logs: Array<{ stage: string }> = []
+    const { runtime } = await setup({ work: async () => {} }, { onLog: event => logs.push(event as never) })
+    const job = await prepare('work', {})
+    await runtime.repository.insertJob(job)
+    await runtime.consumeMessage(msg(job.id))
+    const message = { body: { jobId: job.id }, attempts: 5, ack: vi.fn(), retry: vi.fn() }
+
+    await runtime.consumeBatch({ queue: 'jobs-dlq', messages: [message] })
+
+    expect(message.ack).toHaveBeenCalled()
+    expect(logs).toContainEqual(expect.objectContaining({ stage: 'dlq-obsolete' }))
+    expect(logs).not.toContainEqual(expect.objectContaining({ stage: 'dlq' }))
+  })
+
   it('does not double-settle when a DLQ message is delivered twice', async () => {
     const { d1, runtime } = await setup({ work: async () => {}, finish: async () => {} })
     const { jobIds } = await runtime.createBatch({
@@ -504,7 +555,7 @@ describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
     expect(rows(d1, 'failed_jobs')).toBe(1)
   })
 
-  it.each(['claim', 'fail', 'settle'] as const)('retries and reports a DLQ %s failure instead of acknowledging it', async (stage) => {
+  it.each(['claim', 'note', 'fail', 'settle'] as const)('retries and reports a DLQ %s failure instead of acknowledging it', async (stage) => {
     const error = new Error(`${stage} unavailable`)
     const message = { body: { jobId: 'job_1' }, attempts: 5, ack: vi.fn(), retry: vi.fn() }
     const logs: Array<{ stage: string, error?: string, cause?: unknown }> = []
@@ -513,7 +564,12 @@ describe('consumeBatch DLQ idempotency (Codex review Area 2/3)', () => {
     await consumeQueueBatch({
       batch: { queue: 'jobs-dlq', messages: [message] },
       repository: {
-        claimJob: stage === 'claim' ? async () => { throw error } : async () => storedJob,
+        claimJob: stage === 'claim'
+          ? async () => { throw error }
+          : stage === 'note'
+            ? async () => null
+            : async () => storedJob,
+        noteDlqArrival: stage === 'note' ? async () => { throw error } : async () => ({ _tag: 'recorded' }),
         failJob: stage === 'fail' ? async () => { throw error } : async () => {},
       } as never,
       store: {

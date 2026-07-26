@@ -3,7 +3,6 @@ import type {
   DispatchDurableJobBatchResult,
   DurableJobContinuation,
   DurableJobRecord,
-  DurableJobRepository,
   QueuePublisher,
 } from './outbox'
 import {
@@ -55,6 +54,14 @@ export interface InsertDurableBatchInput {
  */
 export interface DurableBatchStore {
   insertBatch: (input: InsertDurableBatchInput) => Promise<void>
+  /**
+   * Atomically insert one batch and every member row. A conflict or failed
+   * member insert must roll back the batch row and all sibling members.
+   */
+  insertBatchWithJobs: <Queue extends string>(
+    input: InsertDurableBatchInput,
+    records: readonly DurableJobRecord<Queue>[],
+  ) => Promise<void>
   /**
    * Atomically decrement `pending_jobs` (and `failed_jobs` when `failed`), set
    * `finished_at` on the 1→0 transition, and return the resulting row. Returns
@@ -143,6 +150,81 @@ export function createD1DurableBatchStore(
         input.siteId ?? null,
         input.userId ?? null,
       ).run()
+    },
+
+    async insertBatchWithJobs(input, records) {
+      if (typeof db.batch !== 'function')
+        throw new Error('Atomic job batch creation requires D1Database.batch')
+
+      const memberRows = records.map(record => ({
+        id: record.id,
+        queue: record.queue,
+        jobType: record.jobType,
+        batchId: record.batchId ?? null,
+        userId: record.userId ?? null,
+        siteId: record.siteId ?? null,
+        partnerId: record.partnerId ?? null,
+        traceId: record.traceId,
+        uniqueKey: record.uniqueKey ?? null,
+        payload: record.payload,
+        attempts: record.attempts,
+        maxAttempts: record.maxAttempts,
+        availableAt: record.availableAt,
+        createdAt: record.createdAt,
+      }))
+      const statements = [
+        db.prepare(`
+          INSERT INTO ${batches} (
+            id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs,
+            on_finish, allow_failures, site_id, user_id, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+        `).bind(
+          input.id,
+          input.name ?? null,
+          input.parentBatchId ?? null,
+          input.totalJobs,
+          input.pendingJobs,
+          input.failedJobs ?? 0,
+          input.onFinish ?? null,
+          input.allowFailures ? 1 : 0,
+          input.siteId ?? null,
+          input.userId ?? null,
+        ),
+        db.prepare(`
+          INSERT INTO ${jobs} (
+            id, queue, job_type, batch_id, user_id, site_id, partner_id,
+            trace_id, unique_key, payload, attempts, max_attempts,
+            available_at, created_at
+          )
+          SELECT
+            json_extract(value, '$.id'),
+            json_extract(value, '$.queue'),
+            json_extract(value, '$.jobType'),
+            json_extract(value, '$.batchId'),
+            json_extract(value, '$.userId'),
+            json_extract(value, '$.siteId'),
+            json_extract(value, '$.partnerId'),
+            json_extract(value, '$.traceId'),
+            json_extract(value, '$.uniqueKey'),
+            json_extract(value, '$.payload'),
+            json_extract(value, '$.attempts'),
+            json_extract(value, '$.maxAttempts'),
+            json_extract(value, '$.availableAt'),
+            json_extract(value, '$.createdAt')
+          FROM json_each(?)
+        `).bind(JSON.stringify(memberRows)),
+      ]
+      if (input.parentBatchId) {
+        statements.push(db.prepare(`
+          UPDATE ${batches}
+          SET total_jobs = total_jobs + 1,
+              pending_jobs = pending_jobs + 1,
+              updated_at = unixepoch()
+          WHERE id = ?
+        `).bind(input.parentBatchId))
+      }
+      await db.batch(statements)
     },
 
     async decrementPending(batchId, decOpts) {
@@ -238,7 +320,6 @@ export interface CreateJobBatchOptions<
   Queue extends string = string,
 > {
   store: DurableBatchStore
-  repository: { insertJobs: NonNullable<DurableJobRepository<Queue>['insertJobs']> }
   publisher: Pick<QueuePublisher<Queue>, 'sendBatch'>
   /** Prepared job records (use `prepareDurableJob`). Their `batchId` is overwritten with this batch's id. */
   jobs: Array<DurableJobRecord<Queue>>
@@ -252,7 +333,6 @@ export interface CreateJobBatchOptions<
   delaySeconds?: number
   /** Supply for deterministic ids (tests); defaults to a random UUID. */
   batchId?: string
-  insertBatchSize?: number
 }
 
 export interface CreateJobBatchResult {
@@ -281,7 +361,7 @@ export async function createJobBatch<
   const batchId = opts.batchId ?? crypto.randomUUID()
   const records = opts.jobs.map(job => (job.batchId === batchId ? job : { ...job, batchId }))
 
-  await opts.store.insertBatch({
+  const batchInput: InsertDurableBatchInput = {
     id: batchId,
     name: opts.name ?? null,
     parentBatchId: opts.parentBatchId ?? null,
@@ -292,22 +372,10 @@ export async function createJobBatch<
     allowFailures: opts.allowFailures ?? false,
     siteId: opts.siteId ?? null,
     userId: opts.userId ?? null,
-  })
-
-  const inserted = await opts.repository.insertJobs(records, { batchSize: opts.insertBatchSize ?? 90 })
-  const failedChunks = inserted.chunks.filter(chunk => !chunk.ok)
-  if (failedChunks.length > 0 || inserted.inserted.length !== records.length) {
-    const insertedCount = inserted.inserted.length
-    const failed = failedChunks.length > 0 ? `; ${failedChunks.length} chunk(s) failed` : ''
-    throw new Error(`Failed to create nuxt-cf-jobs batch ${batchId}: inserted ${insertedCount}/${records.length} job(s)${failed}`)
   }
-
-  // A child batch occupies exactly one slot in its parent (the parent fires once
-  // every child batch completes), independent of how many members the child has.
-  // Only increment after every member row is durably inserted; otherwise the
-  // parent would wait on a child batch that failed to exist coherently.
-  if (opts.parentBatchId)
-    await opts.store.incrementCounters?.(opts.parentBatchId, { by: 1 })
+  await opts.store.insertBatchWithJobs(batchInput, records).catch((cause) => {
+    throw new Error(`Failed to create nuxt-cf-jobs batch ${batchId} atomically`, { cause })
+  })
 
   const dispatched = await dispatchDurableJobBatch(
     opts.publisher,

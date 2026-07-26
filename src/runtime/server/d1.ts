@@ -1,4 +1,5 @@
 import type {
+  DurableJobFailureEvidenceRepository,
   DurableJobFailureRepository,
   DurableJobLifecycle,
   DurableJobPruneRepository,
@@ -9,9 +10,15 @@ import type {
 } from './outbox'
 import { DurableJobOwnershipError, headlineOf } from './errors'
 
+export interface D1ResultLike<T = unknown> {
+  success?: boolean
+  meta?: { changes?: number }
+  results?: T[]
+}
+
 export interface D1PreparedStatementLike<T = unknown> {
   bind: (...values: unknown[]) => D1PreparedStatementLike<T>
-  run: () => Promise<{ success?: boolean, meta?: { changes?: number } }>
+  run: () => Promise<D1ResultLike<T>>
   first: <Result = T>() => Promise<Result | null>
   all?: <Result = T>() => Promise<{ results?: Result[] }>
 }
@@ -20,7 +27,7 @@ export interface D1DatabaseLike {
   exec: (query: string) => Promise<unknown>
   prepare: <T = unknown>(query: string) => D1PreparedStatementLike<T>
   /** Optional batch API matching `D1Database.batch`. When absent, batched ops fall back to sequential `.run()`. */
-  batch?: (statements: D1PreparedStatementLike<unknown>[]) => Promise<Array<{ success?: boolean, meta?: { changes?: number } }>>
+  batch?: (statements: D1PreparedStatementLike<unknown>[]) => Promise<Array<D1ResultLike>>
 }
 
 export interface D1DurableJobRecord<Queue extends string = string> {
@@ -112,6 +119,7 @@ export type D1DurableJobRepository<Queue extends string = string>
     & DurableJobRecoveryRepository<Queue, D1DurableJobRecord<Queue>>
     & DurableJobLifecycle<D1DurableJobRecord<Queue>>
     & DurableJobFailureRepository
+    & DurableJobFailureEvidenceRepository
     & DurableJobPruneRepository
     & {
       migrate: () => Promise<void>
@@ -163,6 +171,67 @@ export const d1DurableJobMigrationSql = [
   // PRAGMA optimize after schema/index changes; migrate() is a maintenance path.
   'PRAGMA optimize',
 ]
+
+export const DURABLE_JOB_FAILURE_EVIDENCE_LIMIT = 8
+
+type DurableJobFailureEvidence
+  = | { _tag: 'release', at: number, description: string, delaySeconds: number, error?: string }
+    | { _tag: 'stale-release', at: number, description: string }
+    | { _tag: 'dlq-arrival', at: number, description: string, messageAttempts: number }
+
+const FAILURE_EVIDENCE_TEXT_LIMIT = 2_000
+
+function boundedFailureText(value: string): string {
+  return value.slice(0, FAILURE_EVIDENCE_TEXT_LIMIT)
+}
+
+function releaseEvidence(at: number, opts: ReleaseDurableJobOptions | undefined): DurableJobFailureEvidence {
+  const error = opts?.error ? boundedFailureText(opts.error) : undefined
+  return {
+    _tag: 'release',
+    at,
+    description: `release@${at}: ${error ?? 'controlled release'}`,
+    delaySeconds: opts?.delaySeconds ?? 0,
+    ...(error ? { error } : {}),
+  }
+}
+
+function staleReleaseEvidence(at: number, error: string): DurableJobFailureEvidence {
+  return {
+    _tag: 'stale-release',
+    at,
+    description: `stale-release@${at}: ${boundedFailureText(error)}`,
+  }
+}
+
+function dlqArrivalEvidence(at: number, messageAttempts: number): DurableJobFailureEvidence {
+  return {
+    _tag: 'dlq-arrival',
+    at,
+    description: `dlq@${at}: Cloudflare retries exhausted (message attempts=${messageAttempts})`,
+    messageAttempts,
+  }
+}
+
+function validEvidenceArraySql(column: string): string {
+  return `CASE
+    WHEN json_valid(${column}) AND json_type(${column}) = 'array' THEN ${column}
+    ELSE '[]'
+  END`
+}
+
+function appendFailureEvidenceSql(column: string): string {
+  const evidence = validEvidenceArraySql(column)
+  return `json_insert(
+    CASE
+      WHEN json_array_length(${evidence}) >= ?
+        THEN json_remove(${evidence}, '$[0]')
+      ELSE ${evidence}
+    END,
+    '$[#]',
+    json(?)
+  )`
+}
 
 export function createD1DurableJobRepository<Queue extends string = string>(
   db: D1DatabaseLike,
@@ -366,17 +435,48 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async releaseJob(job, releaseOpts) {
+      const releasedAt = currentUnixSeconds()
+      const evidence = releaseEvidence(releasedAt, releaseOpts)
       const result = await db.prepare(`
         UPDATE ${jobsTable}
-        SET reserved_at = NULL, available_at = ?, last_error = COALESCE(?, last_error)
+        SET reserved_at = NULL,
+            available_at = ?,
+            last_error = COALESCE(?, last_error),
+            retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
         WHERE id = ?
           AND reserved_at = ?
           AND attempts = ?
           AND completed_at IS NULL
           AND failed_at IS NULL
-      `).bind(resolveAvailableAt(releaseOpts), releaseOpts?.error ?? null, job.id, job.reserved_at, job.attempts).run()
+      `).bind(
+        resolveAvailableAt(releaseOpts, releasedAt),
+        releaseOpts?.error ?? null,
+        DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
+        JSON.stringify(evidence),
+        job.id,
+        job.reserved_at,
+        job.attempts,
+      ).run()
       assertOwnedMutation(result, job.id)
       await runLifecycleHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
+    },
+
+    async noteDlqArrival(id, input) {
+      const at = input.at ?? currentUnixSeconds()
+      const evidence = dlqArrivalEvidence(at, input.messageAttempts)
+      const row = await db.prepare<{ id: string }>(`
+        UPDATE ${jobsTable}
+        SET retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
+        WHERE id = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+        RETURNING id
+      `).bind(
+        DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
+        JSON.stringify(evidence),
+        id,
+      ).first<{ id: string }>()
+      return row ? { _tag: 'recorded' } : { _tag: 'obsolete' }
     },
 
     async recordFailure(input) {
@@ -404,12 +504,21 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async findDispatchableJobs(query = {}) {
-      return await all<D1DurableJobRecord<Queue>>(db.prepare(`
+      return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
         SELECT *
         FROM ${jobsTable}
         WHERE reserved_at IS NULL
           AND available_at <= ?
           AND (? IS NULL OR created_at <= ?)
+          AND (
+            ? IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM json_each(${validEvidenceArraySql('retry_reasons')})
+              WHERE json_extract(value, '$._tag') = 'stale-release'
+                AND CAST(json_extract(value, '$.at') AS INTEGER) > ?
+            )
+          )
           AND completed_at IS NULL
           AND failed_at IS NULL
         ORDER BY available_at ASC
@@ -418,12 +527,14 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         query.now ?? currentUnixSeconds(),
         query.createdBefore ?? null,
         query.createdBefore ?? null,
+        query.staleReleasedBefore ?? null,
+        query.staleReleasedBefore ?? null,
         query.limit ?? 100,
       ))
     },
 
     async findStaleReservedJobs(query) {
-      return await all<D1DurableJobRecord<Queue>>(db.prepare(`
+      return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
         SELECT *
         FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
@@ -436,9 +547,15 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async releaseStaleReservedJobs(query) {
+      const releasedAt = query.now ?? currentUnixSeconds()
+      const error = query.error ?? 'stale-reservation'
+      const evidence = staleReleaseEvidence(releasedAt, error)
       const result = await db.prepare(`
         UPDATE ${jobsTable}
-        SET reserved_at = NULL, available_at = ?, last_error = COALESCE(?, last_error)
+        SET reserved_at = NULL,
+            available_at = ?,
+            last_error = COALESCE(?, last_error),
+            retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
         WHERE id IN (
           SELECT id
           FROM ${jobsTable}
@@ -453,6 +570,8 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       `).bind(
         query.availableAt ?? query.now ?? currentUnixSeconds(),
         query.error ?? null,
+        DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
+        JSON.stringify(evidence),
         query.staleBefore,
         query.limit ?? 100,
       ).run()
@@ -470,14 +589,25 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     // test adapters without batch support retain the idempotent sequential
     // fallback. `max_attempts IS NOT NULL` leaves uncapped jobs untouched.
     async failStaleReservedJobs(query) {
-      const insertStatement = db.prepare(`
+      const now = query.now ?? currentUnixSeconds()
+      const exception = query.error ?? 'stale-reservation: exhausted retries'
+      const evidenceArray = validEvidenceArraySql('retry_reasons')
+      const insertStatement = db.prepare<{ id: string, queue: Queue, batchId: string | null }>(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
           exception, attempts, max_attempts, failed_at
         )
         SELECT
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
-          ?, attempts, max_attempts, unixepoch()
+          ? || ' (attempts=' || attempts
+            || ', reserved ' || CAST(MAX(0, ? - reserved_at) AS INTEGER) || 's ago'
+            || '; last error: ' || COALESCE(last_error, 'none')
+            || '; last evidence: ' || COALESCE(
+              json_extract(${evidenceArray}, '$[#-1].description'),
+              'none, no release recorded, possible isolate termination'
+            )
+            || ')',
+          attempts, max_attempts, ?
         FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
           AND reserved_at <= ?
@@ -487,8 +617,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND attempts >= max_attempts
         ORDER BY reserved_at ASC
         LIMIT ?
+        RETURNING id, queue, batch_id AS batchId
       `).bind(
-        query.error ?? 'stale-reservation: exhausted retries',
+        exception,
+        now,
+        now,
         query.staleBefore,
         query.limit ?? 100,
       )
@@ -502,11 +635,30 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND max_attempts IS NOT NULL
           AND attempts >= max_attempts
           AND id IN (SELECT id FROM ${failedJobsTable})
-      `).bind(query.staleBefore)
-      const [, deleted] = typeof db.batch === 'function'
-        ? await db.batch([insertStatement, deleteStatement])
-        : [await insertStatement.run(), await deleteStatement.run()]
-      return deleted!.meta?.changes ?? 0
+          AND id IN (
+            SELECT id
+            FROM ${jobsTable}
+            WHERE reserved_at IS NOT NULL
+              AND reserved_at <= ?
+              AND completed_at IS NULL
+              AND failed_at IS NULL
+              AND max_attempts IS NOT NULL
+              AND attempts >= max_attempts
+            ORDER BY reserved_at ASC
+            LIMIT ?
+          )
+      `).bind(query.staleBefore, query.staleBefore, query.limit ?? 100)
+
+      if (typeof db.batch === 'function') {
+        const [inserted] = await db.batch([insertStatement, deleteStatement])
+        return (inserted?.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null }>
+      }
+
+      const inserted = insertStatement.all
+        ? await insertStatement.all<{ id: string, queue: Queue, batchId: string | null }>()
+        : await insertStatement.run()
+      await deleteStatement.run()
+      return (inserted.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null }>
     },
 
     toDispatchableJob(job) {
@@ -660,10 +812,10 @@ function assertOwnedMutation(result: { meta?: { changes?: number }, success?: bo
   throw new DurableJobOwnershipError(jobId)
 }
 
-function resolveAvailableAt(opts: ReleaseDurableJobOptions | undefined): number {
+function resolveAvailableAt(opts: ReleaseDurableJobOptions | undefined, now = currentUnixSeconds()): number {
   if (typeof opts?.availableAt === 'number')
     return opts.availableAt
-  return currentUnixSeconds() + (opts?.delaySeconds ?? 0)
+  return now + (opts?.delaySeconds ?? 0)
 }
 
 async function all<T>(statement: D1PreparedStatementLike<T>): Promise<T[]> {

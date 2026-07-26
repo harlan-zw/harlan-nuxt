@@ -146,6 +146,23 @@ export interface ReleaseDurableJobOptions {
   error?: string
 }
 
+export interface NoteDurableJobDlqArrivalInput {
+  messageAttempts: number
+  at?: number
+}
+
+export type NoteDurableJobDlqArrivalResult
+  = | { _tag: 'recorded' }
+    | { _tag: 'obsolete' }
+
+export interface DurableJobFailureEvidenceRepository {
+  /**
+   * Record that Cloudflare exhausted a durable message while its row could not
+   * be claimed. This must not take ownership of the row.
+   */
+  noteDlqArrival: (id: string, input: NoteDurableJobDlqArrivalInput) => Promise<NoteDurableJobDlqArrivalResult>
+}
+
 /**
  * Well-known `failJob` options, always passable regardless of a repository's own
  * `FailOptions` — hence `Partial<FailOptions> & FailDurableJobOptions` on `failJob`
@@ -183,6 +200,8 @@ export interface DurableJobRecoveryQuery {
   now?: number
   /** Only return jobs created at or before this unix-second timestamp. */
   createdBefore?: number
+  /** Suppress rows reaped more recently than this timestamp so CF redelivery wins first. */
+  staleReleasedBefore?: number
   limit?: number
 }
 
@@ -202,10 +221,15 @@ export interface DurableJobRecoveryRepository<
   /**
    * Terminally fail stale-reserved jobs that have already exhausted their
    * attempts (`attempts >= max_attempts`), moving them to `failed_jobs` instead
-   * of leaving them to be re-released forever. Returns the number terminalized.
+   * of leaving them to be re-released forever. Returns exact terminalized jobs
+   * so callers can settle batches and publish telemetry.
    * Optional so older repositories degrade to the prior (revive-only) behaviour.
    */
-  failStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
+  failStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Array<{
+    id: string
+    queue: Queue
+    batchId: string | null
+  }>>
 }
 
 export interface PruneDurableJobsQuery {
@@ -643,8 +667,8 @@ export async function failStaleReservedDurableJobs<
 >(
   repository: Pick<DurableJobRecoveryRepository<Queue, Record>, 'failStaleReservedJobs'>,
   query: DurableJobStaleRecoveryQuery,
-): Promise<number> {
-  return await repository.failStaleReservedJobs?.(query) ?? 0
+): Promise<Array<{ id: string, queue: Queue, batchId: string | null }>> {
+  return await repository.failStaleReservedJobs?.(query) ?? []
 }
 
 /**

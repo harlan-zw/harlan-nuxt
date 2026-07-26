@@ -370,6 +370,7 @@ export default defineNuxtConfig({
       d1Binding: 'DB',
       staleSeconds: 300,
       orphanedSeconds: 600,
+      redeliveryGraceSeconds: 120,
       orphanedBatchSeconds: 7 * 86400,
       limit: 100,
     },

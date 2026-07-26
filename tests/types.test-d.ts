@@ -66,7 +66,8 @@ void ({ stage: 'totally-made-up' } satisfies CfJobsLogEvent)
 // rather than falling silently into a default branch.
 function classify(stage: CfJobsLogStage): 'warn' | 'error' {
   switch (stage) {
-    case 'dlq': return 'warn'
+    case 'dlq':
+    case 'dlq-obsolete': return 'warn'
     case 'invalid_payload':
     case 'unexpected':
     case 'failed':

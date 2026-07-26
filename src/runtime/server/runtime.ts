@@ -112,6 +112,7 @@ export async function runDurableJobBatchMessage<
  * - `unexpected`      — a lightweight handler threw; the message is retried.
  * - `failed`          — a handler called `ctx.fail()`.
  * - `dlq`             — a durable job exhausted its retries and was dead-lettered.
+ * - `dlq-obsolete`    — a dead-letter delivery arrived after its row resolved.
  * - `dlq-failed`      — durable DLQ bookkeeping failed; the message was retried.
  * - `continuation-failed` — a terminal payload continuation failed to dispatch.
  * - `onfinish-failed` — a batch's `onFinish` continuation threw.
@@ -121,6 +122,7 @@ export type CfJobsLogStage
     | 'unexpected'
     | 'failed'
     | 'dlq'
+    | 'dlq-obsolete'
     | 'dlq-failed'
     | 'continuation-failed'
     | 'onfinish-failed'
@@ -310,8 +312,8 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
       const body = (message.body ?? {}) as Record<string, unknown>
       const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
       const taskName = typeof body._task === 'string' ? body._task : undefined
-      opts.onLog?.({ stage: 'dlq', queue: opts.batch.queue, taskName, jobId })
       try {
+        let stage: Extract<CfJobsLogStage, 'dlq' | 'dlq-obsolete'> = 'dlq'
         if (jobId) {
           // Laravel's "exhausted → failed_jobs" transition. Claim FIRST: only when
           // the claim succeeds do WE own the terminal transition, so we failJob
@@ -327,7 +329,14 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
             if (settled.progress && opts.onBatchProgress)
               await opts.onBatchProgress(settled.progress)
           }
+          else {
+            const noted = await opts.repository.noteDlqArrival(jobId, {
+              messageAttempts: message.attempts,
+            })
+            stage = noted._tag === 'recorded' ? 'dlq' : 'dlq-obsolete'
+          }
         }
+        opts.onLog?.({ stage, queue: opts.batch.queue, taskName, jobId })
         message.ack()
       }
       catch (error) {
@@ -530,7 +539,7 @@ export interface DurableJobsRuntime<Queue extends string = string> {
   /** Durably enqueue a prepared record (persist row + dispatch message). */
   enqueue: (record: DurableJobRecord<Queue>, opts?: { delaySeconds?: number }) => Promise<EnqueueDurableJobResult>
   /** Register + dispatch a batch; `onFinish` fires once every member settles. */
-  createBatch: (opts: Omit<CreateJobBatchOptions<string, Record<string, unknown>, Queue>, 'store' | 'repository' | 'publisher'>) => Promise<CreateJobBatchResult>
+  createBatch: (opts: Omit<CreateJobBatchOptions<string, Record<string, unknown>, Queue>, 'store' | 'publisher'>) => Promise<CreateJobBatchResult>
   /** Run one durable queue message end-to-end (lifecycle + batch settle + progress). */
   consumeMessage: (message: ConsumerMessage) => Promise<RunDurableJobBatchMessageResult>
   /** Process a whole CF queue batch (DLQ + durable + lightweight) — the consumer entrypoint. */
@@ -610,7 +619,6 @@ export function createDurableJobsRuntime<
     enqueue: (record, enqueueOpts) => enqueueDurableJob(repository, publisher, record, enqueueOpts),
     createBatch: batchOpts => createJobBatch<string, Record<string, unknown>, Queue>({
       store,
-      repository: repository as { insertJobs: NonNullable<D1DurableJobRepository<Queue>['insertJobs']> },
       publisher,
       ...batchOpts,
     }),

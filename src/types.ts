@@ -39,6 +39,8 @@ export interface ReconcileOptions {
   staleSeconds?: number
   /** Due, unreserved jobs older than this are treated as orphaned. Defaults to 600s. */
   orphanedSeconds?: number
+  /** Grace for the original CF redelivery before reconcile sends a duplicate. Defaults to 120s. */
+  redeliveryGraceSeconds?: number
   /** Pending batches with no active jobs older than this are closed. Defaults to 7 days. */
   orphanedBatchSeconds?: number
   /** Max stale/orphaned rows handled per cron tick. Defaults to 100. */

@@ -15,13 +15,18 @@ export interface RecoverDurableJobsOptions {
   now?: number
   staleSeconds?: number
   orphanedSeconds?: number
+  /** Let the original CF message reclaim a reaped row before dispatching a duplicate. Defaults to 120s. */
+  redeliveryGraceSeconds?: number
   limit?: number
   staleError?: string
+  /** Settle batches or publish telemetry for rows terminalized by the stale reaper. */
+  onTerminalized?: (jobs: Array<{ id: string, queue: string, batchId: string | null }>) => void | Promise<void>
 }
 
 export interface RecoverDurableJobsResult<Queue extends string = string> {
   released: number
   terminalized: number
+  terminalizedJobs: Array<{ id: string, queue: Queue, batchId: string | null }>
   swept: number
   dispatched: number
   stale: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
@@ -41,6 +46,7 @@ export async function recoverDurableJobs<
   const nowSeconds = opts.now ?? Math.floor(Date.now() / 1000)
   const staleSeconds = opts.staleSeconds ?? 300
   const orphanedSeconds = opts.orphanedSeconds ?? 600
+  const redeliveryGraceSeconds = Math.max(0, opts.redeliveryGraceSeconds ?? 120)
   const limit = opts.limit ?? 100
   const staleBefore = nowSeconds - staleSeconds
 
@@ -48,11 +54,14 @@ export async function recoverDurableJobs<
   // Doing this before the find/release below means the revive path only ever
   // sees still-retriable jobs, so an `attempts >= max_attempts` job can't be
   // re-dispatched into an endless reaper → stale → reaper loop.
-  const terminalized = await failStaleReservedDurableJobs(repository, {
+  const terminalizedJobs = await failStaleReservedDurableJobs(repository, {
+    now: nowSeconds,
     staleBefore,
     error: opts.staleError ? `${opts.staleError}: exhausted retries` : 'exhausted retries',
     limit,
   })
+  if (terminalizedJobs.length > 0)
+    await opts.onTerminalized?.(terminalizedJobs)
 
   const stale = await repository.findStaleReservedJobs?.({
     staleBefore,
@@ -60,6 +69,7 @@ export async function recoverDurableJobs<
   }) ?? []
 
   const released = await releaseStaleReservedDurableJobs(repository, {
+    now: nowSeconds,
     staleBefore,
     availableAt: nowSeconds,
     error: opts.staleError ?? 'stale-reservation',
@@ -69,18 +79,20 @@ export async function recoverDurableJobs<
   const orphaned = await findDispatchableDurableJobs(repository, {
     now: nowSeconds,
     createdBefore: nowSeconds - orphanedSeconds,
+    ...(redeliveryGraceSeconds > 0 ? { staleReleasedBefore: nowSeconds - redeliveryGraceSeconds } : {}),
     limit,
   })
 
-  const dispatchable = uniqueJobs([
-    ...stale.slice(0, released),
-    ...orphaned,
-  ])
+  const releasedIds = new Set(stale.slice(0, released).map(job => job.id))
+  const dispatchable = uniqueJobs(redeliveryGraceSeconds > 0
+    ? orphaned.filter(job => !releasedIds.has(job.id))
+    : [...stale.slice(0, released), ...orphaned])
   const dispatchResults = await dispatchDurableJobBatch(publisher, dispatchable)
 
   return {
     released,
-    terminalized,
+    terminalized: terminalizedJobs.length,
+    terminalizedJobs,
     swept: dispatchable.length,
     dispatched: dispatchResults.filter(result => result.status === 'sent').length,
     stale,
