@@ -178,6 +178,7 @@ type DurableJobFailureEvidence
   = | { _tag: 'release', at: number, description: string, delaySeconds: number, error?: string }
     | { _tag: 'stale-release', at: number, description: string }
     | { _tag: 'dlq-arrival', at: number, description: string, messageAttempts: number }
+    | { _tag: 'orphan-redispatch', at: number, description: string }
 
 const FAILURE_EVIDENCE_TEXT_LIMIT = 2_000
 
@@ -201,6 +202,14 @@ function staleReleaseEvidence(at: number, error: string): DurableJobFailureEvide
     _tag: 'stale-release',
     at,
     description: `stale-release@${at}: ${boundedFailureText(error)}`,
+  }
+}
+
+function orphanRedispatchEvidence(at: number): DurableJobFailureEvidence {
+  return {
+    _tag: 'orphan-redispatch',
+    at,
+    description: `orphan-redispatch@${at}: recovery sweep re-sent this row to its queue`,
   }
 }
 
@@ -461,6 +470,40 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       await runLifecycleHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
     },
 
+    async noteOrphanRedispatch(ids, opts) {
+      if (!ids.length)
+        return 0
+      const at = opts?.at ?? currentUnixSeconds()
+      const evidence = JSON.stringify(orphanRedispatchEvidence(at))
+      // One statement per row: the evidence append is a per-row JSON rewrite, so
+      // there is no set-based form. Bounded by the caller's sweep `limit`.
+      const statement = (id: string) => db.prepare<{ id: string }>(`
+        UPDATE ${jobsTable}
+        SET retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
+        WHERE id = ?
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+        RETURNING id
+      `).bind(
+        DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
+        evidence,
+        id,
+      )
+      // `batch` is optional on the D1-like interface (see claimJob's own guard),
+      // so degrade to sequential rather than assuming it.
+      if (typeof db.batch === 'function') {
+        const rows = await db.batch<{ id: string }>(ids.map(statement))
+        return rows.reduce((total, result) => total + (result.results?.length ?? 0), 0)
+      }
+      let noted = 0
+      for (const id of ids) {
+        const row = await statement(id).first<{ id: string }>()
+        if (row)
+          noted++
+      }
+      return noted
+    },
+
     async noteDlqArrival(id, input) {
       const at = input.at ?? currentUnixSeconds()
       const evidence = dlqArrivalEvidence(at, input.messageAttempts)
@@ -519,6 +562,15 @@ export function createD1DurableJobRepository<Queue extends string = string>(
                 AND CAST(json_extract(value, '$.at') AS INTEGER) > ?
             )
           )
+          AND (
+            ? IS NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM json_each(${validEvidenceArraySql('retry_reasons')})
+              WHERE json_extract(value, '$._tag') = 'orphan-redispatch'
+                AND CAST(json_extract(value, '$.at') AS INTEGER) > ?
+            )
+          )
           AND completed_at IS NULL
           AND failed_at IS NULL
         ORDER BY available_at ASC
@@ -529,6 +581,8 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         query.createdBefore ?? null,
         query.staleReleasedBefore ?? null,
         query.staleReleasedBefore ?? null,
+        query.redispatchedBefore ?? null,
+        query.redispatchedBefore ?? null,
         query.limit ?? 100,
       ))
     },

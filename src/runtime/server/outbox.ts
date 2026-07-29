@@ -202,6 +202,22 @@ export interface DurableJobRecoveryQuery {
   createdBefore?: number
   /** Suppress rows reaped more recently than this timestamp so CF redelivery wins first. */
   staleReleasedBefore?: number
+  /**
+   * Suppress rows the sweep itself already re-dispatched more recently than this
+   * timestamp.
+   *
+   * Without it the sweep has no memory: `findDispatchableJobs` orders by
+   * `available_at ASC`, so on a queue whose consumer is slower than its producer
+   * it re-selects the same oldest `limit` rows every tick and re-sends them
+   * forever. That turns the recovery backstop into the system's largest producer
+   * and deepens the very backlog it exists to clear (nuxtseo.com, 2026-07-28:
+   * 300 x 30 ticks/hr = 9,000 writes/hr against a 100/hr consumer).
+   *
+   * Age alone cannot express this: `createdBefore` asks "is this row old?", which
+   * is true of every row queued behind a backlog, whereas the question that
+   * matters is "did WE already re-send this one?".
+   */
+  redispatchedBefore?: number
   limit?: number
 }
 
@@ -216,6 +232,12 @@ export interface DurableJobRecoveryRepository<
   Record extends Pick<DurableJobRecord<Queue>, 'id' | 'queue'> = Pick<DurableJobRecord<Queue>, 'id' | 'queue'>,
 > {
   findDispatchableJobs?: (query?: DurableJobRecoveryQuery) => Promise<Record[]>
+  /**
+   * Record that the orphan sweep re-dispatched these rows, so a later sweep can
+   * exclude them via {@link DurableJobRecoveryQuery.redispatchedBefore}. Optional:
+   * a repository without it degrades to the previous (memoryless) behaviour.
+   */
+  noteOrphanRedispatch?: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
   findStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Record[]>
   releaseStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
   /**

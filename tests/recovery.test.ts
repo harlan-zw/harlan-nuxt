@@ -41,6 +41,8 @@ describe('recoverDurableJobs', () => {
       now: 1_000,
       createdBefore: 400,
       staleReleasedBefore: 880,
+      // Defaults to orphanedSeconds: a row is re-sent at most once per window.
+      redispatchedBefore: 400,
       limit: 10,
     })
     expect(sent).toEqual([{ queue: 'q', ids: ['orphaned'] }])
@@ -94,5 +96,107 @@ describe('recoverDurableJobs', () => {
     expect(onTerminalized).toHaveBeenCalledWith(terminalizedJobs)
     expect(result.terminalized).toBe(3)
     expect(result.terminalizedJobs).toEqual(terminalizedJobs)
+  })
+})
+
+/**
+ * Regression: the recovery sweep must not become the system's largest producer.
+ *
+ * nuxtseo.com, 2026-07-28/29. `findDispatchableJobs` orders by `available_at ASC`
+ * and, before this, had no memory of what it had already re-sent. On a queue
+ * whose consumer is slower than its producer (`max_concurrency: 1`, ~100 msg/hr)
+ * every row eventually satisfies "due, unreserved, older than `orphanedSeconds`",
+ * so each tick re-selected the SAME oldest `limit` rows and re-sent them. At
+ * limit 300 on a two-minute cron that is 9,000 writes/hr against a 100/hr
+ * consumer — measured at 8,987 — which deepened the backlog it existed to clear
+ * and rebuilt a 122k-message queue within 23h of a full purge.
+ *
+ * Age cannot express the fix: `createdBefore` asks "is this row old?", true of
+ * every row queued behind a backlog. The question is "did we already re-send it?".
+ */
+describe('recoverDurableJobs orphan re-dispatch damping', () => {
+  function backloggedRepository(rows: Array<{ id: string, queue: string }>) {
+    const noted: string[][] = []
+    return {
+      noted,
+      repository: {
+        findStaleReservedJobs: vi.fn(async () => []),
+        releaseStaleReservedJobs: vi.fn(async () => 0),
+        // A backlog: every row is old, due and unreserved on every tick.
+        findDispatchableJobs: vi.fn(async () => rows),
+        noteOrphanRedispatch: vi.fn(async (ids: readonly string[]) => {
+          noted.push([...ids])
+          return ids.length
+        }),
+      },
+    }
+  }
+
+  it('stamps every row it re-sent so the next sweep can exclude them', async () => {
+    const { repository, noted } = backloggedRepository([
+      { id: 'a', queue: 'q' },
+      { id: 'b', queue: 'q' },
+    ])
+    const publisher = { sendBatch: vi.fn(async () => true) }
+
+    const result = await recoverDurableJobs(repository, publisher, {
+      now: 10_000,
+      orphanedSeconds: 600,
+      limit: 300,
+    })
+
+    expect(noted).toEqual([['a', 'b']])
+    expect(repository.noteOrphanRedispatch).toHaveBeenCalledWith(['a', 'b'], { at: 10_000 })
+    expect(result.redispatchNoted).toBe(2)
+  })
+
+  it('asks the repository to exclude rows re-dispatched within the window', async () => {
+    const { repository } = backloggedRepository([{ id: 'a', queue: 'q' }])
+    await recoverDurableJobs(repository, { sendBatch: vi.fn(async () => true) }, {
+      now: 10_000,
+      orphanedSeconds: 600,
+      redispatchGraceSeconds: 3_600,
+      limit: 300,
+    })
+
+    // Without this the sweep is memoryless and re-sends the same rows forever.
+    expect(repository.findDispatchableJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ redispatchedBefore: 6_400 }),
+    )
+  })
+
+  it('does NOT stamp a row whose queue send failed, so it stays eligible', async () => {
+    const { repository, noted } = backloggedRepository([
+      { id: 'ok', queue: 'good' },
+      { id: 'lost', queue: 'bad' },
+    ])
+    const publisher = {
+      sendBatch: vi.fn(async (queue: string) => queue === 'good'),
+    }
+
+    const result = await recoverDurableJobs(repository, publisher, { now: 10_000, limit: 300 })
+
+    // Suppressing a row we never actually re-sent would strand it for a whole
+    // window — the failure mode this backstop exists to prevent.
+    expect(noted).toEqual([['ok']])
+    expect(result.redispatchNoted).toBe(1)
+  })
+
+  it('degrades to the previous behaviour when the repository cannot stamp', async () => {
+    const repository = {
+      findStaleReservedJobs: vi.fn(async () => []),
+      releaseStaleReservedJobs: vi.fn(async () => 0),
+      findDispatchableJobs: vi.fn(async () => [{ id: 'a', queue: 'q' }]),
+      // No noteOrphanRedispatch — an older repository implementation.
+    }
+    const publisher = { sendBatch: vi.fn(async () => true) }
+
+    const result = await recoverDurableJobs(repository, publisher, { now: 10_000, limit: 300 })
+
+    // Still recovers; just cannot damp. `redispatchNoted: 0` beside a non-zero
+    // `swept` is the signal that the sweep is running memoryless.
+    expect(result.swept).toBe(1)
+    expect(result.dispatched).toBe(1)
+    expect(result.redispatchNoted).toBe(0)
   })
 })
