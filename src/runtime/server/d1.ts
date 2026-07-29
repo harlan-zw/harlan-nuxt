@@ -492,7 +492,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // `batch` is optional on the D1-like interface (see claimJob's own guard),
       // so degrade to sequential rather than assuming it.
       if (typeof db.batch === 'function') {
-        const rows = await db.batch<{ id: string }>(ids.map(statement))
+        const rows = await db.batch(ids.map(statement))
         return rows.reduce((total, result) => total + (result.results?.length ?? 0), 0)
       }
       let noted = 0
