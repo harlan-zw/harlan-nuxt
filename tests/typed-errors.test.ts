@@ -338,6 +338,56 @@ describe('describeCauseWithStack (diagnostic rendering)', () => {
   })
 })
 
+// Truncating the joined render from the front deleted exactly the part worth
+// keeping. A `DrizzleQueryError` puts the whole failing SQL and its bind params
+// in its own message/stack, so link 1 alone blew the budget and the real D1
+// error underneath never reached `failed_jobs.exception` or the Sentry event
+// (this is how a 100-bound-param rejection read as an opaque "Failed query: …"
+// for two days).
+describe('describeCauseWithStack keeps the deepest cause under truncation', () => {
+  // ~5000 chars of SQL/params junk: a multi-row insert whose statement alone
+  // exceeds MAX_DESCRIBED_STACK_CHARS, with the driver error only on `.cause`.
+  function drizzleShapedError() {
+    const sqlJunk = `insert into "job_batches" ("id", "name", "total_jobs", "pending_jobs") values ${'(?, ?, ?, ?), '.repeat(240)}`
+    const params = Array.from({ length: 900 }, (_, i) => `"param-${i}"`).join(', ')
+    const top = new Error(`Failed query: ${sqlJunk}\nparams: ${params}`, {
+      cause: new Error('D1_ERROR: too many SQL variables at offset 132: SQLITE_ERROR'),
+    })
+    expect(top.message.length).toBeGreaterThan(5000)
+    return top
+  }
+
+  // Slack for the truncation marker plus a capped-headline ellipsis — the budget
+  // itself must not grow.
+  const TRUNCATION_SLACK = 40
+
+  it('includes the deepest cause when the top stack alone exceeds the budget', () => {
+    expect(describeCauseWithStack(drizzleShapedError())).toContain('too many SQL variables')
+  })
+
+  it('stays within the documented budget plus marker slack', () => {
+    expect(describeCauseWithStack(drizzleShapedError()).length).toBeLessThanOrEqual(MAX_DESCRIBED_STACK_CHARS + TRUNCATION_SLACK)
+  })
+
+  it('keeps line 1 as the top error headline, so headlineOf still signs the defect', () => {
+    expect(headlineOf(describeCauseWithStack(drizzleShapedError())).startsWith('Error: Failed query:')).toBe(true)
+  })
+
+  it('renders an under-budget chain byte-identically to the untruncated shape', () => {
+    const cause = new Error('D1_ERROR: no such table: gsc_pages')
+    const top = new Error('Failed query: select 1', { cause })
+    expect(describeCauseWithStack(top)).toBe(`${top.stack}\nCaused by: ${cause.stack}`)
+  })
+
+  it('caps a single runaway headline instead of crowding out the rest of the chain', () => {
+    const deep = new Error('the actual root cause')
+    const top = new Error('x'.repeat(MAX_DESCRIBED_STACK_CHARS * 2), { cause: deep })
+    const rendered = describeCauseWithStack(top)
+    expect(rendered).toContain('the actual root cause')
+    expect(rendered.length).toBeLessThanOrEqual(MAX_DESCRIBED_STACK_CHARS + 40)
+  })
+})
+
 describe('headlineOf', () => {
   it('returns a single-line message untouched', () => {
     expect(headlineOf('boom')).toBe('boom')
