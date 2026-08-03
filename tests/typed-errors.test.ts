@@ -379,6 +379,46 @@ describe('describeCauseWithStack keeps the deepest cause under truncation', () =
     expect(describeCauseWithStack(top)).toBe(`${top.stack}\nCaused by: ${cause.stack}`)
   })
 
+  it('does not spend budget reserving a headline when there is no deeper cause', () => {
+    const solo = new Error('boom')
+    solo.stack = `Error: boom\n${'    at frame (/w.js:1:1)\n'.repeat(400)}`
+    // Nothing is under this error, so every reserved char is a duplicate of line 1
+    // paid for with dropped stack frames.
+    expect(describeCauseWithStack(solo)).toBe(`${solo.stack.slice(0, MAX_DESCRIBED_STACK_CHARS)}\n… (truncated)`)
+  })
+
+  it('keeps front-truncation while the deepest cause still fits, so a marginal overflow loses nothing', () => {
+    const deep = new Error(`deep ${'d'.repeat(880)} END-OF-DEEP-MESSAGE`)
+    deep.stack = `Error: ${deep.message}\n${'z'.repeat(200)}`
+    const mid = new Error('mid', { cause: deep })
+    mid.stack = `Error: mid\n${'y'.repeat(1489)}`
+    const top = new Error('top', { cause: mid })
+    top.stack = `Error: top\n${'x'.repeat(1489)}`
+    // ~4137 chars rendered against a 4000 budget, with the deepest headline ending
+    // at ~3936 — the old prefix already carried it, so reserving headlines here
+    // would have DELETED the tail of the very message it exists to protect.
+    expect(describeCauseWithStack(top)).toContain('END-OF-DEEP-MESSAGE')
+  })
+
+  it('leaves the leading 300 chars untouched for an ordinary over-budget chain, so failure-signature grouping does not move', () => {
+    const frames = (n: number, tag: string) => `    at ${tag} (file:///worker.js:1:1)\n`.repeat(n)
+    const deep = new Error('D1_ERROR: Network connection lost.')
+    deep.stack = `Error: D1_ERROR: Network connection lost.\n${frames(30, 'd1')}`
+    const mid = new Error('failed to write gsc_pages rows', { cause: deep })
+    mid.stack = `Error: failed to write gsc_pages rows\n${frames(60, 'mid')}`
+    const top = new Error('sync failed', { cause: mid })
+    top.stack = `Error: sync failed\n${frames(60, 'top')}`
+    const joined = [top.stack, mid.stack, deep.stack].join('\nCaused by: ')
+    expect(joined.length).toBeGreaterThan(MAX_DESCRIBED_STACK_CHARS)
+
+    const rendered = describeCauseWithStack(top)
+    // Downstream sinks group failures on a prefix of this text (a whitespace-collapsed
+    // 80 chars, and SQL that buckets on the leading 300). Reserving headlines would
+    // push `Caused by:` into that window and split one recurring defect into two.
+    expect(rendered.slice(0, 300)).toBe(joined.slice(0, 300))
+    expect(rendered).toContain('D1_ERROR: Network connection lost.')
+  })
+
   it('caps a single runaway headline instead of crowding out the rest of the chain', () => {
     const deep = new Error('the actual root cause')
     const top = new Error('x'.repeat(MAX_DESCRIBED_STACK_CHARS * 2), { cause: deep })

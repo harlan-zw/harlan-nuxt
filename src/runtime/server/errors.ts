@@ -124,8 +124,16 @@ export function describeCause(cause: unknown): string {
 /** Upper bound on a rendered stack, so one defect can't blow up a `failed_jobs` row. */
 export const MAX_DESCRIBED_STACK_CHARS = 4000
 
-/** Per-link cap when a chain is rendered headline-first, so one long message can't crowd out the rest. */
+/** Ceiling on a single link's headline when a chain is rendered headline-first. */
 const MAX_HEADLINE_CHARS = 500
+
+const CAUSE_SEPARATOR = '\nCaused by: '
+const TRUNCATION_MARKER = '\n… (truncated)'
+
+/** `error.stack` opens with this, so it is also the prefix of a link's rendered part. */
+function headlineTextOf(link: unknown): string {
+  return link instanceof Error ? `${link.name}: ${link.message}` : describeCause(link)
+}
 
 /**
  * The first line of a rendered defect — `"TypeError: <message>"` for anything that
@@ -152,11 +160,14 @@ export function headlineOf(rendered: string): string {
  * `error.stack` already begins with `"<name>: <message>"`, so it is used whole when
  * present and synthesised otherwise. Cycles and runaway chains are bounded.
  *
- * Over budget, the HEADLINE of every chain link is rendered first and stacks fill
- * whatever remains. Truncating the joined render from the front instead would delete
- * the deepest cause, which is the one thing worth keeping: a `DrizzleQueryError`
- * embeds the whole failing SQL and bind params in its own stack, so link 1 alone can
- * exceed the budget and the real driver error underneath never reaches the row.
+ * Over budget, plain front-truncation is kept as long as it still shows the DEEPEST
+ * link's headline, because an untruncated prefix beats any reserved-headline scheme.
+ * Only when the deepest link would be cut away entirely — a `DrizzleQueryError` embeds
+ * the whole failing SQL and bind params in its own stack, so link 1 alone can exceed
+ * the budget and the real driver error underneath never reaches the row — is a
+ * `Cause chain:` summary of every link's headline appended, shrinking the prefix to
+ * pay for it. The summary is a SUFFIX so the leading text, which downstream sinks
+ * group failures on, is unchanged either way.
  */
 export function describeCauseWithStack(cause: unknown, maxChars: number = MAX_DESCRIBED_STACK_CHARS): string {
   const chain: unknown[] = []
@@ -179,22 +190,40 @@ export function describeCauseWithStack(cause: unknown, maxChars: number = MAX_DE
   }
 
   const rendered = chain
-    .map(link => link instanceof Error ? link.stack || `${link.name}: ${link.message}` : describeCause(link))
-    .join('\nCaused by: ') || describeCause(cause)
+    .map(link => link instanceof Error ? link.stack || headlineTextOf(link) : describeCause(link))
+    .join(CAUSE_SEPARATOR) || describeCause(cause)
   if (rendered.length <= maxChars)
     return rendered
 
+  // A single link has nothing deeper to protect, and a chain only marginally over
+  // budget still carries its deepest link inside the prefix. Reserving headlines in
+  // either case would DELETE stack frames the old front-truncation kept.
+  const frontTruncated = rendered.slice(0, maxChars)
+  const deepestHeadline = headlineTextOf(chain[chain.length - 1])
+  if (frontTruncated.includes(deepestHeadline))
+    return `${frontTruncated}${TRUNCATION_MARKER}`
+
+  // Scale the per-link cap with the budget and the chain length: a flat cap lets five
+  // long messages eat the whole allowance, leaving no room for any stack at all.
+  const perLink = Math.max(1, Math.min(MAX_HEADLINE_CHARS, Math.floor(maxChars / 2 / chain.length)))
   const headlines = chain
     .map((link) => {
-      const text = link instanceof Error ? `${link.name}: ${link.message}` : describeCause(link)
-      return text.length > MAX_HEADLINE_CHARS ? `${text.slice(0, MAX_HEADLINE_CHARS)}…` : text
+      const text = headlineTextOf(link)
+      return text.length > perLink ? `${text.slice(0, perLink)}…` : text
     })
-    .join('\nCaused by: ') || describeCause(cause)
-  const remaining = maxChars - headlines.length
-  if (remaining <= 0)
-    return headlines.length > maxChars ? `${headlines.slice(0, maxChars)}\n… (truncated)` : headlines
+    .join(CAUSE_SEPARATOR) || describeCause(cause)
 
-  return `${headlines}\n${rendered.slice(0, remaining)}\n… (truncated)`
+  // The summary goes at the END, not the front. Prepending it would rewrite the
+  // leading text of every over-budget failure, and sinks downstream group failures
+  // on a prefix of this string — one recurring defect would split into two buckets
+  // on deploy. A suffix keeps the prefix (and `headlineOf`) byte-identical to plain
+  // front-truncation while still carrying the deepest cause.
+  const summary = `${TRUNCATION_MARKER}\nCause chain: ${headlines}`
+  const keep = maxChars - summary.length
+  if (keep <= 0)
+    return headlines.slice(0, maxChars)
+
+  return `${rendered.slice(0, keep)}${summary}`
 }
 
 export const jobErrors = {
