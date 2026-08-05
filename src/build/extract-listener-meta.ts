@@ -19,7 +19,7 @@ const LISTENER_KEYS = new Set([
   'event',
   'execution',
   'input',
-  'subscriber',
+  'owner',
   'middleware',
   'shouldHandle',
   'idempotency',
@@ -36,7 +36,8 @@ export interface ListenerStaticMeta {
   event: string
   enabled: boolean
   execution: ListenerExecution
-  subscriber?: string
+  owner?: string
+  hasInput: boolean
   hasIdempotency: boolean
   hasFailed: boolean
 }
@@ -65,17 +66,23 @@ export function extractListenerMeta(source: string, filename: string): ListenerS
   if (!hasObjectKey(definition, 'handle'))
     throw new Error(`${filename} listener must declare handle`)
 
-  const subscriberNode = getObjectValue(definition, 'subscriber')
-  const subscriber = subscriberNode === undefined ? undefined : stringValue(subscriberNode)
-  if (subscriberNode !== undefined && !subscriber)
-    throw new Error(`${filename} listener subscriber must be a non-empty string literal`)
+  const ownerNode = getObjectValue(definition, 'owner')
+  const owner = ownerNode === undefined ? undefined : stringValue(ownerNode)
+  if (ownerNode !== undefined && !owner)
+    throw new Error(`${filename} listener owner must be a non-empty string literal`)
 
   const executionNode = getObjectValue(definition, 'execution')
   const execution = executionNode === undefined
     ? { _tag: 'sync' as const, failure: 'propagate' as const }
     : parseExecution(executionNode, filename)
   const hasIdempotency = hasObjectKey(definition, 'idempotency')
+  const hasInput = hasObjectKey(definition, 'input')
   const hasFailed = hasObjectKey(definition, 'failed')
+  const inputNode = getObjectValue(definition, 'input')
+  if (hasInput && inputNode?.type === 'Identifier' && inputNode.name === 'undefined')
+    throw new Error(`${filename} listener input must be a parser; omit input to use the event contract`)
+  if (hasInput && inputNode?.type === 'UnaryExpression' && inputNode.operator === 'void')
+    throw new Error(`${filename} listener input must be a parser; omit input to use the event contract`)
   if (execution._tag === 'queued' && !hasIdempotency)
     throw new Error(`${filename} queued listener must declare idempotency`)
   if (execution._tag !== 'queued' && hasIdempotency)
@@ -85,7 +92,7 @@ export function extractListenerMeta(source: string, filename: string): ListenerS
   if (execution._tag !== 'queued' && hasFailed)
     throw new Error(`${filename} only queued listeners may declare failed`)
 
-  return { name, event, enabled, execution, subscriber, hasIdempotency, hasFailed }
+  return { name, event, enabled, execution, owner, hasInput, hasIdempotency, hasFailed }
 }
 
 function parseExecution(input: unknown, filename: string): ListenerExecution {

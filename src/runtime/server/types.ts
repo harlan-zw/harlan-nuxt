@@ -81,7 +81,7 @@ interface ListenerDefinitionBase<Name extends string, Event extends string, Payl
   event: Event
   /** Omit to use the owning event contract parser. */
   input?: InputParser<Payload>
-  subscriber?: string
+  owner?: string
   middleware?: Array<ListenerMiddleware<Payload, Services>>
   handle: (payload: Payload, context: ListenerContext<Services>) => void | Promise<void>
   /** A literal false removes this listener from the generated registry and bundle. */
@@ -130,7 +130,7 @@ export interface GeneratedListenerEntry {
   name: string
   event: string
   execution: ListenerExecution
-  subscriber?: string
+  owner?: string
   hasIdempotency: boolean
   hasFailed?: boolean
   load: () => Promise<AnyListenerDefinition>
@@ -271,7 +271,7 @@ export interface EventDispatchContext<Services = unknown> {
 }
 
 export interface QueuedDeliveryContext<Services = unknown> {
-  services?: Services
+  services: Services
   attempt?: number
   idempotency: ListenerIdempotencyAdapter
   observe?: EventObserver
@@ -296,11 +296,7 @@ export interface EventPlan {
   eventId: string
   eventName: string
   occurredAt: string
-  syncCompleted: readonly string[]
-  isolatedFailures: readonly string[]
-  deferred: readonly GeneratedListenerEntry[]
   publications: readonly QueuedListenerPublication[]
-  payload: unknown
 }
 
 export type CommitEventPlanResult

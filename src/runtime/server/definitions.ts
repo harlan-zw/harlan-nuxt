@@ -21,8 +21,15 @@ export function defineEvent(definition: LocalEventDefinition<string, unknown> | 
 export function defineListener<
   const Name extends string,
   const Event extends string,
+  const Parser extends InputParser<any>,
+  Services = unknown,
+>(definition: ListenerDefinition<Name, Event, ParserOutput<Parser>, Services> & { input: Parser }): ListenerDefinition<Name, Event, ParserOutput<Parser>, Services> & { input: Parser }
+export function defineListener<
+  const Name extends string,
+  const Event extends string,
   Payload,
   Services = unknown,
->(definition: ListenerDefinition<Name, Event, Payload, Services>): ListenerDefinition<Name, Event, Payload, Services> {
+>(definition: ListenerDefinition<Name, Event, Payload, Services> & { input?: undefined }): ListenerDefinition<Name, Event, Payload, Services>
+export function defineListener(definition: ListenerDefinition<string, string, unknown, unknown>) {
   return definition
 }

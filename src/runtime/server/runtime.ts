@@ -99,8 +99,11 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
   const planEvent = async (name: string, payload: unknown, context: EventDispatchContext = {}): Promise<EventPlan> => {
     const eventId = context.eventId ?? crypto.randomUUID()
     const observe = createObserver([options.observe, context.observe], context.observerFallback ?? options.observerFallback)
+    const state = emptyReportState()
+    let listenerNames: readonly string[] = []
     return runObserved(eventId, name, observe, async () => {
       const prepared = await prepareEvent(registry, name, payload, { ...context, eventId })
+      listenerNames = prepared.listeners.map(listener => listener.name)
       const queued = prepared.listeners.filter(listener => listener.execution._tag === 'queued')
       if (queued.length === 0 || queued.some(listener => listener.execution._tag === 'queued' && listener.execution.publication !== 'after-commit'))
         throw eventRuntimeError('EventPlanQueueMismatch', `Event "${name}" does not have a uniform after-commit queued publication plan`)
@@ -109,24 +112,18 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
       if (!context.eventId)
         throw eventRuntimeError('InvalidQueuedDelivery', `Queued event "${name}" requires a stable context.eventId`)
 
-      const state = emptyReportState()
       await observe({ _tag: 'dispatch-started', eventId, eventName: name })
-      await runSyncListeners(prepared, context, observe, state)
       const plan = Object.freeze({
         _tag: 'event-plan',
         planId: `${eventId}:${registry.manifestHash}`,
         eventId,
         eventName: name,
         occurredAt: prepared.occurredAt,
-        syncCompleted: Object.freeze([...state.syncCompleted]),
-        isolatedFailures: Object.freeze([...state.isolatedFailures]),
-        deferred: Object.freeze(prepared.listeners.filter(listener => listener.execution._tag === 'deferred')),
         publications: buildPublications(prepared, queued),
-        payload: snapshotPlannedPayload(prepared),
       } satisfies EventPlan)
       plans.add(plan)
       return plan
-    })
+    }, () => dispatchFailureDetail(state, listenerNames))
   }
 
   const commitEventPlan = async (
@@ -135,13 +132,13 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
     context: EventDispatchContext,
   ): Promise<CommitEventPlanResult> => {
     const observe = createObserver([options.observe, context.observe], context.observerFallback ?? options.observerFallback)
+    const state = emptyReportState()
+    const listenerNames = plan.publications.map(publication => publication.envelope.listenerName)
     return runObserved(plan.eventId, plan.eventName, observe, async () => {
       if (!plans.has(plan) || committedPlans.has(plan))
         throw eventRuntimeError('EventPlanAlreadyCommitted', `Event plan "${plan.planId}" is invalid or already committed`)
       if (!context.queue)
         throw eventRuntimeError('QueueAdapterMissing', `Committing event "${plan.eventName}" requires context.queue`)
-      if (plan.deferred.length > 0 && !context.waitUntil)
-        throw eventRuntimeError('DeferredRuntimeMissing', `Committing event "${plan.eventName}" requires context.waitUntil`)
 
       const outcome = await unitOfWork.commit({
         planId: plan.planId,
@@ -167,34 +164,17 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
 
       if (!sameDeliveryIds(plan.publications, outcome.receipt.deliveryIds))
         throw eventRuntimeError('EventPlanQueueMismatch', `Unit of work returned a mismatched staging receipt for plan "${plan.planId}"`)
-      await dispatchCommitted(plan, plan.publications, context, observe)
+      await dispatchCommitted(plan, plan.publications, context, observe, state)
 
-      const prepared: PreparedEvent = {
-        eventId: plan.eventId,
-        eventName: plan.eventName,
-        occurredAt: plan.occurredAt,
-        definition: undefined as never,
-        payload: plan.payload,
-        listeners: plan.deferred,
-      }
-      const state: RuntimeReportState = {
-        syncCompleted: [...plan.syncCompleted],
-        isolatedFailures: [...plan.isolatedFailures],
-        deferredScheduled: [],
-        queued: plan.publications.map(publication => publication.envelope.listenerName),
-        started: plan.publications.map(publication => publication.envelope.listenerName),
-        failed: [],
-      }
-      scheduleDeferred(prepared, plan.deferred, context, observe, state)
-      const report = toReport(prepared, state)
+      const report = toReport(plan, state)
       await observe({
         _tag: 'dispatch-completed',
         eventId: plan.eventId,
         eventName: plan.eventName,
-        listenerCount: plan.syncCompleted.length + plan.isolatedFailures.length + plan.deferred.length + plan.publications.length,
+        listenerCount: plan.publications.length,
       })
       return { _tag: 'committed', report }
-    })
+    }, () => dispatchFailureDetail(state, listenerNames))
   }
 
   const deliverQueuedListener = async (envelope: EventListenerEnvelope, context: QueuedDeliveryContext): Promise<void> => {
@@ -278,7 +258,8 @@ async function prepareEvent(
   if (!entry)
     throw eventRuntimeError('UnknownEvent', `Unknown event "${name}"`)
   const definition = await loadEventDefinition(entry)
-  const payload = parseEventPayload(definition, input)
+  const parsedPayload = parseEventPayload(definition, input)
+  const payload = definition.transport._tag === 'transfer' ? freezeValue(parsedPayload) : parsedPayload
   const encodedPayload = definition.transport._tag === 'transfer' ? encodeEventPayload(definition, payload) : undefined
   return {
     eventId: context.eventId!,
@@ -490,12 +471,6 @@ function buildPublications(prepared: PreparedEvent, listeners: readonly Generate
   }))
 }
 
-function snapshotPlannedPayload(prepared: PreparedEvent): unknown {
-  if (!isTransferDefinition(prepared.definition) || prepared.encodedPayload === undefined)
-    throw eventRuntimeError('EventPlanQueueMismatch', `Event plan "${prepared.eventName}" requires a transferable payload`)
-  return freezeValue(parseEventPayload(prepared.definition, prepared.encodedPayload))
-}
-
 async function publishImmediate(
   prepared: PreparedEvent,
   publications: readonly QueuedListenerPublication[],
@@ -512,9 +487,10 @@ async function dispatchCommitted(
   publications: readonly QueuedListenerPublication[],
   context: EventDispatchContext,
   observe: EventObserver,
+  state: RuntimeReportState,
 ): Promise<void> {
   const outcomes = await callQueueAdapter(publications, () => context.queue!.dispatchCommitted(publications, queueCallContext(context, observe)))
-  await settleQueueOutcomes(plan.eventId, plan.eventName, publications, outcomes, 'after-commit', observe)
+  await settleQueueOutcomes(plan.eventId, plan.eventName, publications, outcomes, 'after-commit', observe, state)
 }
 
 async function callQueueAdapter(

@@ -43,6 +43,7 @@ describe('nuxt module integration', () => {
     expect(template).toContain('layer-listener')
 
     const registryPath = join(nuxt.options.buildDir, 'event-listeners/registry.mjs')
+    const contractsPath = join(nuxt.options.buildDir, 'event-listeners/contracts.ts')
     nuxt.hook('builder:generateApp' as never, (async (input: { filter?: (template: { dst?: string }) => boolean }) => {
       for (const current of nuxt.options.build.templates) {
         if (!current.dst || !current.getContents)
@@ -59,9 +60,14 @@ describe('nuxt module integration', () => {
       'change',
       appListener,
     )
-    const regenerated = await readFile(registryPath, 'utf8')
+    const [regenerated, regeneratedContracts] = await Promise.all([
+      readFile(registryPath, 'utf8'),
+      readFile(contractsPath, 'utf8'),
+    ])
     expect(regenerated).toContain('app-listener-regenerated')
     expect(regenerated).not.toContain('name: "app-listener"')
+    expect(regeneratedContracts).toContain('AssertListenerPayload_app_listener_regenerated_')
+    expect(regeneratedContracts).not.toContain('AssertListenerPayload_app_listener_0')
     await nuxt.close()
   })
 
@@ -75,7 +81,7 @@ describe('nuxt module integration', () => {
     await Promise.all([
       writeFile(join(root, 'server/events/event.ts'), `export default defineEvent({ name: 'test:event', transport: { _tag: 'transfer', version: 1 }, codec: { parse: input => input, encode: payload => payload } })`),
       writeFile(join(root, 'server/listeners/listener.ts'), `export default defineListener({ name: 'queued', event: 'test:event', execution: { _tag: 'queued', queue: 'notifications', publication: 'immediate' }, idempotency: { key: () => 'queued' }, handle: () => {} })`),
-      writeFile(join(root, 'server/utils/event-context.ts'), `export function createQueuedEventListenerContext() { return { idempotency: { run: async (_input, effect) => ({ _tag: 'executed', value: await effect() }) } } }`),
+      writeFile(join(root, 'server/utils/event-context.ts'), `export function createQueuedEventListenerContext() { return { services: undefined, idempotency: { run: async (_input, effect) => ({ _tag: 'executed', value: await effect() }) } } }`),
     ])
     const nuxt = await loadNuxt({
       cwd: root,

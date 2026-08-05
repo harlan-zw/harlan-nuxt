@@ -350,7 +350,7 @@ describe('event runtime', () => {
     expect(Object.isFrozen(plan)).toBe(true)
     expect(Object.isFrozen(plan.publications)).toBe(true)
     expect(Object.isFrozen(plan.publications[0])).toBe(true)
-    expect(Object.isFrozen(plan.payload)).toBe(true)
+    expect(Object.isFrozen(plan.publications[0]!.envelope.payload)).toBe(true)
     expect(() => (plan.publications as QueuedListenerPublication[]).push(plan.publications[0]!)).toThrow()
 
     await expect(runtime.commitEventPlan(plan, {
@@ -399,6 +399,43 @@ describe('event runtime', () => {
       expect.objectContaining({ _tag: 'queue-published', listenerName: 'sent', queue: 'notifications' }),
       expect.objectContaining({ _tag: 'queue-failed', listenerName: 'pending', queue: 'analytics' }),
     ]))
+  })
+
+  it('reports partial after-commit publication with durable sibling detail', async () => {
+    const observations: unknown[] = []
+    const registry = createGeneratedEventRegistry({
+      manifestHash: 'hash',
+      events: [eventEntry()],
+      listeners: [
+        { name: 'sent', event: 'test:event', execution: { _tag: 'queued', queue: 'notifications', publication: 'after-commit' }, hasIdempotency: true, load: vi.fn() },
+        { name: 'pending', event: 'test:event', execution: { _tag: 'queued', queue: 'analytics', publication: 'after-commit' }, hasIdempotency: true, load: vi.fn() },
+      ],
+    })
+    const runtime = createGeneratedEventRuntime(registry)
+    const plan = await runtime.planEvent('test:event', { value: 'x' }, { eventId: 'partial-after-commit', observe: () => {} })
+
+    await expect(runtime.commitEventPlan(plan, {
+      commit: async ({ publications }) => ({
+        _tag: 'committed',
+        receipt: { _tag: 'staged-event-listeners', deliveryIds: publications.map(publication => publication.deliveryId) },
+      }),
+    }, {
+      queue: {
+        publishImmediate: async publications => published(publications),
+        dispatchCommitted: async publications => [
+          { _tag: 'published', deliveryId: publications[0]!.deliveryId, queue: publications[0]!.queue },
+          { _tag: 'failed', deliveryId: publications[1]!.deliveryId, queue: publications[1]!.queue, status: 'not-dispatched', error: new Error('binding unavailable') },
+        ],
+      },
+      observe: (observation) => { observations.push(observation) },
+    })).rejects.toSatisfy(error => isEventRuntimeError(error) && error._tag === 'QueueDispatchFailure')
+
+    expect(observations).toContainEqual(expect.objectContaining({
+      _tag: 'dispatch-failed',
+      queued: ['sent'],
+      failed: ['pending'],
+      notStarted: [],
+    }))
   })
 
   it('supports reserved object property names in generated registries', async () => {
@@ -572,6 +609,7 @@ describe('event runtime', () => {
     })
     const terminalError = new Error('attempts exhausted')
     await createGeneratedEventRuntime(terminalRegistry).handleQueuedListenerTerminalFailure(envelope, terminalError, {
+      services: undefined,
       idempotency: { run: async (_input, effect) => ({ _tag: 'executed', value: await effect() }) },
       observe: () => {},
     })
@@ -605,6 +643,7 @@ describe('event runtime', () => {
     const runtime = createGeneratedEventRuntime(registry)
 
     await runtime.deliverQueuedListener(envelope, {
+      services: undefined,
       idempotency: { run: async () => ({ _tag: 'duplicate' }) },
       observe: () => {},
     })

@@ -35,6 +35,7 @@ export interface EventRegistryBuildPlan {
   listeners: ListenerBuildPlanEntry[]
   manifestHash: string
   allowExternalEvents: boolean
+  queuedDeliveryContextImportPath?: string
 }
 
 export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt, templateDir: string): void {
@@ -53,6 +54,15 @@ export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt
     filename: 'event-listeners/registry.d.ts',
     getContents: async () => generateEventRegistryTypes(options, sourceContext, templateDir),
   }, { nuxt: true, nitro: true })
+  const contractsTemplate = addTemplate({
+    filename: 'event-listeners/contracts.ts',
+    write: true,
+    getContents: async () => generateEventRegistryContracts(options, sourceContext, templateDir),
+  })
+
+  nuxt.hook('nitro:prepare:types' as never, (({ references }: { references: Array<{ path: string }> }) => {
+    references.push({ path: contractsTemplate.dst })
+  }) as never)
 
   // Nuxt reports template getContents failures as warnings and can otherwise
   // finish a production build without a registry. Validate once after every
@@ -77,7 +87,7 @@ export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt
     if (!isWatchedEventPath(path, options, sourceContext))
       return
     await nuxt.callHook('builder:generateApp', {
-      filter: template => template.dst === registryTemplate.dst || template.dst === serverTemplate.dst || template.dst === typesTemplate.dst,
+      filter: template => template.dst === registryTemplate.dst || template.dst === serverTemplate.dst || template.dst === typesTemplate.dst || template.dst === contractsTemplate.dst,
     })
   }) as never)
 }
@@ -122,7 +132,15 @@ export async function buildEventRegistryPlan(
     listeners: listeners.map(entry => ({ file: entry.file, meta: entry.meta })),
   }
   const manifestHash = createHash('sha256').update(JSON.stringify(hashInput)).digest('hex').slice(0, 16)
-  return { events, listeners, manifestHash, allowExternalEvents: options.allowExternalEvents === true }
+  return {
+    events,
+    listeners,
+    manifestHash,
+    allowExternalEvents: options.allowExternalEvents === true,
+    ...(options.queuedDeliveryContext
+      ? { queuedDeliveryContextImportPath: toImportPath(templateDir, resolve(sourceContext.rootDir, options.queuedDeliveryContext)) }
+      : {}),
+  }
 }
 
 export async function generateEventRegistryTemplate(
@@ -141,6 +159,14 @@ export async function generateEventRegistryTypes(
   return renderEventRegistryTypes(await buildEventRegistryPlan(options, sourceContext, templateDir))
 }
 
+export async function generateEventRegistryContracts(
+  options: ModuleOptions,
+  sourceContext: RegistrySourceContext,
+  templateDir: string,
+): Promise<string> {
+  return renderEventRegistryContracts(await buildEventRegistryPlan(options, sourceContext, templateDir))
+}
+
 export function renderEventRegistry(plan: EventRegistryBuildPlan): string {
   const eventLines = plan.events.map(entry => [
     `name: ${JSON.stringify(entry.meta.name)}`,
@@ -151,7 +177,7 @@ export function renderEventRegistry(plan: EventRegistryBuildPlan): string {
     `name: ${JSON.stringify(entry.meta.name)}`,
     `event: ${JSON.stringify(entry.meta.event)}`,
     `execution: ${JSON.stringify(entry.meta.execution)}`,
-    ...(entry.meta.subscriber ? [`subscriber: ${JSON.stringify(entry.meta.subscriber)}`] : []),
+    ...(entry.meta.owner ? [`owner: ${JSON.stringify(entry.meta.owner)}`] : []),
     `hasIdempotency: ${entry.meta.hasIdempotency}`,
     `hasFailed: ${entry.meta.hasFailed}`,
     `load: () => import(${JSON.stringify(entry.importPath)}).then(m => m.default)`,
@@ -237,6 +263,52 @@ export function renderEventRegistryTypes(plan: EventRegistryBuildPlan): string {
     'export {}',
     '',
   ].join('\n')
+}
+
+export function renderEventRegistryContracts(plan: EventRegistryBuildPlan): string {
+  const eventNames = new Set(plan.events.map(entry => entry.meta.name))
+  const eventTypes = plan.events.map(entry => `  typeof import(${JSON.stringify(entry.importPath)})['default'],`)
+  const listenerInputAssertions = plan.listeners
+    .filter(entry => entry.meta.hasInput)
+    .map((entry, index) => `type AssertListenerInput_${safeTypeName(entry.meta.name)}_${index} = AssertTrue<typeof import(${JSON.stringify(entry.importPath)})['default'] extends { input: InputParser<any> } ? true : false>`)
+  const listenerAssertions = plan.listeners
+    .filter(entry => !entry.meta.hasInput && eventNames.has(entry.meta.event))
+    .map((entry, index) => `type AssertListenerPayload_${safeTypeName(entry.meta.name)}_${index} = AssertTrue<typeof import(${JSON.stringify(entry.importPath)})['default'] extends ListenerDefinition<string, ${JSON.stringify(entry.meta.event)}, EventPayload<${JSON.stringify(entry.meta.event)}>, any> ? true : false>`)
+  const queuedServiceAssertions = plan.queuedDeliveryContextImportPath
+    ? plan.listeners
+        .filter(entry => entry.meta.execution._tag === 'queued')
+        .map((entry, index) => `type AssertQueuedServices_${safeTypeName(entry.meta.name)}_${index} = AssertTrue<QueuedDeliveryServices extends ListenerServicesOf<typeof import(${JSON.stringify(entry.importPath)})['default']> ? true : false>`)
+    : []
+
+  return [
+    '/* Generated by @nuxtseo/event-listeners. Do not edit. */',
+    `import type { EventPayloadOf, InputParser, ListenerDefinition, QueuedDeliveryContext } from '@nuxtseo/event-listeners/server'`,
+    '',
+    'type EventDefinitions = readonly [',
+    ...eventTypes,
+    ']',
+    `type EventsByName = { readonly [Definition in EventDefinitions[number] as Definition['name']]: Definition }`,
+    `type EventPayload<Name extends keyof EventsByName> = EventPayloadOf<EventsByName[Name]>`,
+    'type AssertTrue<Value extends true> = Value',
+    'type ListenerServicesOf<Definition> = Definition extends ListenerDefinition<string, string, any, infer Services> ? Services : never',
+    ...(plan.queuedDeliveryContextImportPath
+      ? [
+          `type QueuedDeliveryContextResult = Awaited<ReturnType<typeof import(${JSON.stringify(plan.queuedDeliveryContextImportPath)})['createQueuedEventListenerContext']>>`,
+          `type AssertQueuedDeliveryContext = AssertTrue<QueuedDeliveryContextResult extends QueuedDeliveryContext<any> ? true : false>`,
+          `type QueuedDeliveryServices = QueuedDeliveryContextResult extends QueuedDeliveryContext<infer Services> ? Services : never`,
+        ]
+      : []),
+    ...listenerInputAssertions,
+    ...listenerAssertions,
+    ...queuedServiceAssertions,
+    '',
+    'export {}',
+    '',
+  ].join('\n')
+}
+
+function safeTypeName(value: string): string {
+  return value.replace(/[^\w$]/g, '_')
 }
 
 function assertValidPlan(

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { addServerImports, createResolver, defineNuxtModule } from '@nuxt/kit'
 import { installEventRegistryTemplates } from './build/registry'
 
-export { generateEventRegistryTemplate, generateEventRegistryTypes } from './build/registry'
+export { generateEventRegistryContracts, generateEventRegistryTemplate, generateEventRegistryTypes } from './build/registry'
 export type { ModuleOptions } from './types'
 
 export default defineNuxtModule<ModuleOptions>({

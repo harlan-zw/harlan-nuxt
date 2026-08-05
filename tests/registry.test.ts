@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { extractEventMeta } from '../src/build/extract-event-meta'
 import { extractListenerMeta } from '../src/build/extract-listener-meta'
-import { buildEventRegistryPlan, generateEventRegistryTemplate, generateEventRegistryTypes } from '../src/build/registry'
+import { buildEventRegistryPlan, generateEventRegistryContracts, generateEventRegistryTemplate, generateEventRegistryTypes } from '../src/build/registry'
 
 async function sourceTree() {
   const root = await mkdtemp(join(tmpdir(), 'event-listeners-'))
@@ -49,9 +49,11 @@ export default defineListener({
 
 describe('event registry build', () => {
   it('extracts Laravel-compatible sync propagation when execution is omitted', () => {
-    expect(extractListenerMeta(`export default defineListener({ name: 'audit', event: 'audit:ran', handle: () => {} })`, 'listener.ts')).toMatchObject({
+    expect(extractListenerMeta(`export default defineListener({ name: 'audit', event: 'audit:ran', owner: 'audit', handle: () => {} })`, 'listener.ts')).toMatchObject({
       name: 'audit',
       event: 'audit:ran',
+      owner: 'audit',
+      hasInput: false,
       execution: { _tag: 'sync', failure: 'propagate' },
     })
   })
@@ -109,22 +111,28 @@ describe('event registry build', () => {
     await expect(buildEventRegistryPlan({ allowEmptyEvents: ['typo:event'] }, tree.context, tree.templateDir)).rejects.toThrow(/Unknown allowEmptyEvents/)
   })
 
-  it('rejects sync or deferred listeners mixed into an after-commit event', async () => {
+  it('rejects other execution modes mixed into an after-commit event', async () => {
     const tree = await sourceTree()
     await Promise.all([
       writeFile(join(tree.root, 'server/events/event.ts'), transferEvent('root:event')),
-      writeFile(join(tree.root, 'server/listeners/queued.ts'), queuedListener('queued', 'root:event', 'events', 'after-commit')),
+      writeFile(join(tree.root, 'server/listeners/immediate.ts'), queuedListener('immediate', 'root:event', 'events', 'immediate')),
+      writeFile(join(tree.root, 'server/listeners/queued.ts'), queuedListener('after-commit', 'root:event', 'events', 'after-commit')),
       writeFile(join(tree.root, 'server/listeners/sync.ts'), `export default defineListener({ name: 'sync', event: 'root:event', handle: () => {} })`),
     ])
 
     await expect(buildEventRegistryPlan({
       queues: ['events'],
       queuedDeliveryContext: 'server/event-context.ts',
-    }, tree.context, tree.templateDir)).rejects.toThrow(/after-commit.*non-queued/)
+    }, tree.context, tree.templateDir)).rejects.toThrow(/mixes immediate and after-commit/)
   })
 
   it('rejects definitions which are not default exports', () => {
     expect(() => extractListenerMeta(`defineListener({ name: 'audit', event: 'audit:ran', handle: () => {} })`, 'listener.ts')).toThrow(/must default-export/)
+  })
+
+  it('rejects explicit undefined listener input instead of bypassing event payload checks', () => {
+    expect(() => extractListenerMeta(`export default defineListener({ name: 'audit', event: 'audit:ran', input: undefined, handle: () => {} })`, 'listener.ts')).toThrow(/input must be a parser/)
+    expect(() => extractListenerMeta(`export default defineListener({ name: 'audit', event: 'audit:ran', input: void 0, handle: () => {} })`, 'listener.ts')).toThrow(/input must be a parser/)
   })
 
   it('rejects object spreads that could hide listener routing metadata', () => {
@@ -213,6 +221,43 @@ describe('event registry build', () => {
     expect(types).toContain('Name extends keyof EventsByName ? EventPayloadOf<EventsByName[Name]> : unknown')
   })
 
+  it('generates listener payload and queued service assertions for strict app composition', async () => {
+    const tree = await sourceTree()
+    await Promise.all([
+      writeFile(join(tree.root, 'server/events/event.ts'), transferEvent('root:event')),
+      writeFile(join(tree.root, 'server/listeners/listener.ts'), queuedListener('listener', 'root:event')),
+    ])
+
+    const options = {
+      queues: ['events'],
+      queuedDeliveryContext: 'server/event-context.ts',
+    }
+    const [types, contracts] = await Promise.all([
+      generateEventRegistryTypes(options, tree.context, tree.templateDir),
+      generateEventRegistryContracts(options, tree.context, tree.templateDir),
+    ])
+
+    expect(types).not.toContain('AssertListenerPayload_listener_0')
+    expect(contracts).toContain('AssertListenerPayload_listener_0')
+    expect(contracts).toContain('AssertQueuedServices_listener_0')
+    expect(contracts).toContain('AssertQueuedDeliveryContext')
+    expect(contracts).toContain('QueuedDeliveryServices extends ListenerServicesOf')
+    expect(contracts).toContain('createQueuedEventListenerContext')
+  })
+
+  it('generates a parser assertion when listener input is explicit', async () => {
+    const tree = await sourceTree()
+    await Promise.all([
+      writeFile(join(tree.root, 'server/events/event.ts'), transferEvent('root:event')),
+      writeFile(join(tree.root, 'server/listeners/listener.ts'), `export default defineListener({ name: 'listener', event: 'root:event', input: parser, handle: () => {} })`),
+    ])
+
+    const contracts = await generateEventRegistryContracts({}, tree.context, tree.templateDir)
+
+    expect(contracts).toContain('AssertListenerInput_listener_0')
+    expect(contracts).not.toContain('AssertListenerPayload_listener_0')
+  })
+
   it('allows same-isolate deferred listeners for local request payloads', async () => {
     const tree = await sourceTree()
     await writeFile(join(tree.root, 'server/events/event.ts'), localEvent('request:event'))
@@ -252,15 +297,6 @@ describe('event registry build', () => {
         await writeFile(join(tree.root, 'server/listeners/one.ts'), queuedListener('listener', 'root:event'))
       },
       error: /Local event .* cannot use queued/,
-    },
-    {
-      name: 'mixed publication modes',
-      setup: async (tree: Awaited<ReturnType<typeof sourceTree>>) => {
-        await writeFile(join(tree.root, 'server/events/event.ts'), transferEvent('root:event'))
-        await writeFile(join(tree.root, 'server/listeners/one.ts'), queuedListener('one', 'root:event', 'events', 'immediate'))
-        await writeFile(join(tree.root, 'server/listeners/two.ts'), queuedListener('two', 'root:event', 'events', 'after-commit'))
-      },
-      error: /mixes immediate and after-commit/,
     },
   ])('fails the build for $name', async ({ setup, error }) => {
     const tree = await sourceTree()
