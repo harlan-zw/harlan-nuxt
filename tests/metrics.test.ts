@@ -46,7 +46,7 @@ describe('metricsSinkToRepoHooks', () => {
 })
 
 describe('combineMetricsSinks', () => {
-  it('fans out to every sink and isolates a throwing one', async () => {
+  it('fans out to every sink and surfaces a throwing one', async () => {
     const a = vi.fn()
     const c = vi.fn()
     const sink = combineMetricsSinks(
@@ -55,14 +55,14 @@ describe('combineMetricsSinks', () => {
       { record: c },
     )
     const event = { jobId: 'j', queue: 'q', jobType: 't', status: 'completed', attempts: 1, durationMs: 1, batchId: null, siteId: null, userId: null } as JobMetricsEvent
-    await expect(sink.record(event)).resolves.toBeUndefined()
+    await expect(sink.record(event)).rejects.toThrow('bad sink')
     expect(a).toHaveBeenCalledWith(event)
     expect(c).toHaveBeenCalledWith(event) // reached despite the middle sink throwing
   })
 
-  it('swallows an async sink rejection', async () => {
+  it('surfaces an async sink rejection', async () => {
     const sink = combineMetricsSinks({ record: () => Promise.reject(new Error('async boom')) })
-    await expect(sink.record({} as JobMetricsEvent)).resolves.toBeUndefined()
+    await expect(sink.record({} as JobMetricsEvent)).rejects.toThrow('async boom')
   })
 })
 

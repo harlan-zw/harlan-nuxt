@@ -147,6 +147,26 @@ describe('createDurableJobsRuntime — batch happy path', () => {
     expect(events).toHaveLength(2)
     expect(events.every(e => e.status === 'completed' && e.queue === 'q' && e.jobType === 'work')).toBe(true)
   })
+
+  it('reports an isolated lifecycle observer defect', async () => {
+    const sinkError = new Error('metrics unavailable')
+    const observerErrors: Array<{ stage: string, cause: unknown }> = []
+    const { runtime } = await setup(
+      { work: async () => {} },
+      {
+        metricsSink: { record: () => { throw sinkError } },
+        onObserverError: (input: { stage: string, cause: unknown }) => void observerErrors.push(input),
+      },
+    )
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+
+    const result = await runtime.consumeMessage(msg(jobIds[0]!))
+
+    expect(result.run.status).toBe('completed')
+    expect(observerErrors).toEqual([
+      expect.objectContaining({ stage: 'completed', cause: sinkError }),
+    ])
+  })
 })
 
 describe('ctx.reportStats → metrics + job row (JOB_ANALYTICS parity)', () => {

@@ -19,6 +19,7 @@ describe('d1 best-practice query shapes', () => {
     const dispatchable = queryPlan(db, `
       SELECT * FROM jobs
       WHERE reserved_at IS NULL
+        AND published_at IS NULL
         AND available_at <= 100
         AND (NULL IS NULL OR created_at <= NULL)
         AND completed_at IS NULL

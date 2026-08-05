@@ -19,11 +19,12 @@ import { createD1DurableBatchStore, createJobBatch, settleBatchMember } from './
 import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastRepositoryHooks } from './broadcast'
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
-import { describeCause, describeCauseWithStack, formatJobError } from './errors'
+import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
 import { resolveJobRetryDelay } from './policy'
+import { parseJobInput } from './registry'
 
 // ============================================
 // Consumer loop: claim → run → settle → progress
@@ -263,6 +264,8 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
   isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
   dispatchContinuations?: (input: { storedJob: D1DurableJobRecord<Queue>, stage: DurableJobContinuationStage }) => void | Promise<void>
+  onTerminalFailure?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob>['onTerminalFailure']
+  onObserverError?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob>['onObserverError']
   /**
    * Soft batch CPU budget (ms). Before each message, if the batch has run longer
    * than this, the remaining messages are retried instead of processed — so a
@@ -277,14 +280,53 @@ function defaultIsDlqQueue(queue: string): boolean {
   return queue.includes('-dlq')
 }
 
+export function resolveStoredJobRetryDelay(
+  job: Pick<D1DurableJobRecord, 'id' | 'attempts' | 'backoff'>,
+  onInvalid?: (input: { jobId: string, cause: unknown }) => void,
+): number {
+  if (!job.backoff)
+    return 0
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(job.backoff)
+  }
+  catch (cause) {
+    if (onInvalid)
+      onInvalid({ jobId: job.id, cause })
+    else
+      console.error('[nuxt-cf-jobs] invalid stored backoff', { jobId: job.id, cause })
+    return 0
+  }
+  if (!Array.isArray(parsed) || parsed.some(delay => typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0)) {
+    const cause = new Error('Stored backoff must be an array of finite non-negative numbers')
+    if (onInvalid)
+      onInvalid({ jobId: job.id, cause })
+    else
+      console.error('[nuxt-cf-jobs] invalid stored backoff', { jobId: job.id, cause })
+    return 0
+  }
+  if (parsed.length === 0)
+    return 0
+  return parsed[Math.min(Math.max(job.attempts - 1, 0), parsed.length - 1)] as number
+}
+
+function createStoredJobRetryDelay(onLog: ((event: CfJobsLogEvent) => void) | undefined) {
+  return ({ job }: { error: unknown, job: D1DurableJobRecord }): number => resolveStoredJobRetryDelay(job, ({ jobId, cause }) => {
+    if (onLog) {
+      onLog({ stage: 'unexpected', jobId, error: describeCause(cause), stack: describeCauseWithStack(cause), cause })
+      return
+    }
+    console.error('[nuxt-cf-jobs] invalid stored backoff', { jobId, cause })
+  })
+}
+
 function reportContinuationFailures(
   run: RunDurableJobMessageResult,
   onLog: ((event: CfJobsLogEvent) => void) | undefined,
   jobId: string | undefined,
 ): void {
-  if (!('continuationFailures' in run))
-    return
-  for (const failure of run.continuationFailures ?? []) {
+  const continuationFailures = 'continuationFailures' in run ? run.continuationFailures ?? [] : []
+  for (const failure of continuationFailures) {
     onLog?.({
       stage: 'continuation-failed',
       jobId,
@@ -292,6 +334,46 @@ function reportContinuationFailures(
       stack: describeCauseWithStack(failure.cause),
       cause: failure.cause,
     })
+  }
+  if ('terminalFailureCause' in run && run.terminalFailureCause !== undefined) {
+    onLog?.({
+      stage: 'unexpected',
+      jobId,
+      error: `Terminal failure callback failed: ${describeCause(run.terminalFailureCause)}`,
+      stack: describeCauseWithStack(run.terminalFailureCause),
+      cause: run.terminalFailureCause,
+    })
+  }
+}
+
+function createDefinitionTerminalFailure<Queue extends string, Env, Db, Logger>(opts: {
+  registry: DurableJobsRuntimeRegistry<Env, Db, Logger>
+  toDispatchableJob: (job: D1DurableJobRecord<Queue>) => DispatchableJob
+  createJobContext: ConsumerContextFactory<Env, Db, Logger>
+}): NonNullable<RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['onTerminalFailure']> {
+  return async ({ error, storedJob }) => {
+    const job = opts.toDispatchableJob(storedJob)
+    const envelope = job.payload as { _task?: unknown, [key: string]: unknown }
+    if (typeof envelope._task !== 'string')
+      throw jobErrorToException(jobErrors.noTask())
+    const definition = opts.registry.loadJobDefinition
+      ? await opts.registry.loadJobDefinition(envelope._task)
+      : opts.registry.getJobDefinition?.(envelope._task)
+    if (!definition?.failed)
+      return
+    const { _task, _continuations, ...payload } = envelope
+    const parsed = parseJobInput(definition as never, payload)
+    if (!parsed.success)
+      throw jobErrorToException(jobErrors.invalidPayload(envelope._task, parsed.error))
+    const control = { handled: false }
+    const ctx = await opts.createJobContext({
+      job,
+      storedJob,
+      taskName: envelope._task,
+      payload,
+      control,
+    })
+    await definition.failed(parsed.data, ctx, error)
   }
 }
 
@@ -388,7 +470,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         store: opts.store,
         toDispatchableJob: opts.repository.toDispatchableJob,
         createJobContext: opts.createJobContext,
-        retryDelaySeconds: opts.retryDelaySeconds,
+        retryDelaySeconds: opts.retryDelaySeconds ?? createStoredJobRetryDelay(opts.onLog),
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
@@ -396,6 +478,12 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         createJobScope: opts.createJobScope,
         isPermanentFailure: opts.isPermanentFailure,
         dispatchContinuations: opts.dispatchContinuations,
+        onTerminalFailure: opts.onTerminalFailure ?? createDefinitionTerminalFailure({
+          registry: opts.registry,
+          toDispatchableJob: opts.repository.toDispatchableJob,
+          createJobContext: opts.createJobContext,
+        }),
+        onObserverError: opts.onObserverError,
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
@@ -428,6 +516,10 @@ export interface DurableJobsRuntimeRegistry<Env = unknown, Db = unknown, Logger 
 
 type ConsumerMessage = RunDurableJobMessageOptions<unknown, DispatchableJob>['message']
 type ConsumerContextFactory<Env, Db, Logger> = RunDurableJobMessageOptions<unknown, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['createJobContext']
+
+export type DurableJobsRuntimeObserverError<Queue extends string = string>
+  = | { stage: 'claimed' | 'completed' | 'failed' | 'released', jobId: string, cause: unknown }
+    | { stage: 'settlement' | 'terminal-failure', storedJob: D1DurableJobRecord<Queue>, cause: unknown }
 
 export interface CreateDurableJobsRuntimeOptions<
   Queue extends string = string,
@@ -481,6 +573,9 @@ export interface CreateDurableJobsRuntimeOptions<
   isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
   /** Dispatch then/catch/finally payload continuations after a terminal outcome. */
   dispatchContinuations?: (input: { storedJob: D1DurableJobRecord<Queue>, stage: DurableJobContinuationStage }) => void | Promise<void>
+  onTerminalFailure?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob>['onTerminalFailure']
+  /** Reports isolated D1 lifecycle, settlement, and terminal callback defects. */
+  onObserverError?: (input: DurableJobsRuntimeObserverError<Queue>) => void | Promise<void>
   /** Soft per-batch CPU budget (ms); remaining messages are deferred once exceeded. */
   maxBatchCpuMs?: number
   /** Delay (s) for CPU-guard-deferred messages. Default 5. */
@@ -508,14 +603,13 @@ function composeLifecycleHooks<Queue extends string>(
 
 function composeHook<T>(hooks: Array<((input: T) => void | Promise<void>) | undefined>): (input: T) => Promise<void> {
   return async (input) => {
-    await Promise.all(hooks.map(async (hook) => {
-      try {
-        await hook?.(input)
-      }
-      catch {
-        // Lifecycle observers must not affect job execution.
-      }
-    }))
+    const active = hooks.filter((hook): hook is (input: T) => void | Promise<void> => hook !== undefined)
+    const outcomes = await Promise.allSettled(active.map(hook => Promise.resolve().then(() => hook(input))))
+    const failures = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
+    if (failures.length === 1)
+      throw failures[0]
+    if (failures.length > 1)
+      throw new AggregateError(failures, 'Multiple lifecycle observers failed')
   }
 }
 
@@ -572,6 +666,7 @@ export function createDurableJobsRuntime<
   const repository = createD1DurableJobRepository<Queue>(opts.db, {
     reclaimAfterSeconds: opts.reclaimAfterSeconds,
     ...lifecycleHooks,
+    onObserverError: opts.onObserverError,
   })
   const store = createD1DurableBatchStore(opts.db)
   const publisher = createQueuePublisher<Record<string, unknown>, Queue>(
@@ -630,13 +725,19 @@ export function createDurableJobsRuntime<
         store,
         toDispatchableJob: repository.toDispatchableJob,
         createJobContext: opts.createJobContext,
-        retryDelaySeconds: opts.retryDelaySeconds,
+        retryDelaySeconds: opts.retryDelaySeconds ?? createStoredJobRetryDelay(opts.onLog),
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         maxAttemptsOf: stored => stored.max_attempts,
         completeResult: opts.completeResult,
         createJobScope: opts.createJobScope,
         isPermanentFailure: opts.isPermanentFailure,
         dispatchContinuations: opts.dispatchContinuations,
+        onTerminalFailure: opts.onTerminalFailure ?? createDefinitionTerminalFailure({
+          registry: opts.registry,
+          toDispatchableJob: repository.toDispatchableJob,
+          createJobContext: opts.createJobContext,
+        }),
+        onObserverError: opts.onObserverError,
         dispatchOnFinish,
         onBatchProgress,
       })
@@ -661,6 +762,8 @@ export function createDurableJobsRuntime<
       createJobScope: opts.createJobScope,
       isPermanentFailure: opts.isPermanentFailure,
       dispatchContinuations: opts.dispatchContinuations,
+      onTerminalFailure: opts.onTerminalFailure,
+      onObserverError: opts.onObserverError,
       maxBatchCpuMs: opts.maxBatchCpuMs,
       cpuGuardRetryDelaySeconds: opts.cpuGuardRetryDelaySeconds,
     }),

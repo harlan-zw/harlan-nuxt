@@ -4,7 +4,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { addTemplate, addTypeTemplate, resolveFiles, updateTemplates } from '@nuxt/kit'
+import { addTemplate, addTypeTemplate, resolveFiles } from '@nuxt/kit'
 import { cfJobsAppExportNames } from '../runtime/server/app'
 import { extractJobMeta } from './extract-job-meta'
 
@@ -27,12 +27,29 @@ export interface RegistryBuildPlan {
   defaultQueue?: string
 }
 
+/** A job module contributed by another Nuxt module. The file stays lazy. */
+export interface RegistrySource {
+  file: string
+  /** Overrides a missing or statically unreadable definition name. */
+  name?: string
+}
+
+export interface RegistrySourcesContext {
+  sources: RegistrySource[]
+}
+
+export interface RegistrySourceTracker {
+  collect: () => Promise<RegistrySource[]>
+  isWatched: (path: string, rootDir: string) => Promise<boolean>
+}
+
 /**
  * Owns the generated `#cf-jobs/app` value module + type augmentation as one
  * build-time seam. `module.ts` remains the Nuxt adapter; discovery, rendering,
  * alias registration, and watch invalidation stay local here.
  */
 export function installRegistryTemplates(options: ModuleOptions, nuxt: Nuxt, templateDir: string): void {
+  const sourceTracker = createRegistrySourceTracker(nuxt)
   const legacyRegistryTemplate = resolve(nuxt.options.buildDir, 'cf-jobs/registry.ts')
   if (existsSync(legacyRegistryTemplate))
     unlinkSync(legacyRegistryTemplate)
@@ -40,7 +57,7 @@ export function installRegistryTemplates(options: ModuleOptions, nuxt: Nuxt, tem
   const registryTemplate = addTemplate({
     filename: 'cf-jobs/registry.js',
     write: true,
-    getContents: async () => generateRegistryTemplate(options, nuxt.options.rootDir, templateDir),
+    getContents: async () => generateRegistryTemplate(options, nuxt.options.rootDir, templateDir, await sourceTracker.collect()),
   })
   nuxt.options.alias['#cf-jobs/app'] = registryTemplate.dst
   if (options.registryAlias && options.registryAlias !== '#cf-jobs/app')
@@ -49,14 +66,41 @@ export function installRegistryTemplates(options: ModuleOptions, nuxt: Nuxt, tem
 
   const typesTemplate = addTypeTemplate({
     filename: 'cf-jobs/registry-augmentation.d.ts',
-    getContents: async () => generateRegistryTypesTemplate(options, nuxt.options.rootDir, templateDir),
+    getContents: async () => generateRegistryTypesTemplate(options, nuxt.options.rootDir, templateDir, await sourceTracker.collect()),
   }, { nuxt: true, nitro: true })
 
   nuxt.hooks.hook('builder:watch' as never, (async (_event: string, path: string) => {
-    if (!isWatchedJobPath(path, options, nuxt.options.rootDir))
+    if (!isWatchedJobPath(path, options, nuxt.options.rootDir) && !(await sourceTracker.isWatched(path, nuxt.options.rootDir)))
       return
-    await updateTemplates({ filter: template => template.dst === registryTemplate.dst || template.dst === typesTemplate.dst })
+    await nuxt.callHook('builder:generateApp', {
+      filter: template => template.dst === registryTemplate.dst || template.dst === typesTemplate.dst,
+    })
   }) as never)
+}
+
+/** Collect registry contributions at render time to avoid Nuxt module order coupling. */
+export async function collectRegistrySources(nuxt: Pick<Nuxt, 'callHook'>): Promise<RegistrySource[]> {
+  const context: RegistrySourcesContext = { sources: [] }
+  const callHook = nuxt.callHook as unknown as (name: 'cf-jobs:registry:sources', context: RegistrySourcesContext) => Promise<void>
+  await callHook.call(nuxt, 'cf-jobs:registry:sources', context)
+  return context.sources
+}
+
+export function createRegistrySourceTracker(nuxt: Pick<Nuxt, 'callHook'>): RegistrySourceTracker {
+  let previous: RegistrySource[] = []
+  const collect = async (): Promise<RegistrySource[]> => {
+    previous = await collectRegistrySources(nuxt)
+    return previous
+  }
+  return {
+    collect,
+    async isWatched(path, rootDir) {
+      const prior = previous
+      const current = await collect()
+      return isWatchedRegistrySource(path, current, rootDir)
+        || isWatchedRegistrySource(path, prior, rootDir)
+    },
+  }
 }
 
 export function inlineRegistryTemplateInNitroDev(nuxt: Nuxt, registryTemplatePath: string): void {
@@ -76,14 +120,17 @@ export function inlineRegistryTemplateInNitroDev(nuxt: Nuxt, registryTemplatePat
   ]
 }
 
-export async function buildRegistryPlan(options: ModuleOptions, rootDir: string, templateDir: string): Promise<RegistryBuildPlan> {
+export async function buildRegistryPlan(options: ModuleOptions, rootDir: string, templateDir: string, sources: readonly RegistrySource[] = []): Promise<RegistryBuildPlan> {
   const files = await resolveJobFiles(options, rootDir)
-  const entries = await Promise.all(files.map(async (file): Promise<RegistryBuildPlanEntry> => {
+  const discovered = files.map(file => ({ file }))
+  const uniqueSources = dedupeRegistrySources([...discovered, ...sources])
+  const entries = await Promise.all(uniqueSources.map(async (source): Promise<RegistryBuildPlanEntry> => {
+    const file = resolve(source.file)
     const meta = extractJobMeta(await readFile(file, 'utf8'))
     return {
       file,
       meta,
-      name: meta.name ?? toJobName(file, options, rootDir),
+      name: source.name ?? meta.name ?? toJobName(file, options, rootDir),
       importPath: toImportPath(templateDir, file).replace(JOB_FILE_EXTENSION_RE, ''),
     }
   }))
@@ -92,15 +139,30 @@ export async function buildRegistryPlan(options: ModuleOptions, rootDir: string,
   return { entries, defaultQueue: options.defaultQueue }
 }
 
-export async function generateRegistryTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {
-  return renderRegistryTemplate(await buildRegistryPlan(options, rootDir, templateDir))
+export async function generateRegistryTemplate(options: ModuleOptions, rootDir: string, templateDir: string, sources: readonly RegistrySource[] = []): Promise<string> {
+  return renderRegistryTemplate(await buildRegistryPlan(options, rootDir, templateDir, sources))
 }
 
-export async function generateRegistryTypesTemplate(options: ModuleOptions, rootDir: string, templateDir: string): Promise<string> {
+export async function generateRegistryTypesTemplate(options: ModuleOptions, rootDir: string, templateDir: string, sources: readonly RegistrySource[] = []): Promise<string> {
   return renderRegistryTypesTemplate(
-    await buildRegistryPlan(options, rootDir, templateDir),
+    await buildRegistryPlan(options, rootDir, templateDir, sources),
     options.registryAlias ?? '#cf-jobs/app',
   )
+}
+
+function dedupeRegistrySources(sources: RegistrySource[]): RegistrySource[] {
+  const byFile = new Map<string, RegistrySource>()
+  for (const source of sources) {
+    const file = resolve(source.file)
+    const previous = byFile.get(file)
+    byFile.set(file, {
+      ...previous,
+      ...source,
+      file,
+      ...(source.name === undefined && previous?.name !== undefined ? { name: previous.name } : {}),
+    })
+  }
+  return [...byFile.values()]
 }
 
 function renderRegistryTemplate(plan: RegistryBuildPlan): string {
@@ -232,6 +294,11 @@ function isWatchedJobPath(path: string, options: ModuleOptions, rootDir: string)
   const dirs = toArray(options.jobsDir ?? 'server/jobs').map(dir => resolve(rootDir, dir))
   const absolutePath = resolve(rootDir, path)
   return dirs.some(dir => absolutePath === dir || absolutePath.startsWith(dir + sep))
+}
+
+function isWatchedRegistrySource(path: string, sources: readonly RegistrySource[], rootDir: string): boolean {
+  const absolutePath = resolve(rootDir, path)
+  return sources.some(source => resolve(source.file) === absolutePath)
 }
 
 function toArray<T>(value: T | T[]): T[] {

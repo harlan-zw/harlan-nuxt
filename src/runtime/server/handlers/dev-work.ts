@@ -54,7 +54,7 @@ export default async function devWorkHandler(event: DevWorkerEvent) {
   const result = pickString(query.drain) === '0'
     ? { processed: 0, byQueue: {} as Record<string, number>, remaining: 0 }
     : await runDevWorkerTick({
-        findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
+        findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max, publication: 'all' }),
         queueConfig: queue => resolveQueueWorkerConfig(queues[queue]),
         async dispatchBatch(queue, messages) {
           // Fire the registered consumer in-process and await it — the handler (and

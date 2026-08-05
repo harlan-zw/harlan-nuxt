@@ -17,7 +17,7 @@ import type {
 import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
 import { buildJobPayload } from './payload'
-import { createJobTraceId, createJobUniqueKey, resolveJobMaxAttempts } from './policy'
+import { createJobTraceId, createJobUniqueKey, resolveJobBackoff, resolveJobMaxAttempts } from './policy'
 import { sendBatchChunked, withSendBackpressure } from './queue'
 import { parseJobInput } from './registry'
 import { err, ok, unwrapResult } from './result'
@@ -53,6 +53,7 @@ export interface DurableJobRecord<Queue extends string = string> {
   payload: string
   attempts: number
   maxAttempts: number
+  backoff?: number[]
   availableAt: number
   createdAt: number
 }
@@ -87,10 +88,22 @@ export interface DurableJobRepository<
 > {
   insertJob: (record: Record) => Promise<boolean>
   /**
+   * Optional explicit unpublished insert used by the outbox publisher. Legacy
+   * `insertJob` remains immediately claimable and must not be used when recovery
+   * of a failed queue send is required.
+   */
+  stageJob?: (record: Record) => Promise<boolean>
+  /**
    * Optional batched insert. When implemented, callers can persist many records in chunks
    * (chunked at the D1 100-statement limit by D1-backed implementations).
    */
   insertJobs?: (records: readonly Record[], opts?: { batchSize?: number }) => Promise<{ inserted: Record[], chunks: Array<{ ok: boolean, ids: string[], changes: number, error?: unknown }> }>
+}
+
+/** Publication evidence for a durable insert-then-send outbox protocol. */
+export interface DurableJobPublicationRepository {
+  markJobsPublished: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
+  noteJobsDispatchFailure: (ids: readonly string[], cause: unknown, opts?: { at?: number }) => Promise<number>
 }
 
 export interface RecordDurableJobFailureInput<Queue extends string = string> {
@@ -219,6 +232,8 @@ export interface DurableJobRecoveryQuery {
    */
   redispatchedBefore?: number
   limit?: number
+  /** Defaults to unpublished outbox rows. Dev drainers may explicitly read all live rows. */
+  publication?: 'unpublished' | 'published' | 'all'
 }
 
 export interface DurableJobStaleRecoveryQuery extends DurableJobRecoveryQuery {
@@ -247,11 +262,18 @@ export interface DurableJobRecoveryRepository<
    * so callers can settle batches and publish telemetry.
    * Optional so older repositories degrade to the prior (revive-only) behaviour.
    */
-  failStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Array<{
-    id: string
-    queue: Queue
-    batchId: string | null
-  }>>
+  failStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<DurableJobTerminalized<Queue>[]>
+}
+
+/** Durable evidence returned when the reaper terminalizes an abandoned claim. */
+export interface DurableJobTerminalized<Queue extends string = string> {
+  id: string
+  queue: Queue
+  batchId: string | null
+  jobType: string
+  payload: string
+  attempts: number
+  exception: string
 }
 
 export interface PruneDurableJobsQuery {
@@ -330,7 +352,7 @@ export interface PrepareDurableJobOptions<
   payload: Payload
   route?: DurableJobRoute<Queue>
   registry?: DurableJobRegistryLike
-  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'unique' | 'uniqueId'>
+  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'>
   id?: string
   batchId?: string
   userId?: number
@@ -340,6 +362,7 @@ export interface PrepareDurableJobOptions<
   now?: number
   traceId?: string
   defaultMaxAttempts?: number
+  backoff?: number[]
   continuations?: DurableJobContinuations<string, Record<string, unknown>, Queue>
 }
 
@@ -355,7 +378,7 @@ export async function prepareDurableJobResult<
   Queue extends string,
 >(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<Result<DurableJobRecord<Queue>, JobError>> {
   const now = opts.now ?? Math.floor(Date.now() / 1000)
-  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'unique' | 'uniqueId'> | undefined
+  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'> | undefined
 
   const route = resolveDurableJobRoute(opts.name, opts.route, definition, opts.registry)
   if (!route)
@@ -379,6 +402,11 @@ export async function prepareDurableJobResult<
   if (bytes > DURABLE_JOB_MAX_PAYLOAD_BYTES)
     return err(jobErrors.payloadTooLarge(opts.name, bytes, DURABLE_JOB_MAX_PAYLOAD_BYTES))
 
+  const maxAttempts = resolveJobMaxAttempts(definition) ?? opts.defaultMaxAttempts ?? 3
+  const backoff = opts.backoff ?? (definition?.backoff === undefined
+    ? undefined
+    : Array.from({ length: maxAttempts }, (_, index) => resolveJobBackoff(definition.backoff, index + 1) ?? 0))
+
   return ok({
     id: opts.id ?? crypto.randomUUID(),
     queue: route.queue as Queue,
@@ -391,7 +419,8 @@ export async function prepareDurableJobResult<
     uniqueKey,
     payload: serialized,
     attempts: 0,
-    maxAttempts: resolveJobMaxAttempts(definition) ?? opts.defaultMaxAttempts ?? 3,
+    maxAttempts,
+    backoff,
     availableAt: now + (opts.delaySeconds ?? 0),
     createdAt: now,
   })
@@ -569,7 +598,7 @@ export function toQueueJobMessage<Queue extends string>(record: Pick<DurableJobR
 }
 
 export function groupQueueJobMessagesByQueue<Queue extends string>(
-  records: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>,
+  records: readonly Pick<DurableJobRecord<Queue>, 'id' | 'queue'>[],
 ): Map<Queue, Array<QueueJobMessage<Queue>>> {
   const groups = new Map<Queue, Array<QueueJobMessage<Queue>>>()
   for (const record of records) {
@@ -689,7 +718,7 @@ export async function failStaleReservedDurableJobs<
 >(
   repository: Pick<DurableJobRecoveryRepository<Queue, Record>, 'failStaleReservedJobs'>,
   query: DurableJobStaleRecoveryQuery,
-): Promise<Array<{ id: string, queue: Queue, batchId: string | null }>> {
+): Promise<DurableJobTerminalized<Queue>[]> {
   return await repository.failStaleReservedJobs?.(query) ?? []
 }
 
@@ -715,19 +744,39 @@ export async function enqueueDurableJob<
   Queue extends string,
   Record extends DurableJobRecord<Queue>,
 >(
-  repository: Pick<DurableJobRepository<Queue, Record>, 'insertJob'>,
+  repository: Pick<DurableJobRepository<Queue, Record>, 'insertJob'>
+    & Partial<Pick<DurableJobRepository<Queue, Record>, 'stageJob'>>
+    & Partial<DurableJobPublicationRepository>,
   publisher: Pick<QueuePublisher<Queue>, 'send'>,
   record: Record,
   opts?: { delaySeconds?: number },
 ): Promise<EnqueueDurableJobResult> {
-  const inserted = await repository.insertJob(record)
+  const publicationRepository = typeof repository.stageJob === 'function' && hasPublicationRepository(repository)
+    ? repository as typeof repository & DurableJobPublicationRepository & { stageJob: NonNullable<typeof repository.stageJob> }
+    : undefined
+  const inserted = publicationRepository
+    ? await publicationRepository.stageJob(record)
+    : await repository.insertJob(record)
   if (!inserted)
     return { status: 'duplicate' }
 
-  return await publisher
-    .send(record.queue, toQueueJobMessage(record), opts)
-    .then((sent): EnqueueDurableJobResult => sent ? { status: 'enqueued' } : { status: 'not-dispatched' })
-    .catch((cause: unknown): EnqueueDurableJobResult => ({ status: 'dispatch-failed', cause }))
+  return await publisher.send(record.queue, toQueueJobMessage(record), opts)
+    .then(async (sent): Promise<EnqueueDurableJobResult> => {
+      if (!sent) {
+        await publicationRepository?.noteJobsDispatchFailure([record.id], new Error(`Queue binding unavailable for ${record.queue}`))
+        return { status: 'not-dispatched' }
+      }
+      if (publicationRepository) {
+        const updated = await publicationRepository.markJobsPublished([record.id])
+        if (updated !== 1)
+          return { status: 'dispatch-failed', cause: new Error(`Published ${updated} of 1 durable rows`) }
+      }
+      return { status: 'enqueued' }
+    })
+    .catch(async (cause: unknown): Promise<EnqueueDurableJobResult> => {
+      await publicationRepository?.noteJobsDispatchFailure([record.id], cause)
+      return { status: 'dispatch-failed', cause }
+    })
 }
 
 /**
@@ -742,21 +791,43 @@ export type DispatchDurableJobBatchResult<Queue extends string = string>
     | { queue: Queue, status: 'not-dispatched' }
     | { queue: Queue, status: 'failed', cause: unknown }
 
+export type PublishDurableJobBatchResult<Queue extends string = string>
+  = | { queue: Queue, status: 'published', jobIds: string[] }
+    | { queue: Queue, status: 'not-dispatched', jobIds: string[] }
+    | { queue: Queue, status: 'failed', jobIds: string[], cause: unknown }
+    | { queue: Queue, status: 'state-failed', jobIds: string[], cause: unknown }
+
 export interface SweepDurableJobsResult<Queue extends string> {
   swept: number
   dispatched: Array<DispatchDurableJobBatchResult<Queue>>
 }
 
 export async function sweepDispatchableDurableJobs<Queue extends string>(
-  repository: Pick<DurableJobRecoveryRepository<Queue, Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>, 'findDispatchableJobs'>,
+  repository: Pick<DurableJobRecoveryRepository<Queue, Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>, 'findDispatchableJobs'>
+    & Partial<DurableJobPublicationRepository>,
   publisher: Pick<QueuePublisher<Queue>, 'sendBatch'>,
   query?: DurableJobRecoveryQuery,
 ): Promise<SweepDurableJobsResult<Queue>> {
   const records = await findDispatchableDurableJobs(repository, query)
   if (records.length === 0)
     return { swept: 0, dispatched: [] }
-  const dispatched = await dispatchDurableJobBatch(publisher, records)
+  const dispatched: Array<DispatchDurableJobBatchResult<Queue>> = hasPublicationRepository(repository)
+    ? (await publishDurableJobBatch(repository, publisher, records, { now: query?.now })).map((result) => {
+        if (result.status === 'published')
+          return { queue: result.queue, status: 'sent' }
+        if (result.status === 'not-dispatched')
+          return { queue: result.queue, status: 'not-dispatched' }
+        return { queue: result.queue, status: 'failed', cause: result.cause }
+      })
+    : await dispatchDurableJobBatch(publisher, records)
   return { swept: records.length, dispatched }
+}
+
+function hasPublicationRepository(
+  repository: Partial<DurableJobPublicationRepository>,
+): repository is DurableJobPublicationRepository {
+  return typeof repository.markJobsPublished === 'function'
+    && typeof repository.noteJobsDispatchFailure === 'function'
 }
 
 export async function dispatchDurableJobBatch<Queue extends string>(
@@ -778,6 +849,54 @@ export async function dispatchDurableJobBatch<Queue extends string>(
   )
 }
 
+/**
+ * Publish already-staged rows and durably record the outcome. A successful send
+ * is acknowledged only after every row is marked published. If that state write
+ * fails, rows remain recoverable and a duplicate delivery is possible by design.
+ */
+export async function publishDurableJobBatch<Queue extends string>(
+  repository: DurableJobPublicationRepository,
+  publisher: Pick<QueuePublisher<Queue>, 'sendBatch'>,
+  records: readonly Pick<DurableJobRecord<Queue>, 'id' | 'queue'>[],
+  opts?: { delaySeconds?: number, now?: number },
+): Promise<Array<PublishDurableJobBatchResult<Queue>>> {
+  const groups = groupQueueJobMessagesByQueue(records)
+  return await Promise.all([...groups].map(async ([queue, messages]): Promise<PublishDurableJobBatchResult<Queue>> => {
+    const jobIds = messages.map(message => message.jobId)
+    const sent = await publisher.sendBatch(queue, messages, { delaySeconds: opts?.delaySeconds })
+      .then(value => ({ _tag: 'sent' as const, value }))
+      .catch((cause: unknown) => ({ _tag: 'failed' as const, cause }))
+
+    if (sent._tag === 'failed') {
+      return await repository.noteJobsDispatchFailure(jobIds, sent.cause, { at: opts?.now })
+        .then((updated): PublishDurableJobBatchResult<Queue> => updated === jobIds.length
+          ? { queue, status: 'failed', jobIds, cause: sent.cause }
+          : { queue, status: 'state-failed', jobIds, cause: new AggregateError([sent.cause], `Recorded dispatch failure for ${updated} of ${jobIds.length} durable rows`) })
+        .catch((evidenceCause: unknown): PublishDurableJobBatchResult<Queue> => ({
+          queue,
+          status: 'state-failed',
+          jobIds,
+          cause: new AggregateError([sent.cause, evidenceCause], 'Queue send and dispatch evidence writes failed'),
+        }))
+    }
+
+    if (!sent.value) {
+      const cause = new Error(`Queue binding unavailable for ${queue}`)
+      return await repository.noteJobsDispatchFailure(jobIds, cause, { at: opts?.now })
+        .then((updated): PublishDurableJobBatchResult<Queue> => updated === jobIds.length
+          ? { queue, status: 'not-dispatched', jobIds }
+          : { queue, status: 'state-failed', jobIds, cause: new AggregateError([cause], `Recorded dispatch failure for ${updated} of ${jobIds.length} durable rows`) })
+        .catch((evidenceCause: unknown): PublishDurableJobBatchResult<Queue> => ({ queue, status: 'state-failed', jobIds, cause: evidenceCause }))
+    }
+
+    return await repository.markJobsPublished(jobIds, { at: opts?.now })
+      .then((updated): PublishDurableJobBatchResult<Queue> => updated === jobIds.length
+        ? { queue, status: 'published', jobIds }
+        : { queue, status: 'state-failed', jobIds, cause: new Error(`Published ${updated} of ${jobIds.length} durable rows`) })
+      .catch((cause: unknown): PublishDurableJobBatchResult<Queue> => ({ queue, status: 'state-failed', jobIds, cause }))
+  }))
+}
+
 export type DurableJobMessageStatus
   = | 'invalid-message'
     | DurableJobClaimMiss
@@ -786,6 +905,8 @@ export type DurableJobMessageStatus
     | 'failed'
     | 'completed'
     | 'errored'
+    | 'exhausted'
+    | 'claim-error'
 
 export interface RunDurableJobMessageOptions<
   StoredJob,
@@ -804,6 +925,7 @@ export interface RunDurableJobMessageOptions<
   registry: {
     getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
+    loadJobDefinition?: (name: string) => Promise<JobDefinition<string, unknown, string, Env, Db, Logger> | undefined>
   }
   toDispatchableJob: (job: StoredJob) => Job
   createJobContext: (input: {
@@ -847,6 +969,10 @@ export interface RunDurableJobMessageOptions<
    * never fail on transient infra errors. `maxAttempts` is `maxAttemptsOf`'s value.
    */
   isPermanentFailure?: (input: { error: unknown, storedJob: StoredJob, attempts: number, maxAttempts: number | undefined }) => boolean
+  /** Runs once, after terminal failure persistence and only when retries are exhausted. */
+  onTerminalFailure?: (input: { error: unknown, storedJob: StoredJob }) => void | Promise<void>
+  /** Required visibility fallback for settlement observer defects. Defaults to console.error. */
+  onObserverError?: (input: { stage: 'settlement' | 'terminal-failure', cause: unknown, storedJob: StoredJob }) => void | Promise<void>
   /**
    * Dispatch the job payload's `then`/`catch`/`finally` continuations after a
    * terminal outcome: `then`+`finally` on success, `catch`+`finally` on terminal
@@ -901,11 +1027,11 @@ export type RunDurableJobMessageResult
   = | { status: 'invalid-message' }
     | { status: DurableJobClaimMiss }
     | { status: 'dispatch-failed', dispatch: DispatchResult, error?: JobError, continuationFailures?: DurableJobContinuationFailure[] }
-    | { status: 'failed', dispatch: DispatchResult, continuationFailures?: DurableJobContinuationFailure[] }
+    | { status: 'failed', dispatch: DispatchResult, terminalFailureCause?: unknown, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'released', dispatch: DispatchResult }
     | { status: 'completed', dispatch: DispatchResult, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'errored', error: JobError }
-    | { status: 'exhausted', error: JobError, continuationFailures?: DurableJobContinuationFailure[] }
+    | { status: 'exhausted', error: JobError, terminalFailureCause?: unknown, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'claim-error', error: JobError }
 
 export async function runDurableJobMessage<
@@ -972,13 +1098,17 @@ export async function runDurableJobMessage<
     await scope?.onSettled?.({ storedJob, status, durationMs: Date.now() - startedMs, permanent, error })
   }
   const observeSettlement = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
-    try {
-      await settle(status, permanent, error)
-    }
-    catch {
-      // The scope callback is an observer of an already-persisted transition.
-      // It must never turn a completed/finalized job back into a queue retry.
-    }
+    await settle(status, permanent, error).catch(async (cause: unknown) => {
+      await reportObserverError(opts.onObserverError, { stage: 'settlement', cause, storedJob })
+    })
+  }
+  const runTerminalFailure = async (error: unknown): Promise<unknown | undefined> => {
+    return await Promise.resolve(opts.onTerminalFailure?.({ error, storedJob }))
+      .then(() => undefined)
+      .catch(async (cause: unknown) => {
+        await reportObserverError(opts.onObserverError, { stage: 'terminal-failure', cause, storedJob })
+        return cause
+      })
   }
   const dispatchTerminalContinuations = async (...stages: DurableJobContinuationStage[]): Promise<DurableJobContinuationFailure[]> => {
     const failures: DurableJobContinuationFailure[] = []
@@ -1039,9 +1169,15 @@ export async function runDurableJobMessage<
           throw error
         }
         await observeSettlement('failed', true, dispatch.control.error)
+        const terminalFailureCause = await runTerminalFailure(new Error(dispatch.control.error ?? 'Job failed via ctx.fail()'))
         const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
         opts.message.ack()
-        return { status: 'failed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
+        return {
+          status: 'failed',
+          dispatch,
+          ...(terminalFailureCause === undefined ? {} : { terminalFailureCause }),
+          ...(continuationFailures.length > 0 ? { continuationFailures } : {}),
+        }
       }
       const delaySeconds = dispatch.control.delaySeconds ?? 0
       try {
@@ -1102,9 +1238,15 @@ export async function runDurableJobMessage<
         throw failError
       }
       await observeSettlement('exhausted', true, error)
+      const terminalFailureCause = await runTerminalFailure(error)
       const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
       opts.message.ack()
-      return { status: 'exhausted', error: jobErrors.handlerThrew(error), ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
+      return {
+        status: 'exhausted',
+        error: jobErrors.handlerThrew(error),
+        ...(terminalFailureCause === undefined ? {} : { terminalFailureCause }),
+        ...(continuationFailures.length > 0 ? { continuationFailures } : {}),
+      }
     }
     const delaySeconds = typeof opts.retryDelaySeconds === 'function'
       ? opts.retryDelaySeconds({ error, job: storedJob })
@@ -1125,4 +1267,17 @@ export async function runDurableJobMessage<
     opts.message.retry({ delaySeconds })
     return { status: 'errored', error: jobErrors.handlerThrew(error) }
   }
+}
+
+async function reportObserverError<StoredJob>(
+  observer: RunDurableJobMessageOptions<StoredJob, DispatchableJob>['onObserverError'],
+  input: { stage: 'settlement' | 'terminal-failure', cause: unknown, storedJob: StoredJob },
+): Promise<void> {
+  if (observer) {
+    await Promise.resolve().then(() => observer(input)).catch((fallbackCause: unknown) => {
+      console.error('[nuxt-cf-jobs] observer error fallback failed', { input, fallbackCause })
+    })
+    return
+  }
+  console.error('[nuxt-cf-jobs] observer error', input)
 }

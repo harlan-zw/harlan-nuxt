@@ -8,7 +8,9 @@ import type {
   DurableJobRepository,
   ReleaseDurableJobOptions,
 } from './outbox'
-import { DurableJobOwnershipError, headlineOf } from './errors'
+import type { Result } from './result'
+import { describeCause, DurableJobOwnershipError, headlineOf } from './errors'
+import { err, ok } from './result'
 
 export interface D1ResultLike<T = unknown> {
   success?: boolean
@@ -43,9 +45,14 @@ export interface D1DurableJobRecord<Queue extends string = string> {
   payload: string
   attempts: number
   max_attempts: number
+  backoff: string | null
   reserved_at: number | null
   available_at: number
   created_at: number
+  published_at: number | null
+  last_dispatched_at: number | null
+  dispatch_attempts: number
+  last_dispatch_error: string | null
   completed_at: number | null
   failed_at: number | null
   last_error: string | null
@@ -86,20 +93,22 @@ export interface D1DurableJobRepositoryOptions<Queue extends string = string> {
    * double-claimed. Default unset = only unreserved rows are claimable.
    */
   reclaimAfterSeconds?: number
-  /** Awaited after a successful claim. Errors are swallowed so observers cannot break the lifecycle. */
+  /** Awaited after a successful claim. Defects are isolated and reported through `onObserverError`. */
   onJobClaimed?: (input: { job: D1DurableJobRecord<Queue> }) => void | Promise<void>
-  /** Awaited after `completeJob` writes succeed. Errors are swallowed. */
+  /** Awaited after `completeJob` writes succeed. Defects are isolated and reported. */
   onJobCompleted?: (input: { job: D1DurableJobRecord<Queue>, durationMs: number | null, result?: unknown }) => void | Promise<void>
   /**
-   * Awaited after `failJob` writes succeed. Errors are swallowed.
+   * Awaited after `failJob` writes succeed. Defects are isolated and reported.
    *
    * `error` is the HEADLINE (`"TypeError: <message>"`) — safe for issue titles,
    * realtime payloads and Analytics Engine blobs. `cause` is the ORIGINAL thrown
    * value: report it as-is (`captureException(cause)`) to keep the native stack.
    */
   onJobFailed?: (input: { job: D1DurableJobRecord<Queue>, error: string, cause?: unknown }) => void | Promise<void>
-  /** Awaited after `releaseJob` writes succeed. Errors are swallowed. */
+  /** Awaited after `releaseJob` writes succeed. Defects are isolated and reported. */
   onJobReleased?: (input: { job: D1DurableJobRecord<Queue>, opts: ReleaseDurableJobOptions | undefined }) => void | Promise<void>
+  /** Visibility fallback for lifecycle observer defects. Defaults to console.error. */
+  onObserverError?: (input: { stage: 'claimed' | 'completed' | 'failed' | 'released', jobId: string, cause: unknown }) => void | Promise<void>
 }
 
 export interface D1InsertJobsChunkResult {
@@ -127,6 +136,13 @@ export type D1DurableJobRepository<Queue extends string = string>
         records: readonly DurableJobRecord<Queue>[],
         opts?: { batchSize?: number },
       ) => Promise<D1InsertJobsResult<Queue>>
+      prepareStageJobs: (
+        records: readonly DurableJobRecord<Queue>[],
+      ) => Result<D1PreparedDurableJobStage<Queue>, PrepareD1DurableJobStageError>
+      stageJob: (record: DurableJobRecord<Queue>) => Promise<boolean>
+      stageJobs: (records: readonly DurableJobRecord<Queue>[]) => Promise<StageD1DurableJobsResult<Queue>>
+      markJobsPublished: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
+      noteJobsDispatchFailure: (ids: readonly string[], cause: unknown, opts?: { at?: number }) => Promise<number>
       toDispatchableJob: (job: D1DurableJobRecord<Queue>) => {
         id: string
         queue: Queue
@@ -138,9 +154,23 @@ export type D1DurableJobRepository<Queue extends string = string>
       }
     }
 
+export interface D1PreparedDurableJobStage<Queue extends string = string> {
+  records: readonly DurableJobRecord<Queue>[]
+  statements: D1PreparedStatementLike<unknown>[]
+}
+
+export type PrepareD1DurableJobStageError
+  = | { _tag: 'duplicate-job-id', id: string }
+
+export type StageD1DurableJobsResult<Queue extends string = string>
+  = | { status: 'staged', records: readonly DurableJobRecord<Queue>[] }
+    | { status: 'invalid', error: PrepareD1DurableJobStageError }
+    | { status: 'unsupported', reason: 'transactional-batch-unavailable' }
+    | { status: 'failed', cause: unknown }
+
 export const d1DurableJobMigrationSql = [
   'CREATE TABLE IF NOT EXISTS job_batches (id text PRIMARY KEY, name text, parent_batch_id text, total_jobs integer NOT NULL DEFAULT 0, pending_jobs integer NOT NULL DEFAULT 0, failed_jobs integer NOT NULL DEFAULT 0, on_finish text, handler text, allow_failures integer DEFAULT 0, site_id text, user_id integer, created_at integer NOT NULL DEFAULT (unixepoch()), updated_at integer NOT NULL DEFAULT (unixepoch()), finished_at integer)',
-  'CREATE TABLE IF NOT EXISTS jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text REFERENCES job_batches(id), user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, attempts integer DEFAULT 0, max_attempts integer DEFAULT 3, reserved_at integer, available_at integer NOT NULL, created_at integer NOT NULL DEFAULT (unixepoch()), completed_at integer, failed_at integer, last_error text, retry_reasons text, rows_fetched integer, rows_inserted integer, d1_rows_read integer, d1_rows_written integer, duration_ms integer)',
+  'CREATE TABLE IF NOT EXISTS jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text REFERENCES job_batches(id), user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, attempts integer DEFAULT 0, max_attempts integer DEFAULT 3, backoff text, reserved_at integer, available_at integer NOT NULL, created_at integer NOT NULL DEFAULT (unixepoch()), published_at integer, last_dispatched_at integer, dispatch_attempts integer NOT NULL DEFAULT 0, last_dispatch_error text, completed_at integer, failed_at integer, last_error text, retry_reasons text, rows_fetched integer, rows_inserted integer, d1_rows_read integer, d1_rows_written integer, duration_ms integer)',
   'CREATE TABLE IF NOT EXISTS failed_jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text, user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, exception text NOT NULL, attempts integer NOT NULL, max_attempts integer NOT NULL, failed_at integer NOT NULL)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_site ON job_batches (site_id)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_pending ON job_batches (pending_jobs)',
@@ -150,7 +180,7 @@ export const d1DurableJobMigrationSql = [
   // Recovery scans are global (not queue-scoped), so the queue-first index above
   // cannot serve them. Keep these partial indexes bounded to live rows and align
   // their leading columns with the range + ORDER BY used by each recovery query.
-  'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_stale_reserved ON jobs (reserved_at) WHERE reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs (user_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_site ON jobs (site_id)',
@@ -171,6 +201,32 @@ export const d1DurableJobMigrationSql = [
   // PRAGMA optimize after schema/index changes; migrate() is a maintenance path.
   'PRAGMA optimize',
 ]
+
+const D1_DURABLE_JOB_PUBLICATION_COLUMNS = [
+  { name: 'published_at', definition: 'integer' },
+  { name: 'last_dispatched_at', definition: 'integer' },
+  { name: 'dispatch_attempts', definition: 'integer NOT NULL DEFAULT 0' },
+  { name: 'last_dispatch_error', definition: 'text' },
+  { name: 'backoff', definition: 'text' },
+] as const
+
+/** Resumable upgrade for a pre-publication or partially upgraded `jobs` table. */
+export function buildD1DurableJobPublicationUpgradeSql(
+  jobsTable = 'jobs',
+  existingColumns: ReadonlySet<string> = new Set(),
+): string[] {
+  const missing = D1_DURABLE_JOB_PUBLICATION_COLUMNS.filter(column => !existingColumns.has(column.name))
+  const addedPublicationColumn = missing.some(column => column.name === 'published_at')
+  return [
+    ...missing.map(column => `ALTER TABLE ${jobsTable} ADD COLUMN ${column.name} ${column.definition}`),
+    ...(addedPublicationColumn
+      ? [`UPDATE ${jobsTable} SET published_at = created_at, last_dispatched_at = created_at, dispatch_attempts = 1 WHERE published_at IS NULL`]
+      : []),
+    'DROP INDEX IF EXISTS idx_jobs_dispatchable',
+    `CREATE INDEX idx_jobs_dispatchable ON ${jobsTable} (available_at) WHERE published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL`,
+    'PRAGMA optimize',
+  ]
+}
 
 export const DURABLE_JOB_FAILURE_EVIDENCE_LIMIT = 8
 
@@ -253,13 +309,21 @@ export function createD1DurableJobRepository<Queue extends string = string>(
   const insertJobSql = `
     INSERT OR IGNORE INTO ${jobsTable} (
       id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
-      attempts, max_attempts, available_at, created_at
+      attempts, max_attempts, backoff, available_at, created_at, published_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `
+  const stageJobSql = `
+    INSERT INTO ${jobsTable} (
+      id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+      attempts, max_attempts, backoff, available_at, created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `
+  const stageJobOrIgnoreSql = stageJobSql.replace('INSERT INTO', 'INSERT OR IGNORE INTO')
 
-  function bindInsertJob(record: DurableJobRecord<Queue>): D1PreparedStatementLike<unknown> {
-    return db.prepare(insertJobSql).bind(
+  function bindJob(record: DurableJobRecord<Queue>, sql = insertJobSql): D1PreparedStatementLike<unknown> {
+    return db.prepare(sql).bind(
       record.id,
       record.queue,
       record.jobType,
@@ -272,20 +336,59 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       record.payload,
       record.attempts,
       record.maxAttempts,
+      record.backoff ? JSON.stringify(record.backoff) : null,
       record.availableAt,
       record.createdAt,
+      ...(sql === insertJobSql ? [record.createdAt] : []),
     )
+  }
+
+  function prepareStageJobs(records: readonly DurableJobRecord<Queue>[]): Result<D1PreparedDurableJobStage<Queue>, PrepareD1DurableJobStageError> {
+    const duplicate = findDuplicateJobId(records)
+    if (duplicate)
+      return err({ _tag: 'duplicate-job-id', id: duplicate })
+    return ok({
+      records,
+      statements: records.map(record => bindJob(record, stageJobSql)),
+    })
   }
 
   return {
     async migrate() {
+      const existingJobsTable = await db.prepare<{ name: string }>(`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
+      `).bind(jobsTable).first<{ name: string }>()
+      const existingColumns = new Set(existingJobsTable
+        ? (await all<{ name: string }>(db.prepare<{ name: string }>(`
+            SELECT name FROM pragma_table_info(?)
+          `).bind(jobsTable))).map(column => column.name)
+        : [])
+      const requiresPublicationUpgrade = existingJobsTable
+        ? D1_DURABLE_JOB_PUBLICATION_COLUMNS.some(column => !existingColumns.has(column.name))
+        : false
       // D1 exec() is intended for static maintenance work and accepts multiple
       // statements. One call avoids a network round trip per table/index.
-      await db.exec(d1DurableJobMigrationSql.join(';\n'))
+      const migrationSql = existingJobsTable && !existingColumns.has('published_at')
+        ? d1DurableJobMigrationSql.filter(statement => !statement.includes('idx_jobs_dispatchable'))
+        : d1DurableJobMigrationSql
+      await db.exec(migrationSql.join(';\n'))
+      if (requiresPublicationUpgrade) {
+        // Rows are backfilled only when this migration introduces published_at.
+        // If a partial or external migration already created that column, retain
+        // its null values as unpublished rather than guessing that a send occurred.
+        await db.exec(buildD1DurableJobPublicationUpgradeSql(jobsTable, existingColumns).join(';\n'))
+      }
     },
 
     async insertJob(record) {
-      const result = await bindInsertJob(record).run()
+      const result = await bindJob(record).run()
+      return typeof result.meta?.changes === 'number'
+        ? result.meta.changes > 0
+        : result.success === true
+    },
+
+    async stageJob(record) {
+      const result = await bindJob(record, stageJobOrIgnoreSql).run()
       return typeof result.meta?.changes === 'number'
         ? result.meta.changes > 0
         : result.success === true
@@ -301,7 +404,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 
       for (let i = 0; i < records.length; i += batchSize) {
         const slice = records.slice(i, i + batchSize)
-        const stmts = slice.map(bindInsertJob)
+        const stmts = slice.map(record => bindJob(record))
         try {
           const results = typeof db.batch === 'function'
             ? await db.batch(stmts)
@@ -332,6 +435,62 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       return { inserted, chunks }
     },
 
+    prepareStageJobs(records) {
+      return prepareStageJobs(records)
+    },
+
+    async stageJobs(records) {
+      const prepared = prepareStageJobs(records)
+      if (!prepared.ok)
+        return { status: 'invalid', error: prepared.error }
+      if (records.length === 0)
+        return { status: 'staged', records }
+      if (typeof db.batch !== 'function')
+        return { status: 'unsupported', reason: 'transactional-batch-unavailable' }
+      return await db.batch(prepared.value.statements)
+        .then((results): StageD1DurableJobsResult<Queue> => {
+          const exact = results.length === records.length && results.every(result => result.meta?.changes === 1 || (result.meta?.changes === undefined && result.success === true))
+          return exact
+            ? { status: 'staged', records }
+            : { status: 'failed', cause: new Error(`Durable stage affected ${results.reduce((sum, result) => sum + (result.meta?.changes ?? 0), 0)} of ${records.length} rows`) }
+        })
+        .catch((cause: unknown): StageD1DurableJobsResult<Queue> => ({ status: 'failed', cause }))
+    },
+
+    async markJobsPublished(ids, publishOpts) {
+      if (ids.length === 0)
+        return 0
+      const at = publishOpts?.at ?? currentUnixSeconds()
+      const result = await db.prepare(`
+        UPDATE ${jobsTable}
+        SET published_at = COALESCE(published_at, ?),
+            last_dispatched_at = ?,
+            dispatch_attempts = dispatch_attempts + 1,
+            last_dispatch_error = NULL
+        WHERE id IN (SELECT value FROM json_each(?))
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(at, at, JSON.stringify(ids)).run()
+      return result.meta?.changes ?? 0
+    },
+
+    async noteJobsDispatchFailure(ids, cause, failureOpts) {
+      if (ids.length === 0)
+        return 0
+      const at = failureOpts?.at ?? currentUnixSeconds()
+      const result = await db.prepare(`
+        UPDATE ${jobsTable}
+        SET last_dispatched_at = ?,
+            dispatch_attempts = dispatch_attempts + 1,
+            last_dispatch_error = ?
+        WHERE id IN (SELECT value FROM json_each(?))
+          AND published_at IS NULL
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(at, describeCause(cause), JSON.stringify(ids)).run()
+      return result.meta?.changes ?? 0
+    },
+
     async claimJob(id) {
       const now = currentUnixSeconds()
       // `reclaimBefore`: reservations at or before this are treated as abandoned
@@ -342,6 +501,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         UPDATE ${jobsTable}
         SET reserved_at = ?, attempts = attempts + 1
         WHERE id = ?
+          AND published_at IS NOT NULL
           AND (reserved_at IS NULL OR reserved_at <= ?)
           AND available_at <= ?
           AND completed_at IS NULL
@@ -349,7 +509,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         RETURNING *
       `).bind(now, id, reclaimBefore, now).first<D1DurableJobRecord<Queue>>()
       if (job)
-        await runLifecycleHook(() => opts.onJobClaimed?.({ job }))
+        await runLifecycleHook(() => opts.onJobClaimed?.({ job }), opts.onObserverError, { stage: 'claimed', jobId: job.id })
       return job
     },
 
@@ -396,7 +556,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job.attempts,
       ).run()
       assertOwnedMutation(resultUpdate, job.id)
-      await runLifecycleHook(() => opts.onJobCompleted?.({ job, durationMs, result }))
+      await runLifecycleHook(() => opts.onJobCompleted?.({ job, durationMs, result }), opts.onObserverError, { stage: 'completed', jobId: job.id })
     },
 
     async failJob(job, error, failOpts) {
@@ -440,7 +600,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       // HEADLINE only (`"TypeError: <message>"`, always the stack's first line).
       // A caller passing a plain single-line message is unaffected. `cause` carries the
       // original throw so an error tracker reports it directly, stack and all.
-      await runLifecycleHook(() => opts.onJobFailed?.({ job, error: headlineOf(error), cause: failOpts?.cause }))
+      await runLifecycleHook(() => opts.onJobFailed?.({ job, error: headlineOf(error), cause: failOpts?.cause }), opts.onObserverError, { stage: 'failed', jobId: job.id })
     },
 
     async releaseJob(job, releaseOpts) {
@@ -467,7 +627,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job.attempts,
       ).run()
       assertOwnedMutation(result, job.id)
-      await runLifecycleHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }))
+      await runLifecycleHook(() => opts.onJobReleased?.({ job, opts: releaseOpts }), opts.onObserverError, { stage: 'released', jobId: job.id })
     },
 
     async noteOrphanRedispatch(ids, opts) {
@@ -547,10 +707,16 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async findDispatchableJobs(query = {}) {
+      const publicationPredicate = query.publication === 'all'
+        ? '1 = 1'
+        : query.publication === 'published'
+          ? 'published_at IS NOT NULL'
+          : 'published_at IS NULL'
       return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
         SELECT *
         FROM ${jobsTable}
         WHERE reserved_at IS NULL
+          AND ${publicationPredicate}
           AND available_at <= ?
           AND (? IS NULL OR created_at <= ?)
           AND (
@@ -646,7 +812,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       const now = query.now ?? currentUnixSeconds()
       const exception = query.error ?? 'stale-reservation: exhausted retries'
       const evidenceArray = validEvidenceArraySql('retry_reasons')
-      const insertStatement = db.prepare<{ id: string, queue: Queue, batchId: string | null }>(`
+      const insertStatement = db.prepare<{ id: string, queue: Queue, batchId: string | null, jobType: string, payload: string, attempts: number, exception: string }>(`
         INSERT OR REPLACE INTO ${failedJobsTable} (
           id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
           exception, attempts, max_attempts, failed_at
@@ -671,7 +837,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND attempts >= max_attempts
         ORDER BY reserved_at ASC
         LIMIT ?
-        RETURNING id, queue, batch_id AS batchId
+        RETURNING id, queue, batch_id AS batchId, job_type AS jobType, payload, attempts, exception
       `).bind(
         exception,
         now,
@@ -705,14 +871,14 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 
       if (typeof db.batch === 'function') {
         const [inserted] = await db.batch([insertStatement, deleteStatement])
-        return (inserted?.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null }>
+        return (inserted?.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null, jobType: string, payload: string, attempts: number, exception: string }>
       }
 
       const inserted = insertStatement.all
-        ? await insertStatement.all<{ id: string, queue: Queue, batchId: string | null }>()
+        ? await insertStatement.all<{ id: string, queue: Queue, batchId: string | null, jobType: string, payload: string, attempts: number, exception: string }>()
         : await insertStatement.run()
       await deleteStatement.run()
-      return (inserted.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null }>
+      return (inserted.results ?? []) as Array<{ id: string, queue: Queue, batchId: string | null, jobType: string, payload: string, attempts: number, exception: string }>
     },
 
     toDispatchableJob(job) {
@@ -803,6 +969,23 @@ export function createD1DurableJobRepository<Queue extends string = string>(
   }
 }
 
+/** Strict, transactional staging through a repository's D1 batch boundary. */
+export async function stagePreparedDurableJobs<Queue extends string>(
+  repository: Pick<D1DurableJobRepository<Queue>, 'stageJobs'>,
+  records: readonly DurableJobRecord<Queue>[],
+): Promise<StageD1DurableJobsResult<Queue>> {
+  return await repository.stageJobs(records)
+}
+
+function findDuplicateJobId<Queue extends string>(records: readonly DurableJobRecord<Queue>[]): string | undefined {
+  const seen = new Set<string>()
+  for (const record of records) {
+    if (seen.has(record.id))
+      return record.id
+    seen.add(record.id)
+  }
+}
+
 const DEFAULT_PRUNE_CHUNK = 1000
 
 /**
@@ -850,14 +1033,20 @@ function readResultStat(result: unknown): (key: 'durationMs' | 'rowsFetched' | '
   }
 }
 
-async function runLifecycleHook(fn: () => void | Promise<void>): Promise<void> {
-  try {
-    await fn()
-  }
-  catch {
-    // Observers are awaited so Workers do not terminate their promises early,
-    // but they never affect the already-persisted job lifecycle transition.
-  }
+async function runLifecycleHook(
+  fn: () => void | Promise<void>,
+  fallback: D1DurableJobRepositoryOptions['onObserverError'],
+  context: { stage: 'claimed' | 'completed' | 'failed' | 'released', jobId: string },
+): Promise<void> {
+  await Promise.resolve().then(fn).catch(async (cause: unknown) => {
+    if (fallback) {
+      await Promise.resolve().then(() => fallback({ ...context, cause })).catch((fallbackCause: unknown) => {
+        console.error('[nuxt-cf-jobs] D1 observer error fallback failed', { ...context, cause, fallbackCause })
+      })
+      return
+    }
+    console.error('[nuxt-cf-jobs] D1 observer error', { ...context, cause })
+  })
 }
 
 function assertOwnedMutation(result: { meta?: { changes?: number }, success?: boolean }, jobId: string): void {

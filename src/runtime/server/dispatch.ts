@@ -92,11 +92,6 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
       await opts.onHandledThrow?.({ ...input, error })
       return { success: true, control }
     }
-    if (definition?.failed) {
-      await Promise.resolve(definition.failed(parsedPayload.data, ctx, error)).catch((failedError) => {
-        opts.onUnhandledThrow?.({ ...input, error: failedError })
-      })
-    }
     await opts.onUnhandledThrow?.({ ...input, error })
     throw error
   }

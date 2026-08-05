@@ -1,4 +1,5 @@
 import type { Nuxt } from '@nuxt/schema'
+import type { RegistrySourcesContext } from './build/registry'
 import type { DiscoveredTask } from './tasks'
 import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
@@ -16,9 +17,13 @@ import {
 } from './wrangler'
 
 export { generateRegistryTemplate, generateRegistryTypesTemplate } from './build/registry'
+export type { RegistrySource, RegistrySourcesContext } from './build/registry'
 export type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 
 declare module '@nuxt/schema' {
+  interface NuxtHooks {
+    'cf-jobs:registry:sources': (context: RegistrySourcesContext) => void | Promise<void>
+  }
   interface RuntimeConfig {
     cfJobs: {
       queues: ModuleOptions['queues']
@@ -69,6 +74,7 @@ export default defineNuxtModule<ModuleOptions>().with({
       { name: 'defineScheduledTask', from: resolver.resolve('./runtime/server/scheduled') },
     ])
     installRegistryTemplates(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
+    installReconcileContextTemplate(options.reconcile, nuxt)
 
     // Inject nitro's `useRuntimeConfig` into the generated registry at startup.
     // The registry imports nothing framework-bound (so it survives raw-Node / Vite
@@ -163,6 +169,23 @@ function resolveReconcileOptions(input: ModuleOptions['reconcile']): ResolvedRec
 
 function isReconcileEnabled(input: ModuleOptions['reconcile']): boolean {
   return input !== false && (input === true || input === undefined || input.enabled !== false)
+}
+
+function installReconcileContextTemplate(input: ModuleOptions['reconcile'], nuxt: Nuxt): void {
+  const contextModule = typeof input === 'object' ? input.terminalFailureContext : undefined
+  const template = addTemplate({
+    filename: 'cf-jobs/reconcile-context.mjs',
+    write: true,
+    getContents: () => renderReconcileContextProxy(nuxt.options.rootDir, contextModule),
+  })
+  nuxt.options.alias['#cf-jobs/reconcile-context'] = template.dst
+}
+
+export function renderReconcileContextProxy(rootDir: string, contextModule?: string): string {
+  if (!contextModule)
+    return 'export const createReconcileJobContext = undefined\n'
+  const resolved = resolve(rootDir, contextModule).replace(/\\/g, '/')
+  return `export { createReconcileJobContext } from ${JSON.stringify(resolved)}\n`
 }
 
 function normalizeRoute(route: string): string {

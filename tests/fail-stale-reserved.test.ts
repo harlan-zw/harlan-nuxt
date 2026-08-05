@@ -81,7 +81,15 @@ describe('failStaleReservedJobs (reaper honours max_attempts)', () => {
 
     const terminalized = await repo.failStaleReservedJobs!({ now, staleBefore: now - 300, limit: 100 })
 
-    expect(terminalized).toEqual([{ id, queue: 'q', batchId: null }])
+    expect(terminalized).toEqual([expect.objectContaining({
+      id,
+      queue: 'q',
+      batchId: null,
+      jobType: 'x',
+      payload: '{"_task":"x"}',
+      attempts: 2,
+      exception: expect.stringContaining('stale-reservation: exhausted retries'),
+    })])
     expect(countJobs(d1, 'jobs')).toBe(0)
     const failed = d1._db.prepare('SELECT id, exception FROM failed_jobs WHERE id = ?').get(id) as { id: string, exception: string }
     expect(failed.id).toBe(id)
@@ -179,12 +187,12 @@ describe('bounded failure evidence', () => {
     ]), rec.id)
 
     await expect(
-      repo.findDispatchableJobs({ now: 1_000, staleReleasedBefore: 880 }),
+      repo.findDispatchableJobs({ now: 1_000, staleReleasedBefore: 880, publication: 'all' }),
     )
       .resolves
       .toEqual([])
     await expect(
-      repo.findDispatchableJobs({ now: 1_000, staleReleasedBefore: 960 }),
+      repo.findDispatchableJobs({ now: 1_000, staleReleasedBefore: 960, publication: 'all' }),
     )
       .resolves
       .toEqual([expect.objectContaining({ id: rec.id })])

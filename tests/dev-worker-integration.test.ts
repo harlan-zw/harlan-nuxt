@@ -86,7 +86,7 @@ describe('dev worker over the real D1 repository', () => {
     const consumer = recordingConsumer(repo)
 
     const result = await runDevWorkerTick({
-      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
+      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max, publication: 'all' }),
       queueConfig: () => resolveQueueWorkerConfig(undefined),
       dispatchBatch: consumer.dispatchBatch,
     }, { limit: 100 })
@@ -97,12 +97,12 @@ describe('dev worker over the real D1 repository', () => {
     expect(consumer.ran.sort()).toEqual([...ids].sort())
 
     // The rows are actually gone from the dispatchable set (completed in D1).
-    const stillReady = await findDispatchableDurableJobs(repo, { limit: 100 })
+    const stillReady = await findDispatchableDurableJobs(repo, { limit: 100, publication: 'all' })
     expect(stillReady).toHaveLength(0)
 
     // A second tick is a clean no-op.
     const second = await runDevWorkerTick({
-      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
+      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max, publication: 'all' }),
       queueConfig: () => resolveQueueWorkerConfig(undefined),
       dispatchBatch: consumer.dispatchBatch,
     }, { limit: 100 })
@@ -118,7 +118,7 @@ describe('dev worker over the real D1 repository', () => {
 
     const consumer = recordingConsumer(repo)
     const result = await runDevWorkerTick({
-      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
+      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max, publication: 'all' }),
       queueConfig: () => resolveQueueWorkerConfig({ maxConcurrency: 2, maxBatchSize: 2 }),
       dispatchBatch: consumer.dispatchBatch,
     }, { limit: 100 })
@@ -137,7 +137,7 @@ describe('dev worker over the real D1 repository', () => {
 
     const consumer = recordingConsumer(repo)
     const result = await runDevWorkerTick({
-      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max }),
+      findDispatchable: max => findDispatchableDurableJobs(repo, { limit: max, publication: 'all' }),
       queueConfig: () => resolveQueueWorkerConfig(undefined),
       dispatchBatch: consumer.dispatchBatch,
     }, { limit: 100, queue: 'keep' })
@@ -146,7 +146,7 @@ describe('dev worker over the real D1 repository', () => {
     expect(result.byQueue).toEqual({ keep: 1 })
     expect(consumer.ran).toHaveLength(1)
     // The skipped queue's job is still ready.
-    const stillReady = await findDispatchableDurableJobs(repo, { limit: 100 })
+    const stillReady = await findDispatchableDurableJobs(repo, { limit: 100, publication: 'all' })
     expect(stillReady.map(r => r.queue)).toEqual(['skip'])
   })
 })

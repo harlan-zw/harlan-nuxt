@@ -151,21 +151,18 @@ export function metricsSinkToRepoHooks(
 }
 
 /**
- * Fan an event out to several sinks, isolating each so one throwing/rejecting
- * sink never starves the others (the repo guards the outermost call, but a sink
- * combined here is also reachable directly).
+ * Fan an event out to every sink. Failures are collected only after all sinks
+ * run, then surfaced so the repository can report them through onObserverError.
  */
 export function combineMetricsSinks(...sinks: JobMetricsSink[]): JobMetricsSink {
   return {
     async record(event) {
-      await Promise.all(sinks.map(async (sink) => {
-        try {
-          await sink.record(event)
-        }
-        catch {
-          // one sink's failure must not block the rest
-        }
-      }))
+      const outcomes = await Promise.allSettled(sinks.map(sink => Promise.resolve().then(() => sink.record(event))))
+      const failures = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
+      if (failures.length === 1)
+        throw failures[0]
+      if (failures.length > 1)
+        throw new AggregateError(failures, 'Multiple metrics sinks failed')
     },
   }
 }

@@ -37,6 +37,29 @@ describe('lazy registry entries', () => {
     expect(load).toHaveBeenCalledTimes(1)
   })
 
+  it('evicts a rejected lazy import so a later dispatch can retry it', async () => {
+    const handle = vi.fn(async () => {})
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('transient chunk failure'))
+      .mockResolvedValueOnce(defineJob({
+        name: 'indexing/retry-import',
+        queue: 'critical',
+        handle,
+      }))
+    const registry = defineJobRegistry([{
+      name: 'indexing/retry-import',
+      queue: 'critical',
+      load,
+    } as LazyJobEntry])
+
+    await expect(registry.loadJobDefinition('indexing/retry-import')).rejects.toThrow('transient chunk failure')
+    await expect(registry.loadJobDefinition('indexing/retry-import')).resolves.toMatchObject({
+      name: 'indexing/retry-import',
+    })
+
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+
   it('dispatches a lazy job through the loaded handler', async () => {
     const ran: unknown[] = []
     const handle = vi.fn(async (payload: unknown) => {

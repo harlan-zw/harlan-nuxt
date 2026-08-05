@@ -1,13 +1,16 @@
 import type {
   DispatchDurableJobBatchResult,
+  DurableJobPublicationRepository,
   DurableJobRecord,
   DurableJobRecoveryRepository,
+  DurableJobTerminalized,
   QueuePublisher,
 } from './outbox'
 import {
   dispatchDurableJobBatch,
   failStaleReservedDurableJobs,
   findDispatchableDurableJobs,
+  publishDurableJobBatch,
   releaseStaleReservedDurableJobs,
 } from './outbox'
 
@@ -27,13 +30,13 @@ export interface RecoverDurableJobsOptions {
   limit?: number
   staleError?: string
   /** Settle batches or publish telemetry for rows terminalized by the stale reaper. */
-  onTerminalized?: (jobs: Array<{ id: string, queue: string, batchId: string | null }>) => void | Promise<void>
+  onTerminalized?: (jobs: DurableJobTerminalized[]) => void | Promise<void>
 }
 
 export interface RecoverDurableJobsResult<Queue extends string = string> {
   released: number
   terminalized: number
-  terminalizedJobs: Array<{ id: string, queue: Queue, batchId: string | null }>
+  terminalizedJobs: DurableJobTerminalized<Queue>[]
   swept: number
   dispatched: number
   /**
@@ -101,6 +104,7 @@ export async function recoverDurableJobs<
     createdBefore: nowSeconds - orphanedSeconds,
     ...(redeliveryGraceSeconds > 0 ? { staleReleasedBefore: nowSeconds - redeliveryGraceSeconds } : {}),
     ...(redispatchGraceSeconds > 0 ? { redispatchedBefore: nowSeconds - redispatchGraceSeconds } : {}),
+    publication: 'all',
     limit,
   })
 
@@ -108,7 +112,21 @@ export async function recoverDurableJobs<
   const dispatchable = uniqueJobs(redeliveryGraceSeconds > 0
     ? orphaned.filter(job => !releasedIds.has(job.id))
     : [...stale.slice(0, released), ...orphaned])
-  const dispatchResults = await dispatchDurableJobBatch(publisher, dispatchable)
+  const publicationRepository = repository as DurableJobRecoveryRepository<Queue, Record> & Partial<DurableJobPublicationRepository>
+  const dispatchResults: Array<DispatchDurableJobBatchResult<Queue>> = publicationRepository.markJobsPublished && publicationRepository.noteJobsDispatchFailure
+    ? (await publishDurableJobBatch(
+        publicationRepository as DurableJobRecoveryRepository<Queue, Record> & DurableJobPublicationRepository,
+        publisher,
+        dispatchable,
+        { now: nowSeconds },
+      )).map((result): DispatchDurableJobBatchResult<Queue> => {
+        if (result.status === 'published')
+          return { queue: result.queue, status: 'sent' }
+        if (result.status === 'not-dispatched')
+          return { queue: result.queue, status: 'not-dispatched' }
+        return { queue: result.queue, status: 'failed', cause: result.cause }
+      })
+    : await dispatchDurableJobBatch(publisher, dispatchable)
 
   // Stamp AFTER dispatch, and only the rows the sweep actually re-sent, so a
   // failed send stays eligible for the next tick. A repository without the

@@ -270,7 +270,13 @@ export function defineJobRegistry<
       return Promise.resolve(entry)
     let pending = loaded.get(name)
     if (!pending) {
-      pending = entry.load()
+      const importing = entry.load()
+      const guarded = importing.catch((error) => {
+        if (loaded.get(name) === guarded)
+          loaded.delete(name)
+        throw error
+      })
+      pending = guarded
       loaded.set(name, pending)
     }
     return pending

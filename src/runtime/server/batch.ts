@@ -2,12 +2,14 @@ import type { D1DatabaseLike } from './d1'
 import type {
   DispatchDurableJobBatchResult,
   DurableJobContinuation,
+  DurableJobPublicationRepository,
   DurableJobRecord,
   QueuePublisher,
 } from './outbox'
 import {
   dispatchDurableJobBatch,
   parseDurableJobContinuation,
+  publishDurableJobBatch,
   serializeDurableJobContinuation,
 } from './outbox'
 
@@ -62,6 +64,8 @@ export interface DurableBatchStore {
     input: InsertDurableBatchInput,
     records: readonly DurableJobRecord<Queue>[],
   ) => Promise<void>
+  markJobsPublished?: DurableJobPublicationRepository['markJobsPublished']
+  noteJobsDispatchFailure?: DurableJobPublicationRepository['noteJobsDispatchFailure']
   /**
    * Atomically decrement `pending_jobs` (and `failed_jobs` when `failed`), set
    * `finished_at` on the 1→0 transition, and return the resulting row. Returns
@@ -169,6 +173,7 @@ export function createD1DurableBatchStore(
         payload: record.payload,
         attempts: record.attempts,
         maxAttempts: record.maxAttempts,
+        backoff: record.backoff ? JSON.stringify(record.backoff) : null,
         availableAt: record.availableAt,
         createdAt: record.createdAt,
       }))
@@ -195,7 +200,7 @@ export function createD1DurableBatchStore(
           INSERT INTO ${jobs} (
             id, queue, job_type, batch_id, user_id, site_id, partner_id,
             trace_id, unique_key, payload, attempts, max_attempts,
-            available_at, created_at
+            backoff, available_at, created_at
           )
           SELECT
             json_extract(value, '$.id'),
@@ -210,6 +215,7 @@ export function createD1DurableBatchStore(
             json_extract(value, '$.payload'),
             json_extract(value, '$.attempts'),
             json_extract(value, '$.maxAttempts'),
+            json_extract(value, '$.backoff'),
             json_extract(value, '$.availableAt'),
             json_extract(value, '$.createdAt')
           FROM json_each(?)
@@ -225,6 +231,41 @@ export function createD1DurableBatchStore(
         `).bind(input.parentBatchId))
       }
       await db.batch(statements)
+    },
+
+    async markJobsPublished(ids, publishOpts) {
+      if (ids.length === 0)
+        return 0
+      const at = publishOpts?.at ?? Math.floor(Date.now() / 1000)
+      const result = await db.prepare(`
+        UPDATE ${jobs}
+        SET published_at = COALESCE(published_at, ?),
+            last_dispatched_at = ?,
+            dispatch_attempts = dispatch_attempts + 1,
+            last_dispatch_error = NULL
+        WHERE id IN (SELECT value FROM json_each(?))
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(at, at, JSON.stringify(ids)).run()
+      return result.meta?.changes ?? 0
+    },
+
+    async noteJobsDispatchFailure(ids, cause, failureOpts) {
+      if (ids.length === 0)
+        return 0
+      const at = failureOpts?.at ?? Math.floor(Date.now() / 1000)
+      const error = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)
+      const result = await db.prepare(`
+        UPDATE ${jobs}
+        SET last_dispatched_at = ?,
+            dispatch_attempts = dispatch_attempts + 1,
+            last_dispatch_error = ?
+        WHERE id IN (SELECT value FROM json_each(?))
+          AND published_at IS NULL
+          AND completed_at IS NULL
+          AND failed_at IS NULL
+      `).bind(at, error, JSON.stringify(ids)).run()
+      return result.meta?.changes ?? 0
     },
 
     async decrementPending(batchId, decOpts) {
@@ -377,11 +418,24 @@ export async function createJobBatch<
     throw new Error(`Failed to create nuxt-cf-jobs batch ${batchId} atomically`, { cause })
   })
 
-  const dispatched = await dispatchDurableJobBatch(
-    opts.publisher,
-    records,
-    opts.delaySeconds ? { delaySeconds: opts.delaySeconds } : undefined,
-  )
+  const dispatched = opts.store.markJobsPublished && opts.store.noteJobsDispatchFailure
+    ? (await publishDurableJobBatch(
+        opts.store as DurableBatchStore & DurableJobPublicationRepository,
+        opts.publisher,
+        records,
+        opts.delaySeconds ? { delaySeconds: opts.delaySeconds } : undefined,
+      )).map((result): DispatchDurableJobBatchResult<Queue> => {
+        if (result.status === 'published')
+          return { queue: result.queue, status: 'sent' }
+        if (result.status === 'not-dispatched')
+          return { queue: result.queue, status: 'not-dispatched' }
+        return { queue: result.queue, status: 'failed', cause: result.cause }
+      })
+    : await dispatchDurableJobBatch(
+        opts.publisher,
+        records,
+        opts.delaySeconds ? { delaySeconds: opts.delaySeconds } : undefined,
+      )
 
   return { batchId, jobIds: records.map(r => r.id), dispatched }
 }

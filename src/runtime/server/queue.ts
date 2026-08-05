@@ -8,7 +8,7 @@ import { formatJobError } from './errors'
 import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
 import { createObjectMessageDedup } from './message-dedup'
 import { clampDelay, resolveJobMaxAttempts, resolveJobRetryDelay } from './policy'
-import { buildJobMessage } from './registry'
+import { buildJobMessage, parseJobInput } from './registry'
 import { resolveQueueSourceEnv, runtimeConfigSource } from './runtime-env'
 
 export { CF_QUEUE_MAX_DELAY_SECONDS } from './internal'
@@ -735,7 +735,7 @@ export async function processRegisteredQueueBatch<Env extends Record<string, unk
             })
           }
           catch (error) {
-            await opts.onDispatchError?.({ env: payload.env, batch: payload.batch, message, error })
+            await reportRegisteredQueueError(opts, { env: payload.env, batch: payload.batch, message, error })
             throw error
           }
         }
@@ -849,7 +849,10 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
     }
 
     if (result.control?.action === 'failed') {
-      await opts.onDispatchError?.({ ...input, taskName, definition, job, error: new Error(result.control.error ?? 'Job failed via ctx.fail()') })
+      const error = new Error(result.control.error ?? 'Job failed via ctx.fail()')
+      await reportRegisteredQueueError(opts, { ...input, taskName, definition, job, error })
+      await runRegisteredJobFailed({ ...input, taskName, definition, job, payload }, opts, error)
+        .catch(failedError => reportRegisteredQueueError(opts, { ...input, taskName, definition, job, error: failedError }))
       markTerminal()
       input.message.ack()
       return
@@ -859,7 +862,7 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
     input.message.ack()
   }
   catch (error) {
-    await opts.onDispatchError?.({ ...input, taskName, definition, job, error })
+    await reportRegisteredQueueError(opts, { ...input, taskName, definition, job, error })
 
     const queues = typeof opts.queues === 'function' ? opts.queues(runtimeConfigSource(input.env as Record<string, unknown>)) : opts.queues
     const maxAttempts = resolveJobMaxAttempts(definition)
@@ -876,11 +879,13 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
           sent = await sendQueueMessage(input.env as Record<string, unknown>, dlqBindingName, input.message.body)
         }
         catch (dlqError) {
-          await opts.onDispatchError?.({ ...input, taskName, definition, job, error: dlqError })
+          await reportRegisteredQueueError(opts, { ...input, taskName, definition, job, error: dlqError })
           throw dlqError
         }
         if (sent) {
           await opts.onDlq?.({ ...input, taskName, definition, job })
+          await runRegisteredJobFailed({ ...input, taskName, definition, job, payload }, opts, error)
+            .catch(failedError => reportRegisteredQueueError(opts, { ...input, taskName, definition, job, error: failedError }))
           markTerminal()
           input.message.ack()
           return
@@ -893,6 +898,52 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
       ?? resolveJobRetryDelay(definition, input.message.attempts)
     input.message.retry({ delaySeconds: clampDelay(raw) })
   }
+}
+
+async function reportRegisteredQueueError<Env extends Record<string, unknown>, Db, Logger>(
+  opts: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>,
+  input: RegisteredQueueConsumerHookInput<Env> & { error: unknown },
+): Promise<void> {
+  if (!opts.onDispatchError) {
+    console.error('[nuxt-cf-jobs] queue observer unavailable', input)
+    return
+  }
+
+  await Promise.resolve()
+    .then(() => opts.onDispatchError!(input))
+    .catch((observerError) => {
+      console.error('[nuxt-cf-jobs] queue observer failed', { ...input, observerError })
+    })
+}
+
+async function runRegisteredJobFailed<Env extends Record<string, unknown>, Db, Logger>(
+  input: RegisteredQueueConsumerHookInput<Env> & {
+    logicalQueue: string
+    taskName: string
+    definition: AnyJobDefinition
+    job: DispatchableJob
+    payload: Record<string, unknown>
+  },
+  opts: RegisterRegisteredQueueConsumerOptions<Env, Db, Logger>,
+  error: unknown,
+): Promise<void> {
+  const definition = opts.registry.loadJobDefinition
+    ? await opts.registry.loadJobDefinition(input.taskName)
+    : input.definition
+  if (!definition?.failed)
+    return
+  const { _task, _continuations, ...cleanPayload } = input.payload
+  const parsed = parseJobInput(definition as never, cleanPayload)
+  if (!parsed.success)
+    throw new Error(`Failed hook payload no longer matches task: ${input.taskName}`, { cause: parsed.error })
+  const control: JobControlResult = { handled: false }
+  const ctx = await opts.createContext({
+    ...input,
+    definition: definition as JobDefinition<string, unknown, string, Env, unknown, unknown>,
+    control,
+    payload: cleanPayload,
+  })
+  await definition.failed(parsed.data, ctx, error)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

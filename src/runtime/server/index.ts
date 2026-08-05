@@ -26,6 +26,7 @@ export {
   resolveQueueBindingName,
 } from './queue'
 export type { JobQueuePublisher, JobQueuePublisherOptions, QueueBindingUnavailableInput, QueueBindingUnavailableReason } from './queue'
+export * from './reconcile-terminal'
 export * from './recovery'
 export * from './registry'
 export * from './result'

@@ -362,7 +362,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     })).rejects.toThrow('Job middleware called next() multiple times')
   })
 
-  it('runs a job-local failed hook for unhandled handler errors', async () => {
+  it('does not run a job-local failed hook for a retriable handler error', async () => {
     const failed = vi.fn()
     const registry = defineJobRegistry([
       defineJob({
@@ -396,9 +396,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
       }),
     })).rejects.toThrow('boom')
 
-    expect(failed).toHaveBeenCalledOnce()
-    expect(failed.mock.calls[0][0]).toEqual({ message: 'hello' })
-    expect(failed.mock.calls[0][2]).toBeInstanceOf(Error)
+    expect(failed).not.toHaveBeenCalled()
   })
 
   it('dispatches registered jobs from Cloudflare queue batches by logical queue', async () => {
@@ -563,6 +561,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('acks registered queue ctx.fail() as an explicit failure, not a completed success', async () => {
+    const failed = vi.fn()
     const registry = defineJobRegistry([
       defineJob({
         name: 'demo/fail-control',
@@ -570,6 +569,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
         async handle(_payload: Record<string, never>, ctx: { fail: (error: string) => Promise<void> }) {
           await ctx.fail('bad order')
         },
+        failed,
       }),
     ])
     const batch = createQueueBatch('cf-default', [
@@ -601,8 +601,146 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     })
 
     expect(onDispatchError).toHaveBeenCalledWith(expect.objectContaining({ taskName: 'demo/fail-control', error: expect.any(Error) }))
+    expect(failed).toHaveBeenCalledOnce()
+    expect(failed).toHaveBeenCalledWith({}, expect.objectContaining({ jobId: expect.any(String) }), expect.objectContaining({ message: 'bad order' }))
     expect(batch.messages[0]?.acked).toBe(true)
     expect(batch.messages[0]?.retries).toEqual([])
+  })
+
+  it('reports a lightweight failed-hook defect without replaying a terminal ctx.fail()', async () => {
+    const hookError = new Error('failed hook exploded')
+    const onDispatchError = vi.fn()
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/fail-hook-defect',
+        queue: 'default',
+        async handle(_payload, ctx) {
+          await ctx.fail('terminal')
+        },
+        async failed() {
+          throw hookError
+        },
+      }),
+    ])
+    const batch = createQueueBatch('cf-default', [buildJobPayload('demo/fail-hook-defect', {})])
+
+    await processRegisteredQueueBatch({ batch, env: {} }, {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      onDispatchError,
+      createContext: ({ control, job, message }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        async fail(error) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+    })
+
+    expect(onDispatchError).toHaveBeenCalledWith(expect.objectContaining({ error: hookError }))
+    expect(batch.messages[0]?.acked).toBe(true)
+    expect(batch.messages[0]?.retries).toEqual([])
+  })
+
+  it('reports a lightweight failed-hook defect to stderr when no observer exists', async () => {
+    const hookError = new Error('failed hook exploded without observer')
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/fail-hook-stderr',
+        queue: 'default',
+        async handle(_payload, ctx) {
+          await ctx.fail('terminal')
+        },
+        async failed() {
+          throw hookError
+        },
+      }),
+    ])
+    const batch = createQueueBatch('cf-default', [buildJobPayload('demo/fail-hook-stderr', {})])
+
+    await processRegisteredQueueBatch({ batch, env: {} }, {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      createContext: ({ control, job, message }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        async fail(error) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+    })
+
+    expect(stderr).toHaveBeenCalledWith(
+      '[nuxt-cf-jobs] queue observer unavailable',
+      expect.objectContaining({ error: hookError, taskName: 'demo/fail-hook-stderr' }),
+    )
+    expect(batch.messages[0]?.acked).toBe(true)
+    expect(batch.messages[0]?.retries).toEqual([])
+    stderr.mockRestore()
+  })
+
+  it('isolates a throwing queue observer from terminal message handling', async () => {
+    const hookError = new Error('failed hook exploded')
+    const observerError = new Error('observer exploded')
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onDispatchError = vi.fn().mockRejectedValue(observerError)
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/fail-hook-observer-defect',
+        queue: 'default',
+        async handle(_payload, ctx) {
+          await ctx.fail('terminal')
+        },
+        async failed() {
+          throw hookError
+        },
+      }),
+    ])
+    const batch = createQueueBatch('cf-default', [buildJobPayload('demo/fail-hook-observer-defect', {})])
+
+    await processRegisteredQueueBatch({ batch, env: {} }, {
+      registry,
+      queues: { default: { binding: 'QUEUE_DEFAULT', queueName: 'cf-default' } },
+      onDispatchError,
+      createContext: ({ control, job, message }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: message.attempts,
+        release: vi.fn(),
+        async fail(error) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+    })
+
+    expect(onDispatchError).toHaveBeenCalled()
+    expect(stderr).toHaveBeenCalledWith(
+      '[nuxt-cf-jobs] queue observer failed',
+      expect.objectContaining({ error: hookError, observerError }),
+    )
+    expect(batch.messages[0]?.acked).toBe(true)
+    expect(batch.messages[0]?.retries).toEqual([])
+    stderr.mockRestore()
   })
 
   it('acks invalid registered queue payloads and reports validation failures', async () => {
@@ -1154,6 +1292,166 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(lifecycle.releaseJob).not.toHaveBeenCalled()
   })
 
+  it('runs terminal failure callbacks only after max attempts', async () => {
+    const failed = vi.fn(async () => {})
+    const terminal = vi.fn(async () => {})
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/terminal-only',
+        queue: 'default',
+        async handle() {
+          throw new Error('boom')
+        },
+        failed,
+      }),
+    ])
+    const lifecycle = {
+      claimJob: vi.fn(),
+      completeJob: vi.fn(async () => {}),
+      failJob: vi.fn(async () => {}),
+      releaseJob: vi.fn(async () => {}),
+    }
+    const run = async (attempts: number) => {
+      const stored = {
+        id: `job_${attempts}`,
+        queue: 'default',
+        payload: buildJobPayload('demo/terminal-only', {}),
+        attempts,
+        batchId: null,
+      }
+      lifecycle.claimJob.mockResolvedValueOnce(stored)
+      const message = createQueueMessage({ jobId: stored.id, queue: 'default' as const })
+      const result = await runDurableJobMessage({
+        message,
+        lifecycle,
+        registry,
+        toDispatchableJob: job => job,
+        createJobContext: ({ job }) => ({ env: {}, db: {}, log: {}, jobId: job.id, batchId: null, attempt: job.attempts, release: vi.fn(), fail: vi.fn() }),
+        maxAttemptsOf: () => 2,
+        onTerminalFailure: terminal,
+      })
+      return { message, result }
+    }
+
+    const first = await run(1)
+    expect(first.result.status).toBe('errored')
+    expect(terminal).not.toHaveBeenCalled()
+    expect(failed).not.toHaveBeenCalled()
+
+    const second = await run(2)
+    expect(second.result.status).toBe('exhausted')
+    expect(terminal).toHaveBeenCalledOnce()
+    expect(lifecycle.failJob).toHaveBeenCalledOnce()
+    expect(failed).not.toHaveBeenCalled()
+  })
+
+  it('runs the terminal callback only after ctx.fail() is durably persisted', async () => {
+    const order: string[] = []
+    const stored = {
+      id: 'job_manual_failure',
+      queue: 'default',
+      payload: buildJobPayload('demo/manual-failure', {}),
+      attempts: 1,
+      batchId: null,
+    }
+    const message = createQueueMessage({ jobId: stored.id, queue: 'default' as const })
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/manual-failure',
+        queue: 'default',
+        async handle(_payload, ctx) {
+          await ctx.fail('permanent input')
+        },
+      }),
+    ])
+    const lifecycle = {
+      claimJob: vi.fn(async () => stored),
+      completeJob: vi.fn(async () => {}),
+      failJob: vi.fn(async () => { order.push('persisted') }),
+      releaseJob: vi.fn(async () => {}),
+    }
+
+    const result = await runDurableJobMessage({
+      message,
+      lifecycle,
+      registry,
+      toDispatchableJob: job => job,
+      createJobContext: ({ job, control }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: job.attempts,
+        release: vi.fn(),
+        async fail(error) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+      onTerminalFailure: async () => { order.push('callback') },
+    })
+
+    expect(result.status).toBe('failed')
+    expect(order).toEqual(['persisted', 'callback'])
+    expect(message.acked).toBe(true)
+  })
+
+  it('does not run the ctx.fail() terminal callback when persistence fails', async () => {
+    const persisted = new Error('D1 unavailable')
+    const terminal = vi.fn()
+    const stored = {
+      id: 'job_manual_failure_persist_error',
+      queue: 'default',
+      payload: buildJobPayload('demo/manual-failure-persist-error', {}),
+      attempts: 1,
+      batchId: null,
+    }
+    const message = createQueueMessage({ jobId: stored.id, queue: 'default' as const })
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'demo/manual-failure-persist-error',
+        queue: 'default',
+        async handle(_payload, ctx) {
+          await ctx.fail('permanent input')
+        },
+      }),
+    ])
+
+    const result = await runDurableJobMessage({
+      message,
+      lifecycle: {
+        claimJob: vi.fn(async () => stored),
+        completeJob: vi.fn(async () => {}),
+        failJob: vi.fn(async () => { throw persisted }),
+        releaseJob: vi.fn(async () => {}),
+      },
+      registry,
+      toDispatchableJob: job => job,
+      createJobContext: ({ job, control }) => ({
+        env: {},
+        db: {},
+        log: {},
+        jobId: job.id,
+        batchId: null,
+        attempt: job.attempts,
+        release: vi.fn(),
+        async fail(error) {
+          control.handled = true
+          control.action = 'failed'
+          control.error = error
+        },
+      }),
+      onTerminalFailure: terminal,
+    })
+
+    expect(result.status).toBe('errored')
+    expect(terminal).not.toHaveBeenCalled()
+    expect(message.acked).toBe(false)
+    expect(message.retries).toHaveLength(1)
+  })
+
   it('provides durable recovery seams for dispatchable and stale reserved jobs', async () => {
     const dispatchable = [
       { id: 'job_1', queue: 'default' },
@@ -1510,6 +1808,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
 
   it('forwards exhausted messages to the configured DLQ binding on dispatch failure', async () => {
     const fake = createFakeQueue<Record<string, unknown>>()
+    const failed = vi.fn()
     const registry = defineJobRegistry([
       defineJob({
         name: 'demo/explodes',
@@ -1518,6 +1817,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
         async handle() {
           throw new Error('boom')
         },
+        failed,
       }),
     ])
     const batch = createQueueBatch('cf-default', [
@@ -1553,6 +1853,8 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     })
 
     expect(onDlq).toHaveBeenCalledOnce()
+    expect(failed).toHaveBeenCalledOnce()
+    expect(failed).toHaveBeenCalledWith({ id: 'x' }, expect.objectContaining({ jobId: expect.any(String) }), expect.objectContaining({ message: 'boom' }))
     expect(fake.messages).toHaveLength(1)
     expect(batch.messages[0]?.acked).toBe(true)
     expect(batch.messages[0]?.retries).toEqual([])
@@ -1770,7 +2072,11 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   it('d1 repo awaits lifecycle hooks while isolating observer failures', async () => {
     const db = createFakeD1()
     const events: Array<{ type: string, id: string }> = []
+    const observerErrors: string[] = []
     const repository = createD1DurableJobRepository(db, {
+      async onObserverError({ stage }) {
+        observerErrors.push(stage)
+      },
       async onJobClaimed({ job }) {
         await Promise.resolve()
         events.push({ type: 'claimed', id: job.id })
@@ -1817,6 +2123,7 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     await repository.releaseJob(claimed!)
     await repository.failJob(claimed!, 'oops')
     expect(events.map(e => e.type)).toEqual(['claimed', 'completed', 'released', 'failed'])
+    expect(observerErrors).toEqual(['claimed', 'completed', 'released', 'failed'])
   })
 
   it('d1 repo recordFailure persists DLQ messages without touching jobs row', async () => {

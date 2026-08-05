@@ -368,6 +368,7 @@ export default defineNuxtConfig({
   cfJobs: {
     reconcile: {
       d1Binding: 'DB',
+      terminalFailureContext: './server/cf-jobs-reconcile-context.ts',
       staleSeconds: 300,
       orphanedSeconds: 600,
       redeliveryGraceSeconds: 120,
@@ -381,6 +382,13 @@ export default defineNuxtConfig({
 ```
 
 Pin `d1Binding` when the Worker exposes more than one D1-like binding.
+
+`terminalFailureContext` points to an application module exporting
+`createReconcileJobContext`. Configure it when job definitions have `failed`
+callbacks: an isolate may terminate on its final claim, so the stale reaper must
+be able to reconstruct application services after it commits the `failed_jobs`
+row. Without the adapter, durable evidence and an explicit error log remain, but
+the package cannot safely invent the application's database and logger context.
 
 ## Broadcasting
 

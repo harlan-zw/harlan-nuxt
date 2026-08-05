@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { generateRegistryTemplate, generateRegistryTypesTemplate, inlineRegistryTemplateInNitroDev } from '../src/build/registry'
+import { describe, expect, it, vi } from 'vitest'
+import { buildRegistryPlan, collectRegistrySources, createRegistrySourceTracker, generateRegistryTemplate, generateRegistryTypesTemplate, inlineRegistryTemplateInNitroDev } from '../src/build/registry'
 
 const rootDir = resolve(__dirname, 'fixtures/nuxt-demo')
 const templateDir = resolve(__dirname, 'fixtures/nuxt-demo/.nuxt/cf-jobs')
@@ -16,6 +16,55 @@ const options = {
 } as never
 
 describe('generateRegistryTemplate (data-only lazy registry)', () => {
+  it('includes lazy sources contributed by another Nuxt module', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-source-'))
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    mkdirSync(join(root, 'module-runtime'), { recursive: true })
+    writeFileSync(join(root, 'server/jobs/local.ts'), `export default defineJob({ name: 'local', queue: 'default', handle() {} })`)
+    const contributed = join(root, 'module-runtime/deliver-event-listener.ts')
+    writeFileSync(contributed, `export default defineJob({ name: 'events/deliver-listener', queue: 'events', handle() {} })`)
+
+    const plan = await buildRegistryPlan(options, root, join(root, '.nuxt/cf-jobs'), [{ file: contributed }])
+
+    expect(plan.entries.map(entry => entry.name)).toEqual(['local', 'events/deliver-listener'])
+    expect(plan.entries[1]?.importPath).toContain('module-runtime/deliver-event-listener')
+  })
+
+  it('collects registry sources through a late-bound Nuxt hook', async () => {
+    const callHook = vi.fn(async (_name: string, context: { sources: unknown[] }) => {
+      context.sources.push({ file: '/module/job.ts' })
+    })
+
+    await expect(collectRegistrySources({ callHook } as never)).resolves.toEqual([{ file: '/module/job.ts' }])
+    expect(callHook).toHaveBeenCalledWith('cf-jobs:registry:sources', { sources: [{ file: '/module/job.ts' }] })
+  })
+
+  it('uses a contributed name override for an auto-discovered file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-source-override-'))
+    const file = join(root, 'server/jobs/local.ts')
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    writeFileSync(file, `export default defineJob({ name: 'local', queue: 'default', handle() {} })`)
+
+    const plan = await buildRegistryPlan(options, root, join(root, '.nuxt/cf-jobs'), [{ file, name: 'module/override' }])
+
+    expect(plan.entries).toHaveLength(1)
+    expect(plan.entries[0]?.name).toBe('module/override')
+  })
+
+  it('remembers a contributed source long enough to invalidate its deletion', async () => {
+    const file = '/module/deleted-job.ts'
+    let sources = [{ file }]
+    const callHook = vi.fn(async (_name: string, context: { sources: Array<{ file: string }> }) => {
+      context.sources.push(...sources)
+    })
+    const tracker = createRegistrySourceTracker({ callHook } as never)
+    await tracker.collect()
+    sources = []
+
+    await expect(tracker.isWatched(file, '/app')).resolves.toBe(true)
+    await expect(tracker.isWatched('/module/unrelated.ts', '/app')).resolves.toBe(false)
+  })
+
   it('imports nothing framework-bound — only the app factory', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     // The registry loads in raw Node and Vite contexts, so it must NOT import

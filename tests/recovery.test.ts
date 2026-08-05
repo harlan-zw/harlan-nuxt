@@ -43,6 +43,7 @@ describe('recoverDurableJobs', () => {
       staleReleasedBefore: 880,
       // Defaults to orphanedSeconds: a row is re-sent at most once per window.
       redispatchedBefore: 400,
+      publication: 'all',
       limit: 10,
     })
     expect(sent).toEqual([{ queue: 'q', ids: ['orphaned'] }])

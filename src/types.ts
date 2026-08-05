@@ -45,6 +45,12 @@ export interface ReconcileOptions {
   orphanedBatchSeconds?: number
   /** Max stale/orphaned rows handled per cron tick. Defaults to 100. */
   limit?: number
+  /**
+   * Application module exporting `createReconcileJobContext`. This lets the
+   * stale reaper invoke a job definition's `failed` callback after durable
+   * terminal evidence has been committed. Relative paths resolve from rootDir.
+   */
+  terminalFailureContext?: string
 }
 
 export interface ModuleOptions {

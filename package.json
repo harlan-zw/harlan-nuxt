@@ -34,6 +34,11 @@
       "import": "./dist/runtime/server/d1.js",
       "default": "./dist/runtime/server/d1.js"
     },
+    "./outbox": {
+      "types": "./dist/runtime/server/outbox-public.d.ts",
+      "import": "./dist/runtime/server/outbox-public.js",
+      "default": "./dist/runtime/server/outbox-public.js"
+    },
     "./schema": {
       "types": "./dist/runtime/server/schema.d.ts",
       "import": "./dist/runtime/server/schema.js",
@@ -57,6 +62,9 @@
       ],
       "d1": [
         "dist/runtime/server/d1.d.ts"
+      ],
+      "outbox": [
+        "dist/runtime/server/outbox-public.d.ts"
       ],
       "schema": [
         "dist/runtime/server/schema.d.ts"
