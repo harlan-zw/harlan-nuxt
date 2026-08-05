@@ -13,7 +13,6 @@
   "main": "./src/module.ts",
   "scripts": {
     "prepare": "nuxt prepare",
-    "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.check.json"
   },
   "peerDependencies": {
