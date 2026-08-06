@@ -6,9 +6,6 @@ export default defineNuxtConfig({
       { path: '~/components/global', global: true },
       '~/components',
     ],
-    transform: {
-      exclude: [/\.vue(?:$|\?)/, /\.[jt]sx(?:$|\?)/],
-    },
   },
   imports: { autoImport: false },
 
