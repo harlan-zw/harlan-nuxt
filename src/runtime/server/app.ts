@@ -33,6 +33,7 @@ import {
 } from './queue'
 import { defineJobRegistry, validateJobDefinitions } from './registry'
 import { createDurableJobsRuntime } from './runtime'
+import { useJobRuntimeConfig } from './runtime-config'
 import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
 
 export interface CfJobsRuntimeConfig {
@@ -56,27 +57,12 @@ export type UseRuntimeConfigFn = (event?: unknown) => CfJobsRuntimeConfig
 export interface CreateCfJobsAppOptions {
   /**
    * Bundled nitro's `useRuntimeConfig`. Optional: the generated `#cf-jobs/app`
-   * registry omits it (it must import nothing framework-bound — see the template
-   * comment) and the `provide-runtime-config` server plugin injects it at startup
-   * via `provideRuntimeConfig`. Tests pass a stub directly here.
+   * registry omits it and reads the shared runtime config provider. Tests may
+   * pass a stub directly here.
    */
   useRuntimeConfig?: UseRuntimeConfigFn
   /** Fallback queue applied to jobs whose `defineJob` omits `queue`. */
   defaultQueue?: string
-}
-
-/**
- * Stand-in `useRuntimeConfig` used before the server plugin injects nitro's real
- * one. Reaching runtime config means a queue dispatch ran before nitro started
- * its plugins (or `nuxt-cf-jobs`'s `provide-runtime-config` plugin is missing).
- */
-function runtimeConfigNotProvided(): never {
-  throw new Error(
-    '[nuxt-cf-jobs] runtime config was read before it was provided. The '
-    + '`provide-runtime-config` server plugin injects nitro\'s `useRuntimeConfig` '
-    + 'at startup — ensure the nuxt-cf-jobs module is installed and its server '
-    + 'plugins are registered, and that no job is dispatched before nitro boots.',
-  )
 }
 
 /**
@@ -93,13 +79,8 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   jobs: Jobs,
   { useRuntimeConfig: injectedRuntimeConfig, defaultQueue }: CreateCfJobsAppOptions = {},
 ) {
-  // Mutable so the `provide-runtime-config` server plugin can supply nitro's real
-  // `useRuntimeConfig` at startup. Every closure below reads it at call time, so
-  // injection is visible regardless of import order.
-  let useRuntimeConfig: UseRuntimeConfigFn = injectedRuntimeConfig ?? runtimeConfigNotProvided
-  const provideRuntimeConfig = (fn: UseRuntimeConfigFn): void => {
-    useRuntimeConfig = fn
-  }
+  const useRuntimeConfig: UseRuntimeConfigFn = injectedRuntimeConfig
+    ?? (event => useJobRuntimeConfig(event) as unknown as CfJobsRuntimeConfig)
 
   const materialized = (defaultQueue
     ? jobs.map(j => (j.queue ? j : { ...j, queue: defaultQueue }))
@@ -245,7 +226,6 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   return {
     jobs: materialized,
     jobRegistry,
-    provideRuntimeConfig,
     getHandler: jobRegistry.getHandler,
     loadJobDefinition,
     getJobDefinition: jobRegistry.getJobDefinition,
@@ -265,8 +245,8 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
 /**
  * Thin wrapper used by the generated `#cf-jobs/app` template. The template emits
  * only static data (the job array + default queue) and imports nothing
- * framework-bound — nitro's `useRuntimeConfig` is injected later by the
- * `provide-runtime-config` server plugin via `app.provideRuntimeConfig`.
+ * framework-bound. Runtime helpers read the shared provider injected by the
+ * `provide-runtime-config` server plugin.
  */
 export function createGeneratedCfJobsApp<const Jobs extends readonly LazyJobEntry[]>(
   jobs: Jobs,

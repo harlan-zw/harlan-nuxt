@@ -15,7 +15,7 @@ type UseRuntimeConfig = typeof useRuntimeConfig
  * `#nitro-internal-virtual/storage` specifier only resolves inside the nitro
  * rollup build, so it throws `ERR_PACKAGE_IMPORT_NOT_DEFINED` and crashes the
  * dev server at boot (cached, so every request 500s). Keeping the reference
- * injected mirrors how `app.provideRuntimeConfig` already feeds the registry.
+ * injected keeps the generated registry framework-independent.
  */
 let injectedUseRuntimeConfig: UseRuntimeConfig | undefined
 
@@ -40,12 +40,14 @@ export function provideJobRuntimeConfig(fn: UseRuntimeConfig): void {
  * On the request path keep calling `useRuntimeConfig(event)` directly — the
  * event already binds the vars.
  */
-export function useJobRuntimeConfig(): ReturnType<typeof useRuntimeConfig> {
+export function useJobRuntimeConfig(event?: unknown): ReturnType<typeof useRuntimeConfig> {
   if (!injectedUseRuntimeConfig) {
     throw new Error(
       '[nuxt-cf-jobs] useJobRuntimeConfig() was read before nitro\'s `useRuntimeConfig` was injected. The `provide-runtime-config` server plugin injects it at startup — ensure the nuxt-cf-jobs module is installed and its server plugins are registered, and that no job is dispatched before nitro boots.',
     )
   }
+  if (event)
+    return injectedUseRuntimeConfig(event as never)
   const env = resolveNitroTaskEnv()
   return injectedUseRuntimeConfig(env ? runtimeConfigSource(env) as never : undefined)
 }
