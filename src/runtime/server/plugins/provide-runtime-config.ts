@@ -2,8 +2,9 @@
 import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
 import { provideJobRuntimeConfig } from '../runtime-config'
 
-// Always-registered server plugin: injects nitro's `useRuntimeConfig` into the
-// standalone provider used by the generated registry and runtime helpers.
+// Optional host adapter for direct `useJobRuntimeConfig` consumers. The Nuxt
+// module does not register this globally; its generated registry injects the
+// auto import at its own usage boundary.
 // Neither may import `nitropack/runtime` at module-top: they load in raw
 // Node / the Vite build / nitro dev's external `file://` graph, where
 // `nitropack/runtime`'s `#nitro-internal-virtual/*` virtuals don't resolve (a

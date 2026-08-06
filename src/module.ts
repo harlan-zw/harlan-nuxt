@@ -5,7 +5,7 @@ import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
 import { addImportsDir, addServerHandler, addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
 import { installRegistryTemplates } from './build/registry'
-import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast'
+import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast-constants'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
 import {
   crossCheckCrons,
@@ -63,23 +63,25 @@ export default defineNuxtModule<ModuleOptions>().with({
   async setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
     const queues = options.queues as ModuleOptions['queues']
+    const hasQueues = Object.keys(queues).length > 0
+    const broadcast = resolveBroadcastOptions(options.broadcast)
+    const reconcile = resolveReconcileOptions(options.reconcile)
 
     nuxt.options.alias['#cf-jobs/server'] = resolver.resolve('./runtime/server')
     // Cloudflare Analytics Engine sink lives on its own subpath so its
     // Workers-specific `writeDataPoint` shape never loads with the core barrel.
     nuxt.options.alias['#cf-jobs/cloudflare'] = resolver.resolve('./runtime/server/cloudflare')
+    const nitro = ((nuxt.options as { nitro?: { alias?: Record<string, string> } }).nitro ??= {})
+    nitro.alias ??= {}
+    nitro.alias['nuxt-cf-jobs/runtime-config'] = resolver.resolve('./runtime/server/nitro-runtime-config')
     addImportsDir(resolver.resolve('./runtime/app/composables'))
     addServerImports([
       { name: 'defineJob', from: resolver.resolve('./runtime/server/registry') },
       { name: 'defineScheduledTask', from: resolver.resolve('./runtime/server/scheduled') },
     ])
     installRegistryTemplates(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
-    installReconcileContextTemplate(options.reconcile, nuxt)
-
-    // Inject nitro's `useRuntimeConfig` into the generated registry at startup.
-    // The registry imports nothing framework-bound (so it survives raw-Node / Vite
-    // / nitro-dev external loads); this bundled plugin bridges the runtime in.
-    addServerPlugin(resolver.resolve('./runtime/server/plugins/provide-runtime-config'))
+    if (reconcile)
+      installReconcileContextTemplate(options.reconcile, nuxt)
 
     if (options.defaultQueue && !queues[options.defaultQueue])
       useLogger('nuxt-cf-jobs').warn(`cfJobs.defaultQueue="${options.defaultQueue}" is not a key of cfJobs.queues`)
@@ -89,7 +91,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     // concurrency without the app duplicating it into `cfJobs.queues`. Prod is
     // unaffected (the real consumer reads wrangler directly).
     let runtimeQueues = queues
-    if (nuxt.options.dev) {
+    if (nuxt.options.dev && hasQueues) {
       const wranglerPath = options.wranglerPath
         ? resolve(nuxt.options.rootDir, options.wranglerPath)
         : findWranglerConfig(nuxt.options.rootDir)
@@ -102,8 +104,6 @@ export default defineNuxtModule<ModuleOptions>().with({
       runtimeQueues = enrichQueuesWithConsumerConfig(queues, expectations, merged?.consumers ?? [])
     }
 
-    const broadcast = resolveBroadcastOptions(options.broadcast)
-    const reconcile = resolveReconcileOptions(options.reconcile)
     nuxt.options.runtimeConfig.cfJobs = {
       ...(nuxt.options.runtimeConfig.cfJobs ?? {}),
       queues: nuxt.options.runtimeConfig.cfJobs?.queues ?? runtimeQueues,
@@ -117,11 +117,12 @@ export default defineNuxtModule<ModuleOptions>().with({
       setPublicBroadcastConfig(nuxt, broadcast)
       addServerHandler({
         route: broadcast.route,
+        lazy: true,
         handler: resolver.resolve('./runtime/server/handlers/broadcast-ws'),
       })
     }
 
-    if (nuxt.options.dev) {
+    if (nuxt.options.dev && hasQueues) {
       addServerPlugin(resolver.resolve('./runtime/server/plugins/dev-queues'))
       // Dev-only worker endpoint driven by `cf-jobs work`: drains durable jobs
       // out-of-band through the app's consumer so WebSockets see live progress.
@@ -129,14 +130,16 @@ export default defineNuxtModule<ModuleOptions>().with({
       addServerHandler({
         route: '/__cf-jobs/work',
         method: 'post',
+        lazy: true,
         handler: resolver.resolve('./runtime/server/handlers/dev-work'),
       })
     }
 
-    if (options.validateWrangler !== false)
+    if (options.validateWrangler !== false && hasQueues)
       runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), (nuxt.options as { nitro?: unknown }).nitro)
 
-    await wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
+    if (options.tasksDir || reconcile)
+      await wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
   },
 })
 

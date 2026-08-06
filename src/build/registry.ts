@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { addTemplate, addTypeTemplate, resolveFiles } from '@nuxt/kit'
-import { cfJobsAppExportNames } from '../runtime/server/app'
+import { cfJobsAppExportNames } from '../runtime/shared/app-exports'
 import { extractJobMeta } from './extract-job-meta'
 
 const WINDOWS_SLASH_RE = /\\/g
@@ -203,17 +203,20 @@ function renderRegistryTemplate(plan: RegistryBuildPlan): string {
     // only resolves in one context: `#imports` is a build-only Nuxt virtual (dies
     // in raw Node), and `nitropack/runtime` eagerly pulls nitro's
     // `internal/storage.mjs` whose `#nitro-internal-virtual/storage` import is
-    // only provided inside the nitro rollup build (dies everywhere else). nitro's
-    // `useRuntimeConfig` is instead injected at startup by the always-registered
-    // `provide-runtime-config` server plugin, which IS bundled by nitro and can
-    // safely reach the runtime.
-    `import { createGeneratedCfJobsApp } from 'nuxt-cf-jobs/server'`,
+    // only provided inside the nitro rollup build (dies everywhere else).
+    // Nitro aliases this adapter to its runtime implementation. Other contexts
+    // resolve the safe package provider without pulling Nitro into their graph.
+    `import { useJobRuntimeConfig } from 'nuxt-cf-jobs/runtime-config'`,
+    `import { createGeneratedCfJobsApp } from 'nuxt-cf-jobs/app'`,
     '',
     'export const jobs = [',
     ...entryLines,
     ']',
     `/** @type {import('nuxt-cf-jobs/server').CfJobsApp<${jobsType}>} */`,
-    `export const app = createGeneratedCfJobsApp(jobs, ${plan.defaultQueue ? JSON.stringify(plan.defaultQueue) : 'undefined'})`,
+    'export const app = createGeneratedCfJobsApp(jobs, {',
+    `  defaultQueue: ${plan.defaultQueue ? JSON.stringify(plan.defaultQueue) : 'undefined'},`,
+    '  useRuntimeConfig: event => useJobRuntimeConfig(event),',
+    '})',
     '',
     'export const {',
     ...cfJobsAppExportNames.map(name => `  ${name},`),

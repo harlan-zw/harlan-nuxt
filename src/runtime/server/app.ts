@@ -21,6 +21,7 @@ import type {
 } from './runtime'
 import type { QueueSource } from './runtime-env'
 import type { QueueBindingsConfig } from './types'
+import { cfJobsAppExportNames } from '../shared/app-exports'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
   assertJobQueueBindings,
@@ -56,9 +57,8 @@ export type UseRuntimeConfigFn = (event?: unknown) => CfJobsRuntimeConfig
 
 export interface CreateCfJobsAppOptions {
   /**
-   * Bundled nitro's `useRuntimeConfig`. Optional: the generated `#cf-jobs/app`
-   * registry omits it and reads the shared runtime config provider. Tests may
-   * pass a stub directly here.
+   * Bundled Nitro `useRuntimeConfig`. The generated `#cf-jobs/app` registry
+   * passes Nuxt's auto import here. Direct consumers and tests may pass a stub.
    */
   useRuntimeConfig?: UseRuntimeConfigFn
   /** Fallback queue applied to jobs whose `defineJob` omits `queue`. */
@@ -67,9 +67,8 @@ export interface CreateCfJobsAppOptions {
 
 /**
  * Builds the registry + helpers around a statically-known array of jobs. The
- * generated `#cf-jobs/app` template imports each job source file directly and
- * passes the resulting array in — rollup resolves nuxt `#aliases` and
- * extensionless paths inside the bundle.
+ * The generated `#cf-jobs/app` template passes lazy job metadata. Each handler
+ * source enters the bundle only when its `load()` thunk runs.
  *
  * `useRuntimeConfig` is injected so this module never imports `nitropack/runtime`
  * itself; that keeps `app.ts` usable from unit tests / non-nitro consumers and
@@ -244,19 +243,17 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
 
 /**
  * Thin wrapper used by the generated `#cf-jobs/app` template. The template emits
- * only static data (the job array + default queue) and imports nothing
- * framework-bound. Runtime helpers read the shared provider injected by the
- * `provide-runtime-config` server plugin.
+ * static job data plus Nuxt's deferred runtime config auto import.
  */
 export function createGeneratedCfJobsApp<const Jobs extends readonly LazyJobEntry[]>(
   jobs: Jobs,
-  defaultQueue?: string,
+  options: { defaultQueue?: string, useRuntimeConfig: UseRuntimeConfigFn },
 ) {
   // Lazy entries carry static routing metadata + a `load()` thunk instead of an
   // eager `handle`; the registry resolves handlers on demand. The precise
   // per-job payload/queue types reach consumers via the generated `#cf-jobs/app`
   // `.d.ts` augmentation, so the runtime cast here is intentional.
-  return createCfJobsApp(jobs as unknown as readonly AnyJobDefinition[], { defaultQueue })
+  return createCfJobsApp(jobs as unknown as readonly AnyJobDefinition[], options)
 }
 
 export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
@@ -270,22 +267,7 @@ export type CfJobsApp<Jobs extends readonly AnyJobDefinition[]>
  * `jobs` is exported separately by the template (as a `const` tuple), so it is
  * intentionally absent here.
  */
-export const cfJobsAppExportNames = [
-  'jobRegistry',
-  'getHandler',
-  'loadJobDefinition',
-  'getJobDefinition',
-  'getJobQueue',
-  'getJobRoute',
-  'validateRegistry',
-  'validateQueueBindings',
-  'assertQueueBindings',
-  'getQueue',
-  'buildJobPayload',
-  'prepareJob',
-  'registerQueueConsumer',
-  'createDurableRuntime',
-] as const satisfies readonly Exclude<keyof CfJobsApp<readonly AnyJobDefinition[]>, 'jobs'>[]
+export { cfJobsAppExportNames }
 
 export type QueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>
   = CfJobsQueueConsumerOptions<Env, Db, Logger>

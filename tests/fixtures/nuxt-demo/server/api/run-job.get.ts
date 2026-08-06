@@ -1,4 +1,4 @@
-import { jobRegistry } from '#cf-jobs/app'
+import { jobRegistry, validateQueueBindings } from '#cf-jobs/app'
 import { dispatchRegisteredJob } from '#cf-jobs/server'
 
 // Exercises the module's generated registry through the real consumer-side
@@ -29,5 +29,6 @@ export default defineEventHandler(async () => {
   return {
     success: result.success,
     registeredJobs: jobRegistry.jobs.map(job => job.name),
+    queueIssues: validateQueueBindings(),
   }
 })

@@ -1,6 +1,6 @@
-export const CF_JOBS_BROADCAST_DEFAULT_ROUTE = '/__cf-jobs/ws'
-export const CF_JOBS_BROADCAST_TOPIC_PREFIX = 'cf-jobs:'
-export const CF_JOBS_BROADCAST_SYSTEM_CHANNEL = 'system'
+import { CF_JOBS_BROADCAST_TOPIC_PREFIX } from './broadcast-constants'
+
+export { CF_JOBS_BROADCAST_DEFAULT_ROUTE, CF_JOBS_BROADCAST_SYSTEM_CHANNEL, CF_JOBS_BROADCAST_TOPIC_PREFIX } from './broadcast-constants'
 
 export type CfJobsBroadcastJobStatus = 'claimed' | 'completed' | 'failed' | 'released'
 

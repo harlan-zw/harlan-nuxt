@@ -4,18 +4,17 @@ import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
 type UseRuntimeConfig = typeof useRuntimeConfig
 
 /**
- * Nitro's `useRuntimeConfig`, injected at startup by the `provide-runtime-config`
- * server plugin (which IS bundled by nitro, so it can reach the runtime safely).
+ * A runtime config reader explicitly provided by a host or test.
  *
  * Why injection rather than a module-top `import { useRuntimeConfig } from
  * 'nitropack/runtime'`: this file is re-exported by the `nuxt-cf-jobs/server`
- * barrel, which the generated `#cf-jobs/app` registry imports — and nitro dev
- * loads that registry as a raw external `file://` module. A module-top import of
+ * barrel, which applications can import outside a Nitro bundle. Nitro dev can
+ * load that registry as a raw external `file://` module. A module-top import of
  * `nitropack/runtime` there eagerly pulls nitro's `internal/storage.mjs`, whose
  * `#nitro-internal-virtual/storage` specifier only resolves inside the nitro
  * rollup build, so it throws `ERR_PACKAGE_IMPORT_NOT_DEFINED` and crashes the
- * dev server at boot (cached, so every request 500s). Keeping the reference
- * injected keeps the generated registry framework-independent.
+ * dev server at boot (cached, so every request 500s). Explicit injection keeps
+ * this package module framework-independent.
  */
 let injectedUseRuntimeConfig: UseRuntimeConfig | undefined
 
@@ -43,7 +42,7 @@ export function provideJobRuntimeConfig(fn: UseRuntimeConfig): void {
 export function useJobRuntimeConfig(event?: unknown): ReturnType<typeof useRuntimeConfig> {
   if (!injectedUseRuntimeConfig) {
     throw new Error(
-      '[nuxt-cf-jobs] useJobRuntimeConfig() was read before nitro\'s `useRuntimeConfig` was injected. The `provide-runtime-config` server plugin injects it at startup — ensure the nuxt-cf-jobs module is installed and its server plugins are registered, and that no job is dispatched before nitro boots.',
+      '[nuxt-cf-jobs] useJobRuntimeConfig() was read before a runtime config reader was provided. Pass `useRuntimeConfig` to createCfJobsApp() or call provideJobRuntimeConfig() at the host boundary.',
     )
   }
   if (event)

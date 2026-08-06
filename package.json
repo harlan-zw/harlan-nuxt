@@ -13,6 +13,7 @@
     "Harlan Wilton <harlan@harlanzw.com>"
   ],
   "license": "MIT",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
@@ -23,6 +24,16 @@
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js",
       "default": "./dist/runtime/server/index.js"
+    },
+    "./app": {
+      "types": "./dist/runtime/server/app.d.ts",
+      "import": "./dist/runtime/server/app.js",
+      "default": "./dist/runtime/server/app.js"
+    },
+    "./runtime-config": {
+      "types": "./dist/runtime/server/runtime-config.d.ts",
+      "import": "./dist/runtime/server/runtime-config.js",
+      "default": "./dist/runtime/server/runtime-config.js"
     },
     "./cloudflare": {
       "types": "./dist/runtime/server/cloudflare.d.ts",
@@ -56,6 +67,12 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
+      ],
+      "app": [
+        "dist/runtime/server/app.d.ts"
+      ],
+      "runtime-config": [
+        "dist/runtime/server/runtime-config.d.ts"
       ],
       "cloudflare": [
         "dist/runtime/server/cloudflare.d.ts"

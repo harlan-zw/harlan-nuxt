@@ -65,18 +65,18 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     await expect(tracker.isWatched('/module/unrelated.ts', '/app')).resolves.toBe(false)
   })
 
-  it('imports nothing framework-bound — only the app factory', async () => {
+  it('defers runtime config access and imports only the focused app factory', async () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     // The registry loads in raw Node and Vite contexts, so it must NOT import
     // `nitropack/runtime` (drags `internal/storage.mjs` → unresolved
     // `#nitro-internal-virtual/storage`) nor `#imports` (a build-only Nuxt
-    // virtual). Nitro dev inlines the registry separately so its job imports are
-    // bundled, and `useRuntimeConfig` is injected at runtime by the
-    // `provide-runtime-config` server plugin.
+    // virtual). Nitro aliases the focused runtime config adapter only when this
+    // registry enters its graph; raw Node resolves the safe package fallback.
     expect(out).not.toMatch(/from\s+['"]nitropack\/runtime['"]/)
     expect(out).not.toMatch(/from\s+['"]#imports['"]/)
-    expect(out).not.toContain('useRuntimeConfig')
-    expect(out).toContain(`from 'nuxt-cf-jobs/server'`)
+    expect(out).toContain(`from 'nuxt-cf-jobs/runtime-config'`)
+    expect(out).toContain('event => useJobRuntimeConfig(event)')
+    expect(out).toContain(`from 'nuxt-cf-jobs/app'`)
   })
 
   it('does NOT statically import job handlers (they load lazily)', async () => {
@@ -97,7 +97,7 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).toMatch(/export const jobs = \[/)
     expect(out).not.toContain('as const')
     expect(out).toContain('@type {import(\'nuxt-cf-jobs/server\').CfJobsApp<readonly [')
-    expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*(undefined|['"])/)
+    expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*\{/)
     // Every facade helper (incl. loadJobDefinition) is destructured straight off
     // the runtime app — no hand-written typed wrapper.
     expect(out).toContain('} = app')

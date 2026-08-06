@@ -19,5 +19,6 @@ describe('nitro queue runtime', async () => {
     expect(body.success).toBe(true)
     expect(body.registeredJobs).toContain('sync/table')
     expect(body.registeredJobs).toContain('analytics/rollup-rebuild')
+    expect(body.queueIssues).toEqual([])
   })
 })
