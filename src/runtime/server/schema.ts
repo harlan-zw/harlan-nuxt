@@ -18,7 +18,6 @@ export const cfJobBatches = sqliteTable('job_batches', {
   finishedAt: integer('finished_at'),
 }, t => [
   index('idx_job_batches_site').on(t.siteId),
-  index('idx_job_batches_pending').on(t.pendingJobs),
   index('idx_job_batches_parent').on(t.parentBatchId),
   index('idx_job_batches_finished_at').on(t.finishedAt),
 ])
@@ -54,15 +53,14 @@ export const cfJobs = sqliteTable('jobs', {
   d1RowsWritten: integer('d1_rows_written'),
   durationMs: integer('duration_ms'),
 }, t => [
-  index('idx_jobs_claimable').on(t.queue, t.reservedAt, t.availableAt),
   index('idx_jobs_dispatchable').on(t.availableAt).where(sql`published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL`),
   index('idx_jobs_stale_reserved').on(t.reservedAt).where(sql`reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
+  index('idx_jobs_active').on(t.createdAt).where(sql`completed_at IS NULL AND failed_at IS NULL`),
   index('idx_jobs_user').on(t.userId),
   index('idx_jobs_site').on(t.siteId),
   index('idx_jobs_partner').on(t.partnerId),
   index('idx_jobs_type').on(t.jobType),
   index('idx_jobs_batch').on(t.batchId),
-  index('idx_jobs_trace').on(t.traceId),
   index('idx_jobs_sync_dedup').on(t.siteId, t.jobType),
   index('idx_jobs_completed_at').on(t.completedAt).where(sql`completed_at IS NOT NULL`),
   uniqueIndex('idx_jobs_unique_active').on(t.uniqueKey).where(sql`unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
@@ -85,9 +83,8 @@ export const cfFailedJobs = sqliteTable('failed_jobs', {
   failedAt: integer('failed_at').notNull(),
 }, t => [
   index('idx_failed_jobs_queue').on(t.queue),
-  index('idx_failed_jobs_site').on(t.siteId),
-  index('idx_failed_jobs_trace').on(t.traceId),
-  index('idx_failed_jobs_batch').on(t.batchId),
+  index('idx_failed_jobs_site_failed_at').on(t.siteId, t.failedAt),
+  index('idx_failed_jobs_batch_failed_at').on(t.batchId, t.failedAt),
   index('idx_failed_jobs_failed_at').on(t.failedAt),
 ])
 

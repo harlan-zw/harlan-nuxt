@@ -54,8 +54,7 @@ export async function snapshotDurableQueues(
   const jobsTable = tables.jobs ?? 'jobs'
   const failedTable = tables.failedJobs ?? 'failed_jobs'
 
-  const active = await all<{ queue: string, ready: number, reserved: number, delayed: number, completed: number }>(
-    db.prepare(`
+  const activeStatement = db.prepare<{ queue: string, ready: number, reserved: number, delayed: number, completed: number }>(`
       SELECT queue,
         SUM(CASE WHEN reserved_at IS NULL AND available_at <= ? AND completed_at IS NULL THEN 1 ELSE 0 END) AS ready,
         SUM(CASE WHEN reserved_at IS NOT NULL AND completed_at IS NULL THEN 1 ELSE 0 END) AS reserved,
@@ -63,11 +62,19 @@ export async function snapshotDurableQueues(
         SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed
       FROM ${jobsTable}
       GROUP BY queue
-    `).bind(now, now),
+    `).bind(now, now)
+  const failedStatement = db.prepare<{ queue: string, failed: number }>(
+    `SELECT queue, COUNT(*) AS failed FROM ${failedTable} GROUP BY queue`,
   )
-  const failed = await all<{ queue: string, failed: number }>(
-    db.prepare(`SELECT queue, COUNT(*) AS failed FROM ${failedTable} GROUP BY queue`),
-  )
+  const [active, failed] = typeof db.batch === 'function'
+    ? await db.batch([activeStatement, failedStatement]).then(results => [
+        (results[0]?.results ?? []) as Array<{ queue: string, ready: number, reserved: number, delayed: number, completed: number }>,
+        (results[1]?.results ?? []) as Array<{ queue: string, failed: number }>,
+      ] as const)
+    : await Promise.all([
+        all(activeStatement),
+        all(failedStatement),
+      ])
 
   const byQueue = new Map<string, DurableQueueSnapshot>()
   for (const r of active)

@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from './d1'
+import type { D1DatabaseLike, D1PreparedStatementLike } from './d1'
 
 const SQL_IDENTIFIER_RE = /^[a-z_]\w*$/i
 
@@ -73,7 +73,7 @@ export async function listD1BatchMembers(
   const jobsTable = sqlIdentifier(opts.jobsTable ?? 'jobs')
   const failedJobsTable = sqlIdentifier(opts.failedJobsTable ?? 'failed_jobs')
 
-  const active = await all<ActiveBatchMemberRow>(db, `
+  const activeStatement = db.prepare<ActiveBatchMemberRow>(`
     SELECT
       id,
       job_type AS jobType,
@@ -89,15 +89,24 @@ export async function listD1BatchMembers(
       END ASC,
       COALESCE(reserved_at, completed_at, created_at, 0) DESC,
       id ASC
-  `, [batchId])
-  const failed = await all<FailedBatchMemberRow>(db, `
+  `).bind(batchId)
+  const failedStatement = db.prepare<FailedBatchMemberRow>(`
     SELECT
       id,
       job_type AS jobType
     FROM ${failedJobsTable}
     WHERE batch_id = ?
     ORDER BY failed_at DESC, id ASC
-  `, [batchId])
+  `).bind(batchId)
+  const [active, failed] = typeof db.batch === 'function'
+    ? await db.batch([activeStatement, failedStatement]).then(results => [
+        (results[0]?.results ?? []) as ActiveBatchMemberRow[],
+        (results[1]?.results ?? []) as FailedBatchMemberRow[],
+      ] as const)
+    : await Promise.all([
+        all(activeStatement),
+        all(failedStatement),
+      ])
 
   const seen = new Set<string>()
   const members = active.map((row) => {
@@ -118,8 +127,7 @@ export async function listD1BatchMembers(
   return members
 }
 
-async function all<T>(db: D1DatabaseLike, query: string, bindings: unknown[]): Promise<T[]> {
-  const statement = db.prepare<T>(query).bind(...bindings)
+async function all<T>(statement: D1PreparedStatementLike<T>): Promise<T[]> {
   if (typeof statement.all !== 'function')
     throw new Error('D1 all() support is required to list durable batch members')
   const result = await statement.all<T>()

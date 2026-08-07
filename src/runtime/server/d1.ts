@@ -172,30 +172,35 @@ export const d1DurableJobMigrationSql = [
   'CREATE TABLE IF NOT EXISTS job_batches (id text PRIMARY KEY, name text, parent_batch_id text, total_jobs integer NOT NULL DEFAULT 0, pending_jobs integer NOT NULL DEFAULT 0, failed_jobs integer NOT NULL DEFAULT 0, on_finish text, handler text, allow_failures integer DEFAULT 0, site_id text, user_id integer, created_at integer NOT NULL DEFAULT (unixepoch()), updated_at integer NOT NULL DEFAULT (unixepoch()), finished_at integer)',
   'CREATE TABLE IF NOT EXISTS jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text REFERENCES job_batches(id), user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, attempts integer DEFAULT 0, max_attempts integer DEFAULT 3, backoff text, reserved_at integer, available_at integer NOT NULL, created_at integer NOT NULL DEFAULT (unixepoch()), published_at integer, last_dispatched_at integer, dispatch_attempts integer NOT NULL DEFAULT 0, last_dispatch_error text, completed_at integer, failed_at integer, last_error text, retry_reasons text, rows_fetched integer, rows_inserted integer, d1_rows_read integer, d1_rows_written integer, duration_ms integer)',
   'CREATE TABLE IF NOT EXISTS failed_jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text, user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, exception text NOT NULL, attempts integer NOT NULL, max_attempts integer NOT NULL, failed_at integer NOT NULL)',
+  // Drop legacy indexes proven unused by package and downstream query shapes.
+  // `pending_jobs` and `reserved_at` are hot lifecycle columns, so indexing them
+  // added a write on every batch settlement and claim/release respectively.
+  'DROP INDEX IF EXISTS idx_job_batches_pending',
+  'DROP INDEX IF EXISTS idx_jobs_claimable',
+  'DROP INDEX IF EXISTS idx_jobs_trace',
+  'DROP INDEX IF EXISTS idx_failed_jobs_trace',
+  'DROP INDEX IF EXISTS idx_failed_jobs_site',
+  'DROP INDEX IF EXISTS idx_failed_jobs_batch',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_site ON job_batches (site_id)',
-  'CREATE INDEX IF NOT EXISTS idx_job_batches_pending ON job_batches (pending_jobs)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_parent ON job_batches (parent_batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_finished_at ON job_batches (finished_at)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON jobs (queue, reserved_at, available_at)',
-  // Recovery scans are global (not queue-scoped), so the queue-first index above
-  // cannot serve them. Keep these partial indexes bounded to live rows and align
+  // Recovery scans are global. Keep these partial indexes bounded to live rows and align
   // their leading columns with the range + ORDER BY used by each recovery query.
   'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_stale_reserved ON jobs (reserved_at) WHERE reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_active ON jobs (created_at) WHERE completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs (user_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_site ON jobs (site_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_partner ON jobs (partner_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs (job_type)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs (batch_id)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_trace ON jobs (trace_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_sync_dedup ON jobs (site_id, job_type)',
   // Partial index backing pruneCompletedJobs (completed_at IS NOT NULL AND <= ?).
   'CREATE INDEX IF NOT EXISTS idx_jobs_completed_at ON jobs (completed_at) WHERE completed_at IS NOT NULL',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_unique_active ON jobs (unique_key) WHERE unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_queue ON failed_jobs (queue)',
-  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_site ON failed_jobs (site_id)',
-  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_trace ON failed_jobs (trace_id)',
-  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_batch ON failed_jobs (batch_id)',
+  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_site_failed_at ON failed_jobs (site_id, failed_at)',
+  'CREATE INDEX IF NOT EXISTS idx_failed_jobs_batch_failed_at ON failed_jobs (batch_id, failed_at)',
   'CREATE INDEX IF NOT EXISTS idx_failed_jobs_failed_at ON failed_jobs (failed_at)',
   // Refresh planner statistics after creating indexes. Cloudflare recommends
   // PRAGMA optimize after schema/index changes; migrate() is a maintenance path.
@@ -635,33 +640,18 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         return 0
       const at = opts?.at ?? currentUnixSeconds()
       const evidence = JSON.stringify(orphanRedispatchEvidence(at))
-      // One statement per row: the evidence append is a per-row JSON rewrite, so
-      // there is no set-based form. Bounded by the caller's sweep `limit`.
-      const statement = (id: string) => db.prepare<{ id: string }>(`
+      const result = await db.prepare(`
         UPDATE ${jobsTable}
         SET retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
-        WHERE id = ?
+        WHERE id IN (SELECT value FROM json_each(?))
           AND completed_at IS NULL
           AND failed_at IS NULL
-        RETURNING id
       `).bind(
         DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
         evidence,
-        id,
-      )
-      // `batch` is optional on the D1-like interface (see claimJob's own guard),
-      // so degrade to sequential rather than assuming it.
-      if (typeof db.batch === 'function') {
-        const rows = await db.batch(ids.map(statement))
-        return rows.reduce((total, result) => total + (result.results?.length ?? 0), 0)
-      }
-      let noted = 0
-      for (const id of ids) {
-        const row = await statement(id).first<{ id: string }>()
-        if (row)
-          noted++
-      }
-      return noted
+        JSON.stringify(ids),
+      ).run()
+      return result.meta?.changes ?? 0
     },
 
     async noteDlqArrival(id, input) {
@@ -712,6 +702,9 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         : query.publication === 'published'
           ? 'published_at IS NOT NULL'
           : 'published_at IS NULL'
+      const orderColumn = query.publication === 'all' && query.createdBefore != null
+        ? 'created_at'
+        : 'available_at'
       return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
         SELECT *
         FROM ${jobsTable}
@@ -739,7 +732,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           )
           AND completed_at IS NULL
           AND failed_at IS NULL
-        ORDER BY available_at ASC
+        ORDER BY ${orderColumn} ASC
         LIMIT ?
       `).bind(
         query.now ?? currentUnixSeconds(),

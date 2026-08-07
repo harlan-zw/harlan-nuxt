@@ -86,7 +86,7 @@ describeE2E('nuxt-cf-jobs wrangler d1 e2e', () => {
     worker.stdout.on('data', chunk => logs += chunk.toString())
     worker.stderr.on('data', chunk => logs += chunk.toString())
 
-    await waitForJsonUntil(`${baseUrl}/jobs/__boot__`, () => true)
+    await waitForJsonUntil(`${baseUrl}/health`, () => true)
     await fetch(`${baseUrl}/reset`, { method: 'POST' })
   }, 120_000)
 

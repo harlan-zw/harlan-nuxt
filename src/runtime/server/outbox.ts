@@ -219,9 +219,9 @@ export interface DurableJobRecoveryQuery {
    * Suppress rows the sweep itself already re-dispatched more recently than this
    * timestamp.
    *
-   * Without it the sweep has no memory: `findDispatchableJobs` orders by
-   * `available_at ASC`, so on a queue whose consumer is slower than its producer
-   * it re-selects the same oldest `limit` rows every tick and re-sends them
+   * Without it the sweep has no memory: `findDispatchableJobs` orders oldest
+   * candidates first, so on a queue whose consumer is slower than its producer
+   * it re-selects the same `limit` rows every tick and re-sends them
    * forever. That turns the recovery backstop into the system's largest producer
    * and deepens the very backlog it exists to clear (nuxtseo.com, 2026-07-28:
    * 300 x 30 ticks/hr = 9,000 writes/hr against a 100/hr consumer).

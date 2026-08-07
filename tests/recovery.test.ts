@@ -103,8 +103,8 @@ describe('recoverDurableJobs', () => {
 /**
  * Regression: the recovery sweep must not become the system's largest producer.
  *
- * nuxtseo.com, 2026-07-28/29. `findDispatchableJobs` orders by `available_at ASC`
- * and, before this, had no memory of what it had already re-sent. On a queue
+ * nuxtseo.com, 2026-07-28/29. The previous implementation ordered by
+ * `available_at ASC` and had no memory of what it had already re-sent. On a queue
  * whose consumer is slower than its producer (`max_concurrency: 1`, ~100 msg/hr)
  * every row eventually satisfies "due, unreserved, older than `orphanedSeconds`",
  * so each tick re-selected the SAME oldest `limit` rows and re-sent them. At

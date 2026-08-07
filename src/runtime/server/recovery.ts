@@ -96,7 +96,7 @@ export async function recoverDurableJobs<
   // The sweep must not re-send a row it already re-sent this window. Age alone
   // cannot express that: `createdBefore` is true of every row queued behind a
   // backlog, so without this the sweep re-selects the same oldest `limit` rows
-  // every tick (it orders by `available_at ASC`) and becomes a producer instead
+  // every tick (oldest candidates first) and becomes a producer instead
   // of a repair. See `DurableJobRecoveryQuery.redispatchedBefore`.
   const redispatchGraceSeconds = Math.max(0, opts.redispatchGraceSeconds ?? orphanedSeconds)
   const orphaned = await findDispatchableDurableJobs(repository, {

@@ -1,6 +1,6 @@
 name = "nuxt-cf-jobs-d1-e2e"
 main = "./wrangler-d1-worker.ts"
-compatibility_date = "2026-05-25"
+compatibility_date = "2026-07-28"
 
 [[d1_databases]]
 binding = "DB"
