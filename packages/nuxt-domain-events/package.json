@@ -1,36 +1,101 @@
 {
-  "name": "@nuxtseo/event-listeners",
+  "name": "@harlanzw/nuxt-domain-events",
   "type": "module",
   "version": "0.0.0",
-  "private": true,
-  "description": "Lazy, layer-aware functional events and listeners for Nuxt server runtimes.",
-  "exports": {
-    ".": "./src/module.ts",
-    "./server": "./src/runtime/server/index.ts",
-    "./cf-jobs": "./src/runtime/server/adapters/cf-jobs.ts",
-    "./build": "./src/build/index.ts"
+  "description": "Experimental lazy, layer-aware domain events for Nuxt server runtimes.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
   },
-  "main": "./src/module.ts",
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-domain-events#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/nuxt-domain-events"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js"
+    },
+    "./cf-jobs": {
+      "types": "./dist/runtime/server/adapters/cf-jobs.d.ts",
+      "import": "./dist/runtime/server/adapters/cf-jobs.js"
+    },
+    "./build": {
+      "types": "./dist/build/index.d.mts",
+      "import": "./dist/build/index.mjs"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "server": [
+        "dist/runtime/server/index.d.ts"
+      ],
+      "cf-jobs": [
+        "dist/runtime/server/adapters/cf-jobs.d.ts"
+      ],
+      "build": [
+        "dist/build/index.d.mts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "prepare": "nuxt prepare",
-    "typecheck": "tsc --noEmit -p tsconfig.check.json"
+    "build": "nuxt-module-build build && nuxt-module-build prepare",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "test:attw": "attw --pack",
+    "test:pack": "pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt-cf-jobs": "catalog:"
+    "@harlanzw/nuxt-cf-jobs": "workspace:*",
+    "nuxt": ">=4.5.0 <5.0.0"
   },
   "peerDependenciesMeta": {
-    "nuxt-cf-jobs": {
+    "@harlanzw/nuxt-cf-jobs": {
       "optional": true
     }
   },
   "dependencies": {
+    "@nuxt/kit": "catalog:",
     "oxc-parser": "catalog:"
   },
   "devDependencies": {
-    "@nuxt/kit": "catalog:",
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@harlanzw/nuxt-cf-jobs": "workspace:*",
+    "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",
+    "eslint": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",
+    "unbuild": "catalog:",
     "vitest": "catalog:",
     "vue-tsc": "catalog:"
   }

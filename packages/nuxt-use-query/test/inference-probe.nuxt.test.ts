@@ -8,8 +8,8 @@
 // `unknown`. With the overload mirroring `useFetch`'s generic chain in
 // place, that work-around is no longer load-bearing.
 
+import { useNuxtQuery } from '@harlanzw/nuxt-use-query/query'
 import { registerEndpoint } from '@nuxt/test-utils/runtime'
-import { useNuxtQuery } from 'nuxt-use-query/query'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 registerEndpoint('/api/typed-probe', { method: 'GET', handler: () => ({ message: 'hello', count: 42 }) })

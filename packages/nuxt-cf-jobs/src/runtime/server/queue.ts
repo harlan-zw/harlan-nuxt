@@ -2,7 +2,7 @@ import type { JobRegistryLike } from './dispatch'
 import type { DurableJobFailureRepository } from './outbox'
 import type { AnyJobDefinition, JobMessageOf, JobPayloadOf } from './registry'
 import type { QueueSource } from './runtime-env'
-import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueuePayload, QueueSendBatchOptions, QueueSendOptions } from './types'
+import type { CloudflareQueue, CloudflareQueueSendBatchMessage, DispatchableJob, JobContext, JobControlResult, JobDefinition, QueueBindingsConfig, QueueMessageContentType, QueuePayload, QueueSendBatchOptions, QueueSendOptions } from './types'
 import { dispatchRegisteredJob } from './dispatch'
 import { formatJobError } from './errors'
 import { CF_QUEUE_MAX_DELAY_SECONDS, stableStringify } from './internal'
@@ -187,7 +187,7 @@ export interface JobQueuePublisher<Job extends AnyJobDefinition> {
   send: (payload: JobPayloadOf<Job>, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
   sendBatch: (payloads: Array<JobPayloadOf<Job>>, opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
   sendBatchMessages: (
-    messages: Array<{ payload: JobPayloadOf<Job>, delaySeconds?: number, contentType?: import('./types').QueueMessageContentType }>,
+    messages: Array<{ payload: JobPayloadOf<Job>, delaySeconds?: number, contentType?: QueueMessageContentType }>,
     opts?: SendBackpressureOptions,
   ) => Promise<boolean>
 }

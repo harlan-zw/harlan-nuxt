@@ -74,9 +74,9 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     // registry enters its graph; raw Node resolves the safe package fallback.
     expect(out).not.toMatch(/from\s+['"]nitropack\/runtime['"]/)
     expect(out).not.toMatch(/from\s+['"]#imports['"]/)
-    expect(out).toContain(`from 'nuxt-cf-jobs/runtime-config'`)
+    expect(out).toContain(`from '@harlanzw/nuxt-cf-jobs/runtime-config'`)
     expect(out).toContain('event => useJobRuntimeConfig(event)')
-    expect(out).toContain(`from 'nuxt-cf-jobs/app'`)
+    expect(out).toContain(`from '@harlanzw/nuxt-cf-jobs/app'`)
   })
 
   it('does NOT statically import job handlers (they load lazily)', async () => {
@@ -96,7 +96,7 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/export const jobs = \[/)
     expect(out).not.toContain('as const')
-    expect(out).toContain('@type {import(\'nuxt-cf-jobs/server\').CfJobsApp<readonly [')
+    expect(out).toContain('@type {import(\'@harlanzw/nuxt-cf-jobs/server\').CfJobsApp<readonly [')
     expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*\{/)
     // Every facade helper (incl. loadJobDefinition) is destructured straight off
     // the runtime app — no hand-written typed wrapper.
@@ -161,7 +161,7 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
 
   it('re-exports app helper option types from the augmentation', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
-    expect(out).toContain(`export type { CfJobsDurableRuntimeOptions, QueueConsumerOptions } from 'nuxt-cf-jobs/server'`)
+    expect(out).toContain(`export type { CfJobsDurableRuntimeOptions, QueueConsumerOptions } from '@harlanzw/nuxt-cf-jobs/server'`)
   })
 
   it('exports type aliases derived from the full job def tuple', async () => {

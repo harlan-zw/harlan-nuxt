@@ -1,6 +1,6 @@
-import { defineJob } from 'nuxt-cf-jobs/server'
-import { createQueuedEventListenerContext } from '#event-listeners/context'
-import * as generatedEventRuntime from '#event-listeners/server'
+import { defineJob } from '@harlanzw/nuxt-cf-jobs/server'
+import { createQueuedEventListenerContext } from '#domain-events/context'
+import * as generatedEventRuntime from '#domain-events/server'
 import { isPermanentQueuedDeliveryError, safeParseEventListenerEnvelope } from '../runtime'
 
 const eventRuntime = generatedEventRuntime as typeof generatedEventRuntime & {

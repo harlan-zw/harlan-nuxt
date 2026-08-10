@@ -31,3 +31,4 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm test:attw
+      - run: pnpm test:pack

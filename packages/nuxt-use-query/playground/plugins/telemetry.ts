@@ -2,7 +2,7 @@ import {
   formatQueryTelemetryFinishEvent,
   formatQueryTelemetryStartEvent,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
-} from 'nuxt-use-query/telemetry'
+} from '@harlanzw/nuxt-use-query/telemetry'
 
 export default defineNuxtPlugin((nuxtApp) => {
   if (!import.meta.dev)

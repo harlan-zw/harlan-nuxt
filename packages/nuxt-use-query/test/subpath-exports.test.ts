@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 describe('subpath exports', () => {
   it('loads direct runtime entrypoints', async () => {
-    const query = await import('nuxt-use-query/query')
-    const mutation = await import('nuxt-use-query/mutation')
-    const rpc = await import('nuxt-use-query/rpc')
-    const subscription = await import('nuxt-use-query/subscription')
-    const websocket = await import('nuxt-use-query/websocket')
-    const telemetry = await import('nuxt-use-query/telemetry')
-    const queryCache = await import('nuxt-use-query/query-cache')
-    const cache = await import('nuxt-use-query/cache')
+    const query = await import('@harlanzw/nuxt-use-query/query')
+    const mutation = await import('@harlanzw/nuxt-use-query/mutation')
+    const rpc = await import('@harlanzw/nuxt-use-query/rpc')
+    const subscription = await import('@harlanzw/nuxt-use-query/subscription')
+    const websocket = await import('@harlanzw/nuxt-use-query/websocket')
+    const telemetry = await import('@harlanzw/nuxt-use-query/telemetry')
+    const queryCache = await import('@harlanzw/nuxt-use-query/query-cache')
+    const cache = await import('@harlanzw/nuxt-use-query/cache')
 
     expect(query.useNuxtQuery).toBeTypeOf('function')
     expect(mutation.useNuxtMutation).toBeTypeOf('function')

@@ -4,7 +4,7 @@ const telemetryAlias = fileURLToPath(new URL('../src/runtime/telemetry.ts', impo
 
 export default defineNuxtConfig({
   alias: {
-    'nuxt-use-query/telemetry': telemetryAlias,
+    '@harlanzw/nuxt-use-query/telemetry': telemetryAlias,
   },
   modules: ['../src/module'],
   compatibilityDate: '2025-01-01',

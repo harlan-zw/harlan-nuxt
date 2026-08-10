@@ -88,7 +88,7 @@ export default defineNitroPlugin((nitroApp) => {
     }, true) as typeof globalThis.$fetch
   }
 
-  nitroApp.hooks.hook('request', (event) => {
+  nitroApp.hooks.hook('request', (event: any) => {
     const fetchEvent = event as { $fetch?: FetchLike }
     const fetcher = fetchEvent.$fetch
     if (!fetcher) {
@@ -97,7 +97,7 @@ export default defineNitroPlugin((nitroApp) => {
     fetchEvent.$fetch = wrapFetch(fetcher[ORIGINAL_KEY] ?? fetcher, () => getEventState(event, getInternalStackToken()), true)
   })
 
-  nitroApp.hooks.hook('afterResponse', async (event) => {
+  nitroApp.hooks.hook('afterResponse', async (event: any) => {
     const state = (event?.context as Record<string, unknown> | undefined)?.[STATE_KEY]
     if (state == null)
       return

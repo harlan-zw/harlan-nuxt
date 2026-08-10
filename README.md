@@ -11,5 +11,6 @@ consistent verification, and independent releases.
 | `@harlanzw/nuxt-use-query` | Nuxt-native queries, mutations, subscriptions, and RPC. |
 | `@harlanzw/nuxt-domain-events` | Lazy server-side domain events and listeners. |
 | `@harlanzw/nuxt-dx` | Development-only Nuxt diagnostics and agent handoff. |
+| `@harlanzw/nuxt-github-sponsors` | Typed GitHub Sponsors data, tiers, route, and composable. |
 
 All packages are experimental. Package versions and release notes are independent.

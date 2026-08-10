@@ -5,11 +5,11 @@ import { buildNuxt } from '@nuxt/kit'
 import { loadNuxt } from 'nuxt'
 import { describe, expect, it } from 'vitest'
 import { generateEventRegistryTemplate } from '../src/build/registry'
-import eventListenersModule from '../src/module'
+import domainEventsModule from '../src/module'
 
 describe('nuxt module integration', () => {
   it('wires the generated server alias and discovers app plus Nuxt layer sources', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nuxt-event-listeners-'))
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-'))
     const layer = join(root, 'layer')
     const appListener = join(root, 'server/listeners/app.ts')
     await Promise.all([
@@ -30,20 +30,20 @@ describe('nuxt module integration', () => {
       overrides: {
         dev: true,
         extends: [layer],
-        modules: [[eventListenersModule, {}]],
+        modules: [[domainEventsModule, {}]],
       },
     })
     await nuxt.ready()
-    expect(nuxt.options.alias['#event-listeners/server']).toBeTruthy()
+    expect(nuxt.options.alias['#domain-events/server']).toBeTruthy()
     const template = await generateEventRegistryTemplate({}, {
       rootDir: nuxt.options.rootDir,
       layerRoots: [nuxt.options.rootDir, ...nuxt.options._layers.map(current => current.config.rootDir)],
-    }, join(nuxt.options.buildDir, 'event-listeners'))
+    }, join(nuxt.options.buildDir, 'domain-events'))
     expect(template).toContain('app-listener')
     expect(template).toContain('layer-listener')
 
-    const registryPath = join(nuxt.options.buildDir, 'event-listeners/registry.mjs')
-    const contractsPath = join(nuxt.options.buildDir, 'event-listeners/contracts.ts')
+    const registryPath = join(nuxt.options.buildDir, 'domain-events/registry.mjs')
+    const contractsPath = join(nuxt.options.buildDir, 'domain-events/contracts.ts')
     nuxt.hook('builder:generateApp' as never, (async (input: { filter?: (template: { dst?: string }) => boolean }) => {
       for (const current of nuxt.options.build.templates) {
         if (!current.dst || !current.getContents)
@@ -72,7 +72,7 @@ describe('nuxt module integration', () => {
   })
 
   it('contributes the lazy generic delivery job only with an explicit queued context', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nuxt-event-listeners-queued-'))
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-queued-'))
     await Promise.all([
       mkdir(join(root, 'server/events'), { recursive: true }),
       mkdir(join(root, 'server/listeners'), { recursive: true }),
@@ -88,7 +88,7 @@ describe('nuxt module integration', () => {
       ready: false,
       overrides: {
         dev: true,
-        modules: [[eventListenersModule, {
+        modules: [[domainEventsModule, {
           queues: ['notifications'],
           queuedDeliveryContext: 'server/utils/event-context.ts',
         }]],
@@ -99,14 +99,14 @@ describe('nuxt module integration', () => {
     const callHook = nuxt.callHook as unknown as (name: string, context: typeof contribution) => Promise<void>
     await callHook.call(nuxt, 'cf-jobs:registry:sources', contribution)
 
-    expect(nuxt.options.alias['#event-listeners/context']).toBe(join(root, 'server/utils/event-context.ts'))
+    expect(nuxt.options.alias['#domain-events/context']).toBe(join(root, 'server/utils/event-context.ts'))
     expect(contribution.sources).toEqual([expect.objectContaining({ name: 'events/deliver-listener' })])
     expect(await readFile(contribution.sources[0]!.file, 'utf8')).toContain('queue: \'maintenance\'')
     await nuxt.close()
   })
 
   it('removes literal-disabled listeners from the production server output', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nuxt-event-listeners-disabled-'))
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-disabled-'))
     await Promise.all([
       mkdir(join(root, 'server/api'), { recursive: true }),
       mkdir(join(root, 'server/events'), { recursive: true }),
@@ -125,7 +125,7 @@ describe('nuxt module integration', () => {
       ready: true,
       overrides: {
         dev: false,
-        modules: [[eventListenersModule, {}]],
+        modules: [[domainEventsModule, {}]],
       },
     })
     await buildNuxt(nuxt)
@@ -140,7 +140,7 @@ describe('nuxt module integration', () => {
   }, 30_000)
 
   it('fails a production Nuxt build when a strict event contract has no listener', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nuxt-event-listeners-empty-'))
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-empty-'))
     await Promise.all([
       mkdir(join(root, 'server/events'), { recursive: true }),
       symlink(join(import.meta.dirname, '../node_modules'), join(root, 'node_modules'), 'dir'),
@@ -151,7 +151,7 @@ describe('nuxt module integration', () => {
       ready: true,
       overrides: {
         dev: false,
-        modules: [[eventListenersModule, {}]],
+        modules: [[domainEventsModule, {}]],
       },
     })).rejects.toThrow(/Event contract\(s\) have no listeners: test:empty/)
   }, 30_000)

@@ -6,6 +6,8 @@
 
 > Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.
 
+Status: experimental. APIs may change before the first scoped release.
+
 ## Features
 
 - `useNuxtQuery` wraps Nuxt `useFetch` with TanStack-style stale-time revalidation, polling, enabled gates, and previous-data display.
@@ -46,10 +48,10 @@ The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache a
 
 ## Installation
 
-Install `nuxt-use-query` in the consuming Nuxt site:
+Install `@harlanzw/nuxt-use-query` in the consuming Nuxt site:
 
 ```bash
-npx nuxi@latest module add nuxt-use-query
+npx nuxi@latest module add @harlanzw/nuxt-use-query
 ```
 
 If the site will define RPC contracts, add Zod as a direct app dependency:
@@ -61,14 +63,14 @@ pnpm add zod
 Or install it manually:
 
 ```bash
-pnpm add nuxt-use-query zod
+pnpm add @harlanzw/nuxt-use-query zod
 ```
 
 Add the module to `nuxt.config.ts`:
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['nuxt-use-query'],
+  modules: ['@harlanzw/nuxt-use-query'],
 })
 ```
 
@@ -92,14 +94,14 @@ The module auto-imports:
 You can also import from subpaths when using the helpers outside Nuxt's auto-import scan:
 
 ```ts
-import { useNuxtMutation } from 'nuxt-use-query/mutation'
-import { useNuxtQuery } from 'nuxt-use-query/query'
-import { getQueryData, invalidateNuxtQueries, setQueryData } from 'nuxt-use-query/query-cache'
+import { useNuxtMutation } from '@harlanzw/nuxt-use-query/mutation'
+import { useNuxtQuery } from '@harlanzw/nuxt-use-query/query'
+import { getQueryData, invalidateNuxtQueries, setQueryData } from '@harlanzw/nuxt-use-query/query-cache'
 import {
   defineNuxtRpcQuery,
   toHumanNuxtRpcError,
   useNuxtRpcQuery,
-} from 'nuxt-use-query/rpc'
+} from '@harlanzw/nuxt-use-query/rpc'
 ```
 
 ## Recommended Site Pattern
@@ -380,7 +382,7 @@ String frames are JSON-parsed by default (non-JSON frames pass through for `sche
 RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP failures and Zod request/response validation failures are normalized before they reach hooks or callers.
 
 ```ts
-import { toHumanNuxtRpcError } from 'nuxt-use-query/rpc'
+import { toHumanNuxtRpcError } from '@harlanzw/nuxt-use-query/rpc'
 
 const rpc = useNuxtRpc({
   onError({ error, operation }) {
@@ -407,7 +409,7 @@ Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. I
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['nuxt-use-query'],
+  modules: ['@harlanzw/nuxt-use-query'],
   nuxtUseQuery: {
     telemetry: {
       enabled: true,
@@ -451,7 +453,6 @@ During SSR, fetches made through `useFetch`, `useRequestFetch`, Nitro `event.$fe
 For server `$fetch` telemetry, attach Nitro hooks from a server plugin:
 
 ```ts
-import { defineNitroPlugin } from 'nitropack/runtime'
 import {
   formatDuplicateFetchTelemetryEvent,
   formatFetchTimeoutTelemetryEvent,
@@ -461,7 +462,8 @@ import {
   formatRecursiveFetchTelemetryEvent,
   formatSlowFetchTelemetryEvent,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
-} from 'nuxt-use-query/telemetry'
+} from '@harlanzw/nuxt-use-query/telemetry'
+import { defineNitroPlugin } from 'nitropack/runtime'
 
 export default defineNitroPlugin((nitroApp) => {
   nitroApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSlow, (event) => {
@@ -500,7 +502,7 @@ For Nuxt app-side query telemetry, attach hooks from a Nuxt plugin:
 import {
   formatQueryTelemetryFinishEvent,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
-} from 'nuxt-use-query/telemetry'
+} from '@harlanzw/nuxt-use-query/telemetry'
 
 export default defineNuxtPlugin((nuxtApp) => {
   nuxtApp.hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, (event) => {
@@ -515,7 +517,7 @@ Enable build-time enforcement when a project is ready to make the pattern mandat
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['nuxt-use-query'],
+  modules: ['@harlanzw/nuxt-use-query'],
   nuxtUseQuery: {
     contracts: {
       enabled: true,
@@ -539,13 +541,13 @@ Start without enforcement while migrating an existing site, then enable it once 
 
 ## License
 
-[MIT](https://github.com/harlan-zw/nuxt-use-query/blob/main/LICENSE.md)
+[MIT](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md)
 
-[npm-version-src]: https://img.shields.io/npm/v/nuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
-[npm-version-href]: https://npmjs.com/package/nuxt-use-query
+[npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlanzw/nuxt-use-query
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/nuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
-[npm-downloads-href]: https://npmjs.com/package/nuxt-use-query
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlanzw/nuxt-use-query
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com

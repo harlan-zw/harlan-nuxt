@@ -2,9 +2,9 @@
 // hydration-deferred establish, parse-at-boundary, callbacks running in Nuxt
 // context (so the cache helpers resolve), enabled gating, and scope teardown.
 
-import type { NuxtSubscriptionSource } from 'nuxt-use-query/subscription'
-import { getQueryData, setQueryData } from 'nuxt-use-query/query-cache'
-import { useNuxtSubscription } from 'nuxt-use-query/subscription'
+import type { NuxtSubscriptionSource } from '@harlanzw/nuxt-use-query/subscription'
+import { getQueryData, setQueryData } from '@harlanzw/nuxt-use-query/query-cache'
+import { useNuxtSubscription } from '@harlanzw/nuxt-use-query/subscription'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick, onScopeDispose, ref } from 'vue'
 

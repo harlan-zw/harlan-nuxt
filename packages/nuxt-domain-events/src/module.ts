@@ -8,8 +8,8 @@ export type { ModuleOptions } from './types'
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
-    name: '@nuxtseo/event-listeners',
-    configKey: 'eventListeners',
+    name: '@harlanzw/nuxt-domain-events',
+    configKey: 'domainEvents',
   },
   defaults: {
     eventsDir: 'server/events',
@@ -32,27 +32,27 @@ export default defineNuxtModule<ModuleOptions>({
     const observerPath = options.observer
       ? resolve(nuxt.options.rootDir, options.observer)
       : resolver.resolve('./runtime/server/observer')
-    nuxt.options.alias['#event-listeners/observer'] = observerPath
+    nuxt.options.alias['#domain-events/observer'] = observerPath
     const nitro = ((nuxt.options as unknown as { nitro?: Record<string, any> }).nitro ??= {})
     nitro.alias ||= {}
-    nitro.alias['#event-listeners/observer'] = observerPath
+    nitro.alias['#domain-events/observer'] = observerPath
 
-    installEventRegistryTemplates(resolvedOptions, nuxt, resolve(nuxt.options.buildDir, 'event-listeners'))
+    installEventRegistryTemplates(resolvedOptions, nuxt, resolve(nuxt.options.buildDir, 'domain-events'))
 
     addServerImports([
       { name: 'defineEvent', from: resolver.resolve('./runtime/server/definitions') },
       { name: 'defineListener', from: resolver.resolve('./runtime/server/definitions') },
-      { name: 'dispatchEvent', from: '#event-listeners/server' },
-      { name: 'planEvent', from: '#event-listeners/server' },
-      { name: 'commitEventPlan', from: '#event-listeners/server' },
-      { name: 'deliverQueuedListener', from: '#event-listeners/server' },
-      { name: 'handleQueuedListenerTerminalFailure', from: '#event-listeners/server' },
+      { name: 'dispatchEvent', from: '#domain-events/server' },
+      { name: 'planEvent', from: '#domain-events/server' },
+      { name: 'commitEventPlan', from: '#domain-events/server' },
+      { name: 'deliverQueuedListener', from: '#domain-events/server' },
+      { name: 'handleQueuedListenerTerminalFailure', from: '#domain-events/server' },
     ])
 
     if (options.queuedDeliveryContext) {
       const deliveryContextPath = resolve(nuxt.options.rootDir, options.queuedDeliveryContext)
-      nuxt.options.alias['#event-listeners/context'] = deliveryContextPath
-      nitro.alias['#event-listeners/context'] = deliveryContextPath
+      nuxt.options.alias['#domain-events/context'] = deliveryContextPath
+      nitro.alias['#domain-events/context'] = deliveryContextPath
       nuxt.hook('cf-jobs:registry:sources' as never, ((context: { sources: Array<{ file: string, name?: string }> }) => {
         context.sources.push({
           file: resolver.resolve('./runtime/server/jobs/deliver-listener.ts'),

@@ -12,10 +12,9 @@
 //   3. `useNuxtQuery` fetches a `registerEndpoint`-mocked Nitro handler and
 //      stamps `lastFetched` after pending → success.
 
-import { registerEndpoint } from '@nuxt/test-utils/runtime'
-import { retainQuery } from 'nuxt-use-query/cache'
-import { useNuxtMutation } from 'nuxt-use-query/mutation'
-import { useNuxtQuery } from 'nuxt-use-query/query'
+import { retainQuery } from '@harlanzw/nuxt-use-query/cache'
+import { useNuxtMutation } from '@harlanzw/nuxt-use-query/mutation'
+import { useNuxtQuery } from '@harlanzw/nuxt-use-query/query'
 import {
   getQueryData,
   invalidateNuxtQueries,
@@ -23,8 +22,9 @@ import {
   removeNuxtQueries,
   setQueryData,
   useQueryCache,
-} from 'nuxt-use-query/query-cache'
-import { defineNuxtRpcQuery, invalidateNuxtRpc, useNuxtRpcQuery } from 'nuxt-use-query/rpc'
+} from '@harlanzw/nuxt-use-query/query-cache'
+import { defineNuxtRpcQuery, invalidateNuxtRpc, useNuxtRpcQuery } from '@harlanzw/nuxt-use-query/rpc'
+import { registerEndpoint } from '@nuxt/test-utils/runtime'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import { z } from 'zod'

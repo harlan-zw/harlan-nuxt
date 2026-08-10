@@ -1,6 +1,6 @@
-import type { SubscriptionContextBase } from 'nuxt-use-query/subscription'
+import type { SubscriptionContextBase } from '@harlanzw/nuxt-use-query/subscription'
 import { runInNewContext } from 'node:vm'
-import { createSubscriptionController } from 'nuxt-use-query/subscription'
+import { createSubscriptionController } from '@harlanzw/nuxt-use-query/subscription'
 import { describe, expect, it, vi } from 'vitest'
 
 // Unit coverage for the pure establish/teardown state machine — the part that

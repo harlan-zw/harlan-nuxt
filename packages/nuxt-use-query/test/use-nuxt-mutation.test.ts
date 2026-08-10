@@ -10,7 +10,7 @@ vi.mock('../src/runtime/composables/useQueryCache', () => ({
   invalidateNuxtQueries: invalidateSpy,
 }))
 
-const { useNuxtMutation } = await import('nuxt-use-query/mutation')
+const { useNuxtMutation } = await import('@harlanzw/nuxt-use-query/mutation')
 
 beforeEach(() => {
   invalidateSpy.mockReset()

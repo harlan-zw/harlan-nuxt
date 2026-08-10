@@ -1,4 +1,4 @@
-import { createQueryCache, isQueryStale } from 'nuxt-use-query/cache'
+import { createQueryCache, isQueryStale } from '@harlanzw/nuxt-use-query/cache'
 import { describe, expect, it } from 'vitest'
 import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
 

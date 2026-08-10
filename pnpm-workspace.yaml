@@ -3,8 +3,53 @@ packages:
 
 shellEmulator: true
 trustPolicy: no-downgrade
+trustPolicyIgnoreAfter: 262800
 
-catalog: {}
+catalog:
+  '@antfu/eslint-config': ^9.3.0
+  '@arethetypeswrong/cli': ^0.18.5
+  '@cloudflare/workers-types': ^5.20260809.1
+  '@nuxt/kit': ^4.5.2
+  '@nuxt/module-builder': ^1.0.2
+  '@nuxt/schema': ^4.5.2
+  '@nuxt/test-utils': ^4.1.0
+  '@types/node': ^26.1.1
+  '@vitest/coverage-v8': 4.1.10
+  '@vue/test-utils': ^2.4.11
+  '@vueuse/core': ^14.4.0
+  citty: ^0.2.2
+  consola: ^3.4.2
+  drizzle-orm: 1.0.0-rc.4
+  eslint: ^10.8.1
+  eslint-plugin-harlanzw: ^0.17.1
+  eslint-plugin-vue: ^10.10.0
+  h3: 2.0.1-rc.25
+  happy-dom: ^20.11.1
+  magicast: ^0.5.3
+  nitropack: ^2.13.4
+  nuxt: ^4.5.2
+  oxc-parser: 0.140.0
+  oxc-walker: 1.0.0
+  pathe: ^2.0.3
+  typescript: ^5.9.3
+  unbuild: ^3.6.1
+  vitest: ^4.1.10
+  vue: ^3.5.40
+  vue-router: ^5.2.0
+  vue-tsc: ^3.3.9
+  wrangler: ^4.120.0
+  zod: ^4.4.3
 
 ignoredBuiltDependencies:
   - esbuild
+
+allowBuilds:
+  '@parcel/watcher': true
+  esbuild: true
+  sharp: true
+  vue-demi: true
+  workerd: true
+
+peerDependencyRules:
+  allowedVersions:
+    vue-sfc-transformer: '>=0.1.1 <0.3.0'

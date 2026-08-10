@@ -1,0 +1,70 @@
+{
+  "name": "@harlanzw/nuxt-dx",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Experimental development-only diagnostics for Nuxt.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-dx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/nuxt-dx"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "nuxt-module-build build && nuxt-module-build prepare",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "typecheck": "nuxt typecheck",
+    "test:attw": "attw --pack",
+    "test:pack": "pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
+  },
+  "peerDependencies": {
+    "nuxt": ">=4.5.0 <5.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vitest": "catalog:",
+    "vue": "catalog:"
+  }
+}

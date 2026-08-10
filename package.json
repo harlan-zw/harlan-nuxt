@@ -20,6 +20,7 @@
     "lint:fix": "pnpm -r --if-present run lint:fix",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test": "pnpm -r --if-present run test",
-    "test:attw": "pnpm -r --if-present run test:attw"
+    "test:attw": "pnpm -r --if-present run test:attw",
+    "test:pack": "pnpm -r --if-present run test:pack"
   }
 }

@@ -1,9 +1,8 @@
 {
-  "name": "nuxt-use-query",
+  "name": "@harlanzw/nuxt-use-query",
   "type": "module",
-  "version": "1.0.0",
-  "packageManager": "pnpm@11.2.1",
-  "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
+  "version": "0.0.0",
+  "description": "Experimental Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com",
@@ -14,13 +13,17 @@
   ],
   "license": "MIT",
   "funding": "https://github.com/sponsors/harlan-zw",
-  "homepage": "https://github.com/harlan-zw/nuxt-use-query",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-use-query#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/harlan-zw/nuxt-use-query.git"
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/nuxt-use-query"
   },
   "bugs": {
-    "url": "https://github.com/harlan-zw/nuxt-use-query/issues"
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "sideEffects": false,
   "exports": {
@@ -101,6 +104,9 @@
   "files": [
     "dist"
   ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -109,20 +115,20 @@
     "dev:build": "nuxt build playground",
     "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build && nuxt prepare playground && nuxt prepare test/fixture",
     "prepare:fixtures": "nuxt prepare playground && nuxt prepare test/fixture",
-    "release": "pnpm build && bumpp -x \"npx changelogen --output=CHANGELOG.md\"",
     "prepack": "pnpm run build",
-    "test": "pnpm run prepare:fixtures && vitest",
+    "test": "pnpm run prepare:fixtures && vitest run",
     "test:unit": "vitest run --project=unit",
     "test:e2e": "pnpm run prepare:fixtures && vitest run --project=e2e",
     "typecheck": "nuxt typecheck",
-    "test:attw": "attw --pack"
+    "test:attw": "attw --pack",
+    "test:pack": "pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=3.0.0 <5.0.0",
+    "nuxt": ">=4.5.0 <5.0.0",
     "zod": "^4.0.0"
   },
   "dependencies": {
-    "@nuxt/kit": "catalog:nuxt",
+    "@nuxt/kit": "catalog:",
     "@vueuse/core": "catalog:",
     "consola": "catalog:",
     "nitropack": "catalog:",
@@ -131,22 +137,21 @@
     "pathe": "catalog:"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "catalog:dev-lint",
-    "@arethetypeswrong/cli": "catalog:dev-build",
-    "@nuxt/module-builder": "catalog:nuxt",
-    "@nuxt/test-utils": "catalog:dev-test",
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/test-utils": "catalog:",
     "@vitest/coverage-v8": "catalog:",
-    "@vue/test-utils": "catalog:dev-test",
-    "bumpp": "catalog:",
-    "eslint": "catalog:dev-lint",
+    "@vue/test-utils": "catalog:",
+    "eslint": "catalog:",
     "eslint-plugin-harlanzw": "catalog:",
-    "happy-dom": "catalog:dev-test",
-    "nuxt": "catalog:nuxt",
-    "typescript": "catalog:dev-build",
-    "vitest": "catalog:dev-test",
-    "vue": "catalog:vue",
-    "vue-router": "catalog:vue",
-    "vue-tsc": "catalog:dev-build",
+    "happy-dom": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue": "catalog:",
+    "vue-router": "catalog:",
+    "vue-tsc": "catalog:",
     "zod": "catalog:"
   }
 }
