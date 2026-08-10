@@ -14,3 +14,9 @@ consistent verification, and independent releases.
 | `@harlan-zw/nuxt-github-sponsors` | Typed GitHub Sponsors data, tiers, route, and composable. |
 
 All packages are experimental. Package versions and release notes are independent.
+
+## Releases
+
+Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted
+GitHub Actions publisher releases that package under the `experimental` npm tag
+with provenance.
