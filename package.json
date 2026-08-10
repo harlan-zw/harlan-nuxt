@@ -1,0 +1,25 @@
+{
+  "name": "harlan-nuxt",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.2.1",
+  "description": "Experimental public Nuxt packages by Harlan Wilton.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "dev:prepare": "pnpm -r --if-present run dev:prepare",
+    "lint": "pnpm -r --if-present run lint",
+    "lint:fix": "pnpm -r --if-present run lint:fix",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "test:attw": "pnpm -r --if-present run test:attw"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+dist
+.nuxt
+.output
+.data
+.wrangler
+coverage
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+.idea
+.vscode
