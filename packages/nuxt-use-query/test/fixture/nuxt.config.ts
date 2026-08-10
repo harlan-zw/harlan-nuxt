@@ -6,7 +6,7 @@ const telemetryAlias = resolve(here, '../../src/runtime/telemetry.ts')
 
 export default defineNuxtConfig({
   alias: {
-    '@harlanzw/nuxt-use-query/telemetry': telemetryAlias,
+    '@harlan-zw/nuxt-use-query/telemetry': telemetryAlias,
   },
   modules: [resolve(here, '../../src/module.ts')],
   nuxtUseQuery: {

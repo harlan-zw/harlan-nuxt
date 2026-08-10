@@ -1,4 +1,4 @@
-import type { SubscriptionContextBase } from '@harlanzw/nuxt-use-query/subscription'
+import type { SubscriptionContextBase } from '@harlan-zw/nuxt-use-query/subscription'
 import { describe, expect, it, vi } from 'vitest'
 
 // Capture the options `useWebSocket` was called with so we can drive its
@@ -16,7 +16,7 @@ vi.mock('@vueuse/core', () => ({
   }),
 }))
 
-const { nuxtWebSocketSource } = await import('@harlanzw/nuxt-use-query/websocket')
+const { nuxtWebSocketSource } = await import('@harlan-zw/nuxt-use-query/websocket')
 
 function fakeCtx() {
   const ac = new AbortController()

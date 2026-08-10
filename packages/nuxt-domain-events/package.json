@@ -1,7 +1,7 @@
 {
-  "name": "@harlanzw/nuxt-domain-events",
+  "name": "@harlan-zw/nuxt-domain-events",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Experimental lazy, layer-aware domain events for Nuxt server runtimes.",
   "author": {
     "name": "Harlan Wilton",
@@ -63,7 +63,7 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "nuxt-module-build build && nuxt-module-build prepare",
+    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
     "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
     "prepack": "pnpm run build",
     "lint": "eslint .",
@@ -71,14 +71,14 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.check.json",
     "test:attw": "attw --pack",
-    "test:pack": "pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "@harlanzw/nuxt-cf-jobs": "workspace:*",
+    "@harlan-zw/nuxt-cf-jobs": "workspace:*",
     "nuxt": ">=4.5.0 <5.0.0"
   },
   "peerDependenciesMeta": {
-    "@harlanzw/nuxt-cf-jobs": {
+    "@harlan-zw/nuxt-cf-jobs": {
       "optional": true
     }
   },
@@ -89,7 +89,7 @@
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
-    "@harlanzw/nuxt-cf-jobs": "workspace:*",
+    "@harlan-zw/nuxt-cf-jobs": "workspace:*",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",
     "eslint": "catalog:",

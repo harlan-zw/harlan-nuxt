@@ -1,7 +1,7 @@
 {
-  "name": "@harlanzw/nuxt-use-query",
+  "name": "@harlan-zw/nuxt-use-query",
   "type": "module",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Experimental Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
   "author": {
     "name": "Harlan Wilton",
@@ -9,7 +9,7 @@
     "url": "https://harlanzw.com/"
   },
   "contributors": [
-    "Harlan Wilton <harlan@harlanzw.com>"
+    "Harlan Wilton <harlan@harlan-zw.com>"
   ],
   "license": "MIT",
   "funding": "https://github.com/sponsors/harlan-zw",
@@ -121,7 +121,7 @@
     "test:e2e": "pnpm run prepare:fixtures && vitest run --project=e2e",
     "typecheck": "nuxt typecheck",
     "test:attw": "attw --pack",
-    "test:pack": "pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
     "nuxt": ">=4.5.0 <5.0.0",

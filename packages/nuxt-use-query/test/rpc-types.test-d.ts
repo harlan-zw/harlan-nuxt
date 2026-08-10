@@ -3,7 +3,7 @@ import {
   defineNuxtQueryGroup,
   defineNuxtRpcMutation,
   defineNuxtRpcQuery,
-} from '@harlanzw/nuxt-use-query/rpc'
+} from '@harlan-zw/nuxt-use-query/rpc'
 import { describe, expectTypeOf, it } from 'vitest'
 import { z } from 'zod'
 

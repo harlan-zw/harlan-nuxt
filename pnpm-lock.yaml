@@ -204,7 +204,7 @@ importers:
       '@arethetypeswrong/cli':
         specifier: 'catalog:'
         version: 0.18.5
-      '@harlanzw/nuxt-cf-jobs':
+      '@harlan-zw/nuxt-cf-jobs':
         specifier: workspace:*
         version: link:../nuxt-cf-jobs
       '@nuxt/module-builder':

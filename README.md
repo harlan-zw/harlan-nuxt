@@ -7,10 +7,10 @@ consistent verification, and independent releases.
 
 | Package | Purpose |
 | --- | --- |
-| `@harlanzw/nuxt-cf-jobs` | Typed Cloudflare queue jobs for Nuxt. |
-| `@harlanzw/nuxt-use-query` | Nuxt-native queries, mutations, subscriptions, and RPC. |
-| `@harlanzw/nuxt-domain-events` | Lazy server-side domain events and listeners. |
-| `@harlanzw/nuxt-dx` | Development-only Nuxt diagnostics and agent handoff. |
-| `@harlanzw/nuxt-github-sponsors` | Typed GitHub Sponsors data, tiers, route, and composable. |
+| `@harlan-zw/nuxt-cf-jobs` | Typed Cloudflare queue jobs for Nuxt. |
+| `@harlan-zw/nuxt-use-query` | Nuxt-native queries, mutations, subscriptions, and RPC. |
+| `@harlan-zw/nuxt-domain-events` | Lazy server-side domain events and listeners. |
+| `@harlan-zw/nuxt-dx` | Development-only Nuxt diagnostics and agent handoff. |
+| `@harlan-zw/nuxt-github-sponsors` | Typed GitHub Sponsors data, tiers, route, and composable. |
 
 All packages are experimental. Package versions and release notes are independent.

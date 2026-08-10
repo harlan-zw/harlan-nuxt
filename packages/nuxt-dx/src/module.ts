@@ -8,7 +8,7 @@ export interface ModuleOptions {
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
-    name: '@harlanzw/nuxt-dx',
+    name: '@harlan-zw/nuxt-dx',
     configKey: 'nuxtDx',
   },
   defaults: {

@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, D1PreparedStatementLike } from '@harlanzw/nuxt-cf-jobs/outbox'
+import type { D1DatabaseLike, D1PreparedStatementLike } from '@harlan-zw/nuxt-cf-jobs/outbox'
 import type { EventCommitInput, QueuedListenerPublication } from '../src/runtime/server/types'
 import { DatabaseSync } from 'node:sqlite'
 import {
@@ -6,7 +6,7 @@ import {
   prepareDurableJobResult,
   publishDurableJobBatch,
   stagePreparedDurableJobs,
-} from '@harlanzw/nuxt-cf-jobs/outbox'
+} from '@harlan-zw/nuxt-cf-jobs/outbox'
 import { describe, expect, it, vi } from 'vitest'
 import { createCfJobsEventQueueAdapter } from '../src/runtime/server/adapters/cf-jobs'
 

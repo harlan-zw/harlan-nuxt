@@ -1,5 +1,5 @@
-import { createQueryCache } from '@harlanzw/nuxt-use-query/cache'
-import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from '@harlanzw/nuxt-use-query/telemetry'
+import { createQueryCache } from '@harlan-zw/nuxt-use-query/cache'
+import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from '@harlan-zw/nuxt-use-query/telemetry'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 
@@ -52,7 +52,7 @@ vi.mock('../src/runtime/composables/useQueryCache', async () => {
   return { ...real, useQueryCache: () => cache }
 })
 
-const { useNuxtQuery } = await import('@harlanzw/nuxt-use-query/query')
+const { useNuxtQuery } = await import('@harlan-zw/nuxt-use-query/query')
 
 beforeEach(async () => {
   const { nextTick } = await import('vue')

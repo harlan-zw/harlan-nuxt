@@ -1,4 +1,4 @@
-# `@harlanzw/nuxt-domain-events`
+# `@harlan-zw/nuxt-domain-events`
 
 Functional, layer-aware Nuxt server events with generated lazy registries.
 
@@ -7,12 +7,12 @@ Status: experimental. APIs may change before the first release.
 ## Install
 
 ```bash
-pnpm add @harlanzw/nuxt-domain-events
+pnpm add @harlan-zw/nuxt-domain-events
 ```
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['@harlanzw/nuxt-domain-events'],
+  modules: ['@harlan-zw/nuxt-domain-events'],
 })
 ```
 
@@ -26,6 +26,6 @@ Queued listeners require explicit idempotency and a caller-provided stable `even
 
 After-commit flow uses `planEvent`, then `commitEventPlan`. In v1, every listener for that event must be queued with `publication: 'after-commit'`. D1 batch is non-interactive, so it cannot run ordinary listeners after domain SQL while still allowing their failure to roll back that SQL. Split the event contract when one producer needs both ordinary and after-commit listeners. The caller-supplied unit of work stages the adapter's unpublished D1 statements beside domain writes. It returns `rolled-back` with zero queue evidence, or the adapter's exact staged-delivery receipt only after D1 resolves. A failed send remains an unpublished durable row for recovery.
 
-The `./cf-jobs` adapter accepts the public `@harlanzw/nuxt-cf-jobs/outbox` functions structurally. This keeps the event core runtime-neutral and the dependency one-way. Its generic delivery definition declares the static `maintenance` queue for `@harlanzw/nuxt-cf-jobs` registry locality; the public outbox route override intentionally stores each listener job on the queue declared by that listener.
+The `./cf-jobs` adapter accepts the public `@harlan-zw/nuxt-cf-jobs/outbox` functions structurally. This keeps the event core runtime-neutral and the dependency one-way. Its generic delivery definition declares the static `maintenance` queue for `@harlan-zw/nuxt-cf-jobs` registry locality; the public outbox route override intentionally stores each listener job on the queue declared by that listener.
 
 Deferred in v1: mixed ordinary and after-commit listeners on one transaction-bound event, producer-time Laravel `shouldQueue`, cooperative listener timeouts, listener ordering contracts, grouped subscriber modules, dashboards, CLI, and compatibility shims. Queued listeners cannot declare `shouldHandle`; synchronous and deferred listeners may use it as an in-process condition. Queued listeners may declare a functional `failed(payload, context, error)` callback, invoked after terminal settlement.

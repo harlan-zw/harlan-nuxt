@@ -28,7 +28,7 @@ export interface ModuleOptions {
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
-    name: '@harlanzw/nuxt-use-query',
+    name: '@harlan-zw/nuxt-use-query',
     configKey: 'nuxtUseQuery',
   },
   defaults: {
@@ -70,7 +70,7 @@ export default defineNuxtModule<ModuleOptions>({
     addTypeTemplate({
       filename: 'types/nuxt-use-query.d.ts',
       getContents: () => `
-import type { NuxtUseQueryRuntimeNuxtHooks } from '@harlanzw/nuxt-use-query/telemetry'
+import type { NuxtUseQueryRuntimeNuxtHooks } from '@harlan-zw/nuxt-use-query/telemetry'
 
 declare module '#app' {
   interface RuntimeNuxtHooks extends NuxtUseQueryRuntimeNuxtHooks {}

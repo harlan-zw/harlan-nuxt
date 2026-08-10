@@ -1,4 +1,4 @@
-<h1>@harlanzw/nuxt-cf-jobs</h1>
+<h1>@harlan-zw/nuxt-cf-jobs</h1>
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
@@ -37,7 +37,7 @@ The basic path sends a typed message directly to Cloudflare Queues. D1 is option
 ### 1. Install the module
 
 ```bash
-pnpm add @harlanzw/nuxt-cf-jobs
+pnpm add @harlan-zw/nuxt-cf-jobs
 ```
 
 Map each logical queue name to the binding exposed by Cloudflare:
@@ -45,7 +45,7 @@ Map each logical queue name to the binding exposed by Cloudflare:
 ```ts
 // nuxt.config.ts
 export default defineNuxtConfig({
-  modules: ['@harlanzw/nuxt-cf-jobs'],
+  modules: ['@harlan-zw/nuxt-cf-jobs'],
   cfJobs: {
     queues: {
       default: 'QUEUE_DEFAULT',
@@ -588,7 +588,7 @@ import {
   createFakeQueue,
   createJobTestHarness,
   createQueueTestHarness,
-} from '@harlanzw/@harlanzw/nuxt-cf-jobs/testing'
+} from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/testing'
 ```
 
 ### Run handlers inline
@@ -596,8 +596,8 @@ import {
 Use an inline registry for a small unit test, or pass `jobRegistry` from `#cf-jobs/app` inside a prepared Nuxt test:
 
 ```ts
-import { defineJob, defineJobRegistry } from '@harlanzw/@harlanzw/nuxt-cf-jobs/server'
-import { createJobTestHarness } from '@harlanzw/@harlanzw/nuxt-cf-jobs/testing'
+import { defineJob, defineJobRegistry } from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/server'
+import { createJobTestHarness } from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/testing'
 
 const registry = defineJobRegistry([
   defineJob({
@@ -705,12 +705,12 @@ Published package subpaths:
 
 | Import | Contents |
 | --- | --- |
-| `@harlanzw/nuxt-cf-jobs` | Nuxt module. |
-| `@harlanzw/nuxt-cf-jobs/server` | Server runtime, registry, durable jobs, dispatch, and scheduling. |
-| `@harlanzw/nuxt-cf-jobs/cloudflare` | Cloudflare-specific metrics helpers. |
-| `@harlanzw/nuxt-cf-jobs/d1` | D1 repository adapter for non-Nuxt contexts. |
-| `@harlanzw/nuxt-cf-jobs/schema` | Drizzle table definitions for non-Nuxt contexts. |
-| `@harlanzw/nuxt-cf-jobs/testing` | Nitro-free queue fakes and test harnesses. |
+| `@harlan-zw/nuxt-cf-jobs` | Nuxt module. |
+| `@harlan-zw/nuxt-cf-jobs/server` | Server runtime, registry, durable jobs, dispatch, and scheduling. |
+| `@harlan-zw/nuxt-cf-jobs/cloudflare` | Cloudflare-specific metrics helpers. |
+| `@harlan-zw/nuxt-cf-jobs/d1` | D1 repository adapter for non-Nuxt contexts. |
+| `@harlan-zw/nuxt-cf-jobs/schema` | Drizzle table definitions for non-Nuxt contexts. |
+| `@harlan-zw/nuxt-cf-jobs/testing` | Nitro-free queue fakes and test harnesses. |
 
 ## Development
 
@@ -731,10 +731,10 @@ Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/m
 
 <!-- Badges -->
 [npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-cf-jobs/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
-[npm-version-href]: https://npmjs.com/package/@harlanzw/nuxt-cf-jobs
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
 [npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-cf-jobs.svg?style=flat&colorA=18181B&colorB=28CF8D
-[npm-downloads-href]: https://npmjs.com/package/@harlanzw/nuxt-cf-jobs
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
 [license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
 [license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-cf-jobs/LICENSE.md

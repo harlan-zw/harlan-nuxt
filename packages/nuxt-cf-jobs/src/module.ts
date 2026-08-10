@@ -46,7 +46,7 @@ interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'stal
 
 export default defineNuxtModule<ModuleOptions>().with({
   meta: {
-    name: '@harlanzw/nuxt-cf-jobs',
+    name: '@harlan-zw/nuxt-cf-jobs',
     configKey: 'cfJobs',
   },
   defaults: {
@@ -73,7 +73,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     nuxt.options.alias['#cf-jobs/cloudflare'] = resolver.resolve('./runtime/server/cloudflare')
     const nitro = ((nuxt.options as { nitro?: { alias?: Record<string, string> } }).nitro ??= {})
     nitro.alias ??= {}
-    nitro.alias['@harlanzw/nuxt-cf-jobs/runtime-config'] = resolver.resolve('./runtime/server/nitro-runtime-config')
+    nitro.alias['@harlan-zw/nuxt-cf-jobs/runtime-config'] = resolver.resolve('./runtime/server/nitro-runtime-config')
     addImportsDir(resolver.resolve('./runtime/app/composables'))
     addServerImports([
       { name: 'defineJob', from: resolver.resolve('./runtime/server/registry') },

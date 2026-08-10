@@ -8,7 +8,7 @@
 // `unknown`. With the overload mirroring `useFetch`'s generic chain in
 // place, that work-around is no longer load-bearing.
 
-import { useNuxtQuery } from '@harlanzw/nuxt-use-query/query'
+import { useNuxtQuery } from '@harlan-zw/nuxt-use-query/query'
 import { registerEndpoint } from '@nuxt/test-utils/runtime'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 

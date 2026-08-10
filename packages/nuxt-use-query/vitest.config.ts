@@ -7,15 +7,15 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 const r = (path: string) => resolve(rootDir, path)
 
 const packageAliases = {
-  '@harlanzw/nuxt-use-query/async-query': r('src/runtime/composables/useNuxtAsyncQuery.ts'),
-  '@harlanzw/nuxt-use-query/cache': r('src/runtime/cache.ts'),
-  '@harlanzw/nuxt-use-query/mutation': r('src/runtime/composables/useNuxtMutation.ts'),
-  '@harlanzw/nuxt-use-query/query': r('src/runtime/composables/useNuxtQuery.ts'),
-  '@harlanzw/nuxt-use-query/query-cache': r('src/runtime/composables/useQueryCache.ts'),
-  '@harlanzw/nuxt-use-query/rpc': r('src/runtime/rpc/index.ts'),
-  '@harlanzw/nuxt-use-query/subscription': r('src/runtime/composables/useNuxtSubscription.ts'),
-  '@harlanzw/nuxt-use-query/websocket': r('src/runtime/websocket.ts'),
-  '@harlanzw/nuxt-use-query/telemetry': r('src/runtime/telemetry.ts'),
+  '@harlan-zw/nuxt-use-query/async-query': r('src/runtime/composables/useNuxtAsyncQuery.ts'),
+  '@harlan-zw/nuxt-use-query/cache': r('src/runtime/cache.ts'),
+  '@harlan-zw/nuxt-use-query/mutation': r('src/runtime/composables/useNuxtMutation.ts'),
+  '@harlan-zw/nuxt-use-query/query': r('src/runtime/composables/useNuxtQuery.ts'),
+  '@harlan-zw/nuxt-use-query/query-cache': r('src/runtime/composables/useQueryCache.ts'),
+  '@harlan-zw/nuxt-use-query/rpc': r('src/runtime/rpc/index.ts'),
+  '@harlan-zw/nuxt-use-query/subscription': r('src/runtime/composables/useNuxtSubscription.ts'),
+  '@harlan-zw/nuxt-use-query/websocket': r('src/runtime/websocket.ts'),
+  '@harlan-zw/nuxt-use-query/telemetry': r('src/runtime/telemetry.ts'),
 }
 
 const nuxtProject = defineVitestConfig({

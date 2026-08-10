@@ -1,4 +1,4 @@
-# `@harlanzw/nuxt-dx`
+# `@harlan-zw/nuxt-dx`
 
 Experimental, development-only diagnostics for Nuxt.
 
@@ -7,12 +7,12 @@ The initial feature is a client error overlay that collects Vue warnings, Vue er
 The module is a strict production no-op. It only registers its client plugin when Nuxt runs in development mode.
 
 ```bash
-pnpm add -D @harlanzw/nuxt-dx
+pnpm add -D @harlan-zw/nuxt-dx
 ```
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['@harlanzw/nuxt-dx'],
+  modules: ['@harlan-zw/nuxt-dx'],
   nuxtDx: {
     position: 'bottom-right',
   },

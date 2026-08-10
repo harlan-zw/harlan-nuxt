@@ -1,16 +1,16 @@
-# `@harlanzw/nuxt-github-sponsors`
+# `@harlan-zw/nuxt-github-sponsors`
 
 Experimental GitHub Sponsors data for Nuxt sites.
 
 The module registers a public route and `useGitHubSponsors`. The server core fetches all active sponsorship pages, parses GitHub responses, filters private sponsors, projects a minimal public DTO, applies explicit profile overrides, and assigns configurable tiers. Only successful upstream results receive the one-day SWR cache.
 
 ```bash
-pnpm add @harlanzw/nuxt-github-sponsors
+pnpm add @harlan-zw/nuxt-github-sponsors
 ```
 
 ```ts
 export default defineNuxtConfig({
-  modules: ['@harlanzw/nuxt-github-sponsors'],
+  modules: ['@harlan-zw/nuxt-github-sponsors'],
   githubSponsors: {
     login: 'your-github-login',
     mode: 'runtime', // or 'prerender'

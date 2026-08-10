@@ -113,7 +113,7 @@ async function fetchActiveGitHubSponsors(input: {
         'accept': 'application/vnd.github+json',
         'authorization': `Bearer ${input.token}`,
         'content-type': 'application/json',
-        'user-agent': input.userAgent ?? '@harlanzw/nuxt-github-sponsors',
+        'user-agent': input.userAgent ?? '@harlan-zw/nuxt-github-sponsors',
       },
       method: 'POST',
       signal: AbortSignal.timeout(input.timeoutMs ?? 10_000),

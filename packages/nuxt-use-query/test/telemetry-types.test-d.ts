@@ -1,6 +1,6 @@
 import type { NitroApp } from 'nitropack/types'
 import type { NuxtApp } from 'nuxt/app'
-import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from '@harlanzw/nuxt-use-query/telemetry'
+import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from '@harlan-zw/nuxt-use-query/telemetry'
 import { describe, expectTypeOf, it } from 'vitest'
 
 describe('telemetry hook types', () => {

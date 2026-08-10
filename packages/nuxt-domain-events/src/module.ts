@@ -8,7 +8,7 @@ export type { ModuleOptions } from './types'
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
-    name: '@harlanzw/nuxt-domain-events',
+    name: '@harlan-zw/nuxt-domain-events',
     configKey: 'domainEvents',
   },
   defaults: {

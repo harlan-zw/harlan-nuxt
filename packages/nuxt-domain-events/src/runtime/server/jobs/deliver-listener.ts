@@ -1,4 +1,4 @@
-import { defineJob } from '@harlanzw/nuxt-cf-jobs/server'
+import { defineJob } from '@harlan-zw/nuxt-cf-jobs/server'
 import { createQueuedEventListenerContext } from '#domain-events/context'
 import * as generatedEventRuntime from '#domain-events/server'
 import { isPermanentQueuedDeliveryError, safeParseEventListenerEnvelope } from '../runtime'

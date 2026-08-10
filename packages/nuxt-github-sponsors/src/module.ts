@@ -16,7 +16,7 @@ const DEFAULT_TIERS: SponsorTier[] = [
 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
-    name: '@harlanzw/nuxt-github-sponsors',
+    name: '@harlan-zw/nuxt-github-sponsors',
     configKey: 'githubSponsors',
   },
   defaults: {

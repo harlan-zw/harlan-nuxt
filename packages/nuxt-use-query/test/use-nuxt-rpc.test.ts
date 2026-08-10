@@ -34,7 +34,7 @@ const {
   toHumanNuxtRpcError,
   useNuxtRpc,
   useNuxtRpcQuery,
-} = await import('@harlanzw/nuxt-use-query/rpc')
+} = await import('@harlan-zw/nuxt-use-query/rpc')
 const {
   serializeCanonicalJson,
   serializeNuxtRpcQueryKey,

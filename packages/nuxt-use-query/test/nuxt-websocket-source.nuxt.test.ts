@@ -2,8 +2,8 @@
 // mocks vueuse and calls the factory directly; this proves the reconnect →
 // `ctx.resync` → `onResync` and frame → `onMessage` chain end-to-end).
 
-import { useNuxtSubscription } from '@harlanzw/nuxt-use-query/subscription'
-import { nuxtWebSocketSource } from '@harlanzw/nuxt-use-query/websocket'
+import { useNuxtSubscription } from '@harlan-zw/nuxt-use-query/subscription'
+import { nuxtWebSocketSource } from '@harlan-zw/nuxt-use-query/websocket'
 import { describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 

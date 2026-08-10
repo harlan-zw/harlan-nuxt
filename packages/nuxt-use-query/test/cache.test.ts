@@ -3,7 +3,7 @@ import {
   isQueryStale,
   markQueryFetched,
   retainQuery,
-} from '@harlanzw/nuxt-use-query/cache'
+} from '@harlan-zw/nuxt-use-query/cache'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Pure cache helpers. No Nuxt runtime, no stubs — these are plain functions
