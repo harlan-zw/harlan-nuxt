@@ -1,0 +1,144 @@
+{
+  "name": "nuxt-cf-jobs",
+  "type": "module",
+  "version": "0.15.1",
+  "packageManager": "pnpm@11.2.1",
+  "description": "Nuxt module for typed Cloudflare queue jobs.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "contributors": [
+    "Harlan Wilton <harlan@harlanzw.com>"
+  ],
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
+    },
+    "./app": {
+      "types": "./dist/runtime/server/app.d.ts",
+      "import": "./dist/runtime/server/app.js",
+      "default": "./dist/runtime/server/app.js"
+    },
+    "./runtime-config": {
+      "types": "./dist/runtime/server/runtime-config.d.ts",
+      "import": "./dist/runtime/server/runtime-config.js",
+      "default": "./dist/runtime/server/runtime-config.js"
+    },
+    "./cloudflare": {
+      "types": "./dist/runtime/server/cloudflare.d.ts",
+      "import": "./dist/runtime/server/cloudflare.js",
+      "default": "./dist/runtime/server/cloudflare.js"
+    },
+    "./d1": {
+      "types": "./dist/runtime/server/d1.d.ts",
+      "import": "./dist/runtime/server/d1.js",
+      "default": "./dist/runtime/server/d1.js"
+    },
+    "./outbox": {
+      "types": "./dist/runtime/server/outbox-public.d.ts",
+      "import": "./dist/runtime/server/outbox-public.js",
+      "default": "./dist/runtime/server/outbox-public.js"
+    },
+    "./schema": {
+      "types": "./dist/runtime/server/schema.d.ts",
+      "import": "./dist/runtime/server/schema.js",
+      "default": "./dist/runtime/server/schema.js"
+    },
+    "./testing": {
+      "types": "./dist/runtime/server/testing.d.ts",
+      "import": "./dist/runtime/server/testing.js",
+      "default": "./dist/runtime/server/testing.js"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "server": [
+        "dist/runtime/server/index.d.ts"
+      ],
+      "app": [
+        "dist/runtime/server/app.d.ts"
+      ],
+      "runtime-config": [
+        "dist/runtime/server/runtime-config.d.ts"
+      ],
+      "cloudflare": [
+        "dist/runtime/server/cloudflare.d.ts"
+      ],
+      "d1": [
+        "dist/runtime/server/d1.d.ts"
+      ],
+      "outbox": [
+        "dist/runtime/server/outbox-public.d.ts"
+      ],
+      "schema": [
+        "dist/runtime/server/schema.d.ts"
+      ],
+      "testing": [
+        "dist/runtime/server/testing.d.ts"
+      ]
+    }
+  },
+  "bin": {
+    "cf-jobs": "dist/cli/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "nuxt-module-build build && nuxt-module-build prepare",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "test": "vitest run --project unit",
+    "test:unit": "vitest run --project unit",
+    "test:nitro": "vitest run --project nitro",
+    "test:types": "nuxt prepare tests/fixtures/nuxt-demo && vue-tsc --noEmit -p tests/fixtures/nuxt-demo/tsconfig.json",
+    "test:e2e": "CF_JOBS_E2E=1 vitest run --no-file-parallelism tests/wrangler-dev.e2e.test.ts tests/wrangler-d1.e2e.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tests/tsconfig.json && tsc --noEmit -p tests/cloudflare-tsconfig.json && pnpm test:types",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "peerDependencies": {
+    "nuxt": ">=3.0.0 <5.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:nuxt",
+    "@nuxt/schema": "catalog:nuxt",
+    "citty": "catalog:",
+    "drizzle-orm": "catalog:",
+    "magicast": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@nuxt/module-builder": "catalog:nuxt",
+    "@nuxt/test-utils": "catalog:",
+    "@types/node": "catalog:dev-build",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-harlanzw": "catalog:",
+    "eslint-plugin-vue": "catalog:",
+    "h3": "catalog:",
+    "happy-dom": "catalog:dev-test",
+    "nitropack": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:dev-build",
+    "unbuild": "catalog:",
+    "vitest": "catalog:dev-test",
+    "vue": "catalog:vue",
+    "vue-tsc": "catalog:dev-build",
+    "wrangler": "catalog:"
+  }
+}

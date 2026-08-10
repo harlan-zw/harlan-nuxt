@@ -1,0 +1,19 @@
+name = "nuxt-cf-jobs-d1-e2e"
+main = "./wrangler-d1-worker.ts"
+compatibility_date = "2026-07-28"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nuxt-cf-jobs-d1-e2e"
+database_id = "local-nuxt-cf-jobs-d1-e2e"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "nuxt-cf-jobs-d1-e2e"
+
+[[queues.consumers]]
+queue = "nuxt-cf-jobs-d1-e2e"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 1
+retry_delay = 1

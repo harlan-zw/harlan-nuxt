@@ -1,0 +1,26 @@
+// Typechecks the test suite. The root `tsconfig.json` is `files: []` + project
+// references, so nothing here was ever type-verified — which meant a
+// `@ts-expect-error` in a test silently passed whether or not the error existed,
+// and a regression in the PUBLIC type surface (`JobMetricsEvent`, `CfJobsLogEvent`)
+// only showed up downstream. Mirrors the vitest `#cf-jobs/*` aliases.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "paths": {
+      "#cf-jobs/server": ["../src/runtime/server/index.ts"],
+      "#cf-jobs/cloudflare": ["../src/runtime/server/cloudflare.ts"],
+      "#cf-jobs/testing": ["../src/runtime/server/testing.ts"],
+      "#cf-jobs/app": ["../src/runtime/server/app.ts"]
+    },
+    "resolveJsonModule": true,
+    "types": ["vitest/globals", "node"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["./types.test-d.ts"]
+}

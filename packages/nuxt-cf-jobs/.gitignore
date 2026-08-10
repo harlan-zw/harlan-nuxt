@@ -1,0 +1,15 @@
+node_modules
+dist
+.nuxt
+.output
+.data
+.wrangler
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.tsbuildinfo
+.idea
+eslint-typegen.d.ts

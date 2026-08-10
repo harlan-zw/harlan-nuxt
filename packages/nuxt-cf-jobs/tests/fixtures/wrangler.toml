@@ -1,0 +1,14 @@
+name = "nuxt-cf-jobs-e2e"
+main = "./wrangler-worker.ts"
+compatibility_date = "2026-05-25"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "nuxt-cf-jobs-e2e"
+
+[[queues.consumers]]
+queue = "nuxt-cf-jobs-e2e"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 1
+retry_delay = 1
