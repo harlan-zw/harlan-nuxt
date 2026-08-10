@@ -1,0 +1,152 @@
+{
+  "name": "nuxt-use-query",
+  "type": "module",
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.2.1",
+  "description": "Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "contributors": [
+    "Harlan Wilton <harlan@harlanzw.com>"
+  ],
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/nuxt-use-query",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/nuxt-use-query.git"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/nuxt-use-query/issues"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs"
+    },
+    "./cache": {
+      "types": "./dist/runtime/cache.d.ts",
+      "import": "./dist/runtime/cache.js"
+    },
+    "./async-query": {
+      "types": "./dist/runtime/composables/useNuxtAsyncQuery.d.ts",
+      "import": "./dist/runtime/composables/useNuxtAsyncQuery.js"
+    },
+    "./mutation": {
+      "types": "./dist/runtime/composables/useNuxtMutation.d.ts",
+      "import": "./dist/runtime/composables/useNuxtMutation.js"
+    },
+    "./query": {
+      "types": "./dist/runtime/composables/useNuxtQuery.d.ts",
+      "import": "./dist/runtime/composables/useNuxtQuery.js"
+    },
+    "./query-cache": {
+      "types": "./dist/runtime/composables/useQueryCache.d.ts",
+      "import": "./dist/runtime/composables/useQueryCache.js"
+    },
+    "./rpc": {
+      "types": "./dist/runtime/rpc/index.d.ts",
+      "import": "./dist/runtime/rpc/index.js"
+    },
+    "./subscription": {
+      "types": "./dist/runtime/composables/useNuxtSubscription.d.ts",
+      "import": "./dist/runtime/composables/useNuxtSubscription.js"
+    },
+    "./websocket": {
+      "types": "./dist/runtime/websocket.d.ts",
+      "import": "./dist/runtime/websocket.js"
+    },
+    "./telemetry": {
+      "types": "./dist/runtime/telemetry.d.ts",
+      "import": "./dist/runtime/telemetry.js"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "async-query": [
+        "./dist/runtime/composables/useNuxtAsyncQuery.d.ts"
+      ],
+      "cache": [
+        "./dist/runtime/cache.d.ts"
+      ],
+      "mutation": [
+        "./dist/runtime/composables/useNuxtMutation.d.ts"
+      ],
+      "query": [
+        "./dist/runtime/composables/useNuxtQuery.d.ts"
+      ],
+      "query-cache": [
+        "./dist/runtime/composables/useQueryCache.d.ts"
+      ],
+      "rpc": [
+        "./dist/runtime/rpc/index.d.ts"
+      ],
+      "subscription": [
+        "./dist/runtime/composables/useNuxtSubscription.d.ts"
+      ],
+      "websocket": [
+        "./dist/runtime/websocket.d.ts"
+      ],
+      "telemetry": [
+        "./dist/runtime/telemetry.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
+    "dev": "nuxt dev playground",
+    "dev:build": "nuxt build playground",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build && nuxt prepare playground && nuxt prepare test/fixture",
+    "prepare:fixtures": "nuxt prepare playground && nuxt prepare test/fixture",
+    "release": "pnpm build && bumpp -x \"npx changelogen --output=CHANGELOG.md\"",
+    "prepack": "pnpm run build",
+    "test": "pnpm run prepare:fixtures && vitest",
+    "test:unit": "vitest run --project=unit",
+    "test:e2e": "pnpm run prepare:fixtures && vitest run --project=e2e",
+    "typecheck": "nuxt typecheck",
+    "test:attw": "attw --pack"
+  },
+  "peerDependencies": {
+    "nuxt": ">=3.0.0 <5.0.0",
+    "zod": "^4.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:nuxt",
+    "@vueuse/core": "catalog:",
+    "consola": "catalog:",
+    "nitropack": "catalog:",
+    "oxc-parser": "catalog:",
+    "oxc-walker": "catalog:",
+    "pathe": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:dev-lint",
+    "@arethetypeswrong/cli": "catalog:dev-build",
+    "@nuxt/module-builder": "catalog:nuxt",
+    "@nuxt/test-utils": "catalog:dev-test",
+    "@vitest/coverage-v8": "catalog:",
+    "@vue/test-utils": "catalog:dev-test",
+    "bumpp": "catalog:",
+    "eslint": "catalog:dev-lint",
+    "eslint-plugin-harlanzw": "catalog:",
+    "happy-dom": "catalog:dev-test",
+    "nuxt": "catalog:nuxt",
+    "typescript": "catalog:dev-build",
+    "vitest": "catalog:dev-test",
+    "vue": "catalog:vue",
+    "vue-router": "catalog:vue",
+    "vue-tsc": "catalog:dev-build",
+    "zod": "catalog:"
+  }
+}

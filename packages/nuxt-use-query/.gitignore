@@ -1,0 +1,38 @@
+# Dependencies
+node_modules
+
+# Logs
+*.log*
+
+# Temp directories
+.temp
+.tmp
+.cache
+
+# Generated dirs
+dist
+
+# Nuxt
+.nuxt
+.output
+playground/.nuxt
+playground/.output
+test/fixture/.nuxt
+test/fixture/.output
+
+# Env
+.env
+
+# Testing
+reports
+coverage
+*.lcov
+.nyc_output
+
+# Editors
+.vscode
+*.iml
+.idea
+
+# OS
+.DS_Store
