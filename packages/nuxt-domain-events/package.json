@@ -1,0 +1,37 @@
+{
+  "name": "@nuxtseo/event-listeners",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Lazy, layer-aware functional events and listeners for Nuxt server runtimes.",
+  "exports": {
+    ".": "./src/module.ts",
+    "./server": "./src/runtime/server/index.ts",
+    "./cf-jobs": "./src/runtime/server/adapters/cf-jobs.ts",
+    "./build": "./src/build/index.ts"
+  },
+  "main": "./src/module.ts",
+  "scripts": {
+    "prepare": "nuxt prepare",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json"
+  },
+  "peerDependencies": {
+    "nuxt-cf-jobs": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "nuxt-cf-jobs": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "oxc-parser": "catalog:"
+  },
+  "devDependencies": {
+    "@nuxt/kit": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}
