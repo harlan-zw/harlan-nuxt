@@ -2,6 +2,7 @@ import type { ModuleOptions } from './types'
 import { resolve } from 'node:path'
 import { addServerImports, createResolver, defineNuxtModule } from '@nuxt/kit'
 import { installEventRegistryTemplates } from './build/registry'
+import { resolveRuntimeFile } from './build/runtime-file'
 
 export { generateEventRegistryContracts, generateEventRegistryTemplate, generateEventRegistryTypes } from './build/registry'
 export type { ModuleOptions } from './types'
@@ -20,7 +21,7 @@ export default defineNuxtModule<ModuleOptions>({
     listenersIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
     scanLayers: true,
   },
-  setup(options, nuxt) {
+  async setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
     const cfJobsQueues = Object.keys((nuxt.options as unknown as {
       cfJobs?: { queues?: Record<string, unknown> }
@@ -51,11 +52,12 @@ export default defineNuxtModule<ModuleOptions>({
 
     if (options.queuedDeliveryContext) {
       const deliveryContextPath = resolve(nuxt.options.rootDir, options.queuedDeliveryContext)
+      const deliveryJobPath = await resolveRuntimeFile(resolver, './runtime/server/jobs/deliver-listener')
       nuxt.options.alias['#domain-events/context'] = deliveryContextPath
       nitro.alias['#domain-events/context'] = deliveryContextPath
       nuxt.hook('cf-jobs:registry:sources' as never, ((context: { sources: Array<{ file: string, name?: string }> }) => {
         context.sources.push({
-          file: resolver.resolve('./runtime/server/jobs/deliver-listener.ts'),
+          file: deliveryJobPath,
           name: 'events/deliver-listener',
         })
       }) as never)
