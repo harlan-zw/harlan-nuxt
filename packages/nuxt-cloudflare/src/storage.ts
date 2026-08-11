@@ -30,7 +30,7 @@ export function withDefaultKvExpiration<Options, Instance>(
     setItem(key: string, value: string, transactionOptions: TransactionOptions = {}) {
       const requestedTtl = Number(transactionOptions.ttl)
       const ttl = Number.isFinite(requestedTtl) && requestedTtl > 0
-        ? requestedTtl
+        ? Math.max(requestedTtl, 60)
         : parsedDefaultTtl
       return setItem(key, value, { ...transactionOptions, ttl })
     },

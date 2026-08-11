@@ -28,6 +28,48 @@ describe('applyCloudflareDefaults', () => {
     })
   })
 
+  it.each([
+    {
+      name: 'Nuxt SEO',
+      config: {
+        ai: { binding: 'AI' },
+        browser: { binding: 'BROWSER' },
+        cache: { enabled: false },
+        compatibility_date: '2026-08-11',
+        preview_urls: false,
+        send_email: [{ name: 'EMAIL', allowed_sender_addresses: ['noreply@notify.nuxtseo.com'] }],
+        vectorize: [{ binding: 'VECTORIZE', index_name: 'nuxtseo' }],
+        workers_dev: false,
+      },
+    },
+    {
+      name: 'gscdump',
+      config: {
+        cache: { enabled: true },
+        compatibility_date: '2026-08-11',
+        preview_urls: false,
+        send_email: [{ name: 'SEND_EMAIL', allowed_sender_addresses: ['health@notify.gscdump.com'] }],
+        workers_dev: false,
+      },
+    },
+  ])('normalizes the $name deployment baseline without product policy warnings', ({ config }) => {
+    const effective = applyCloudflareDefaults(config)
+    const diagnostics = diagnoseWranglerConfig(effective, {
+      generated: true,
+      now: new Date('2026-08-11T00:00:00Z'),
+    })
+
+    expect(effective.cache?.cross_version_cache).toBe(false)
+    expect(diagnostics).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'email-binding-unrestricted' }),
+      expect.objectContaining({ code: 'preview-urls-public' }),
+      expect.objectContaining({ code: 'remote-binding-not-enabled' }),
+      expect.objectContaining({ code: 'workers-cache-policy-implicit' }),
+      expect.objectContaining({ code: 'workers-dev-enabled' }),
+      expect.objectContaining({ code: 'workers-dev-implicit' }),
+    ]))
+  })
+
   it('preserves an explicit source-map opt-out', () => {
     expect(applyCloudflareDefaults({ upload_source_maps: false })).toMatchObject({ upload_source_maps: false })
   })
@@ -43,7 +85,7 @@ describe('applyCloudflareDefaults', () => {
     }).cache).toEqual({ enabled: true, cross_version_cache: false })
   })
 
-  it('makes version isolation explicit for an enabled Workers Cache', () => {
+  it('makes an authored Workers Caching deployment scope explicit', () => {
     expect(applyCloudflareDefaults({
       cache: { enabled: true },
     }).cache).toEqual({ enabled: true, cross_version_cache: false })
@@ -94,6 +136,49 @@ describe('applyCloudflareDefaults', () => {
       .toBeUndefined()
     expect(applyCloudflareDefaults({ ai: { binding: 'CF_VERSION_METADATA' } }).version_metadata)
       .toBeUndefined()
+  })
+
+  it.each([
+    { send_email: [{ name: 'CF_VERSION_METADATA' }] },
+    { ratelimits: [{ name: 'CF_VERSION_METADATA' }] },
+    { worker_loaders: [{ binding: 'CF_VERSION_METADATA' }] },
+    { vpc_services: [{ binding: 'CF_VERSION_METADATA' }] },
+    { vpc_networks: [{ binding: 'CF_VERSION_METADATA' }] },
+  ])('does not collide with current Cloudflare product bindings: %j', (binding) => {
+    expect(applyCloudflareDefaults(binding).version_metadata).toBeUndefined()
+  })
+
+  it('warns when local development cannot faithfully simulate a binding', () => {
+    const diagnostics = diagnoseWranglerConfig({
+      ai: { binding: 'AI' },
+      browser: { binding: 'BROWSER' },
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      images: { binding: 'IMAGES' },
+      mtls_certificates: [{ binding: 'MTLS', certificate_id: 'certificate' }],
+      observability: { enabled: true },
+      vectorize: [{ binding: 'VECTORIZE', index_name: 'index' }],
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') })
+
+    expect(diagnostics.filter(diagnostic => diagnostic.code === 'remote-binding-not-enabled'))
+      .toHaveLength(5)
+  })
+
+  it('does not apply local binding advice to a generated deployment config', () => {
+    const diagnostics = diagnoseWranglerConfig({
+      ai: { binding: 'AI' },
+      browser: { binding: 'BROWSER' },
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      vectorize: [{ binding: 'VECTORIZE', index_name: 'index' }],
+      workers_dev: false,
+    }, { generated: true, now: new Date('2026-08-11T00:00:00Z') })
+
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({
+      code: 'remote-binding-not-enabled',
+    }))
   })
 
   it.each(['wasm_modules', 'text_blobs', 'data_blobs'])(
@@ -149,7 +234,7 @@ describe('diagnoseWranglerConfig', () => {
       }))
   })
 
-  it('rejects blanket Worker-first asset routing', () => {
+  it('warns about blanket Worker-first asset routing', () => {
     const diagnostics = diagnoseWranglerConfig({
       compatibility_date: '2026-08-11',
       compatibility_flags: ['nodejs_compat'],
@@ -158,7 +243,7 @@ describe('diagnoseWranglerConfig', () => {
     }, { now: new Date('2026-08-11T00:00:00Z') })
 
     expect(diagnostics).toContainEqual(expect.objectContaining({
-      _tag: 'error',
+      _tag: 'warning',
       code: 'assets-worker-first',
     }))
   })
@@ -331,7 +416,7 @@ describe('diagnoseWranglerConfig', () => {
     expect(applyCloudflareDefaults({ preview_urls: true }).preview_urls).toBe(true)
   })
 
-  it('surfaces permanent deletion risk for a terminal DLQ consumer', () => {
+  it('does not require a second DLQ for a consumer draining a DLQ', () => {
     const diagnostics = diagnoseWranglerConfig({
       compatibility_date: '2026-08-11',
       compatibility_flags: ['nodejs_compat'],
@@ -345,7 +430,7 @@ describe('diagnoseWranglerConfig', () => {
       workers_dev: false,
     }, { now: new Date('2026-08-11T00:00:00Z') })
 
-    expect(diagnostics).toContainEqual(expect.objectContaining({
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({
       code: 'queue-dlq-missing',
       configPath: 'queues.consumers.1.dead_letter_queue',
     }))
@@ -358,6 +443,18 @@ describe('diagnoseWranglerConfig', () => {
       durable_objects: { bindings: [{ name: 'ROOM', class_name: 'Room' }] },
       exports: { Room: { type: 'durable-object', storage: 'sqlite' } },
       migrations: [{ tag: 'v1', new_sqlite_classes: ['Room'] }],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({ _tag: 'error', code: 'durable-object-lifecycle-mixed' }))
+  })
+
+  it('rejects declarative Durable Object exports beside an empty legacy migration list', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      exports: { Room: { type: 'durable-object', storage: 'sqlite' } },
+      migrations: [],
       observability: { enabled: true },
       workers_dev: false,
     }, { now: new Date('2026-08-11T00:00:00Z') }))
@@ -377,7 +474,7 @@ describe('diagnoseWranglerConfig', () => {
     expect(diagnostics).not.toContainEqual(expect.objectContaining({ _tag: 'error' }))
   })
 
-  it.each(['deleted', 'renamed', 'transferred', 'expecting-transfer'])(
+  it.each(['deleted', 'renamed', 'transferred'])(
     'rejects a binding to an inactive declarative Durable Object state: %s',
     (state) => {
       expect(diagnoseWranglerConfig({
@@ -394,6 +491,100 @@ describe('diagnoseWranglerConfig', () => {
         }))
     },
   )
+
+  it('allows a binding to a live Durable Object expecting transfer', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      durable_objects: { bindings: [{ name: 'ROOM', class_name: 'Room' }] },
+      exports: {
+        Room: {
+          type: 'durable-object',
+          state: 'expecting-transfer',
+          storage: 'sqlite',
+          transfer_from: 'room-source',
+        },
+      },
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .not
+      .toContainEqual(expect.objectContaining({ code: 'durable-object-binding-inactive' }))
+  })
+
+  it.each([
+    { category: 'containers', config: { containers: [{ class_name: 'SiteContainer', image: './Dockerfile' }] } },
+    { category: 'd1_databases', config: { d1_databases: [{ binding: 'DB', database_id: 'database' }] } },
+    { category: 'kv_namespaces', config: { kv_namespaces: [{ binding: 'CACHE', id: 'root-cache' }] } },
+    { category: 'queues', config: { queues: { consumers: [{ queue: 'JOBS' }] } } },
+    { category: 'tail_consumers', config: { tail_consumers: [{ service: 'tail-worker' }] } },
+  ])('warns when a named environment omits non-inherited $category config', ({ category, config }) => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      env: { production: {} },
+      ...config,
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'environment-binding-missing',
+        configPath: `env.production.${category}`,
+      }))
+  })
+
+  it('rejects a Container without its matching SQLite Durable Object', () => {
+    const base = {
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      containers: [{ class_name: 'SiteContainer', image: './Dockerfile' }],
+      observability: { enabled: true },
+      workers_dev: false,
+    }
+
+    expect(diagnoseWranglerConfig(base, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({ code: 'container-durable-object-binding-missing' }))
+    expect(diagnoseWranglerConfig({
+      ...base,
+      durable_objects: { bindings: [{ name: 'CONTAINER', class_name: 'SiteContainer' }] },
+      migrations: [{ tag: 'v1', new_classes: ['SiteContainer'] }],
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({ code: 'container-durable-object-not-sqlite' }))
+  })
+
+  it('warns when an email binding has no sender or destination restriction', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      send_email: [{ name: 'EMAIL' }],
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({ code: 'email-binding-unrestricted' }))
+  })
+
+  it('surfaces deprecated and unsafe product configuration', () => {
+    const diagnostics = diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      containers: [{ class_name: 'Container', image: './Dockerfile', instance_type: 'dev' }],
+      data_blobs: { DATA: './data.bin' },
+      durable_objects: { bindings: [{ name: 'CONTAINER', class_name: 'Container' }] },
+      exports: { Container: { type: 'durable-object', storage: 'sqlite' } },
+      observability: { enabled: true },
+      pipelines: [{ binding: 'PIPELINE', pipeline: 'legacy-name' }],
+      unsafe_hello_world: [{ binding: 'UNSAFE' }],
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') })
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'container-instance-type-deprecated' }),
+      expect.objectContaining({ code: 'legacy-module-binding' }),
+      expect.objectContaining({ code: 'pipeline-binding-deprecated' }),
+      expect.objectContaining({ _tag: 'error', code: 'unsafe-hello-world-binding' }),
+    ]))
+  })
 
   it('inherits root declarative Durable Object exports into named environments', () => {
     const diagnostics = diagnoseWranglerConfig({

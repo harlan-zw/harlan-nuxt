@@ -3,6 +3,7 @@ export type HtmlCacheRouteRuleViolation
     | { _tag: 'html-cache-route-rule', severity: 'error' | 'warning', route: string, configPath: string }
 
 const NON_HTML_ROUTE_PREFIXES = [
+  '/.well-known',
   '/api',
   '/_ipx',
   '/_nuxt',
@@ -10,9 +11,11 @@ const NON_HTML_ROUTE_PREFIXES = [
   '/assets',
   '/fonts',
   '/images',
+  '/mcp',
 ] as const
 
 const NON_HTML_EXTENSION_RE = /\.(?:avif|css|csv|gif|ico|jpe?g|js|json|map|md|mjs|pdf|png|svg|txt|webmanifest|webp|woff2?|xml)(?:$|[?*])/i
+const HTML_CONTENT_TYPE_RE = /^(?:application\/xhtml\+xml|text\/html)(?:\s*;|$)/i
 const CACHE_HEADER_NAMES = new Set([
   'cache-control',
   'cdn-cache-control',
@@ -25,22 +28,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function isHtmlCapableRoute(route: string): boolean {
-  if (NON_HTML_EXTENSION_RE.test(route))
+function findHeader(headers: Record<string, unknown>, name: string): unknown {
+  const entry = Object.entries(headers).find(([header]) => header.toLowerCase() === name)
+  return entry?.[1]
+}
+
+function hasExplicitNonHtmlContentType(value: Record<string, unknown>): boolean {
+  if (!isRecord(value.headers))
+    return false
+  const contentType = findHeader(value.headers, 'content-type')
+  return typeof contentType === 'string' && !HTML_CONTENT_TYPE_RE.test(contentType)
+}
+
+function hasHtmlContentType(headers: Record<string, unknown> | undefined): boolean {
+  if (!headers)
+    return false
+  const contentType = findHeader(headers, 'content-type')
+  return typeof contentType === 'string' && HTML_CONTENT_TYPE_RE.test(contentType)
+}
+
+function isHtmlCapableRoute(route: string, value: Record<string, unknown>): boolean {
+  if (NON_HTML_EXTENSION_RE.test(route) || hasExplicitNonHtmlContentType(value))
     return false
   return !NON_HTML_ROUTE_PREFIXES.some(prefix => route === prefix || route.startsWith(`${prefix}/`))
 }
 
 function isPrivateCachePolicy(value: unknown): boolean {
   return typeof value === 'string' && PRIVATE_CACHE_DIRECTIVE_RE.test(value)
-}
-
-function hasHtmlContentType(headers: Record<string, unknown> | undefined): boolean {
-  if (!headers)
-    return false
-  const contentType = Object.entries(headers)
-    .find(([name]) => name.toLowerCase() === 'content-type')?.[1]
-  return typeof contentType === 'string' && /^text\/html(?:;|$)/i.test(contentType)
 }
 
 function resolveViolationSeverity(route: string, value: Record<string, unknown>): 'error' | 'warning' {
@@ -57,7 +71,7 @@ export function findHtmlCacheRouteRuleViolations(
     return []
 
   return Object.entries(routeRules).flatMap(([route, value]) => {
-    if (!isHtmlCapableRoute(route) || !isRecord(value))
+    if (!isRecord(value) || !isHtmlCapableRoute(route, value))
       return []
 
     const severity = resolveViolationSeverity(route, value)

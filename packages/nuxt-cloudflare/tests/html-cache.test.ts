@@ -29,15 +29,25 @@ describe('html cache route rules', () => {
     expect(formatHtmlCacheRouteRuleViolations(violations)).toContain('routeRules./docs/**.headers.Cloudflare-CDN-Cache-Control')
   })
 
-  it('allows cache rules on API and static asset routes', () => {
+  it('allows cache rules on API, generated image, and static asset routes', () => {
     expect(findHtmlCacheRouteRuleViolations({
       '/api/**': { cache: { maxAge: 60 } },
-      '/_og/d/**': { headers: { 'cache-control': 'public, immutable' } },
-      '/_og/r/**': { headers: { 'cache-control': 'public, immutable' } },
-      '/_og/s/**': { headers: { 'cache-control': 'public, immutable' } },
+      '/mcp/server-card': { headers: { 'cache-control': 'public, max-age=3600' } },
       '/_nuxt/**': { headers: { 'cache-control': 'public, immutable' } },
+      '/_og/d/**': { headers: { 'cache-control': 'public, max-age=3600' } },
       '/fonts/**': { headers: { 'cache-control': 'public, immutable' } },
       '/sitemap.xml': { headers: { 'cache-control': 'public, max-age=60' } },
+    })).toEqual([])
+  })
+
+  it('allows a route with an explicit non-HTML content type', () => {
+    expect(findHtmlCacheRouteRuleViolations({
+      '/generated/**': {
+        headers: {
+          'cache-control': 'public, max-age=3600',
+          'content-type': 'image/png',
+        },
+      },
     })).toEqual([])
   })
 

@@ -8,7 +8,7 @@ trustPolicyIgnoreAfter: 262800
 catalog:
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
-  '@cloudflare/workers-types': ^5.20260809.1
+  '@cloudflare/workers-types': ^5.20260811.1
   '@nuxt/kit': ^4.5.2
   '@nuxt/module-builder': ^1.0.2
   '@nuxt/schema': ^4.5.2
@@ -39,7 +39,7 @@ catalog:
   vue: ^3.5.40
   vue-router: ^5.2.0
   vue-tsc: ^3.3.9
-  wrangler: ^4.120.0
+  wrangler: ^4.120.1
   yaml: ^2.9.0
   zod: ^4.4.3
 
@@ -56,3 +56,8 @@ allowBuilds:
 peerDependencyRules:
   allowedVersions:
     vue-sfc-transformer: '>=0.1.1 <0.3.0'
+
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260811.1'
+  - miniflare@5.20260804.0-alpha
+  - wrangler@4.120.1

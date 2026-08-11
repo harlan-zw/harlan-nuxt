@@ -34,7 +34,7 @@ describe('nuxt integration', () => {
     await nuxt.close()
   })
 
-  it('warns for ambiguous cache rules and blocks prerendered HTML cache rules', async () => {
+  it('warns for ambiguous cache rules and blocks explicit HTML cache rules', async () => {
     const nuxt = await loadNuxt({
       cwd: import.meta.dirname,
       dev: true,

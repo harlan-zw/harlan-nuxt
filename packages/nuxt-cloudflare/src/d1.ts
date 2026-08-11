@@ -43,13 +43,10 @@ export type D1RetryErrorKind
 const REQUEST_D1_SESSIONS = Symbol.for('@harlan-zw/nuxt-cloudflare:d1-sessions')
 const TRANSIENT_D1_SIGNALS = [
   'Network connection lost',
-  'operation was aborted',
-  'overloaded',
-  'Requests queued for too long',
-  'exceeded its CPU time limit',
+  'D1 DB reset because its code was updated',
+  'Internal error while starting up D1 DB storage caused object to be reset',
+  'Internal error in D1 DB storage caused object to be reset',
   'storage caused object to be reset',
-  'reset because its code was updated',
-  'Internal error in D1',
   'cannot resolve d1 db due to transient issue on remote node',
 ] as const
 
