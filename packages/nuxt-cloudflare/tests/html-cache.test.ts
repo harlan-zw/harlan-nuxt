@@ -37,6 +37,18 @@ describe('html cache route rules', () => {
       '/sitemap.xml': { headers: { 'cache-control': 'public, max-age=60' } },
     })).toEqual([])
   })
+
+  it('allows an explicit private HTML cache policy', () => {
+    expect(findHtmlCacheRouteRuleViolations({
+      '/auth/**': {
+        cache: false,
+        headers: {
+          'cache-control': 'private, no-store',
+          'cloudflare-cdn-cache-control': 'no-store',
+        },
+      },
+    })).toEqual([])
+  })
 })
 
 describe('html response cache safety', () => {

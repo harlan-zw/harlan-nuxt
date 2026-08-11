@@ -18,6 +18,7 @@ const CACHE_HEADER_NAMES = new Set([
   'cloudflare-cdn-cache-control',
 ])
 const CACHE_ROUTE_RULE_NAMES = ['cache', 'isr', 'swr'] as const
+const PRIVATE_CACHE_DIRECTIVE_RE = /(?:^|,)\s*(?:no-store|private)\s*(?:,|$)/i
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -27,6 +28,10 @@ function isHtmlCapableRoute(route: string): boolean {
   if (NON_HTML_EXTENSION_RE.test(route))
     return false
   return !NON_HTML_ROUTE_PREFIXES.some(prefix => route === prefix || route.startsWith(`${prefix}/`))
+}
+
+function isPrivateCachePolicy(value: unknown): boolean {
+  return typeof value === 'string' && PRIVATE_CACHE_DIRECTIVE_RE.test(value)
 }
 
 export function findHtmlCacheRouteRuleViolations(
@@ -54,7 +59,7 @@ export function findHtmlCacheRouteRuleViolations(
       return violations
 
     for (const name of Object.keys(value.headers)) {
-      if (CACHE_HEADER_NAMES.has(name.toLowerCase())) {
+      if (CACHE_HEADER_NAMES.has(name.toLowerCase()) && !isPrivateCachePolicy(value.headers[name])) {
         violations.push({
           _tag: 'html-cache-header',
           route,
