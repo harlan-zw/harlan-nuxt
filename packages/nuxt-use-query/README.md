@@ -1,23 +1,34 @@
-# Nuxt Use Query
+<h1>@harlan-zw/nuxt-use-query</h1>
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-> Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.
+Nuxt Use Query gives you TanStack-shaped query composables built on Nuxt's own primitives, so caching, SWR, and invalidation work with the payload instead of beside it.
 
 Status: experimental. APIs may change before the first scoped release.
 
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
 ## Features
 
-- `useNuxtQuery` wraps Nuxt `useFetch` with TanStack-style stale-time revalidation, polling, enabled gates, and previous-data display.
-- `useNuxtMutation` wires mutations to query invalidation and optimistic cache rollback.
-- `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` let apps centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
-- Optional build-time contract enforcement flags API path literals outside query folders and query operations that skip shared contract imports or schemas.
-- Optional server `$fetch` telemetry flags slow upstream calls and likely SSR request waterfalls.
-- `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
-- `useNuxtSubscription` bridges a realtime message stream (WebSocket, SSE, vendor SDK) into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
-- Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
+- 🔄 **`useNuxtQuery`:** wraps Nuxt `useFetch` with TanStack-style stale-time revalidation, polling, enabled gates, and previous-data display.
+- ✍️ **`useNuxtMutation`:** wires mutations to query invalidation and optimistic cache rollback.
+- 📇 **Typed RPC contracts:** `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
+- 🚧 **Build-time enforcement:** optionally flag API path literals outside query folders, and query operations that skip shared contract imports or schemas.
+- 📡 **Server fetch telemetry:** optionally flag slow upstream calls and likely SSR request waterfalls.
+- 🗝️ **Cache control:** `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
+- ⚡ **Realtime bridge:** `useNuxtSubscription` pipes a WebSocket, SSE, or vendor SDK stream into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
+- 🧵 **SSR-safe by construction:** cache bookkeeping lives on the Nuxt app instance for per-request isolation.
 
 ## Choosing A Layer
 
@@ -539,15 +550,27 @@ With enforcement enabled:
 
 Start without enforcement while migrating an existing site, then enable it once queries and contracts have been moved into the recommended directories.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-[MIT](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md)
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md).
 
-[npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-use-query
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-use-query
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com

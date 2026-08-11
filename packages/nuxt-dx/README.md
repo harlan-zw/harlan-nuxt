@@ -1,6 +1,34 @@
-# `@harlan-zw/nuxt-dx`
+<h1>@harlan-zw/nuxt-dx</h1>
 
-Experimental diagnostics for Nuxt: a development error overlay, and bundle size budgets for Nuxt and Nitro plugins.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
+
+Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to go looking for: client errors while you develop, and plugins that quietly bloat your bundle when you build.
+
+Status: experimental. APIs may change before the first release.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
+## Features
+
+- 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge.
+- 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
+- 📦 **Plugin size budgets:** warn when a Nuxt or Nitro plugin drags too much JavaScript into the bundle.
+- 🔍 **Exclusive attribution:** each plugin is charged only for what it alone pulls in, so shared dependencies are not double counted.
+- 🎯 **Per-plugin overrides:** budgets keyed by `defineNuxtPlugin` name or path fragment, with an optional build failure.
+- 🚫 **Zero production cost:** the overlay is a strict production no-op.
+
+## Installation
 
 ```bash
 pnpm add -D @harlan-zw/nuxt-dx
@@ -85,4 +113,27 @@ Set `sizeBudget: false` to turn the check off entirely.
 
 Budgets are measured whenever a bundle is produced. Nitro is bundled in both `nuxi dev` and `nuxi build`, so Nitro plugin budgets report in either. The client is served unbundled in dev, so app plugin budgets only report on `nuxi build`.
 
-APIs may change before the first release.
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
+## License
+
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-dx/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-dx/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-dx
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-dx.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-dx
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-dx/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

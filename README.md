@@ -1,22 +1,71 @@
-# Harlan Nuxt
+<h1>Harlan Nuxt</h1>
 
-Experimental public Nuxt packages maintained together for shared tooling,
-consistent verification, and independent releases.
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
+
+A monorepo of experimental Nuxt modules, kept together for shared tooling and consistent verification, and released independently.
+
+Every package here is published under the `experimental` npm tag. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
 
 ## Packages
 
-| Package | Purpose |
+| Package | What it does |
 | --- | --- |
-| `@harlan-zw/nuxt-cf-jobs` | Typed Cloudflare queue jobs for Nuxt. |
-| `@harlan-zw/nuxt-use-query` | Nuxt-native queries, mutations, subscriptions, and RPC. |
-| `@harlan-zw/nuxt-domain-events` | Lazy server-side domain events and listeners. |
-| `@harlan-zw/nuxt-dx` | Nuxt diagnostics: dev error overlay, agent handoff, plugin size budgets. |
-| `@harlan-zw/nuxt-github-sponsors` | Typed GitHub Sponsors data, tiers, route, and composable. |
+| [`@harlan-zw/nuxt-cf-jobs`](./packages/nuxt-cf-jobs) | ☁️ Typed Cloudflare Queue jobs with file-based definitions, optional D1 durability, scheduled tasks, and an operations CLI. |
+| [`@harlan-zw/nuxt-use-query`](./packages/nuxt-use-query) | 🔄 Nuxt-native queries, mutations, and subscriptions with SWR, invalidation, polling, and typed RPC contracts. |
+| [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
+| [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and bundle size budgets for Nuxt and Nitro plugins. |
+| [`@harlan-zw/nuxt-github-sponsors`](./packages/nuxt-github-sponsors) | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
 
-All packages are experimental. Package versions and release notes are independent.
+## Development
+
+Requires Node 22.12+ and pnpm.
+
+```bash
+pnpm install
+pnpm dev:prepare
+```
+
+Then, from the repo root to run every package, or from a package directory to run just that one:
+
+```bash
+pnpm lint       # eslint, includes markdown and code blocks
+pnpm typecheck  # nuxt typecheck / tsc per package
+pnpm test       # vitest
+pnpm build      # nuxt-module-builder / obuild
+```
+
+Packages are pnpm workspace members under `packages/*`. Shared dependency versions live in the `catalog:` block of `pnpm-workspace.yaml`, so bump a version there rather than in each package.
 
 ## Releases
 
-Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted
-GitHub Actions publisher releases that package under the `experimental` npm tag
-with provenance.
+Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted GitHub Actions publisher releases that package under the `experimental` npm tag with provenance.
+
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
+## License
+
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/LICENSE.md).
+
+<!-- Badges -->
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

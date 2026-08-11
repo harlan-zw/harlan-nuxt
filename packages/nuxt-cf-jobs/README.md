@@ -725,15 +725,23 @@ pnpm test:e2e
 
 `test` runs the unit project. `test:nitro` runs the generated registry in a real Nuxt server. `test:e2e` starts Wrangler fixtures and exercises the Cloudflare Queues and D1 round trip through workerd.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
 Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-cf-jobs/LICENSE.md).
 
 <!-- Badges -->
-[npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-cf-jobs/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-cf-jobs/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-cf-jobs.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-cf-jobs.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
 [license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
