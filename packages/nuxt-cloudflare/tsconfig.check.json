@@ -1,0 +1,14 @@
+{
+  "extends": "./.nuxt/tsconfig.node.json",
+  "include": [
+    ".nuxt/nuxt.node.d.ts",
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "build.config.ts",
+    "vitest.config.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
