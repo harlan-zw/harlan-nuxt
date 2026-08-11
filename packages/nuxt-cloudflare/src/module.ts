@@ -9,6 +9,7 @@ import {
   discoverWranglerSourceConfigs,
   evaluateWranglerDiagnostics,
 } from './diagnostics'
+import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -45,12 +46,23 @@ export interface NitroCloudflareShape {
     wrangler?: import('./wrangler').WranglerConfigInput
   }
   preset?: string
+  plugins?: string[]
   sourceMap?: boolean
   storage?: Record<string, NitroStorageMount>
 }
 
 const logger = useLogger('nuxt-cloudflare')
 const cacheDriverPath = resolve(import.meta.dirname, import.meta.url.endsWith('.ts') ? 'storage.ts' : 'storage.mjs')
+const workersCachePluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/workers-cache.ts'
+    : 'runtime/server/plugins/workers-cache.js',
+)
+
+function resolveModuleWorkersCachePolicy(options: ModuleOptions): WorkersCachePolicy {
+  return options.workersCache ?? { _tag: 'enabled', crossVersion: false }
+}
 
 export function configureNitroCloudflare(
   nitro: NitroCloudflareShape,
@@ -68,8 +80,14 @@ export function configureNitroCloudflare(
     tracesSampleRate: options.tracesSampleRate,
     uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? nuxtServerSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
-    workersCache: options.workersCache,
+    workersCache: resolveModuleWorkersCachePolicy(options),
   })
+
+  if (nitro.cloudflare.wrangler.cache?.enabled) {
+    nitro.plugins ??= []
+    if (!nitro.plugins.includes(workersCachePluginPath))
+      nitro.plugins.push(workersCachePluginPath)
+  }
 
   if (options.kvCache === false)
     return
@@ -131,6 +149,16 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   nuxt.hook('modules:done', () => {
     configure()
   })
+  nuxt.hook('nitro:config', (nitroConfig) => {
+    if (resolveModuleWorkersCachePolicy(options)._tag === 'disabled')
+      return
+    const violations = findHtmlCacheRouteRuleViolations(nitroConfig.routeRules)
+    if (violations.length > 0) {
+      throw new Error(
+        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(violations)}`,
+      )
+    }
+  })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
       nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options, nuxt.options.rootDir))
@@ -151,6 +179,7 @@ export default defineNuxtModule<ModuleOptions>({
     logsSampleRate: 0.1,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
+    workersCache: { _tag: 'enabled', crossVersion: false },
   },
   setup: setupCloudflareModule,
 })

@@ -43,15 +43,18 @@ describe('configureNitroCloudflare', () => {
     expect(nitro.cloudflare?.wrangler?.upload_source_maps).toBe(false)
   })
 
-  it('disables Workers Caching by default', () => {
+  it('enables version-isolated Workers Caching by default', () => {
     const nitro: NitroCloudflareShape = {}
 
     configureNitroCloudflare(nitro, {})
 
     expect(nitro.cloudflare?.wrangler?.cache).toEqual({
-      enabled: false,
+      enabled: true,
       cross_version_cache: false,
     })
+    expect(nitro.plugins).toEqual([
+      expect.stringMatching(/\/runtime\/server\/plugins\/workers-cache\.ts$/),
+    ])
   })
 
   it('enables Smart Placement by default', () => {
@@ -74,6 +77,19 @@ describe('configureNitroCloudflare', () => {
       cross_version_cache: false,
     })
   })
+
+  it('supports an explicit Workers Caching opt-out', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {
+      workersCache: { _tag: 'disabled' },
+    })
+
+    expect(nitro.cloudflare?.wrangler?.cache).toEqual({
+      enabled: false,
+      cross_version_cache: false,
+    })
+  })
 })
 
 describe('setupCloudflareModule', () => {
@@ -82,7 +98,7 @@ describe('setupCloudflareModule', () => {
 
     setupCloudflareModule({ enabled: true }, nuxt)
 
-    expect(hooks).toEqual(['modules:done'])
+    expect(hooks).toEqual(['modules:done', 'nitro:config'])
   })
 
   it('registers the production Wrangler audit for builds', () => {
@@ -90,7 +106,7 @@ describe('setupCloudflareModule', () => {
 
     setupCloudflareModule({ enabled: true }, nuxt)
 
-    expect(hooks).toEqual(['modules:done', 'nitro:init'])
+    expect(hooks).toEqual(['modules:done', 'nitro:config', 'nitro:init'])
   })
 
   it('uses Nuxt server source maps as the upload policy', () => {
