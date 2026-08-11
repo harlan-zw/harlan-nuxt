@@ -3,13 +3,13 @@ import type { NitroCloudflareShape } from '../src/module'
 import { describe, expect, it } from 'vitest'
 import { configureNitroCloudflare, setupCloudflareModule } from '../src/module'
 
-function nuxtWithCapturedHooks(dev: boolean): { hooks: string[], nuxt: Nuxt } {
+function nuxtWithCapturedHooks(dev: boolean, serverSourceMaps = false): { hooks: string[], nuxt: Nuxt } {
   const hooks: string[] = []
   const nuxt = {
     hook(name: string) {
       hooks.push(name)
     },
-    options: { dev, nitro: {} },
+    options: { dev, nitro: {}, sourcemap: { server: serverSourceMaps } },
   } as unknown as Nuxt
   return { hooks, nuxt }
 }
@@ -59,5 +59,16 @@ describe('setupCloudflareModule', () => {
     setupCloudflareModule({ enabled: true }, nuxt)
 
     expect(hooks).toEqual(['modules:done', 'nitro:init'])
+  })
+
+  it('uses Nuxt server source maps as the upload policy', () => {
+    const disabled = nuxtWithCapturedHooks(false, false)
+    const enabled = nuxtWithCapturedHooks(false, true)
+
+    setupCloudflareModule({ enabled: true }, disabled.nuxt)
+    setupCloudflareModule({ enabled: true }, enabled.nuxt)
+
+    expect(disabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(false)
+    expect(enabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(true)
   })
 })
