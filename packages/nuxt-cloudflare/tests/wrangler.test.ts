@@ -43,6 +43,12 @@ describe('applyCloudflareDefaults', () => {
     }).cache).toEqual({ enabled: true, cross_version_cache: false })
   })
 
+  it('makes version isolation explicit for an enabled Workers Cache', () => {
+    expect(applyCloudflareDefaults({
+      cache: { enabled: true },
+    }).cache).toEqual({ enabled: true, cross_version_cache: false })
+  })
+
   it('lets an explicit module policy replace authored Workers Caching config', () => {
     expect(applyCloudflareDefaults({
       cache: { enabled: true, cross_version_cache: true },
