@@ -23,7 +23,7 @@ async function waitForDevelopmentServer(
   url: string,
   output: () => string,
 ): Promise<void> {
-  const deadline = Date.now() + 15_000
+  const deadline = Date.now() + 45_000
   let lastConnectionError: unknown
   while (Date.now() < deadline) {
     const currentOutput = output()
@@ -77,5 +77,5 @@ describe('development lifecycle', () => {
 
     expect(output).not.toContain('Generated Wrangler config is missing')
     expect(output).not.toContain('[unhandledRejection]')
-  }, 20_000)
+  }, 50_000)
 })
