@@ -7,11 +7,15 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 ## Defaults
 
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
-- Static assets always bypass the Worker. Any `assets.run_worker_first` declaration fails the build and `doctor`
+- Static assets remain asset first by default. Blanket `assets.run_worker_first: true` fails the build and `doctor`; narrow route-pattern arrays remain available for intentional middleware and skew recovery
 - Workers Logs sampled at 10%, traces at 1%, both overridable
+- Preview URLs disabled unless explicitly enabled
+- `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
+- Workers Caching explicitly disabled by default; opt-in requires a version-sharing decision
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
-- `secrets.required` names only, with plaintext secret-looking `vars` rejected
+- Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
+- Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
 - Raw `cloudflare-kv-binding` on Nitro's `cache` mount upgraded to a 30-day physical expiry
 - Final generated Wrangler config audited after production Nitro compiles
 - Complete defaults and diagnostics applied to every named Wrangler environment
@@ -26,6 +30,7 @@ export default defineNuxtConfig({
 
   nuxtCloudflare: {
     requiredSecrets: ['NUXT_SESSION_PASSWORD'],
+    workersCache: { _tag: 'enabled', crossVersion: false },
   },
 
   nitro: {
@@ -52,6 +57,8 @@ export default defineNuxtConfig({
 
 Cloudflare KV requires TTLs of at least 60 seconds.
 
+Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set.
+
 ## Doctor
 
 Audit Wrangler's effective configuration, including generated config redirects and named environments:
@@ -59,19 +66,39 @@ Audit Wrangler's effective configuration, including generated config redirects a
 ```sh
 pnpm nuxt-cloudflare doctor
 pnpm nuxt-cloudflare doctor --env production --json
+pnpm nuxt-cloudflare doctor --strict --allow-warning source-maps-disabled
 ```
 
-Errors include worker-first assets, missing `nodejs_compat`, malformed compatibility dates, and secret-looking plaintext variables. Diagnostics report secret names only.
+The CLI reads Wrangler config through Wrangler itself, so JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects follow deployment semantics. It separately inspects root authoring format. Existing TOML remains supported and receives non-blocking guidance because Cloudflare recommends JSONC for new projects. Shadowed root configs warn because they can silently drift.
+
+Errors cover blanket Worker-first assets, malformed selective asset patterns, missing `nodejs_compat`, malformed compatibility dates, secret names duplicated across `vars` and `secrets.required`, queue platform-limit violations, and unflattened generated environments. Warnings cover secret-looking variable names, telemetry gaps, stale dates, implicit or cross-version Workers Caching, `keep_vars`, public endpoints, preview URLs, missing DLQs, and project policy. Secret values are never included.
+
+Normal mode fails errors. `--strict` also fails warnings. Intentional exceptions remain visible and may be listed with `--allow-warning`. Module builds use the equivalent policy:
+
+`nodejs_compat` is required by default because this is a Nuxt module. Use `--node-compat ignore` only when auditing a non-Nuxt companion Worker, such as a redirect-only Worker.
+
+```ts
+export default defineNuxtConfig({
+  nuxtCloudflare: {
+    doctor: {
+      _tag: 'strict',
+      allowedWarnings: ['source-maps-disabled'],
+    },
+  },
+})
+```
 
 Recommended CI sequence:
 
 ```sh
 pnpm nuxt build
-pnpm nuxt-cloudflare doctor
-pnpm wrangler types --check
-pnpm wrangler deploy --strict --dry-run --outdir .wrangler-dist
-pnpm wrangler check startup
+pnpm nuxt-cloudflare doctor --strict
+pnpm wrangler types --check --config .output/server/wrangler.json
+pnpm wrangler deploy --strict --dry-run --config .output/server/wrangler.json --outdir .wrangler-dist
+pnpm wrangler check startup --config .output/server/wrangler.json
 ```
+
+Pass the final generated config explicitly to `types` and `check startup`; Nitro's `.wrangler/deploy/config.json` redirect does not apply to those commands.
 
 ## Runtime primitives
 
@@ -89,6 +116,29 @@ await retryIdempotentD1Write({
 ```
 
 One `first-primary` session is cached per request and binding. D1 already retries read-only queries. Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified transient network and reset failures.
+
+### D1 parameter plans
+
+```ts
+import {
+  assertD1BoundParameters,
+  chunkD1Items,
+  defineD1ParameterPlan,
+} from '@harlan-zw/nuxt-cloudflare/d1'
+
+const siteIdPlan = defineD1ParameterPlan({
+  parametersPerItem: 1,
+  reservedParameters: 2,
+})
+
+for (const ids of chunkD1Items(siteIds, siteIdPlan)) {
+  const query = db.select().from(sites).where(inArray(sites.id, ids))
+  assertD1BoundParameters(query.toSQL().params)
+  await query
+}
+```
+
+D1 allows 100 bound parameters per statement, including each statement inside `db.batch()`. The parsed opaque plan rejects fractions, non-finite values, negative reservations, forged runtime plans, and budgets that cannot fit one item. `parametersPerItem` supports multi-row inserts; `reservedParameters` accounts for fixed binds and deliberate headroom. `assertD1BoundParameters` verifies the final ORM output in regression tests. Chunk execution, ordering, transaction boundaries, and result merging remain explicit at the call site.
 
 ### Bindings
 

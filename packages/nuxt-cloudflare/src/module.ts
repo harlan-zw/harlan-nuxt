@@ -1,7 +1,14 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
+import type { WranglerDiagnosticPolicy } from './diagnostics'
+import type { WorkersCachePolicy } from './wrangler'
 import { defineNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
+import {
+  diagnoseWranglerSourceConfigs,
+  discoverWranglerSourceConfigs,
+  evaluateWranglerDiagnostics,
+} from './diagnostics'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -13,6 +20,7 @@ export interface ModuleOptions {
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
+  doctor?: WranglerDiagnosticPolicy
   kvCache?: false | {
     binding: string
     defaultTtl?: number
@@ -23,6 +31,7 @@ export interface ModuleOptions {
   sourceMaps?: boolean
   tracesSampleRate?: number
   versionMetadataBinding?: string
+  workersCache?: WorkersCachePolicy
 }
 
 interface NitroStorageMount extends Record<string, unknown> {
@@ -59,6 +68,7 @@ export function configureNitroCloudflare(
     tracesSampleRate: options.tracesSampleRate,
     uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? nuxtServerSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
+    workersCache: options.workersCache,
   })
 
   if (options.kvCache === false)
@@ -78,7 +88,7 @@ export function configureNitroCloudflare(
   }
 }
 
-async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions): Promise<void> {
+async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions, rootDir: string): Promise<void> {
   const path = resolve(nitro.options.output.serverDir, 'wrangler.json')
   const result = await readWranglerJsonFile(path)
   if (result._tag === 'missing')
@@ -86,16 +96,25 @@ async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions
   if (result._tag === 'invalid')
     throw new Error(`[nuxt-cloudflare] Generated Wrangler config is invalid: ${result.reason}`)
 
-  const diagnostics = diagnoseWranglerConfig(result.config, {
-    compatibilityMaxAgeDays: options.compatibilityMaxAgeDays,
-    publicVarNames: options.publicVarNames,
-  })
-  const warnings = diagnostics.filter(diagnostic => diagnostic._tag === 'warning')
-  const errors = diagnostics.filter(diagnostic => diagnostic._tag === 'error')
+  const diagnostics = [
+    ...diagnoseWranglerConfig(result.config, {
+      compatibilityMaxAgeDays: options.compatibilityMaxAgeDays,
+      generated: true,
+      publicVarNames: options.publicVarNames,
+    }),
+    ...diagnoseWranglerSourceConfigs(discoverWranglerSourceConfigs(rootDir)),
+  ]
+  const policy = options.doctor ?? { _tag: 'advisory' }
+  const outcome = evaluateWranglerDiagnostics(diagnostics, policy)
+  const blocking = new Set(outcome.blockingDiagnostics)
+  const warnings = diagnostics.filter(diagnostic => diagnostic._tag === 'warning' && !blocking.has(diagnostic))
+  const information = diagnostics.filter(diagnostic => diagnostic._tag === 'info')
+  if (information.length > 0)
+    logger.info(formatWranglerDiagnostics(information))
   if (warnings.length > 0)
     logger.warn(formatWranglerDiagnostics(warnings))
-  if (errors.length > 0)
-    throw new Error(`[nuxt-cloudflare]\n${formatWranglerDiagnostics(errors)}`)
+  if (outcome._tag === 'failed')
+    throw new Error(`[nuxt-cloudflare]\n${formatWranglerDiagnostics(outcome.blockingDiagnostics)}`)
 }
 
 export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void {
@@ -114,7 +133,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
-      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options))
+      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options, nuxt.options.rootDir))
     })
   }
 }
@@ -128,6 +147,7 @@ export default defineNuxtModule<ModuleOptions>({
   defaults: {
     enabled: true,
     compatibilityMaxAgeDays: 90,
+    doctor: { _tag: 'advisory' },
     logsSampleRate: 0.1,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
