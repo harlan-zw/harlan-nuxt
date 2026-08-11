@@ -43,7 +43,11 @@ export interface NitroCloudflareShape {
 const logger = useLogger('nuxt-cloudflare')
 const cacheDriverPath = resolve(import.meta.dirname, import.meta.url.endsWith('.ts') ? 'storage.ts' : 'storage.mjs')
 
-export function configureNitroCloudflare(nitro: NitroCloudflareShape, options: ModuleOptions): void {
+export function configureNitroCloudflare(
+  nitro: NitroCloudflareShape,
+  options: ModuleOptions,
+  nuxtServerSourceMaps?: boolean,
+): void {
   nitro.preset ??= 'cloudflare-module'
   nitro.cloudflare ??= {}
   nitro.cloudflare.deployConfig = true
@@ -53,7 +57,7 @@ export function configureNitroCloudflare(nitro: NitroCloudflareShape, options: M
     logsSampleRate: options.logsSampleRate,
     requiredSecrets: options.requiredSecrets,
     tracesSampleRate: options.tracesSampleRate,
-    uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap !== false,
+    uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? nuxtServerSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
   })
 
@@ -98,9 +102,15 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   if (!options.enabled)
     return
 
-  configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
+  const configure = () => configureNitroCloudflare(
+    nuxt.options.nitro as NitroCloudflareShape,
+    options,
+    Boolean(nuxt.options.sourcemap.server),
+  )
+
+  configure()
   nuxt.hook('modules:done', () => {
-    configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
+    configure()
   })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
