@@ -1,6 +1,6 @@
 import type { OutputBundle, Plugin } from 'rollup'
 import type { CostMeasurement, GraphModule } from './graph'
-import type { BudgetScope } from './report'
+import type { BudgetScope } from './scope'
 import type { BudgetTarget } from './targets'
 import { measureCost } from './graph'
 

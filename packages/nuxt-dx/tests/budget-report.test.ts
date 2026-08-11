@@ -1,5 +1,5 @@
 import type { BudgetVerdict } from '../src/size-budget/budget'
-import type { BudgetScope } from '../src/size-budget/report'
+import type { BudgetScope } from '../src/size-budget/scope'
 import { stripAnsi } from 'consola/utils'
 import { describe, expect, it } from 'vitest'
 import { displayId, formatBudgetReport } from '../src/size-budget/report'
