@@ -67,16 +67,16 @@ Workers Caching is separate from Nitro's KV-backed cache. The module enables ver
 
 Cloudflare pricing changes. Check the linked pricing pages before making a budget.
 
-- Workers Logs use a 1% routine sample. [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing) currently includes 20 million monthly events on Workers Paid, then charges $0.60 per million events.
-- Invocation logs remain enabled for baseline visibility. A high-volume Worker with complete custom failure telemetry can set `observability.logs.invocation_logs: false`. This removes one event from each sampled invocation.
-- Traces use a separate 1% sample. Each span is a metered event. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) currently lists 10 million included monthly events and says the quota is shared with logs. This differs from the Workers Logs page. Budget against the lower quota until Cloudflare resolves the difference.
-- Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests, including static assets and Worker-to-Worker requests. Disable it when measured CPU savings do not exceed the added request cost.
-- Static assets stay asset first. Their requests are free and unlimited. Blanket Worker-first routing makes them billable Worker requests, so the module warns about it.
-- Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000 because the higher ceiling increases runaway-cost exposure.
-- Queue retries add billed read operations. Messages incur one operation per 64 KB chunk for each write, read, and delete. Keep payloads small and retries deliberate.
-- The KV-backed Nitro cache expires entries after 30 days by default. This bounds stored cache data. It does not reduce billed reads or writes.
+- Workers Logs use a 1% routine sample. Paid plans include 20 million monthly events. Extra events cost $0.60 per million. See [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing).
+- Invocation logs remain enabled. High-volume Workers with complete error telemetry can set `observability.logs.invocation_logs: false`. This removes one event per sampled invocation.
+- Traces use a separate 1% sample. Each span is metered. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) lists 10 million included monthly events. It also says the quota is shared with logs. The Workers Logs page lists 20 million. Budget against 10 million until the pages agree.
+- Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests. This includes static assets and Worker-to-Worker requests. Disable caching when CPU savings do not exceed the added request cost.
+- Static assets stay asset first. Their requests are free and unlimited. The module warns when blanket Worker-first routing makes assets billable.
+- Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000. A higher ceiling increases runaway-cost exposure.
+- Queue retries add billed read operations. Each 64 KB message chunk incurs write, read, and delete operations. Keep payloads small and retries deliberate.
+- The KV-backed Nitro cache expires entries after 30 days. This bounds stored cache data. It does not reduce billed operations.
 
-[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas have no extra replica charge. The module does not change D1 routing or session behavior.
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas add no separate charge. The module preserves D1 routing and session behavior.
 
 Doctor warnings surface log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
 
