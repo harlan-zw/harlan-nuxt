@@ -1,6 +1,7 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
+import type { WorkersCachePolicy } from './wrangler'
 import { defineNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
@@ -30,6 +31,7 @@ export interface ModuleOptions {
   sourceMaps?: boolean
   tracesSampleRate?: number
   versionMetadataBinding?: string
+  workersCache?: WorkersCachePolicy
 }
 
 interface NitroStorageMount extends Record<string, unknown> {
@@ -66,6 +68,7 @@ export function configureNitroCloudflare(
     tracesSampleRate: options.tracesSampleRate,
     uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? nuxtServerSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
+    workersCache: options.workersCache,
   })
 
   if (options.kvCache === false)

@@ -42,6 +42,30 @@ describe('configureNitroCloudflare', () => {
     expect(nitro.preset).toBe('cloudflare-durable')
     expect(nitro.cloudflare?.wrangler?.upload_source_maps).toBe(false)
   })
+
+  it('disables Workers Caching by default', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.cloudflare?.wrangler?.cache).toEqual({
+      enabled: false,
+      cross_version_cache: false,
+    })
+  })
+
+  it('supports version-isolated Workers Caching as an explicit policy', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {
+      workersCache: { _tag: 'enabled', crossVersion: false },
+    })
+
+    expect(nitro.cloudflare?.wrangler?.cache).toEqual({
+      enabled: true,
+      cross_version_cache: false,
+    })
+  })
 })
 
 describe('setupCloudflareModule', () => {

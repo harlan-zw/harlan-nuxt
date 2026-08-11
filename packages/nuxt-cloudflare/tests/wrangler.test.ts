@@ -31,6 +31,20 @@ describe('applyCloudflareDefaults', () => {
     expect(applyCloudflareDefaults({ upload_source_maps: false })).toMatchObject({ upload_source_maps: false })
   })
 
+  it('preserves an authored Workers Caching policy', () => {
+    expect(applyCloudflareDefaults({
+      cache: { enabled: true, cross_version_cache: false },
+    }).cache).toEqual({ enabled: true, cross_version_cache: false })
+  })
+
+  it('lets an explicit module policy replace authored Workers Caching config', () => {
+    expect(applyCloudflareDefaults({
+      cache: { enabled: true, cross_version_cache: true },
+    }, {
+      workersCache: { _tag: 'disabled' },
+    }).cache).toEqual({ enabled: false, cross_version_cache: false })
+  })
+
   it('applies the complete policy to named environments', () => {
     const config = applyCloudflareDefaults({
       compatibility_date: '2026-08-11',
@@ -96,6 +110,33 @@ describe('applyCloudflareDefaults', () => {
 })
 
 describe('diagnoseWranglerConfig', () => {
+  it('warns when Workers Caching policy is implicit', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'workers-cache-policy-implicit',
+      }))
+  })
+
+  it('warns when Workers Caching is shared across deployments', () => {
+    expect(diagnoseWranglerConfig({
+      cache: { enabled: true, cross_version_cache: true },
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'workers-cache-cross-version-enabled',
+      }))
+  })
+
   it('rejects blanket Worker-first asset routing', () => {
     const diagnostics = diagnoseWranglerConfig({
       compatibility_date: '2026-08-11',

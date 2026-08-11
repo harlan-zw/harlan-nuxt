@@ -12,6 +12,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
+- Workers Caching explicitly disabled by default; opt-in requires a version-sharing decision
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
 - Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
@@ -29,6 +30,7 @@ export default defineNuxtConfig({
 
   nuxtCloudflare: {
     requiredSecrets: ['NUXT_SESSION_PASSWORD'],
+    workersCache: { _tag: 'enabled', crossVersion: false },
   },
 
   nitro: {
@@ -55,6 +57,8 @@ export default defineNuxtConfig({
 
 Cloudflare KV requires TTLs of at least 60 seconds.
 
+Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set.
+
 ## Doctor
 
 Audit Wrangler's effective configuration, including generated config redirects and named environments:
@@ -67,7 +71,7 @@ pnpm nuxt-cloudflare doctor --strict --allow-warning source-maps-disabled
 
 The CLI reads Wrangler config through Wrangler itself, so JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects follow deployment semantics. It separately inspects root authoring format. Existing TOML remains supported and receives non-blocking guidance because Cloudflare recommends JSONC for new projects. Shadowed root configs warn because they can silently drift.
 
-Errors cover blanket Worker-first assets, malformed selective asset patterns, missing `nodejs_compat`, malformed compatibility dates, secret names duplicated across `vars` and `secrets.required`, queue platform-limit violations, and unflattened generated environments. Warnings cover secret-looking variable names, telemetry gaps, stale dates, `keep_vars`, public endpoints, preview URLs, missing DLQs, and project policy. Secret values are never included.
+Errors cover blanket Worker-first assets, malformed selective asset patterns, missing `nodejs_compat`, malformed compatibility dates, secret names duplicated across `vars` and `secrets.required`, queue platform-limit violations, and unflattened generated environments. Warnings cover secret-looking variable names, telemetry gaps, stale dates, implicit or cross-version Workers Caching, `keep_vars`, public endpoints, preview URLs, missing DLQs, and project policy. Secret values are never included.
 
 Normal mode fails errors. `--strict` also fails warnings. Intentional exceptions remain visible and may be listed with `--allow-warning`. Module builds use the equivalent policy:
 

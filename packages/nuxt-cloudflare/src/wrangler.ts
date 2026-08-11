@@ -6,6 +6,15 @@ export interface WranglerAssetsInput {
   run_worker_first?: boolean | string[]
 }
 
+export interface WranglerWorkersCacheInput {
+  enabled: boolean
+  cross_version_cache?: boolean
+}
+
+export type WorkersCachePolicy
+  = | { _tag: 'disabled' }
+    | { _tag: 'enabled', crossVersion: boolean }
+
 export interface WranglerObservabilityInput {
   enabled?: boolean
   head_sampling_rate?: number
@@ -22,6 +31,7 @@ export interface WranglerObservabilityInput {
 
 export interface WranglerConfigInput extends Record<string, unknown> {
   assets?: WranglerAssetsInput
+  cache?: WranglerWorkersCacheInput
   compatibility_date?: string
   compatibility_flags?: string[]
   env?: Record<string, WranglerConfigInput>
@@ -52,6 +62,7 @@ export interface CloudflareDefaultOptions {
   tracesSampleRate?: number
   uploadSourceMaps?: boolean
   versionMetadataBinding?: string
+  workersCache?: WorkersCachePolicy
 }
 
 export const WRANGLER_DIAGNOSTIC_CODES = [
@@ -82,6 +93,8 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'version-metadata-missing',
   'workers-dev-enabled',
   'workers-dev-implicit',
+  'workers-cache-cross-version-enabled',
+  'workers-cache-policy-implicit',
   'wrangler-config-shadowed',
   'wrangler-config-missing',
   'wrangler-config-unreadable',
@@ -134,6 +147,12 @@ function parseDateOnly(value: string): Date | undefined {
 function parsedCompatibilityDateBeforeV2(value: string | undefined): boolean {
   const parsed = value && parseDateOnly(value)
   return Boolean(parsed && parsed < NODEJS_COMPAT_V2_DATE)
+}
+
+function resolveWorkersCachePolicy(policy: WorkersCachePolicy): WranglerWorkersCacheInput {
+  if (policy._tag === 'disabled')
+    return { enabled: false, cross_version_cache: false }
+  return { enabled: true, cross_version_cache: policy.crossVersion }
 }
 
 const WRANGLER_BINDING_CATEGORIES = [
@@ -227,6 +246,9 @@ function applyEnvironmentDefaults(
 ): WranglerConfigInput {
   const compatibilityDate = config.compatibility_date ?? inherited.compatibility_date ?? options.compatibilityDate
   const compatibilityFlags = unique([...(config.compatibility_flags ?? inherited.compatibility_flags ?? []), 'nodejs_compat'])
+  const cache = options.workersCache
+    ? resolveWorkersCachePolicy(options.workersCache)
+    : config.cache ?? inherited.cache ?? resolveWorkersCachePolicy({ _tag: 'disabled' })
   const requiredSecrets = unique([...(config.secrets?.required ?? []), ...(options.requiredSecrets ?? [])])
   const logs = config.observability?.logs
   const inheritedLogs = inherited.observability?.logs
@@ -247,6 +269,7 @@ function applyEnvironmentDefaults(
 
   return {
     ...config,
+    cache,
     ...(compatibilityDate === undefined ? {} : { compatibility_date: compatibilityDate }),
     compatibility_flags: compatibilityFlags,
     observability: {
@@ -577,6 +600,22 @@ function diagnosePolicy(
       configPath: `${prefix}keep_vars`,
     })
   }
+  if (config.cache === undefined) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'workers-cache-policy-implicit',
+      message: 'Choose an explicit Workers Caching policy. Headerless 200 responses are cached for two hours when enabled.',
+      configPath: `${prefix}cache`,
+    })
+  }
+  else if (config.cache.enabled && config.cache.cross_version_cache === true) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'workers-cache-cross-version-enabled',
+      message: 'Cross-version caching can serve responses from superseded deployments until expiry or purge.',
+      configPath: `${prefix}cache.cross_version_cache`,
+    })
+  }
   if (config.preview_urls === true) {
     diagnostics.push({
       _tag: 'warning',
@@ -629,6 +668,7 @@ function resolveEnvironmentPolicy(
 ): WranglerConfigInput {
   return {
     ...environment,
+    cache: environment.cache ?? root.cache,
     compatibility_date: environment.compatibility_date ?? root.compatibility_date,
     compatibility_flags: environment.compatibility_flags ?? root.compatibility_flags,
     exports: environment.exports ?? root.exports,
