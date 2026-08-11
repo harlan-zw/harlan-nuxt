@@ -9,7 +9,10 @@ export default defineNuxtConfig({
   }]],
   nitro: {
     cloudflare: {
-      wrangler: { name: 'nuxt-cloudflare-fixture' },
+      wrangler: {
+        name: 'nuxt-cloudflare-fixture',
+        assets: { run_worker_first: ['/pro/_nuxt/*'] },
+      },
     },
     storage: {
       cache: { driver: 'cloudflare-kv-binding', binding: 'CACHE' },

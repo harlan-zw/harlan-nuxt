@@ -25,10 +25,15 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   compatibility_date?: string
   compatibility_flags?: string[]
   env?: Record<string, WranglerConfigInput>
+  keep_vars?: boolean
   observability?: WranglerObservabilityInput
+  preview_urls?: boolean
   queues?: {
     consumers?: Array<Record<string, unknown>>
+    producers?: Array<Record<string, unknown>>
   }
+  route?: string | Record<string, unknown>
+  routes?: Array<string | Record<string, unknown>>
   secrets?: {
     required?: string[]
   }
@@ -49,29 +54,56 @@ export interface CloudflareDefaultOptions {
   versionMetadataBinding?: string
 }
 
+export const WRANGLER_DIAGNOSTIC_CODES = [
+  'assets-worker-first',
+  'assets-worker-first-pattern-invalid',
+  'compatibility-date-missing',
+  'compatibility-date-invalid',
+  'durable-object-binding-inactive',
+  'durable-object-lifecycle-mixed',
+  'durable-object-lifecycle-unmanaged',
+  'generated-config-has-env',
+  'keep-vars-enabled',
+  'missing-nodejs-compat',
+  'nodejs-compat-version-implicit',
+  'observability-disabled',
+  'observability-sampling-implicit',
+  'observability-sampling-out-of-range',
+  'plaintext-secret-var',
+  'preview-urls-public',
+  'queue-dlq-missing',
+  'queue-retries-above-policy',
+  'queue-retries-out-of-range',
+  'queue-retry-delay-out-of-range',
+  'secret-declared-as-var',
+  'source-maps-disabled',
+  'stale-compatibility-date',
+  'traces-disabled',
+  'version-metadata-missing',
+  'workers-dev-enabled',
+  'workers-dev-implicit',
+  'wrangler-config-shadowed',
+  'wrangler-config-missing',
+  'wrangler-config-unreadable',
+  'wrangler-jsonc-preferred',
+] as const
+
+export type WranglerDiagnosticCode = typeof WRANGLER_DIAGNOSTIC_CODES[number]
+
 export interface WranglerDiagnostic {
-  _tag: 'error' | 'warning'
-  code:
-    | 'assets-worker-first'
-    | 'compatibility-date-missing'
-    | 'compatibility-date-invalid'
-    | 'missing-nodejs-compat'
-    | 'observability-disabled'
-    | 'plaintext-secret-var'
-    | 'queue-retries-excessive'
-    | 'secret-declared-as-var'
-    | 'source-maps-disabled'
-    | 'stale-compatibility-date'
-    | 'version-metadata-missing'
-    | 'workers-dev-enabled'
+  _tag: 'error' | 'info' | 'warning'
+  code: WranglerDiagnosticCode
   message: string
-  path: string
+  configPath?: string
+  sourcePath?: string
 }
 
 export interface WranglerDiagnosticOptions {
   compatibilityMaxAgeDays?: number
+  generated?: boolean
   now?: Date
   publicVarNames?: readonly string[]
+  requireNodeCompat?: boolean
 }
 
 export type WranglerJsonFileResult
@@ -82,6 +114,7 @@ export type WranglerJsonFileResult
 const SECRET_NAME_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|DATABASE_URL|DB_URL|ENCRYPTION_KEY|KEY|PASSWORD|PRIVATE_KEY|SECRET|SIGNING_KEY|TOKEN)(?:_|$)/i
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
+const NODEJS_COMPAT_V2_DATE = new Date('2024-09-23T00:00:00.000Z')
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
@@ -98,8 +131,79 @@ function parseDateOnly(value: string): Date | undefined {
   return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? undefined : date
 }
 
-function hasOwn(value: object, key: PropertyKey): boolean {
-  return Object.hasOwn(value, key)
+function parsedCompatibilityDateBeforeV2(value: string | undefined): boolean {
+  const parsed = value && parseDateOnly(value)
+  return Boolean(parsed && parsed < NODEJS_COMPAT_V2_DATE)
+}
+
+const WRANGLER_BINDING_CATEGORIES = [
+  'data_blobs',
+  'durable_objects',
+  'kv_namespaces',
+  'send_email',
+  'd1_databases',
+  'vectorize',
+  'ai_search_namespaces',
+  'ai_search',
+  'websearch',
+  'agent_memory',
+  'hyperdrive',
+  'r2_buckets',
+  'logfwdr',
+  'services',
+  'analytics_engine_datasets',
+  'text_blobs',
+  'browser',
+  'ai',
+  'images',
+  'stream',
+  'media',
+  'version_metadata',
+  'unsafe',
+  'vars',
+  'wasm_modules',
+  'dispatch_namespaces',
+  'mtls_certificates',
+  'workflows',
+  'pipelines',
+  'secrets_store_secrets',
+  'artifacts',
+  'ratelimits',
+  'assets',
+  'unsafe_hello_world',
+  'flagship',
+] as const
+
+function addBindingNames(names: Set<string>, value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry) => {
+      if (isRecord(entry) && typeof entry.binding === 'string')
+        names.add(entry.binding)
+    })
+    return
+  }
+  if (!isRecord(value))
+    return
+  if (Array.isArray(value.bindings)
+    && value.bindings.every(binding => isRecord(binding) && typeof binding.name === 'string')) {
+    value.bindings.forEach(binding => names.add((binding as { name: string }).name))
+    return
+  }
+  if (typeof value.binding === 'string') {
+    names.add(value.binding)
+    return
+  }
+  Object.entries(value).forEach(([name, binding]) => {
+    if (binding !== undefined)
+      names.add(name)
+  })
+}
+
+function collectBindingNames(config: WranglerConfigInput): Set<string> {
+  const names = new Set(config.secrets?.required ?? [])
+  WRANGLER_BINDING_CATEGORIES.forEach(category => addBindingNames(names, config[category]))
+  addBindingNames(names, config.queues?.producers)
+  return names
 }
 
 export function applyCloudflareDefaults(
@@ -110,7 +214,7 @@ export function applyCloudflareDefaults(
   const environments = config.env && Object.fromEntries(
     Object.entries(config.env).map(([name, environment]) => [name, applyEnvironmentDefaults(environment, {
       ...options,
-      requiredSecrets: root.secrets?.required,
+      requiredSecrets: options.requiredSecrets,
     }, root)]),
   )
   return environments ? { ...root, env: environments } : root
@@ -129,6 +233,17 @@ function applyEnvironmentDefaults(
   const traces = config.observability?.traces
   const inheritedTraces = inherited.observability?.traces
   const uploadSourceMaps = config.upload_source_maps ?? inherited.upload_source_maps ?? options.uploadSourceMaps ?? true
+  const previewUrls = config.preview_urls ?? inherited.preview_urls ?? false
+  const workersDev = config.workers_dev
+    ?? inherited.workers_dev
+    ?? ((config.route !== undefined || (config.routes?.length ?? 0) > 0) ? false : undefined)
+  const versionMetadataBinding = options.versionMetadataBinding ?? 'CF_VERSION_METADATA'
+  const localBindingNames = collectBindingNames(config)
+  const versionMetadata = config.version_metadata
+    ?? (inherited.version_metadata && !localBindingNames.has(inherited.version_metadata.binding)
+      ? inherited.version_metadata
+      : undefined)
+    ?? (localBindingNames.has(versionMetadataBinding) ? undefined : { binding: versionMetadataBinding })
 
   return {
     ...config,
@@ -154,9 +269,9 @@ function applyEnvironmentDefaults(
     },
     ...(requiredSecrets.length > 0 ? { secrets: { ...config.secrets, required: requiredSecrets } } : {}),
     upload_source_maps: uploadSourceMaps,
-    version_metadata: config.version_metadata ?? inherited.version_metadata ?? {
-      binding: options.versionMetadataBinding ?? 'CF_VERSION_METADATA',
-    },
+    ...(versionMetadata ? { version_metadata: versionMetadata } : {}),
+    preview_urls: previewUrls,
+    ...(workersDev === undefined ? {} : { workers_dev: workersDev }),
   }
 }
 
@@ -166,33 +281,134 @@ function diagnoseEnvironment(
   diagnostics: WranglerDiagnostic[],
   publicVarNames: ReadonlySet<string>,
 ): void {
-  if (config.assets && hasOwn(config.assets, 'run_worker_first')) {
+  const workerFirst: unknown = config.assets?.run_worker_first
+  if (workerFirst === true) {
     diagnostics.push({
       _tag: 'error',
       code: 'assets-worker-first',
-      message: 'Remove assets.run_worker_first. Static assets must bypass the Worker.',
-      path: `${prefix}assets.run_worker_first`,
+      message: 'Replace blanket Worker-first routing with false or a narrow route-pattern array.',
+      configPath: `${prefix}assets.run_worker_first`,
+    })
+  }
+  else if (Array.isArray(workerFirst)) {
+    const invalidPatternIndex = workerFirst.findIndex(
+      pattern => typeof pattern !== 'string' || !/^(?:!\/|\/)/.test(pattern),
+    )
+    if (invalidPatternIndex !== -1) {
+      diagnostics.push({
+        _tag: 'error',
+        code: 'assets-worker-first-pattern-invalid',
+        message: 'Selective Worker-first patterns must begin with / or !/.',
+        configPath: `${prefix}assets.run_worker_first.${invalidPatternIndex}`,
+      })
+    }
+  }
+  else if (workerFirst !== undefined && workerFirst !== false) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'assets-worker-first-pattern-invalid',
+      message: 'assets.run_worker_first must be false or an array of route patterns.',
+      configPath: `${prefix}assets.run_worker_first`,
+    })
+  }
+
+  const durableObjectExports = isRecord(config.exports)
+    ? Object.entries(config.exports).filter(([, value]) => isRecord(value) && value.type === 'durable-object')
+    : []
+  const migrations = Array.isArray(config.migrations) ? config.migrations : []
+  if (durableObjectExports.length > 0 && migrations.length > 0) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'durable-object-lifecycle-mixed',
+      message: 'Durable Object declarative exports and legacy migrations are mutually exclusive.',
+      configPath: `${prefix}exports`,
+    })
+  }
+  const durableObjects = isRecord(config.durable_objects) ? config.durable_objects : undefined
+  const bindings = Array.isArray(durableObjects?.bindings) ? durableObjects.bindings : []
+  const localClassNames = bindings.flatMap((binding) => {
+    if (!isRecord(binding) || typeof binding.script_name === 'string' || typeof binding.class_name !== 'string')
+      return []
+    return [binding.class_name]
+  })
+  const inactiveExportedClassNames = new Set(durableObjectExports.flatMap(([name, value]) => {
+    if (!isRecord(value) || value.state === undefined || value.state === 'created')
+      return []
+    return [name]
+  }))
+  if (localClassNames.some(className => inactiveExportedClassNames.has(className))) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'durable-object-binding-inactive',
+      message: 'A Durable Object binding may target only an active declarative export with state created or omitted.',
+      configPath: `${prefix}durable_objects.bindings`,
+    })
+  }
+  const exportedClassNames = new Set(durableObjectExports.map(([name]) => name))
+  const migratedClassNames = new Set<string>()
+  for (const migration of migrations) {
+    if (!isRecord(migration))
+      continue
+    for (const key of ['new_classes', 'new_sqlite_classes'] as const) {
+      if (Array.isArray(migration[key])) {
+        for (const className of migration[key]) {
+          if (typeof className === 'string') {
+            migratedClassNames.add(className)
+          }
+        }
+      }
+    }
+    if (Array.isArray(migration.renamed_classes)) {
+      for (const rename of migration.renamed_classes) {
+        if (!isRecord(rename))
+          continue
+        if (typeof rename.from === 'string')
+          migratedClassNames.delete(rename.from)
+        if (typeof rename.to === 'string')
+          migratedClassNames.add(rename.to)
+      }
+    }
+    if (Array.isArray(migration.transferred_classes)) {
+      for (const transfer of migration.transferred_classes) {
+        if (isRecord(transfer) && typeof transfer.to === 'string')
+          migratedClassNames.add(transfer.to)
+      }
+    }
+    if (Array.isArray(migration.deleted_classes)) {
+      for (const className of migration.deleted_classes) {
+        if (typeof className === 'string') {
+          migratedClassNames.delete(className)
+        }
+      }
+    }
+  }
+  if (localClassNames.some(className => !exportedClassNames.has(className) && !migratedClassNames.has(className))) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'durable-object-lifecycle-unmanaged',
+      message: 'Every locally defined Durable Object needs a declarative export or a legacy migration history.',
+      configPath: `${prefix}durable_objects.bindings`,
     })
   }
 
   const requiredSecrets = new Set(config.secrets?.required ?? [])
   for (const name of Object.keys(config.vars ?? {})) {
-    const path = `${prefix}vars.${name}`
+    const configPath = `${prefix}vars.${name}`
     if (requiredSecrets.has(name)) {
       diagnostics.push({
         _tag: 'error',
         code: 'secret-declared-as-var',
         message: `Remove ${name} from vars; it is declared as a required encrypted secret.`,
-        path,
+        configPath,
       })
       continue
     }
     if (!publicVarNames.has(name) && !/^(?:NUXT_)?PUBLIC_/i.test(name) && SECRET_NAME_RE.test(name)) {
       diagnostics.push({
-        _tag: 'error',
+        _tag: 'warning',
         code: 'plaintext-secret-var',
         message: `Move secret-looking variable ${name} to an encrypted Worker secret.`,
-        path,
+        configPath,
       })
     }
   }
@@ -200,12 +416,37 @@ function diagnoseEnvironment(
   const consumers = config.queues?.consumers ?? []
   consumers.forEach((consumer, index) => {
     const retries = consumer.max_retries
-    if (typeof retries === 'number' && retries > 10) {
+    const retryDelay = consumer.retry_delay
+    if (typeof retries === 'number' && (!Number.isSafeInteger(retries) || retries < 0 || retries > 100)) {
+      diagnostics.push({
+        _tag: 'error',
+        code: 'queue-retries-out-of-range',
+        message: 'Queue consumer max_retries must be an integer between 0 and 100.',
+        configPath: `${prefix}queues.consumers.${index}.max_retries`,
+      })
+    }
+    else if (typeof retries === 'number' && retries > 3) {
       diagnostics.push({
         _tag: 'warning',
-        code: 'queue-retries-excessive',
-        message: `Queue consumer retries ${retries} times; verify this is intentional and backed by a DLQ.`,
-        path: `${prefix}queues.consumers.${index}.max_retries`,
+        code: 'queue-retries-above-policy',
+        message: `Queue consumer retries ${retries} times, above Cloudflare's default of 3. Verify the work is replay-safe.`,
+        configPath: `${prefix}queues.consumers.${index}.max_retries`,
+      })
+    }
+    if (typeof consumer.dead_letter_queue !== 'string' || consumer.dead_letter_queue.length === 0) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'queue-dlq-missing',
+        message: 'Configure a dead-letter queue or explicitly allow this warning for intentionally lossy work.',
+        configPath: `${prefix}queues.consumers.${index}.dead_letter_queue`,
+      })
+    }
+    if (typeof retryDelay === 'number' && (!Number.isSafeInteger(retryDelay) || retryDelay < 0 || retryDelay > 86_400)) {
+      diagnostics.push({
+        _tag: 'error',
+        code: 'queue-retry-delay-out-of-range',
+        message: 'Queue consumer retry_delay must be between 0 and 86400 seconds.',
+        configPath: `${prefix}queues.consumers.${index}.retry_delay`,
       })
     }
   })
@@ -215,7 +456,7 @@ function diagnosePolicy(
   config: WranglerConfigInput,
   prefix: string,
   diagnostics: WranglerDiagnostic[],
-  options: Required<Pick<WranglerDiagnosticOptions, 'compatibilityMaxAgeDays' | 'now'>>,
+  options: Required<Pick<WranglerDiagnosticOptions, 'compatibilityMaxAgeDays' | 'now' | 'requireNodeCompat'>>,
   publicVarNames: ReadonlySet<string>,
 ): void {
   const compatibilityDate = config.compatibility_date
@@ -225,7 +466,7 @@ function diagnosePolicy(
       _tag: 'error',
       code: 'compatibility-date-missing',
       message: 'Set an explicit compatibility_date.',
-      path: `${prefix}compatibility_date`,
+      configPath: `${prefix}compatibility_date`,
     })
   }
   else {
@@ -235,7 +476,7 @@ function diagnosePolicy(
         _tag: 'error',
         code: 'compatibility-date-invalid',
         message: 'compatibility_date must be a real YYYY-MM-DD date.',
-        path: `${prefix}compatibility_date`,
+        configPath: `${prefix}compatibility_date`,
       })
     }
     else if ((options.now.getTime() - parsed.getTime()) / MILLISECONDS_PER_DAY > options.compatibilityMaxAgeDays) {
@@ -243,17 +484,29 @@ function diagnosePolicy(
         _tag: 'warning',
         code: 'stale-compatibility-date',
         message: `compatibility_date is older than the ${options.compatibilityMaxAgeDays}-day project policy. Review compatibility flags before advancing it.`,
-        path: `${prefix}compatibility_date`,
+        configPath: `${prefix}compatibility_date`,
       })
     }
   }
 
-  if (!config.compatibility_flags?.includes('nodejs_compat')) {
+  if (options.requireNodeCompat && !config.compatibility_flags?.includes('nodejs_compat')) {
     diagnostics.push({
       _tag: 'error',
       code: 'missing-nodejs-compat',
       message: 'Add nodejs_compat to compatibility_flags.',
-      path: `${prefix}compatibility_flags`,
+      configPath: `${prefix}compatibility_flags`,
+    })
+  }
+  if (options.requireNodeCompat
+    && parsedCompatibilityDateBeforeV2(compatibilityDate)
+    && config.compatibility_flags?.includes('nodejs_compat')
+    && !config.compatibility_flags.includes('nodejs_compat_v2')
+    && !config.compatibility_flags.includes('no_nodejs_compat_v2')) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'nodejs-compat-version-implicit',
+      message: 'Before 2024-09-23, choose nodejs_compat_v2 or no_nodejs_compat_v2 explicitly.',
+      configPath: `${prefix}compatibility_flags`,
     })
   }
   if (config.observability?.enabled !== true) {
@@ -261,15 +514,51 @@ function diagnosePolicy(
       _tag: 'warning',
       code: 'observability-disabled',
       message: 'Enable Workers observability.',
-      path: `${prefix}observability.enabled`,
+      configPath: `${prefix}observability.enabled`,
     })
+  }
+  else {
+    const samplingRates = [
+      ['head_sampling_rate', config.observability.head_sampling_rate],
+      ['logs.head_sampling_rate', config.observability.logs?.head_sampling_rate],
+      ['traces.head_sampling_rate', config.observability.traces?.head_sampling_rate],
+    ] as const
+    for (const [path, rate] of samplingRates) {
+      if (rate !== undefined && (!Number.isFinite(rate) || rate < 0 || rate > 1)) {
+        diagnostics.push({
+          _tag: 'error',
+          code: 'observability-sampling-out-of-range',
+          message: 'Observability sampling rates must be finite numbers between 0 and 1.',
+          configPath: `${prefix}observability.${path}`,
+        })
+      }
+    }
+    if (config.observability.traces?.enabled !== true) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'traces-disabled',
+        message: 'Enable Workers traces with an explicit sampling rate.',
+        configPath: `${prefix}observability.traces.enabled`,
+      })
+    }
+    const logsEnabled = config.observability.logs?.enabled !== false
+    const tracesEnabled = config.observability.traces?.enabled === true
+    if ((logsEnabled && config.observability.logs?.head_sampling_rate === undefined)
+      || (tracesEnabled && config.observability.traces?.head_sampling_rate === undefined)) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'observability-sampling-implicit',
+        message: 'Set explicit log and trace sampling rates; enabled telemetry otherwise defaults to 100%.',
+        configPath: `${prefix}observability`,
+      })
+    }
   }
   if (config.upload_source_maps !== true) {
     diagnostics.push({
       _tag: 'warning',
       code: 'source-maps-disabled',
       message: 'Enable upload_source_maps when the Worker build emits source maps.',
-      path: `${prefix}upload_source_maps`,
+      configPath: `${prefix}upload_source_maps`,
     })
   }
   if (!config.version_metadata?.binding) {
@@ -277,15 +566,39 @@ function diagnosePolicy(
       _tag: 'warning',
       code: 'version-metadata-missing',
       message: 'Add a version_metadata binding for deployment correlation.',
-      path: `${prefix}version_metadata`,
+      configPath: `${prefix}version_metadata`,
+    })
+  }
+  if (config.keep_vars === true) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'keep-vars-enabled',
+      message: 'keep_vars allows dashboard-managed plaintext variables to drift from source control.',
+      configPath: `${prefix}keep_vars`,
+    })
+  }
+  if (config.preview_urls === true) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'preview-urls-public',
+      message: 'Preview URLs are public unless protected by Access; their logs cannot be viewed through Workers Logs, tail, or Logpush.',
+      configPath: `${prefix}preview_urls`,
     })
   }
   if (config.workers_dev === true) {
     diagnostics.push({
       _tag: 'warning',
       code: 'workers-dev-enabled',
-      message: 'Production workers.dev exposure is enabled; verify this is intentional.',
-      path: `${prefix}workers_dev`,
+      message: 'The public workers.dev endpoint is enabled. Set workers_dev to false unless this is intentional.',
+      configPath: `${prefix}workers_dev`,
+    })
+  }
+  else if (config.workers_dev === undefined) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'workers-dev-implicit',
+      message: 'Set workers_dev explicitly; current Wrangler behavior and published defaults differ when routes are present.',
+      configPath: `${prefix}workers_dev`,
     })
   }
 
@@ -318,7 +631,10 @@ function resolveEnvironmentPolicy(
     ...environment,
     compatibility_date: environment.compatibility_date ?? root.compatibility_date,
     compatibility_flags: environment.compatibility_flags ?? root.compatibility_flags,
+    exports: environment.exports ?? root.exports,
+    migrations: environment.migrations ?? root.migrations,
     observability: mergeObservability(root.observability, environment.observability),
+    preview_urls: environment.preview_urls ?? root.preview_urls,
     upload_source_maps: environment.upload_source_maps ?? root.upload_source_maps,
     workers_dev: environment.workers_dev ?? root.workers_dev,
   }
@@ -332,6 +648,16 @@ export function diagnoseWranglerConfig(
   const diagnosticOptions = {
     compatibilityMaxAgeDays: options.compatibilityMaxAgeDays ?? 90,
     now: options.now ?? new Date(),
+    requireNodeCompat: options.requireNodeCompat ?? true,
+  }
+
+  if (options.generated && Object.keys(config.env ?? {}).length > 0) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'generated-config-has-env',
+      message: 'Generated Wrangler config must target one flattened environment and contain no env block.',
+      configPath: 'env',
+    })
   }
 
   const publicVarNames = new Set(options.publicVarNames ?? [])
@@ -351,7 +677,11 @@ export function diagnoseWranglerConfig(
 
 export function formatWranglerDiagnostics(diagnostics: readonly WranglerDiagnostic[]): string {
   return diagnostics
-    .map(diagnostic => `${diagnostic._tag === 'error' ? 'ERROR' : 'WARN'} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`)
+    .map((diagnostic) => {
+      const location = [diagnostic.sourcePath, diagnostic.configPath].filter(Boolean).join(':')
+      const severity = diagnostic._tag === 'error' ? 'ERROR' : diagnostic._tag === 'warning' ? 'WARN' : 'INFO'
+      return `${severity} ${diagnostic.code}${location ? ` ${location}` : ''}: ${diagnostic.message}`
+    })
     .join('\n')
 }
 

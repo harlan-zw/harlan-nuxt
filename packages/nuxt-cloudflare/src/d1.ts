@@ -2,6 +2,22 @@ export type D1WriteSafety
   = | { _tag: 'lock-only' }
     | { _tag: 'replay-safe' }
 
+export const D1_MAX_BOUND_PARAMETERS = 100
+
+const D1_PARAMETER_PLAN = Symbol('@harlan-zw/nuxt-cloudflare:d1-parameter-plan')
+
+export interface D1ParameterPlanInput {
+  parametersPerItem: number
+  reservedParameters: number
+}
+
+export interface D1ParameterPlan {
+  readonly [D1_PARAMETER_PLAN]: true
+  readonly itemsPerStatement: number
+  readonly parametersPerItem: number
+  readonly reservedParameters: number
+}
+
 export type D1Consistency
   = | { _tag: 'first-primary' }
     | { _tag: 'first-unconstrained' }
@@ -59,12 +75,77 @@ function parseMaxAttempts(value: number | undefined): number {
   return attempts
 }
 
+function parseParameterCount(name: string, value: number, minimum: number): number {
+  if (!Number.isSafeInteger(value) || value < minimum)
+    throw new TypeError(`D1 ${name} must be an integer greater than or equal to ${minimum}`)
+  return value
+}
+
+export function defineD1ParameterPlan(input: D1ParameterPlanInput): D1ParameterPlan {
+  const parametersPerItem = parseParameterCount('parametersPerItem', input.parametersPerItem, 1)
+  const reservedParameters = parseParameterCount(
+    'reservedParameters',
+    input.reservedParameters,
+    0,
+  )
+  const itemsPerStatement = Math.floor(
+    (D1_MAX_BOUND_PARAMETERS - reservedParameters) / parametersPerItem,
+  )
+  if (itemsPerStatement < 1)
+    throw new TypeError('D1 parameter budget cannot fit one item')
+  return Object.freeze({
+    [D1_PARAMETER_PLAN]: true as const,
+    itemsPerStatement,
+    parametersPerItem,
+    reservedParameters,
+  })
+}
+
+export function chunkD1Items<T>(items: readonly T[], plan: D1ParameterPlan): T[][] {
+  if (plan?.[D1_PARAMETER_PLAN] !== true)
+    throw new TypeError('D1 parameter plan must come from defineD1ParameterPlan')
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += plan.itemsPerStatement)
+    chunks.push(items.slice(index, index + plan.itemsPerStatement))
+  return chunks
+}
+
+export function assertD1BoundParameters(parameters: readonly unknown[]): void {
+  if (!Array.isArray(parameters))
+    throw new TypeError('D1 bound parameters must be an array')
+  if (parameters.length > D1_MAX_BOUND_PARAMETERS) {
+    throw new RangeError(
+      `D1 statement has ${parameters.length} bound parameters; maximum is ${D1_MAX_BOUND_PARAMETERS}`,
+    )
+  }
+}
+
 export function classifyD1RetryError(error: unknown): D1RetryErrorKind {
-  const message = error instanceof Error ? error.message : String(error)
-  if (/busy|locked/i.test(message))
+  const messages: string[] = []
+  const seen = new WeakSet<object>()
+  let current: unknown = error
+  while (current !== undefined && current !== null) {
+    if (typeof current !== 'object') {
+      messages.push(String(current))
+      break
+    }
+    if (seen.has(current))
+      break
+    seen.add(current)
+    if (current instanceof Error)
+      messages.push(current.message)
+    else if ('message' in current && typeof current.message === 'string')
+      messages.push(current.message)
+    current = 'cause' in current ? current.cause : undefined
+  }
+  if (messages.some(message => /busy|locked/i.test(message)))
     return { _tag: 'lock' }
-  if (TRANSIENT_D1_SIGNALS.some(signal => message.includes(signal)))
+  if (messages.some((message) => {
+    const normalized = message.toLowerCase()
+    return TRANSIENT_D1_SIGNALS.some(signal => normalized.includes(signal.toLowerCase()))
+  })) {
     return { _tag: 'transient' }
+  }
   return { _tag: 'permanent' }
 }
 
@@ -97,7 +178,7 @@ export async function retryIdempotentD1Write<T>(options: RetryIdempotentD1WriteO
   let lastError: unknown
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const outcome = await options.run().then(
+    const outcome = await Promise.resolve().then(options.run).then(
       value => ({ _tag: 'ok' as const, value }),
       error => ({ _tag: 'error' as const, error }),
     )
