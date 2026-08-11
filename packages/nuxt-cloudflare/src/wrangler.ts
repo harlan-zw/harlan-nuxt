@@ -17,6 +17,17 @@ export type WranglerPlacementInput
     | { hostname: string, host?: never, mode?: never, region?: never }
     | { region: string, host?: never, hostname?: never, mode?: never }
 
+export interface WranglerRemoteBindingInput extends Record<string, unknown> {
+  binding?: string
+  remote?: boolean
+}
+
+export interface WranglerContainerInput extends Record<string, unknown> {
+  class_name?: string
+  image?: string
+  instance_type?: string | Record<string, unknown>
+}
+
 export type WorkersCachePolicy
   = | { _tag: 'disabled' }
     | { _tag: 'enabled', crossVersion: boolean }
@@ -36,12 +47,17 @@ export interface WranglerObservabilityInput {
 }
 
 export interface WranglerConfigInput extends Record<string, unknown> {
+  ai?: WranglerRemoteBindingInput
   assets?: WranglerAssetsInput
+  browser?: WranglerRemoteBindingInput
   cache?: WranglerWorkersCacheInput
   compatibility_date?: string
   compatibility_flags?: string[]
+  containers?: WranglerContainerInput[]
   env?: Record<string, WranglerConfigInput>
+  images?: WranglerRemoteBindingInput
   keep_vars?: boolean
+  mtls_certificates?: WranglerRemoteBindingInput[]
   observability?: WranglerObservabilityInput
   placement?: WranglerPlacementInput
   preview_urls?: boolean
@@ -54,6 +70,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   secrets?: {
     required?: string[]
   }
+  vectorize?: WranglerRemoteBindingInput[]
   upload_source_maps?: boolean
   vars?: Record<string, unknown>
   version_metadata?: {
@@ -77,11 +94,17 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'assets-worker-first-pattern-invalid',
   'compatibility-date-missing',
   'compatibility-date-invalid',
+  'container-durable-object-binding-missing',
+  'container-durable-object-not-sqlite',
+  'container-instance-type-deprecated',
   'durable-object-binding-inactive',
   'durable-object-lifecycle-mixed',
   'durable-object-lifecycle-unmanaged',
+  'email-binding-unrestricted',
+  'environment-binding-missing',
   'generated-config-has-env',
   'keep-vars-enabled',
+  'legacy-module-binding',
   'missing-nodejs-compat',
   'nodejs-compat-version-implicit',
   'observability-disabled',
@@ -89,6 +112,7 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'observability-sampling-out-of-range',
   'plaintext-secret-var',
   'preview-urls-public',
+  'pipeline-binding-deprecated',
   'queue-dlq-missing',
   'queue-retries-above-policy',
   'queue-retries-out-of-range',
@@ -97,6 +121,8 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'source-maps-disabled',
   'stale-compatibility-date',
   'traces-disabled',
+  'remote-binding-not-enabled',
+  'unsafe-hello-world-binding',
   'version-metadata-missing',
   'workers-dev-enabled',
   'workers-dev-implicit',
@@ -122,6 +148,7 @@ export interface WranglerDiagnosticOptions {
   compatibilityMaxAgeDays?: number
   generated?: boolean
   now?: Date
+  normalized?: boolean
   publicVarNames?: readonly string[]
   requireNodeCompat?: boolean
 }
@@ -162,14 +189,6 @@ function resolveWorkersCachePolicy(policy: WorkersCachePolicy): WranglerWorkersC
   return { enabled: true, cross_version_cache: policy.crossVersion }
 }
 
-function resolveAuthoredWorkersCache(
-  cache: WranglerWorkersCacheInput | undefined,
-): WranglerWorkersCacheInput {
-  if (!cache)
-    return resolveWorkersCachePolicy({ _tag: 'disabled' })
-  return { ...cache, cross_version_cache: cache.cross_version_cache ?? false }
-}
-
 const WRANGLER_BINDING_CATEGORIES = [
   'data_blobs',
   'durable_objects',
@@ -203,41 +222,148 @@ const WRANGLER_BINDING_CATEGORIES = [
   'secrets_store_secrets',
   'artifacts',
   'ratelimits',
+  'worker_loaders',
+  'vpc_services',
+  'vpc_networks',
   'assets',
   'unsafe_hello_world',
   'flagship',
 ] as const
 
-function addBindingNames(names: Set<string>, value: unknown): void {
+const WRANGLER_RECORD_BINDING_CATEGORIES = new Set<string>([
+  'cloudchamber',
+  'data_blobs',
+  'define',
+  'text_blobs',
+  'vars',
+  'wasm_modules',
+])
+
+const WRANGLER_NON_INHERITED_BINDING_CATEGORIES = [
+  'agent_memory',
+  'ai',
+  'ai_search',
+  'ai_search_namespaces',
+  'analytics_engine_datasets',
+  'artifacts',
+  'browser',
+  'cloudchamber',
+  'containers',
+  'd1_databases',
+  'data_blobs',
+  'define',
+  'dispatch_namespaces',
+  'durable_objects',
+  'flagship',
+  'hyperdrive',
+  'images',
+  'kv_namespaces',
+  'logfwdr',
+  'media',
+  'mtls_certificates',
+  'pipelines',
+  'queues',
+  'r2_buckets',
+  'ratelimits',
+  'secrets',
+  'secrets_store_secrets',
+  'send_email',
+  'services',
+  'stream',
+  'streaming_tail_consumers',
+  'tail_consumers',
+  'text_blobs',
+  'unsafe',
+  'unsafe_hello_world',
+  'vars',
+  'vectorize',
+  'version_metadata',
+  'vpc_networks',
+  'vpc_services',
+  'wasm_modules',
+  'websearch',
+  'worker_loaders',
+  'workflows',
+] as const
+
+function addBindingNames(names: Set<string>, value: unknown, category?: string): void {
   if (Array.isArray(value)) {
     value.forEach((entry) => {
-      if (isRecord(entry) && typeof entry.binding === 'string')
+      if (!isRecord(entry))
+        return
+      if (typeof entry.binding === 'string')
         names.add(entry.binding)
+      else if (typeof entry.name === 'string')
+        names.add(entry.name)
+      else if (category === 'containers' && typeof entry.class_name === 'string')
+        names.add(entry.class_name)
+      else if ((category === 'tail_consumers' || category === 'streaming_tail_consumers') && typeof entry.service === 'string')
+        names.add(entry.service)
     })
     return
   }
   if (!isRecord(value))
     return
-  if (Array.isArray(value.bindings)
-    && value.bindings.every(binding => isRecord(binding) && typeof binding.name === 'string')) {
-    value.bindings.forEach(binding => names.add((binding as { name: string }).name))
+  if (Array.isArray(value.bindings)) {
+    value.bindings.forEach((binding) => {
+      if (isRecord(binding) && typeof binding.name === 'string')
+        names.add(binding.name)
+    })
     return
   }
   if (typeof value.binding === 'string') {
     names.add(value.binding)
     return
   }
-  Object.entries(value).forEach(([name, binding]) => {
-    if (binding !== undefined)
-      names.add(name)
-  })
+  if (category && WRANGLER_RECORD_BINDING_CATEGORIES.has(category)) {
+    Object.entries(value).forEach(([name, binding]) => {
+      if (binding !== undefined)
+        names.add(name)
+    })
+  }
 }
 
 function collectBindingNames(config: WranglerConfigInput): Set<string> {
   const names = new Set(config.secrets?.required ?? [])
-  WRANGLER_BINDING_CATEGORIES.forEach(category => addBindingNames(names, config[category]))
+  WRANGLER_BINDING_CATEGORIES.forEach(category => addBindingNames(names, config[category], category))
   addBindingNames(names, config.queues?.producers)
   return names
+}
+
+function collectCategoryBindingNames(config: WranglerConfigInput, category: string): Set<string> {
+  if (category === 'secrets')
+    return new Set(config.secrets?.required ?? [])
+  const names = new Set<string>()
+  if (category === 'queues') {
+    addBindingNames(names, config.queues?.producers)
+    config.queues?.consumers?.forEach((consumer) => {
+      if (typeof consumer.queue === 'string')
+        names.add(consumer.queue)
+    })
+  }
+  else {
+    addBindingNames(names, config[category], category)
+  }
+  return names
+}
+
+function configuredRemoteBindings(config: WranglerConfigInput): Array<{ path: string, value: Record<string, unknown> }> {
+  const bindings: Array<{ path: string, value: Record<string, unknown> }> = []
+  for (const category of ['ai', 'browser', 'images'] as const) {
+    const value = config[category]
+    if (isRecord(value) && typeof value.binding === 'string')
+      bindings.push({ path: category, value })
+  }
+  for (const category of ['flagship', 'mtls_certificates', 'vectorize'] as const) {
+    const value = config[category]
+    if (!Array.isArray(value))
+      continue
+    value.forEach((entry, index) => {
+      if (isRecord(entry) && typeof entry.binding === 'string')
+        bindings.push({ path: `${category}.${index}`, value: entry })
+    })
+  }
+  return bindings
 }
 
 export function applyCloudflareDefaults(
@@ -261,9 +387,12 @@ function applyEnvironmentDefaults(
 ): WranglerConfigInput {
   const compatibilityDate = config.compatibility_date ?? inherited.compatibility_date ?? options.compatibilityDate
   const compatibilityFlags = unique([...(config.compatibility_flags ?? inherited.compatibility_flags ?? []), 'nodejs_compat'])
+  const authoredCache = config.cache ?? inherited.cache
   const cache = options.workersCache
     ? resolveWorkersCachePolicy(options.workersCache)
-    : resolveAuthoredWorkersCache(config.cache ?? inherited.cache)
+    : authoredCache
+      ? { ...authoredCache, cross_version_cache: authoredCache.cross_version_cache ?? false }
+      : resolveWorkersCachePolicy({ _tag: 'disabled' })
   const requiredSecrets = unique([...(config.secrets?.required ?? []), ...(options.requiredSecrets ?? [])])
   const logs = config.observability?.logs
   const inheritedLogs = inherited.observability?.logs
@@ -319,14 +448,16 @@ function diagnoseEnvironment(
   config: WranglerConfigInput,
   prefix: string,
   diagnostics: WranglerDiagnostic[],
+  generated: boolean,
+  normalized: boolean,
   publicVarNames: ReadonlySet<string>,
 ): void {
   const workerFirst: unknown = config.assets?.run_worker_first
   if (workerFirst === true) {
     diagnostics.push({
-      _tag: 'error',
+      _tag: 'warning',
       code: 'assets-worker-first',
-      message: 'Replace blanket Worker-first routing with false or a narrow route-pattern array.',
+      message: 'Blanket Worker-first routing invokes the Worker for every asset. Use it only when authentication or response transforms require it.',
       configPath: `${prefix}assets.run_worker_first`,
     })
   }
@@ -356,7 +487,9 @@ function diagnoseEnvironment(
     ? Object.entries(config.exports).filter(([, value]) => isRecord(value) && value.type === 'durable-object')
     : []
   const migrations = Array.isArray(config.migrations) ? config.migrations : []
-  if (durableObjectExports.length > 0 && migrations.length > 0) {
+  const hasExports = normalized ? durableObjectExports.length > 0 : Object.hasOwn(config, 'exports')
+  const hasMigrations = normalized ? migrations.length > 0 : Object.hasOwn(config, 'migrations')
+  if (hasExports && hasMigrations) {
     diagnostics.push({
       _tag: 'error',
       code: 'durable-object-lifecycle-mixed',
@@ -372,7 +505,7 @@ function diagnoseEnvironment(
     return [binding.class_name]
   })
   const inactiveExportedClassNames = new Set(durableObjectExports.flatMap(([name, value]) => {
-    if (!isRecord(value) || value.state === undefined || value.state === 'created')
+    if (!isRecord(value) || value.state === undefined || value.state === 'created' || value.state === 'expecting-transfer')
       return []
     return [name]
   }))
@@ -380,12 +513,18 @@ function diagnoseEnvironment(
     diagnostics.push({
       _tag: 'error',
       code: 'durable-object-binding-inactive',
-      message: 'A Durable Object binding may target only an active declarative export with state created or omitted.',
+      message: 'A Durable Object binding may target only an active declarative export.',
       configPath: `${prefix}durable_objects.bindings`,
     })
   }
   const exportedClassNames = new Set(durableObjectExports.map(([name]) => name))
+  const exportedClassStorage = new Map(durableObjectExports.flatMap(([name, value]) => {
+    if (!isRecord(value) || (value.storage !== 'sqlite' && value.storage !== 'legacy-kv'))
+      return []
+    return [[name, value.storage] as const]
+  }))
   const migratedClassNames = new Set<string>()
+  const migratedClassStorage = new Map<string, 'legacy-kv' | 'sqlite'>()
   for (const migration of migrations) {
     if (!isRecord(migration))
       continue
@@ -394,6 +533,7 @@ function diagnoseEnvironment(
         for (const className of migration[key]) {
           if (typeof className === 'string') {
             migratedClassNames.add(className)
+            migratedClassStorage.set(className, key === 'new_sqlite_classes' ? 'sqlite' : 'legacy-kv')
           }
         }
       }
@@ -402,10 +542,16 @@ function diagnoseEnvironment(
       for (const rename of migration.renamed_classes) {
         if (!isRecord(rename))
           continue
-        if (typeof rename.from === 'string')
+        const storage = typeof rename.from === 'string' ? migratedClassStorage.get(rename.from) : undefined
+        if (typeof rename.from === 'string') {
           migratedClassNames.delete(rename.from)
-        if (typeof rename.to === 'string')
+          migratedClassStorage.delete(rename.from)
+        }
+        if (typeof rename.to === 'string') {
           migratedClassNames.add(rename.to)
+          if (storage)
+            migratedClassStorage.set(rename.to, storage)
+        }
       }
     }
     if (Array.isArray(migration.transferred_classes)) {
@@ -418,6 +564,7 @@ function diagnoseEnvironment(
       for (const className of migration.deleted_classes) {
         if (typeof className === 'string') {
           migratedClassNames.delete(className)
+          migratedClassStorage.delete(className)
         }
       }
     }
@@ -428,6 +575,101 @@ function diagnoseEnvironment(
       code: 'durable-object-lifecycle-unmanaged',
       message: 'Every locally defined Durable Object needs a declarative export or a legacy migration history.',
       configPath: `${prefix}durable_objects.bindings`,
+    })
+  }
+
+  for (const [index, container] of (config.containers ?? []).entries()) {
+    if (typeof container.class_name !== 'string')
+      continue
+    const configPath = `${prefix}containers.${index}.class_name`
+    if (!localClassNames.includes(container.class_name)) {
+      diagnostics.push({
+        _tag: 'error',
+        code: 'container-durable-object-binding-missing',
+        message: `Container class ${container.class_name} needs a matching local Durable Object binding.`,
+        configPath,
+      })
+    }
+    else if (exportedClassStorage.get(container.class_name) === 'legacy-kv'
+      || migratedClassStorage.get(container.class_name) === 'legacy-kv') {
+      diagnostics.push({
+        _tag: 'error',
+        code: 'container-durable-object-not-sqlite',
+        message: `Container class ${container.class_name} needs SQLite Durable Object storage.`,
+        configPath,
+      })
+    }
+    if (container.instance_type === 'dev' || container.instance_type === 'standard') {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'container-instance-type-deprecated',
+        message: `Container instance type ${container.instance_type} is deprecated. Choose a current instance type.`,
+        configPath: `${prefix}containers.${index}.instance_type`,
+      })
+    }
+  }
+
+  if (!generated) {
+    for (const binding of configuredRemoteBindings(config)) {
+      if (binding.value.remote === true)
+        continue
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'remote-binding-not-enabled',
+        message: 'Set remote to true when local development needs the real Cloudflare service.',
+        configPath: `${prefix}${binding.path}.remote`,
+      })
+    }
+  }
+
+  if (Array.isArray(config.send_email)) {
+    config.send_email.forEach((binding, index) => {
+      if (!isRecord(binding))
+        return
+      const isRestricted = typeof binding.destination_address === 'string'
+        || (Array.isArray(binding.allowed_destination_addresses) && binding.allowed_destination_addresses.length > 0)
+        || (Array.isArray(binding.allowed_sender_addresses) && binding.allowed_sender_addresses.length > 0)
+      if (!isRestricted) {
+        diagnostics.push({
+          _tag: 'warning',
+          code: 'email-binding-unrestricted',
+          message: 'Restrict this email binding to approved senders or destinations.',
+          configPath: `${prefix}send_email.${index}`,
+        })
+      }
+    })
+  }
+
+  if (Array.isArray(config.pipelines)) {
+    config.pipelines.forEach((binding, index) => {
+      if (isRecord(binding) && typeof binding.pipeline === 'string') {
+        diagnostics.push({
+          _tag: 'warning',
+          code: 'pipeline-binding-deprecated',
+          message: 'Replace the deprecated pipeline field with stream.',
+          configPath: `${prefix}pipelines.${index}.pipeline`,
+        })
+      }
+    })
+  }
+
+  for (const category of ['data_blobs', 'text_blobs', 'wasm_modules'] as const) {
+    if (isRecord(config[category]) && Object.keys(config[category]).length > 0) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'legacy-module-binding',
+        message: `Replace legacy ${category} bindings with module rules and imports.`,
+        configPath: `${prefix}${category}`,
+      })
+    }
+  }
+
+  if (Array.isArray(config.unsafe_hello_world) && config.unsafe_hello_world.length > 0) {
+    diagnostics.push({
+      _tag: 'error',
+      code: 'unsafe-hello-world-binding',
+      message: 'Remove the explanatory unsafe_hello_world binding.',
+      configPath: `${prefix}unsafe_hello_world`,
     })
   }
 
@@ -454,6 +696,11 @@ function diagnoseEnvironment(
   }
 
   const consumers = config.queues?.consumers ?? []
+  const deadLetterQueues = new Set(consumers.flatMap((consumer) => {
+    return typeof consumer.dead_letter_queue === 'string' && consumer.dead_letter_queue.length > 0
+      ? [consumer.dead_letter_queue]
+      : []
+  }))
   consumers.forEach((consumer, index) => {
     const retries = consumer.max_retries
     const retryDelay = consumer.retry_delay
@@ -473,7 +720,9 @@ function diagnoseEnvironment(
         configPath: `${prefix}queues.consumers.${index}.max_retries`,
       })
     }
-    if (typeof consumer.dead_letter_queue !== 'string' || consumer.dead_letter_queue.length === 0) {
+    const drainsDeadLetterQueue = typeof consumer.queue === 'string' && deadLetterQueues.has(consumer.queue)
+    if (!drainsDeadLetterQueue
+      && (typeof consumer.dead_letter_queue !== 'string' || consumer.dead_letter_queue.length === 0)) {
       diagnostics.push({
         _tag: 'warning',
         code: 'queue-dlq-missing',
@@ -496,7 +745,7 @@ function diagnosePolicy(
   config: WranglerConfigInput,
   prefix: string,
   diagnostics: WranglerDiagnostic[],
-  options: Required<Pick<WranglerDiagnosticOptions, 'compatibilityMaxAgeDays' | 'now' | 'requireNodeCompat'>>,
+  options: Required<Pick<WranglerDiagnosticOptions, 'compatibilityMaxAgeDays' | 'generated' | 'normalized' | 'now' | 'requireNodeCompat'>>,
   publicVarNames: ReadonlySet<string>,
 ): void {
   const compatibilityDate = config.compatibility_date
@@ -658,7 +907,7 @@ function diagnosePolicy(
     })
   }
 
-  diagnoseEnvironment(config, prefix, diagnostics, publicVarNames)
+  diagnoseEnvironment(config, prefix, diagnostics, options.generated, options.normalized, publicVarNames)
 }
 
 function mergeObservability(
@@ -683,13 +932,15 @@ function resolveEnvironmentPolicy(
   root: WranglerConfigInput,
   environment: WranglerConfigInput,
 ): WranglerConfigInput {
+  const exports = environment.exports ?? root.exports
+  const migrations = environment.migrations ?? root.migrations
   return {
     ...environment,
     cache: environment.cache ?? root.cache,
     compatibility_date: environment.compatibility_date ?? root.compatibility_date,
     compatibility_flags: environment.compatibility_flags ?? root.compatibility_flags,
-    exports: environment.exports ?? root.exports,
-    migrations: environment.migrations ?? root.migrations,
+    ...(exports === undefined ? {} : { exports }),
+    ...(migrations === undefined ? {} : { migrations }),
     observability: mergeObservability(root.observability, environment.observability),
     placement: environment.placement ?? root.placement,
     preview_urls: environment.preview_urls ?? root.preview_urls,
@@ -705,6 +956,8 @@ export function diagnoseWranglerConfig(
   const diagnostics: WranglerDiagnostic[] = []
   const diagnosticOptions = {
     compatibilityMaxAgeDays: options.compatibilityMaxAgeDays ?? 90,
+    generated: options.generated ?? false,
+    normalized: options.normalized ?? false,
     now: options.now ?? new Date(),
     requireNodeCompat: options.requireNodeCompat ?? true,
   }
@@ -721,6 +974,19 @@ export function diagnoseWranglerConfig(
   const publicVarNames = new Set(options.publicVarNames ?? [])
   diagnosePolicy(config, '', diagnostics, diagnosticOptions, publicVarNames)
   for (const [name, environment] of Object.entries(config.env ?? {})) {
+    for (const category of WRANGLER_NON_INHERITED_BINDING_CATEGORIES) {
+      const rootNames = collectCategoryBindingNames(config, category)
+      const environmentNames = collectCategoryBindingNames(environment, category)
+      const missingNames = [...rootNames].filter(binding => !environmentNames.has(binding))
+      if (missingNames.length > 0) {
+        diagnostics.push({
+          _tag: 'warning',
+          code: 'environment-binding-missing',
+          message: `Named environments do not inherit ${category}. Add bindings for: ${missingNames.join(', ')}.`,
+          configPath: `env.${name}.${category}`,
+        })
+      }
+    }
     diagnosePolicy(
       resolveEnvironmentPolicy(config, environment),
       `env.${name}.`,

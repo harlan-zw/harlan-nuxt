@@ -109,6 +109,20 @@ describe('retryIdempotentD1Write', () => {
     expect(isTransientD1Error(error)).toBe(false)
   })
 
+  it.each([
+    'D1 DB is overloaded. Requests queued for too long.',
+    'D1 DB storage operation exceeded timeout which caused object to be reset.',
+    'D1 DB\'s isolate exceeded its memory limit and was reset.',
+    'D1 DB exceeded its CPU time limit and was reset.',
+  ])('does not amplify resource pressure by retrying: %s', async (message) => {
+    const error = new Error(`D1_ERROR: ${message}`)
+    const run = vi.fn().mockRejectedValue(error)
+
+    await expect(retryIdempotentD1Write({ safety: { _tag: 'replay-safe' }, run })).rejects.toBe(error)
+    expect(run).toHaveBeenCalledOnce()
+    expect(isTransientD1Error(error)).toBe(false)
+  })
+
   it('classifies mixed-case transient errors nested in a cause', () => {
     expect(isTransientD1Error(new Error('wrapper', {
       cause: new Error('D1_ERROR: NETWORK CONNECTION LOST'),

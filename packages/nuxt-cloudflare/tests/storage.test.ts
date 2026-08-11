@@ -27,4 +27,13 @@ describe('withDefaultKvExpiration', () => {
   it('rejects Cloudflare KV expiry below the platform minimum', () => {
     expect(() => withDefaultKvExpiration(driver(async () => {}), 59)).toThrow(/at least 60 seconds/)
   })
+
+  it('raises caller TTLs to the Cloudflare KV platform minimum', async () => {
+    const setItem = vi.fn(async () => {})
+    const wrapped = withDefaultKvExpiration(driver(setItem), 30 * 24 * 60 * 60)
+
+    await wrapped.setItem?.('short', 'value', { ttl: 1 })
+
+    expect(setItem).toHaveBeenCalledWith('short', 'value', { ttl: 60 })
+  })
 })

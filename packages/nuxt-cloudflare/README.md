@@ -7,19 +7,20 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 ## Defaults
 
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
-- Static assets remain asset first by default. Blanket `assets.run_worker_first: true` fails the build and `doctor`; narrow route-pattern arrays remain available for intentional middleware and skew recovery
+- Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
 - Workers Logs sampled at 10%, traces at 1%, both overridable
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
-- Workers Caching enabled by default with per-version isolation
-- Dynamic responses default to `private, no-store`; rendered HTML is forcibly private and conflicting route rules are diagnosed
-- Smart Placement enabled by default; explicit region, host, or hostname placement is preserved
+- Smart Placement enabled unless the project chooses a placement
+- Workers Caching enabled with version isolation
+- Rendered HTML forced to `private, no-store`; explicit non-HTML cache policies remain intact
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
 - Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
 - Raw `cloudflare-kv-binding` on Nitro's `cache` mount upgraded to a 30-day physical expiry
-- Final generated Wrangler config audited after production Nitro compiles
+- Final generated Wrangler config validated through Wrangler, then audited after production Nitro compiles
+- Production builds fail when server runtime config contains a value copied from a secret build environment variable. The error lists config paths only
 - Complete defaults and diagnostics applied to every named Wrangler environment
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
@@ -56,21 +57,11 @@ export default defineNuxtConfig({
 })
 ```
 
-Cloudflare KV requires TTLs of at least 60 seconds.
+Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises shorter positive TTLs to 60 seconds.
 
-Workers Caching is separate from Nitro's KV-backed cache. It is enabled by default with `cross_version_cache: false`, so each deployment starts with an isolated cache. Dynamic Nitro responses default to `Cache-Control: private, no-store` and `Cloudflare-CDN-Cache-Control: no-store` unless they declare an explicit cache policy. Rendered HTML always receives those private directives; this is required because Cloudflare otherwise heuristically caches a `200` response with no cache header for two hours.
+Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
 
-Potential HTML route rules warn when they use `cache`, `isr`, `swr`, or publicly cacheable `Cache-Control`, `CDN-Cache-Control`, and `Cloudflare-CDN-Cache-Control` headers. Rules proven to be HTML through prerendering, a `.html` path, or an explicit `text/html` content type fail the build. Explicit `private` and `no-store` policies are safe. API, Nuxt OG Image, and static asset routes remain available for explicit caching. Disable Workers Caching only for a gateway that must execute on every request:
-
-```ts
-export default defineNuxtConfig({
-  nuxtCloudflare: {
-    workersCache: { _tag: 'disabled' },
-  },
-})
-```
-
-Smart Placement moves fetch handlers only when Cloudflare measures a faster location near upstream services. Assets-first delivery remains close to the user. Queue handlers, RPC methods, and named entrypoints are unaffected. An authored region, host, or hostname placement overrides the smart default.
+Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Rendered HTML always stays private. API and asset responses keep explicit cache policies. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
 
 ## Doctor
 
@@ -84,7 +75,7 @@ pnpm nuxt-cloudflare doctor --strict --allow-warning source-maps-disabled
 
 The CLI reads Wrangler config through Wrangler itself, so JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects follow deployment semantics. It separately inspects root authoring format. Existing TOML remains supported and receives non-blocking guidance because Cloudflare recommends JSONC for new projects. Shadowed root configs warn because they can silently drift.
 
-Errors cover blanket Worker-first assets, malformed selective asset patterns, missing `nodejs_compat`, malformed compatibility dates, secret names duplicated across `vars` and `secrets.required`, queue platform-limit violations, and unflattened generated environments. Warnings cover secret-looking variable names, telemetry gaps, stale dates, implicit or cross-version Workers Caching, `keep_vars`, public endpoints, preview URLs, missing DLQs, and project policy. Secret values are never included.
+Errors cover malformed asset patterns, invalid Durable Object lifecycles, invalid Container storage, queue limits, unsafe example bindings, and unflattened generated environments. Warnings cover blanket Worker-first assets, missing environment bindings, unrestricted email, local service fidelity, deprecated fields, telemetry gaps, and public endpoints. Secret values are never included.
 
 Normal mode fails errors. `--strict` also fails warnings. Intentional exceptions remain visible and may be listed with `--allow-warning`. Module builds use the equivalent policy:
 
@@ -113,6 +104,14 @@ pnpm wrangler check startup --config .output/server/wrangler.json
 
 Pass the final generated config explicitly to `types` and `check startup`; Nitro's `.wrangler/deploy/config.json` redirect does not apply to those commands.
 
+### Product guidance
+
+- Named environments do not inherit bindings. The doctor reports each omitted root binding.
+- AI, Browser, Images, mTLS, Vectorize, and Flagship warn when local development omits `remote: true`.
+- Every Container must match a local SQLite Durable Object. Legacy `dev` and `standard` instance types warn.
+- Email bindings should restrict senders or destinations.
+- Legacy module bindings and the old Pipeline `pipeline` field warn with their current replacements.
+
 ## Runtime primitives
 
 ### D1 sessions and safe retries
@@ -128,7 +127,7 @@ await retryIdempotentD1Write({
 })
 ```
 
-One `first-primary` session is cached per request and binding. D1 already retries read-only queries. Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified transient network and reset failures.
+One `first-primary` session is cached per request and binding. D1 already retries read-only queries. Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
 
 ### D1 parameter plans
 
@@ -190,7 +189,7 @@ The writer uses exclusive creation and mode 0600. It removes partial files after
 
 ## Deliberate boundaries
 
-The module does not choose Worker names, routes, domains, resource IDs, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
+The module does not choose Worker names, routes, domains, resource IDs, placement, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
 
 Next high-value extractions from Nuxt SEO and gscdump:
 

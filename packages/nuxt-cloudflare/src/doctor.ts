@@ -42,7 +42,7 @@ export function diagnoseWranglerProject(options: DiagnoseWranglerProjectOptions)
   return {
     configPath: loaded.path,
     diagnostics: [
-      ...diagnoseWranglerConfig(loaded.config, { ...options, generated: loaded.generated }),
+      ...diagnoseWranglerConfig(loaded.config, { ...options, generated: loaded.generated, normalized: true }),
       ...diagnoseWranglerSourceConfigs(sourceConfigPaths),
     ],
     sourceConfigPaths,

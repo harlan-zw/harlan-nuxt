@@ -2,6 +2,7 @@ import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
+import process from 'node:process'
 import { defineNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
@@ -59,9 +60,44 @@ const workersCachePluginPath = resolve(
     ? 'runtime/server/plugins/workers-cache.ts'
     : 'runtime/server/plugins/workers-cache.js',
 )
+const BUILD_SECRET_ENV_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|ENCRYPTION_KEY|PASSWORD|PRIVATE_KEY|SECRET|SIGNING_KEY|TOKEN|SALT)(?:_|$)/i
+// Nuxt Scripts must resolve this value during setup to register its signed proxy plugin.
+const REQUIRED_BUILD_SECRET_NAMES = new Set(['NUXT_SCRIPTS_PROXY_SECRET'])
 
 function resolveModuleWorkersCachePolicy(options: ModuleOptions): WorkersCachePolicy {
   return options.workersCache ?? { _tag: 'enabled', crossVersion: false }
+}
+
+export function findPopulatedRuntimeSecretPaths(
+  config: unknown,
+  environment: Readonly<Record<string, string | undefined>>,
+): string[] {
+  const paths: string[] = []
+  const buildSecretValues = new Set(Object.entries(environment).flatMap(([name, value]) => {
+    return BUILD_SECRET_ENV_RE.test(name)
+      && !REQUIRED_BUILD_SECRET_NAMES.has(name)
+      && value
+      && value.length >= 8
+      ? [value]
+      : []
+  }))
+  const visit = (value: unknown, parents: string[]): void => {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return
+    for (const [key, child] of Object.entries(value)) {
+      const path = [...parents, key]
+      if (path[0] === 'public')
+        continue
+      if (child && typeof child === 'object' && !Array.isArray(child)) {
+        visit(child, path)
+        continue
+      }
+      if (typeof child === 'string' && buildSecretValues.has(child))
+        paths.push(path.join('.'))
+    }
+  }
+  visit(config, [])
+  return paths
 }
 
 export function configureNitroCloudflare(
@@ -113,6 +149,11 @@ async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions
     throw new Error(`[nuxt-cloudflare] Generated Wrangler config is missing: ${path}`)
   if (result._tag === 'invalid')
     throw new Error(`[nuxt-cloudflare] Generated Wrangler config is invalid: ${result.reason}`)
+  // Keep Wrangler's CLI runtime out of Nuxt module evaluation and development startup.
+  const { readProjectWranglerConfig } = await import('./wrangler-reader')
+  const validated = readProjectWranglerConfig({ config: path, cwd: rootDir })
+  if (validated._tag === 'invalid')
+    throw new Error('[nuxt-cloudflare] Generated Wrangler config fails Wrangler schema validation. Run Wrangler locally for validation details.')
 
   const diagnostics = [
     ...diagnoseWranglerConfig(result.config, {
@@ -148,6 +189,12 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   configure()
   nuxt.hook('modules:done', () => {
     configure()
+    if (nuxt.options.dev)
+      return
+    const populatedRuntimeSecrets = findPopulatedRuntimeSecretPaths(nuxt.options.runtimeConfig, process.env)
+    if (populatedRuntimeSecrets.length > 0) {
+      throw new Error(`[nuxt-cloudflare] Runtime config contains secret build environment values: ${populatedRuntimeSecrets.join(', ')}. Keep defaults empty and use Worker secret bindings.`)
+    }
   })
   nuxt.hook('nitro:config', (nitroConfig) => {
     if (resolveModuleWorkersCachePolicy(options)._tag === 'disabled')
