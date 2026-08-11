@@ -221,6 +221,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
       if (clientBudget !== undefined) {
         plugins?.push(sizeBudgetRollupPlugin({
           scope: 'client',
+          environment: 'client',
           targets: ids => pluginTargets(appPluginPaths, ids),
           onMeasured: onMeasured('client', clientBudget, true),
         }))
@@ -228,6 +229,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
       if (moduleBudget !== undefined) {
         plugins?.push(sizeBudgetRollupPlugin({
           scope: 'modules',
+          environment: 'client',
           // Read at bundle time: modules keep installing while the config is assembled.
           targets: ids => moduleTargets(installedModuleOwners(nuxt), ids),
           onMeasured: onMeasured('modules', moduleBudget, false),
