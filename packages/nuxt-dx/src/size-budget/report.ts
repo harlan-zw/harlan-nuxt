@@ -1,14 +1,15 @@
 import type { TreeItem } from 'consola/utils'
-import type { PluginVerdict } from './budget'
+import type { BudgetVerdict } from './budget'
 import { colors, formatTree } from 'consola/utils'
 import { formatBytes } from './size'
 
-export type BudgetScope = 'client' | 'nitro'
+export type BudgetScope = 'client' | 'nitro' | 'modules'
 
 const SCOPE = {
-  client: { noun: 'Nuxt plugin', bundle: 'client' },
-  nitro: { noun: 'Nitro plugin', bundle: 'server' },
-} as const satisfies Record<BudgetScope, { noun: string, bundle: string }>
+  client: { noun: 'Nuxt plugin', bundle: 'client', own: 'the plugin file' },
+  nitro: { noun: 'Nitro plugin', bundle: 'server', own: 'the plugin file' },
+  modules: { noun: 'Nuxt module', bundle: 'client', own: 'the module\'s own files' },
+} as const satisfies Record<BudgetScope, { noun: string, bundle: string, own: string }>
 
 /** Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a warning. */
 export function displayId(id: string, rootDir: string): string {
@@ -19,12 +20,12 @@ export function displayId(id: string, rootDir: string): string {
   return fromPackages === -1 ? relative : relative.slice(fromPackages + 'node_modules/'.length)
 }
 
-/** The key that would widen this plugin's budget: its name when it has one, otherwise its file. */
-function overrideKey(verdict: PluginVerdict, rootDir: string): string {
+/** The key that would widen this budget: the name when there is one, otherwise the file. */
+function overrideKey(verdict: BudgetVerdict, rootDir: string): string {
   return verdict.name ?? displayId(verdict.path, rootDir)
 }
 
-function overrideSnippet(over: readonly PluginVerdict[], rootDir: string): string {
+function overrideSnippet(over: readonly BudgetVerdict[], rootDir: string): string {
   const entries = over.map((verdict) => {
     // Round up to the next whole kB so the suggested budget actually clears the current size.
     const kilobytes = Math.ceil(verdict.measurement.totalBytes / 1024)
@@ -33,11 +34,11 @@ function overrideSnippet(over: readonly PluginVerdict[], rootDir: string): strin
   return `nuxtDx.sizeBudget.overridesKb = { ${entries.join(', ')} }`
 }
 
-/** Every byte charged to the plugin, so the listed sizes always sum to the reported total. */
-function breakdown(verdict: PluginVerdict, rootDir: string): TreeItem[] {
+/** Every byte charged to the target, so the listed sizes always sum to the reported total. */
+function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string): TreeItem[] {
   const { ownBytes, exclusiveBytes, exclusiveCount, heaviestDependencies } = verdict.measurement
   const rows: { bytes: number, label: string, muted: boolean }[] = [
-    { bytes: ownBytes, label: 'the plugin file', muted: true },
+    { bytes: ownBytes, label: SCOPE[scope].own, muted: true },
     ...heaviestDependencies.map(dependency => ({
       bytes: dependency.bytes,
       label: displayId(dependency.id, rootDir),
@@ -58,7 +59,7 @@ function breakdown(verdict: PluginVerdict, rootDir: string): TreeItem[] {
   }))
 }
 
-export function formatBudgetReport(scope: BudgetScope, over: readonly PluginVerdict[], rootDir: string): string {
+export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerdict[], rootDir: string): string {
   const { noun, bundle } = SCOPE[scope]
   const lines = [`${over.length} ${noun}${over.length === 1 ? '' : 's'} over budget in the ${bundle} bundle`]
 
@@ -68,9 +69,9 @@ export function formatBudgetReport(scope: BudgetScope, over: readonly PluginVerd
     const overshoot = formatBytes(measurement.totalBytes - budgetBytes)
     lines.push(
       '',
-      `  ${name ? `${colors.bold(name)}  ${colors.dim(file)}` : colors.bold(file)}`,
+      `  ${name && name !== file ? `${colors.bold(name)}  ${colors.dim(file)}` : colors.bold(name ?? file)}`,
       `  ${formatBytes(measurement.totalBytes)} bundled, ${colors.red(`${overshoot} over`)} the ${formatBytes(budgetBytes)} budget`,
-      formatTree(breakdown(verdict, rootDir), { prefix: '    ' }).trimEnd(),
+      formatTree(breakdown(scope, verdict, rootDir), { prefix: '    ' }).trimEnd(),
     )
   }
 
