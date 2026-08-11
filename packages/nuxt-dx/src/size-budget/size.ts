@@ -13,3 +13,8 @@ export function formatBytes(bytes: number): string {
   const unit = UNITS.find(candidate => bytes >= candidate.scale) ?? UNITS[UNITS.length - 1]!
   return `${Number((bytes / unit.scale).toFixed(1))} ${unit.label}`
 }
+
+/** A change in size always carries its direction, so `0 B` never reads as a shrink. */
+export function formatDelta(bytes: number): string {
+  return `${bytes < 0 ? '-' : '+'}${formatBytes(Math.abs(bytes))}`
+}

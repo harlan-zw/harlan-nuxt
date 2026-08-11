@@ -240,6 +240,9 @@ importers:
       '@nuxt/kit':
         specifier: 'catalog:'
         version: 4.5.2(magic-string@1.1.0)(magicast@0.5.4)(oxc-parser@0.140.0)(rolldown@1.2.3)(unplugin@3.3.0(esbuild@0.28.2)(rolldown@1.2.3)(rollup@4.62.4)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.49.2)(yaml@2.9.0)))
+      citty:
+        specifier: 'catalog:'
+        version: 0.2.2
       consola:
         specifier: 'catalog:'
         version: 3.4.2

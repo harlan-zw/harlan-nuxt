@@ -1,15 +1,9 @@
 import type { TreeItem } from 'consola/utils'
 import type { BudgetVerdict } from './budget'
+import type { BudgetScope } from './scope'
 import { colors, formatTree } from 'consola/utils'
+import { SCOPE } from './scope'
 import { formatBytes } from './size'
-
-export type BudgetScope = 'client' | 'nitro' | 'modules'
-
-const SCOPE = {
-  client: { noun: 'Nuxt plugin', bundle: 'client', own: 'the plugin file' },
-  nitro: { noun: 'Nitro plugin', bundle: 'server', own: 'the plugin file' },
-  modules: { noun: 'Nuxt module', bundle: 'client', own: 'the module\'s own files' },
-} as const satisfies Record<BudgetScope, { noun: string, bundle: string, own: string }>
 
 /** Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a warning. */
 export function displayId(id: string, rootDir: string): string {

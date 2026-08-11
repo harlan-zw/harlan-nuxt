@@ -1,11 +1,11 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
 import type { ModuleOwner } from './size-budget/module-packages'
-import type { BudgetScope } from './size-budget/report'
 import type { MeasuredTarget } from './size-budget/rollup'
+import type { BudgetScope } from './size-budget/scope'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { addPlugin, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleRoot } from './size-budget/module-packages'
@@ -13,6 +13,7 @@ import { extractPluginName } from './size-budget/plugin-name'
 import { formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
 import { kilobytesToBytes } from './size-budget/size'
+import { createSnapshotWriter, SNAPSHOT_FILE } from './size-budget/snapshot'
 import { moduleTargets, pluginTargets } from './size-budget/targets'
 
 export interface SizeBudgetOptions {
@@ -33,6 +34,11 @@ export interface SizeBudgetOptions {
   modulesKb?: number | false
   /** Per-target kilobyte budgets, keyed by plugin name, module name, or any fragment of the path. */
   overridesKb?: Record<string, number>
+  /**
+   * Where the machine-readable report is written, relative to the app root.
+   * @default '.nuxt/dx/size-budget.json'
+   */
+  reportPath?: string
   /**
    * Fail the build instead of warning.
    * @default false
@@ -170,6 +176,20 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
   const nitroBudget = budgets.nitro
   const moduleBudget = budgets.modules
 
+  const writeSnapshot = createSnapshotWriter(resolve(nuxt.options.rootDir, options.reportPath ?? SNAPSHOT_FILE), nuxt.options.rootDir)
+  /**
+   * Every measurement is recorded, then judged. The report covers the whole build so
+   * a later run can diff it, and it is written before the verdict so a failing budget
+   * still leaves the artifact behind.
+   */
+  const onMeasured = (scope: BudgetScope, defaultBytes: number, named: boolean) => {
+    const report = reporter(scope, defaultBytes, budgets, nuxt, named)
+    return async (measured: readonly MeasuredTarget[]) => {
+      await writeSnapshot(scope, measured)
+      await report(measured)
+    }
+  }
+
   // `app:resolve` runs before the client build, and holds every plugin including module-registered ones.
   let appPluginPaths: string[] = []
   if (clientBudget !== undefined) {
@@ -188,7 +208,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
         plugins?.push(sizeBudgetRollupPlugin({
           scope: 'client',
           targets: ids => pluginTargets(appPluginPaths, ids),
-          onMeasured: reporter('client', clientBudget, budgets, nuxt, true),
+          onMeasured: onMeasured('client', clientBudget, true),
         }))
       }
       if (moduleBudget !== undefined) {
@@ -196,7 +216,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
           scope: 'modules',
           // Read at bundle time: modules keep installing while the config is assembled.
           targets: ids => moduleTargets(installedModuleOwners(nuxt), ids),
-          onMeasured: reporter('modules', moduleBudget, budgets, nuxt, false),
+          onMeasured: onMeasured('modules', moduleBudget, false),
         }))
       }
     })
@@ -210,7 +230,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
           scope: 'nitro',
           // Nitro plugins have no name concept, so they are always identified by path.
           targets: ids => pluginTargets(nitro.options.plugins, ids),
-          onMeasured: reporter('nitro', nitroBudget, budgets, nuxt, false),
+          onMeasured: onMeasured('nitro', nitroBudget, false),
         }))
       })
     })
