@@ -71,6 +71,35 @@ function normalizeConfig(config: WranglerConfigInput, options: BindingTypeGenera
   return normalized
 }
 
+function compareText(left: string, right: string): number {
+  if (left < right)
+    return -1
+  if (left > right)
+    return 1
+  return 0
+}
+
+function canonicalizeBindingEnvironment(environment: string): string {
+  return environment
+    .replaceAll('\r\n', '\n')
+    .replace(
+      /(interface __BaseEnv_CloudflareBindings \{\n)([\s\S]*?)(\n\})/,
+      (_, opening: string, members: string, closing: string) => [
+        opening,
+        members.split('\n').sort((left, right) => compareText(left.trim(), right.trim())).join('\n'),
+        closing,
+      ].join(''),
+    )
+    .replace(
+      /Pick<Cloudflare\.Env,([^>]+)>/g,
+      (_, members: string) => `Pick<Cloudflare.Env, ${members.split('|').map(member => member.trim()).sort(compareText).join(' | ')}>`,
+    )
+}
+
+function createBindingTypeSignature(environment: string, runtime: string): string {
+  return `${canonicalizeBindingEnvironment(environment)}\0${runtime.replaceAll('\r\n', '\n')}`
+}
+
 async function readAuthoredConfig(rootDir: string): Promise<WranglerConfigInput> {
   const [path] = discoverWranglerSourceConfigs(rootDir)
   if (!path)
@@ -105,7 +134,7 @@ async function generateCloudflareBindingTypes(
 
   return {
     content: generated.content,
-    signature: `${generated.env}\0${generated.runtime}`,
+    signature: createBindingTypeSignature(generated.env, generated.runtime),
   }
 }
 
