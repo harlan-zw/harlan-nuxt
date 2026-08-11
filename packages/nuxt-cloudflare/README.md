@@ -8,7 +8,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
 - Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
-- Workers Logs sampled at 10%, traces at 1%, both overridable
+- Workers Logs sampled at 1%, traces at 1%, both overridable
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
@@ -62,6 +62,23 @@ Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises sho
 Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
 
 Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Rendered HTML always stays private. API and asset responses keep explicit cache policies. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+
+## Cost controls
+
+Cloudflare pricing changes. Check the linked pricing pages before making a budget.
+
+- Workers Logs use a 1% routine sample. [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing) currently includes 20 million monthly events on Workers Paid, then charges $0.60 per million events.
+- Invocation logs remain enabled for baseline visibility. A high-volume Worker with complete custom failure telemetry can set `observability.logs.invocation_logs: false`. This removes one event from each sampled invocation.
+- Traces use a separate 1% sample. Each span is a metered event. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) currently lists 10 million included monthly events and says the quota is shared with logs. This differs from the Workers Logs page. Budget against the lower quota until Cloudflare resolves the difference.
+- Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests, including static assets and Worker-to-Worker requests. Disable it when measured CPU savings do not exceed the added request cost.
+- Static assets stay asset first. Their requests are free and unlimited. Blanket Worker-first routing makes them billable Worker requests, so the module warns about it.
+- Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000 because the higher ceiling increases runaway-cost exposure.
+- Queue retries add billed read operations. Messages incur one operation per 64 KB chunk for each write, read, and delete. Keep payloads small and retries deliberate.
+- The KV-backed Nitro cache expires entries after 30 days by default. This bounds stored cache data. It does not reduce billed reads or writes.
+
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas have no extra replica charge. The module does not change D1 routing or session behavior.
+
+Doctor warnings surface log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
 
 ## Doctor
 

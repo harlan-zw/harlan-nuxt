@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { applyCloudflareDefaults, diagnoseWranglerConfig } from '../src/wrangler'
 
 describe('applyCloudflareDefaults', () => {
+  it('samples routine Workers Logs at one percent by default', () => {
+    expect(applyCloudflareDefaults({}).observability?.logs?.head_sampling_rate).toBe(0.01)
+  })
+
   it('adds the proven Nuxt SEO and gscdump baseline without replacing user sampling', () => {
     expect(applyCloudflareDefaults({
       compatibility_flags: ['global_fetch_strictly_public'],
@@ -207,6 +211,69 @@ describe('applyCloudflareDefaults', () => {
 })
 
 describe('diagnoseWranglerConfig', () => {
+  it('warns when log sampling exceeds the routine one-percent budget', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: {
+        enabled: true,
+        logs: { enabled: true, head_sampling_rate: 0.1 },
+        traces: { enabled: true, head_sampling_rate: 0.01 },
+      },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'observability-log-sampling-high',
+      }))
+  })
+
+  it('warns when trace sampling exceeds the routine one-percent budget', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: {
+        enabled: true,
+        logs: { enabled: true, head_sampling_rate: 0.01 },
+        traces: { enabled: true, head_sampling_rate: 0.1 },
+      },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'observability-trace-sampling-high',
+      }))
+  })
+
+  it('warns when Workers Caching makes static asset requests billable', () => {
+    expect(diagnoseWranglerConfig({
+      assets: { directory: '.output/public' },
+      cache: { enabled: true, cross_version_cache: false },
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'workers-cache-assets-billable',
+      }))
+  })
+
+  it('warns when a raised CPU limit increases runaway-cost exposure', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      limits: { cpu_ms: 60_000 },
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'cpu-limit-raised',
+      }))
+  })
+
   it('warns when Workers Caching policy is implicit', () => {
     expect(diagnoseWranglerConfig({
       compatibility_date: '2026-08-11',

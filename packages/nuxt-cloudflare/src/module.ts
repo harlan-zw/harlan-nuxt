@@ -227,7 +227,7 @@ export default defineNuxtModule<ModuleOptions>({
     enabled: true,
     compatibilityMaxAgeDays: 90,
     doctor: { _tag: 'advisory' },
-    logsSampleRate: 0.1,
+    logsSampleRate: 0.01,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
     workersCache: { _tag: 'enabled', crossVersion: false },
