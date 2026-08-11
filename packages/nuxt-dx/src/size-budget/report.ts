@@ -28,6 +28,11 @@ function overrideSnippet(over: readonly BudgetVerdict[], rootDir: string): strin
   return `nuxtDx.sizeBudget.overridesKb = { ${entries.join(', ')} }`
 }
 
+function ignoreModulesSnippet(over: readonly BudgetVerdict[]): string | undefined {
+  const names = over.flatMap(verdict => verdict.name === undefined ? [] : [`'${verdict.name}'`])
+  return names.length ? `nuxtDx.sizeBudget.ignoreModules = [${names.join(', ')}]` : undefined
+}
+
 /** Every byte charged to the target, so the listed sizes always sum to the reported total. */
 function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string): TreeItem[] {
   const { ownBytes, exclusiveBytes, exclusiveCount, heaviestDependencies } = verdict.measurement
@@ -74,5 +79,13 @@ export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerd
     colors.dim('  Defer heavy imports with `await import()`, or allow the size:'),
     `    ${colors.cyan(overrideSnippet(over, rootDir))}`,
   )
+  const ignoreSnippet = scope === 'modules' ? ignoreModulesSnippet(over) : undefined
+  if (ignoreSnippet) {
+    lines.push(
+      '',
+      colors.dim('  Keep accepted modules in reports without absolute warnings:'),
+      `    ${colors.cyan(ignoreSnippet)}`,
+    )
+  }
   return lines.join('\n')
 }

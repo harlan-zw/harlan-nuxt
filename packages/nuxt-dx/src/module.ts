@@ -19,17 +19,17 @@ import { moduleTargets, pluginTargets } from './size-budget/targets'
 export interface SizeBudgetOptions {
   /**
    * Kilobyte budget for each Nuxt app plugin in the client bundle. `false` disables the check.
-   * @default 20
+   * @default 30
    */
   pluginsKb?: number | false
   /**
    * Kilobyte budget for each Nitro plugin in the server bundle. `false` disables the check.
-   * @default 50
+   * @default 75
    */
   nitroPluginsKb?: number | false
   /**
    * Kilobyte budget for each Nuxt module in the client bundle. `false` disables the check.
-   * @default 50
+   * @default 100
    */
   modulesKb?: number | false
   /** Nuxt module names excluded from absolute budget enforcement. Reports still measure them. */
@@ -98,9 +98,9 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
   }
 
   return {
-    client: resolve(options.pluginsKb, 20, 'pluginsKb'),
-    nitro: resolve(options.nitroPluginsKb, 50, 'nitroPluginsKb'),
-    modules: resolve(options.modulesKb, 50, 'modulesKb'),
+    client: resolve(options.pluginsKb, 30, 'pluginsKb'),
+    nitro: resolve(options.nitroPluginsKb, 75, 'nitroPluginsKb'),
+    modules: resolve(options.modulesKb, 100, 'modulesKb'),
     ignoredModules: new Set(options.ignoreModules),
     overrides,
     fail: options.fail ?? false,
