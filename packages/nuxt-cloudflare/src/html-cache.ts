@@ -1,11 +1,12 @@
 export type HtmlCacheRouteRuleViolation
-  = | { _tag: 'html-cache-header', route: string, configPath: string }
-    | { _tag: 'html-cache-route-rule', route: string, configPath: string }
+  = | { _tag: 'html-cache-header', severity: 'error' | 'warning', route: string, configPath: string }
+    | { _tag: 'html-cache-route-rule', severity: 'error' | 'warning', route: string, configPath: string }
 
 const NON_HTML_ROUTE_PREFIXES = [
   '/api',
   '/_ipx',
   '/_nuxt',
+  '/_og',
   '/assets',
   '/fonts',
   '/images',
@@ -34,6 +35,21 @@ function isPrivateCachePolicy(value: unknown): boolean {
   return typeof value === 'string' && PRIVATE_CACHE_DIRECTIVE_RE.test(value)
 }
 
+function hasHtmlContentType(headers: Record<string, unknown> | undefined): boolean {
+  if (!headers)
+    return false
+  const contentType = Object.entries(headers)
+    .find(([name]) => name.toLowerCase() === 'content-type')?.[1]
+  return typeof contentType === 'string' && /^text\/html(?:;|$)/i.test(contentType)
+}
+
+function resolveViolationSeverity(route: string, value: Record<string, unknown>): 'error' | 'warning' {
+  const definitelyHtml = value.prerender === true
+    || /\.html(?:$|[?*])/i.test(route)
+    || hasHtmlContentType(isRecord(value.headers) ? value.headers : undefined)
+  return definitelyHtml ? 'error' : 'warning'
+}
+
 export function findHtmlCacheRouteRuleViolations(
   routeRules: Record<string, unknown> | undefined,
 ): HtmlCacheRouteRuleViolation[] {
@@ -44,11 +60,13 @@ export function findHtmlCacheRouteRuleViolations(
     if (!isHtmlCapableRoute(route) || !isRecord(value))
       return []
 
+    const severity = resolveViolationSeverity(route, value)
     const violations: HtmlCacheRouteRuleViolation[] = []
     for (const name of CACHE_ROUTE_RULE_NAMES) {
       if (value[name] !== undefined && value[name] !== false) {
         violations.push({
           _tag: 'html-cache-route-rule',
+          severity,
           route,
           configPath: `routeRules.${route}.${name}`,
         })
@@ -62,6 +80,7 @@ export function findHtmlCacheRouteRuleViolations(
       if (CACHE_HEADER_NAMES.has(name.toLowerCase()) && !isPrivateCachePolicy(value.headers[name])) {
         violations.push({
           _tag: 'html-cache-header',
+          severity,
           route,
           configPath: `routeRules.${route}.headers.${name}`,
         })
@@ -75,6 +94,9 @@ export function formatHtmlCacheRouteRuleViolations(
   violations: readonly HtmlCacheRouteRuleViolation[],
 ): string {
   return violations
-    .map(violation => `${violation.configPath}: Workers Caching requires HTML responses to remain private and no-store.`)
+    .map((violation) => {
+      const subject = violation.severity === 'error' ? 'HTML route' : 'Potential HTML route'
+      return `${violation.configPath}: ${subject} must remain private and no-store when Workers Cache is enabled.`
+    })
     .join('\n')
 }
