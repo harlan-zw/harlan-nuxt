@@ -13,9 +13,15 @@ export interface MeasuredTarget {
 
 export interface SizeBudgetPluginOptions {
   scope: BudgetScope
+  /** Restrict a shared Vite plugin to one environment. Rollup builds leave this unset. */
+  environment?: string
   /** Read lazily so plugins and modules registered after this rollup plugin is created are included. */
   targets: (moduleIds: readonly string[]) => readonly BudgetTarget[]
   onMeasured: (measured: readonly MeasuredTarget[]) => void | Promise<void>
+}
+
+interface EnvironmentPlugin extends Plugin {
+  applyToEnvironment?: (environment: { name: string }) => boolean
 }
 
 function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => readonly string[]) {
@@ -36,9 +42,12 @@ function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => reado
  * Measures the bundled weight of each target once the graph is final, so the cost
  * reflects post-tree-shaking bytes rather than what the source file imports on paper.
  */
-export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): Plugin {
+export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): EnvironmentPlugin {
   return {
     name: `nuxt-dx:size-budget:${options.scope}`,
+    applyToEnvironment: options.environment === undefined
+      ? undefined
+      : environment => environment.name === options.environment,
     async generateBundle(_outputOptions, bundle) {
       const { modules, entryIds } = collectGraph(bundle, id => this.getModuleInfo(id)?.importedIds ?? [])
       const targets = options.targets(modules.map(module => module.id))
