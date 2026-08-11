@@ -162,6 +162,14 @@ function resolveWorkersCachePolicy(policy: WorkersCachePolicy): WranglerWorkersC
   return { enabled: true, cross_version_cache: policy.crossVersion }
 }
 
+function resolveAuthoredWorkersCache(
+  cache: WranglerWorkersCacheInput | undefined,
+): WranglerWorkersCacheInput {
+  if (!cache)
+    return resolveWorkersCachePolicy({ _tag: 'disabled' })
+  return { ...cache, cross_version_cache: cache.cross_version_cache ?? false }
+}
+
 const WRANGLER_BINDING_CATEGORIES = [
   'data_blobs',
   'durable_objects',
@@ -255,7 +263,7 @@ function applyEnvironmentDefaults(
   const compatibilityFlags = unique([...(config.compatibility_flags ?? inherited.compatibility_flags ?? []), 'nodejs_compat'])
   const cache = options.workersCache
     ? resolveWorkersCachePolicy(options.workersCache)
-    : config.cache ?? inherited.cache ?? resolveWorkersCachePolicy({ _tag: 'disabled' })
+    : resolveAuthoredWorkersCache(config.cache ?? inherited.cache)
   const requiredSecrets = unique([...(config.secrets?.required ?? []), ...(options.requiredSecrets ?? [])])
   const logs = config.observability?.logs
   const inheritedLogs = inherited.observability?.logs

@@ -58,7 +58,7 @@ export default defineNuxtConfig({
 
 Cloudflare KV requires TTLs of at least 60 seconds.
 
-Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set.
+Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set; omitted `cross_version_cache` is normalized to `false`.
 
 Smart Placement moves fetch handlers only when Cloudflare measures a faster location near upstream services. Assets-first delivery remains close to the user. Queue handlers, RPC methods, and named entrypoints are unaffected. An authored region, host, or hostname placement overrides the smart default.
 
