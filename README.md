@@ -3,9 +3,9 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-A monorepo of experimental Nuxt modules, kept together for shared tooling and consistent verification, and released independently.
+Experimental Nuxt modules developed in one repo, so they share tooling and a single verification pipeline.
 
-Every package here is published under the `experimental` npm tag. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
+Every package here publishes under the `experimental` npm tag. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
 
 <p align="center">
 <table>
@@ -36,7 +36,7 @@ pnpm install
 pnpm dev:prepare
 ```
 
-Then, from the repo root to run every package, or from a package directory to run just that one:
+Run these from the repo root to cover every package, or from a package directory for just that one:
 
 ```bash
 pnpm lint       # eslint, includes markdown and code blocks

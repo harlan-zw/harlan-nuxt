@@ -21,12 +21,11 @@ Status: experimental. APIs may change before the first release.
 
 ## Features
 
-- 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge.
+- 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
 - 📦 **Plugin size budgets:** warn when a Nuxt or Nitro plugin drags too much JavaScript into the bundle.
 - 🔍 **Exclusive attribution:** each plugin is charged only for what it alone pulls in, so shared dependencies are not double counted.
 - 🎯 **Per-plugin overrides:** budgets keyed by `defineNuxtPlugin` name or path fragment, with an optional build failure.
-- 🚫 **Zero production cost:** the overlay is a strict production no-op.
 
 ## Installation
 

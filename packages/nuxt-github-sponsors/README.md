@@ -5,7 +5,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt GitHub Sponsors gives your site typed access to your GitHub sponsors, without shipping a UI you then have to fight.
+Nuxt GitHub Sponsors fetches your GitHub sponsors and hands them to your app as typed data. It ships no UI, so your sponsor page stays yours to design.
 
 Status: experimental. APIs may change before the first release.
 
@@ -21,11 +21,9 @@ Status: experimental. APIs may change before the first release.
 
 ## Features
 
-- 🔌 **Route and composable:** a public route plus `useGitHubSponsors()` for a typed response.
-- 📄 **Full pagination:** fetches every active sponsorship page, not just the first.
+- 🔌 **Route and composable:** a public route plus `useGitHubSponsors()` for a typed response, paginated across every active sponsorship.
 - 🔒 **Private sponsors filtered:** only a minimal public DTO leaves the server.
-- 🏅 **Configurable tiers:** assign tier keys by minimum monthly amount.
-- ✏️ **Profile overrides:** correct names, avatars, and links without patching GitHub.
+- 🏅 **Tiers and overrides:** assign tier keys by minimum monthly amount, and correct names, avatars, and links without patching GitHub.
 - ⚡ **One-day SWR cache:** only successful upstream results are cached.
 - 🎨 **Headless by design:** no sponsor UI, so your visual identity stays yours.
 

@@ -5,7 +5,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Domain Events gives your server runtime functional, layer-aware events with generated lazy registries, so a producer never has to import the listeners it triggers.
+Nuxt Domain Events lets a producer fire a server-side event without importing any of the listeners that handle it. Registries are generated per layer and imported lazily.
 
 Status: experimental. APIs may change before the first release.
 
@@ -25,9 +25,7 @@ Status: experimental. APIs may change before the first release.
 - 🎚️ **Explicit execution modes:** serial synchronous by default, with `sync` isolation, `deferred`, and `queued` as opt-ins.
 - 📦 **Two contract kinds:** `local` for request-scoped state, `transfer` for versioned JSON with a byte limit.
 - 🏷️ **Errors as tagged values:** unknown event, payload mismatch, lazy import failure, registry drift, queue failure, and after-commit misuse.
-- 🔁 **Idempotent queued delivery:** stable delivery IDs derived from your `eventId` and the listener name.
 - 💾 **After-commit publication:** stage queue rows beside domain SQL so a rollback leaves zero queue evidence.
-- ☁️ **Structural Cloudflare adapter:** works with `@harlan-zw/nuxt-cf-jobs` without coupling the event core to it.
 
 ## Installation
 

@@ -21,14 +21,11 @@ Status: experimental. APIs may change before the first scoped release.
 
 ## Features
 
-- 📁 **File-based jobs:** put a `defineJob` file in `server/jobs` and the module builds the registry.
-- 🔒 **Typed dispatch:** job names, payloads, queues, and broadcast messages are inferred from your files.
+- 📁 **File-based typed jobs:** drop a `defineJob` file in `server/jobs` and the module builds the registry, inferring names, payloads, queues, and broadcast messages.
 - ☁️ **Cloudflare Queues:** route jobs across multiple producer bindings and consume them through Nitro's `cloudflare:queue` hook.
 - 🗄️ **Optional D1 durability:** persist jobs before dispatch, recover missed sends, track attempts, and keep failed jobs.
 - ⏰ **Scheduled tasks:** declare the cron beside the task and generate Nitro and Cloudflare scheduling config from it.
 - 📡 **Realtime progress:** publish job and batch events over Nitro WebSockets and a Durable Object.
-- 🧪 **Queue test harnesses:** run jobs inline, record dispatches, or drive retries on a virtual clock.
-- 🛠️ **Operations CLI:** inspect, retry, prune, and migrate local or remote D1 job tables.
 
 ## Quick start
 
