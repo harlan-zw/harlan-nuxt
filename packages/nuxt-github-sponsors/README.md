@@ -1,8 +1,33 @@
-# `@harlan-zw/nuxt-github-sponsors`
+<h1>@harlan-zw/nuxt-github-sponsors</h1>
 
-Experimental GitHub Sponsors data for Nuxt sites.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-The module registers a public route and `useGitHubSponsors`. The server core fetches all active sponsorship pages, parses GitHub responses, filters private sponsors, projects a minimal public DTO, applies explicit profile overrides, and assigns configurable tiers. Only successful upstream results receive the one-day SWR cache.
+Nuxt GitHub Sponsors fetches your GitHub sponsors and hands them to your app as typed data. It ships no UI, so your sponsor page stays yours to design.
+
+Status: experimental. APIs may change before the first release.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
+## Features
+
+- 🔌 **Route and composable:** a public route plus `useGitHubSponsors()` for a typed response, paginated across every active sponsorship.
+- 🔒 **Private sponsors filtered:** only a minimal public DTO leaves the server.
+- 🏅 **Tiers and overrides:** assign tier keys by minimum monthly amount, and correct names, avatars, and links without patching GitHub.
+- ⚡ **One-day SWR cache:** only successful upstream results are cached.
+- 🎨 **Headless by design:** no sponsor UI, so your visual identity stays yours.
+
+## Installation
 
 ```bash
 pnpm add @harlan-zw/nuxt-github-sponsors
@@ -22,8 +47,39 @@ export default defineNuxtConfig({
 })
 ```
 
-Set `NUXT_GITHUB_SPONSORS_TOKEN` at runtime. The route returns an explicit `unavailable` state with reason `not-configured` when no token exists and a `502` response when GitHub cannot be refreshed. No secret is logged.
+Set `NUXT_GITHUB_SPONSORS_TOKEN` at runtime.
+
+## Usage
+
+The module registers a public route and `useGitHubSponsors`. The server core fetches all active sponsorship pages, parses GitHub responses, filters private sponsors, projects a minimal public DTO, applies explicit profile overrides, and assigns configurable tiers.
 
 The package intentionally has no sponsor UI. Each site keeps control of its visual identity and calls `useGitHubSponsors()` for a typed response.
 
-APIs may change before the first release.
+## Failure states
+
+The route returns an explicit `unavailable` state with reason `not-configured` when no token exists, and a `502` response when GitHub cannot be refreshed. No secret is logged.
+
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
+## License
+
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-github-sponsors/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-github-sponsors/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-github-sponsors
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-github-sponsors.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-github-sponsors
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-github-sponsors/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

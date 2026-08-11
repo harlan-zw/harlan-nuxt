@@ -1,23 +1,31 @@
-# Nuxt Use Query
+<h1>@harlan-zw/nuxt-use-query</h1>
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-> Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.
+Nuxt Use Query brings TanStack-shaped composables to Nuxt's own data layer, so caching, SWR, and invalidation run through the payload rather than alongside it.
 
 Status: experimental. APIs may change before the first scoped release.
 
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
 ## Features
 
-- `useNuxtQuery` wraps Nuxt `useFetch` with TanStack-style stale-time revalidation, polling, enabled gates, and previous-data display.
-- `useNuxtMutation` wires mutations to query invalidation and optimistic cache rollback.
-- `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` let apps centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
-- Optional build-time contract enforcement flags API path literals outside query folders and query operations that skip shared contract imports or schemas.
-- Optional server `$fetch` telemetry flags slow upstream calls and likely SSR request waterfalls.
-- `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
-- `useNuxtSubscription` bridges a realtime message stream (WebSocket, SSE, vendor SDK) into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
-- Cache bookkeeping is stored on the Nuxt app instance for SSR-safe per-request isolation.
+- 🔄 **Queries and mutations:** `useNuxtQuery` wraps Nuxt `useFetch` with stale-time revalidation, polling, and enabled gates; `useNuxtMutation` adds invalidation and optimistic rollback.
+- 📇 **Typed RPC contracts:** `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
+- 🗝️ **Cache control:** `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
+- ⚡ **Realtime bridge:** `useNuxtSubscription` pipes a WebSocket, SSE, or vendor SDK stream into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
+- 🧵 **SSR-safe by construction:** cache bookkeeping lives on the Nuxt app instance for per-request isolation.
 
 ## Choosing A Layer
 
@@ -34,7 +42,7 @@ The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache a
 
 **Why the escape hatch exists**: writing a contract for a fetch you call once is overhead with no payoff. Reach for `useNuxtQuery` directly when there is no second caller to protect.
 
-**Mutations stay manual.** There is no `useNuxtRpcMutation` composable — `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
+**Mutations stay manual.** There is no `useNuxtRpcMutation` composable; `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
 
 ## Query Defaults
 
@@ -255,7 +263,7 @@ await updateSite.mutate({ name: 'Docs' })
 
 ## Escape Hatch: `useNuxtQuery` Directly
 
-Skip the RPC layer when the contract isn't yours to define — third-party APIs, one-off internal calls, prototypes, file downloads, or any request where a Zod schema would be ceremony with no payoff:
+Skip the RPC layer when the contract isn't yours to define: third-party APIs, one-off internal calls, prototypes, file downloads, or any request where a Zod schema would be ceremony with no payoff:
 
 ```ts
 const search = ref('')
@@ -314,7 +322,7 @@ if (previous)
 
 ## Realtime: `useNuxtSubscription`
 
-`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it — a [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) module, a vendor SDK, raw `useWebSocket` — and this is the standard seam from "a message arrived" to "this read is now stale".
+`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it: a [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) module, a vendor SDK, raw `useWebSocket`. This is the standard seam from "a message arrived" to "this read is now stale".
 
 ```ts
 import { z } from 'zod'
@@ -327,7 +335,7 @@ useNuxtSubscription({
   source: ctx => connectChannel('job-status', ctx.push),
   // Parse the untrusted frame once, at the boundary.
   schema: jobEvent,
-  // Map the parsed message to cache operations. Explicit by design — you
+  // Map the parsed message to cache operations. Explicit by design: you
   // decide which reads move, the same as a mutation's `invalidates`.
   onMessage: e => invalidateNuxtQueries(`sites:${e.siteId}`),
 })
@@ -335,9 +343,9 @@ useNuxtSubscription({
 
 It mirrors the rest of the package: callbacks run inside the Nuxt context (so the global cache helpers and composables resolve), failures surface through `onError` and an `error` ref rather than being swallowed, and `status` reports bridge establishment (`idle` / `connecting` / `active` / `error`).
 
-**`source` may call composables.** It runs in its own effect scope, so if your transport is itself a composable (`useWebSocket`, a channel composable), call it directly in `source` — its `onScopeDispose` / watchers are torn down with the subscription. Create them synchronously (before any `await`); only the synchronous portion of an async source is scoped.
+**`source` may call composables.** It runs in its own effect scope, so if your transport is itself a composable (`useWebSocket`, a channel composable), call it directly in `source`; its `onScopeDispose` and watchers are torn down with the subscription. Create them synchronously (before any `await`); only the synchronous portion of an async source is scoped.
 
-**Reconnect is a boundary, not magic.** The bridge only sees messages that arrive; events missed while the socket was down are not its concern. Cold-start recovery stays with `useNuxtQuery`'s refetch-on-mount. For mid-session reconnects, run `onReconnect` — typically a wider invalidation that catches up everything that drifted while disconnected. If the transport exposes a connection-status ref, `ctx.resyncOn` wires it for you (it fires `onReconnect` on every reconnect, never the initial connect); otherwise call `ctx.resync()` yourself:
+**Reconnect is a boundary you wire up yourself.** The bridge only sees messages that arrive; events missed while the socket was down are not its concern. Cold-start recovery stays with `useNuxtQuery`'s refetch-on-mount. For mid-session reconnects, run `onReconnect`, typically a wider invalidation that catches up everything that drifted while disconnected. If the transport exposes a connection-status ref, `ctx.resyncOn` wires it for you (it fires `onReconnect` on every reconnect, never the initial connect); otherwise call `ctx.resync()` yourself:
 
 ```ts
 useNuxtSubscription({
@@ -436,7 +444,7 @@ Use `telemetry: true` for the defaults. Set `timeout: false` to disable the defa
 const largePayloadThreshold = {
   default: 300_000,
   hosts: {
-    // a data/export API whose big responses are expected — silence it
+    // a data/export API whose big responses are expected, so silence it
     'searchconsole.googleapis.com': false,
   },
 }
@@ -539,15 +547,27 @@ With enforcement enabled:
 
 Start without enforcement while migrating an existing site, then enable it once queries and contracts have been moved into the recommended directories.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-[MIT](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md)
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md).
 
-[npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-use-query/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-use-query
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-use-query.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-use-query
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-use-query/LICENSE.md
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com

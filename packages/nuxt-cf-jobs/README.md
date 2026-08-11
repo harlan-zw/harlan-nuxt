@@ -21,14 +21,11 @@ Status: experimental. APIs may change before the first scoped release.
 
 ## Features
 
-- 📁 **File-based jobs:** put a `defineJob` file in `server/jobs` and the module builds the registry.
-- 🔒 **Typed dispatch:** job names, payloads, queues, and broadcast messages are inferred from your files.
+- 📁 **File-based typed jobs:** drop a `defineJob` file in `server/jobs` and the module builds the registry, inferring names, payloads, queues, and broadcast messages.
 - ☁️ **Cloudflare Queues:** route jobs across multiple producer bindings and consume them through Nitro's `cloudflare:queue` hook.
 - 🗄️ **Optional D1 durability:** persist jobs before dispatch, recover missed sends, track attempts, and keep failed jobs.
 - ⏰ **Scheduled tasks:** declare the cron beside the task and generate Nitro and Cloudflare scheduling config from it.
 - 📡 **Realtime progress:** publish job and batch events over Nitro WebSockets and a Durable Object.
-- 🧪 **Queue test harnesses:** run jobs inline, record dispatches, or drive retries on a virtual clock.
-- 🛠️ **Operations CLI:** inspect, retry, prune, and migrate local or remote D1 job tables.
 
 ## Quick start
 
@@ -725,15 +722,23 @@ pnpm test:e2e
 
 `test` runs the unit project. `test:nitro` runs the generated registry in a real Nuxt server. `test:e2e` starts Wrangler fixtures and exercises the Cloudflare Queues and D1 round trip through workerd.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
 Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-cf-jobs/LICENSE.md).
 
 <!-- Badges -->
-[npm-version-src]: https://img.shields.io/npm/v/%40harlanzw%2Fnuxt-cf-jobs/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-cf-jobs/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlanzw%2Fnuxt-cf-jobs.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-cf-jobs.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-cf-jobs
 
 [license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
