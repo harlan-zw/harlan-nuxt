@@ -12,7 +12,8 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
-- Workers Caching explicitly disabled by default; opt-in requires a version-sharing decision
+- Workers Caching enabled by default with per-version isolation
+- Dynamic responses default to `private, no-store`; rendered HTML is forcibly private and conflicting page route rules fail the build
 - Smart Placement enabled by default; explicit region, host, or hostname placement is preserved
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
@@ -31,7 +32,6 @@ export default defineNuxtConfig({
 
   nuxtCloudflare: {
     requiredSecrets: ['NUXT_SESSION_PASSWORD'],
-    workersCache: { _tag: 'enabled', crossVersion: false },
   },
 
   nitro: {
@@ -58,7 +58,17 @@ export default defineNuxtConfig({
 
 Cloudflare KV requires TTLs of at least 60 seconds.
 
-Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set; omitted `cross_version_cache` is normalized to `false`.
+Workers Caching is separate from Nitro's KV-backed cache. It is enabled by default with `cross_version_cache: false`, so each deployment starts with an isolated cache. Dynamic Nitro responses default to `Cache-Control: private, no-store` and `Cloudflare-CDN-Cache-Control: no-store` unless they declare an explicit cache policy. Rendered HTML always receives those private directives; this is required because Cloudflare otherwise heuristically caches a `200` response with no cache header for two hours.
+
+HTML-capable route rules fail the build when they use `cache`, `isr`, `swr`, `Cache-Control`, `CDN-Cache-Control`, or `Cloudflare-CDN-Cache-Control`. API and static asset routes remain available for explicit caching. Disable Workers Caching only for a gateway that must execute on every request:
+
+```ts
+export default defineNuxtConfig({
+  nuxtCloudflare: {
+    workersCache: { _tag: 'disabled' },
+  },
+})
+```
 
 Smart Placement moves fetch handlers only when Cloudflare measures a faster location near upstream services. Assets-first delivery remains close to the user. Queue handlers, RPC methods, and named entrypoints are unaffected. An authored region, host, or hostname placement overrides the smart default.
 
