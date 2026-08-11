@@ -1,6 +1,6 @@
-import type { BudgetScope } from './scope'
+import type { BudgetBundle, BudgetScope } from './scope'
 import type { SizeBudgetSnapshot, SnapshotEntry } from './snapshot'
-import { BUDGET_SCOPES } from './scope'
+import { BUDGET_SCOPES, SCOPE } from './scope'
 import { entryKey } from './snapshot'
 
 export type ChangeKind = 'added' | 'removed' | 'grown' | 'shrunk' | 'unchanged'
@@ -10,6 +10,8 @@ export interface EntryChange {
   scope: BudgetScope
   /** How the target is named in the report: its name when it has one, otherwise its path. */
   label: string
+  /** Nuxt module that registered this runtime entry, when known. */
+  owner?: string
   kind: ChangeKind
   /** Total bundled bytes in the base build; zero when the target is new. */
   baseBytes: number
@@ -25,15 +27,20 @@ export interface ScopeTotal {
   deltaBytes: number
 }
 
+export interface BundleTotal {
+  bundle: BudgetBundle
+  baseBytes: number
+  headBytes: number
+  deltaBytes: number
+}
+
 export interface SnapshotDiff {
   /** Every target in either build, biggest growth first. */
   changes: EntryChange[]
-  /**
-   * One total per scope, in the order the scopes are declared. Scopes are never summed
-   * together: a Nuxt module is charged for the plugins it ships, so those bytes belong
-   * to both the module and the plugin, and adding the two would count them twice.
-   */
+  /** One total per runtime entry kind, in declaration order. */
   scopeTotals: ScopeTotal[]
+  /** One disjoint total for each bundle. */
+  bundleTotals: BundleTotal[]
   /** The growth a single target is allowed before the diff fails. */
   thresholdBytes: number
   /** Targets that grew past the threshold, biggest first. */
@@ -58,17 +65,26 @@ function total(entries: readonly SnapshotEntry[], scope: BudgetScope): number {
   return entries.reduce((sum, entry) => sum + (entry.scope === scope ? entry.totalBytes : 0), 0)
 }
 
-/**
- * Within one scope the targets never overlap, so their deltas add up to what that scope
- * gained or lost. Scopes measured from the same bundle do overlap, so each is totalled
- * on its own and they are never added together.
- */
 function scopeTotals(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot): ScopeTotal[] {
   const present = BUDGET_SCOPES.filter(scope => [...base.entries, ...head.entries].some(entry => entry.scope === scope))
   return present.map((scope) => {
     const baseBytes = total(base.entries, scope)
     const headBytes = total(head.entries, scope)
     return { scope, baseBytes, headBytes, deltaBytes: headBytes - baseBytes }
+  })
+}
+
+function bundleTotal(entries: readonly SnapshotEntry[], bundle: BudgetBundle): number {
+  return entries.reduce((sum, entry) => sum + (SCOPE[entry.scope].bundle === bundle ? entry.totalBytes : 0), 0)
+}
+
+function bundleTotals(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot): BundleTotal[] {
+  const entries = [...base.entries, ...head.entries]
+  const present = (['client', 'server'] as const).filter(bundle => entries.some(entry => SCOPE[entry.scope].bundle === bundle))
+  return present.map((bundle) => {
+    const baseBytes = bundleTotal(base.entries, bundle)
+    const headBytes = bundleTotal(head.entries, bundle)
+    return { bundle, baseBytes, headBytes, deltaBytes: headBytes - baseBytes }
   })
 }
 
@@ -93,6 +109,7 @@ export function diffSnapshots(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot
       key,
       scope: identity.scope,
       label: label(identity),
+      owner: identity.owner,
       kind: kindOf(before, after, deltaBytes),
       baseBytes,
       headBytes,
@@ -104,6 +121,7 @@ export function diffSnapshots(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot
   return {
     changes,
     scopeTotals: scopeTotals(base, head),
+    bundleTotals: bundleTotals(base, head),
     thresholdBytes,
     // Per target, never cumulative: the check is aimed at the one plugin that doubled,
     // not at a bundle drifting up by a kilobyte in twenty places.

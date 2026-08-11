@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupByOwner, moduleRoot, packageDirOf } from '../src/size-budget/module-packages'
+import { moduleOwnerOf, moduleRoot, packageDirOf } from '../src/size-budget/module-owner'
 
 describe('packageDirOf', () => {
   it('finds the package a dependency file ships from', () => {
@@ -57,27 +57,21 @@ const OWNERS = [
   { name: 'analytics', root: '/app/modules/analytics.ts' },
 ]
 
-describe('groupByOwner', () => {
-  it('collects every bundled file under a package', () => {
-    const [robots] = groupByOwner(OWNERS, [
-      '/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js',
-      '/app/node_modules/@nuxtjs/robots/dist/runtime/util.js',
-      '/app/node_modules/ufo/dist/index.mjs',
-    ])
-    expect(robots!.ids).toHaveLength(2)
+describe('moduleOwnerOf', () => {
+  it('finds the module that registered a runtime entry', () => {
+    expect(moduleOwnerOf('/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js', OWNERS)).toBe('robots')
   })
 
   it('leaves files no module owns unattributed', () => {
-    expect(groupByOwner(OWNERS, ['/app/node_modules/ufo/dist/index.mjs'])).toEqual([])
+    expect(moduleOwnerOf('/app/node_modules/ufo/dist/index.mjs', OWNERS)).toBeUndefined()
   })
 
   it('does not let a package claim a sibling with a longer name', () => {
-    expect(groupByOwner(OWNERS, ['/app/node_modules/@nuxtjs/robots-extra/dist/index.mjs'])).toEqual([])
+    expect(moduleOwnerOf('/app/node_modules/@nuxtjs/robots-extra/dist/index.mjs', OWNERS)).toBeUndefined()
   })
 
   it('matches a single-file module against itself', () => {
-    const [analytics] = groupByOwner(OWNERS, ['/app/modules/analytics.ts', '/app/modules/other.ts'])
-    expect(analytics!.ids).toEqual(['/app/modules/analytics.ts'])
+    expect(moduleOwnerOf('/app/modules/analytics.ts', OWNERS)).toBe('analytics')
   })
 
   it('gives a nested package to the module that ships it', () => {
@@ -85,22 +79,10 @@ describe('groupByOwner', () => {
       { name: 'outer', root: '/app/node_modules/outer' },
       { name: 'inner', root: '/app/node_modules/outer/node_modules/inner' },
     ]
-    const grouped = groupByOwner(owners, ['/app/node_modules/outer/node_modules/inner/index.js'])
-    expect(grouped).toEqual([{ owner: owners[1], ids: ['/app/node_modules/outer/node_modules/inner/index.js'] }])
-  })
-
-  it('merges two entries for the same module name', () => {
-    const owners = [
-      { name: 'robots', root: '/app/node_modules/@nuxtjs/robots' },
-      { name: 'robots', root: '/app/modules/robots' },
-    ]
-    const grouped = groupByOwner(owners, ['/app/node_modules/@nuxtjs/robots/index.js', '/app/modules/robots/index.js'])
-    expect(grouped).toHaveLength(1)
-    expect(grouped[0]!.ids).toHaveLength(2)
+    expect(moduleOwnerOf('/app/node_modules/outer/node_modules/inner/index.js', owners)).toBe('inner')
   })
 
   it('matches rollup ids carrying a query', () => {
-    const [robots] = groupByOwner(OWNERS, ['/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js?v=abc'])
-    expect(robots!.ids).toEqual(['/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js?v=abc'])
+    expect(moduleOwnerOf('\0/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js?v=abc', OWNERS)).toBe('robots')
   })
 })

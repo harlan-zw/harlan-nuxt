@@ -9,11 +9,6 @@ export interface ModuleOwner {
   root: string
 }
 
-export interface OwnedModules {
-  owner: ModuleOwner
-  ids: string[]
-}
-
 /** Rollup ids carry a virtual prefix and a query suffix that paths on disk do not. */
 function normalize(id: string): string {
   return id.replace(/\\/g, '/').replace(/^\0/, '').split('?')[0]!
@@ -52,23 +47,11 @@ function isUnder(id: string, root: string): boolean {
   return id === root || id.startsWith(`${root}/`)
 }
 
-/**
- * Assign each bundled module to the owner it sits under. The longest root wins so a module
- * nested inside another package keeps its own files, and owners sharing a name are merged.
- */
-export function groupByOwner(owners: readonly ModuleOwner[], moduleIds: readonly string[]): OwnedModules[] {
-  const ranked = [...owners].sort((a, b) => b.root.length - a.root.length)
-  const grouped = new Map<string, OwnedModules>()
-  for (const id of moduleIds) {
-    const path = normalize(id)
-    const owner = ranked.find(candidate => isUnder(path, candidate.root))
-    if (!owner)
-      continue
-    const key = owner.name ?? owner.root
-    const existing = grouped.get(key)
-    if (existing)
-      existing.ids.push(id)
-    else grouped.set(key, { owner, ids: [id] })
-  }
-  return [...grouped.values()]
+/** The nearest installed Nuxt module that owns a runtime entry. */
+export function moduleOwnerOf(file: string, owners: readonly ModuleOwner[]): string | undefined {
+  const path = normalize(file)
+  return [...owners]
+    .sort((a, b) => b.root.length - a.root.length)
+    .find(candidate => isUnder(path, candidate.root))
+    ?.name
 }

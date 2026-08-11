@@ -40,14 +40,13 @@ describe('formatBudgetReport', () => {
   it('says which bundle the budget applies to', () => {
     expect(report([verdict])).toContain('1 Nuxt plugin over budget in the client bundle')
     expect(report([verdict, verdict], 'nitro')).toContain('2 Nitro plugins over budget in the server bundle')
+    expect(report([verdict, verdict], 'client-middleware')).toContain('2 Nuxt middleware over budget in the client bundle')
+    expect(report([verdict], 'nitro-middleware')).toContain('1 Nitro middleware over budget in the server bundle')
   })
 
-  it('reports a Nuxt module by name without repeating it as a path', () => {
-    const module: BudgetVerdict = { ...verdict, path: '/app/node_modules/@nuxtjs/robots', name: '@nuxtjs/robots' }
-    const lines = report([module], 'modules')
-    expect(lines).toContain('1 Nuxt module over budget in the client bundle')
-    expect(lines).toContain('1 kB  the module\'s own files')
-    expect(lines).not.toContain('@nuxtjs/robots  @nuxtjs/robots')
+  it('shows the Nuxt module that registered an entry', () => {
+    const lines = report([{ ...verdict, owner: '@nuxtjs/robots' }])
+    expect(lines).toContain('plugins/analytics.ts  Nuxt module: @nuxtjs/robots')
   })
 
   it('states the overshoot, not just the total', () => {
@@ -66,13 +65,6 @@ describe('formatBudgetReport', () => {
 
   it('suggests an override keyed by name, rounded up past the current size', () => {
     expect(report([{ ...verdict, name: 'analytics' }])).toContain('nuxtDx.sizeBudget.overridesKb = { \'analytics\': 81 }')
-  })
-
-  it('suggests ignoring an accepted module without removing it from reports', () => {
-    const module: BudgetVerdict = { ...verdict, path: '/app/node_modules/@nuxtjs/robots', name: '@nuxtjs/robots' }
-    const lines = report([module], 'modules')
-    expect(lines).toContain('Keep accepted modules in reports without absolute warnings:')
-    expect(lines).toContain('nuxtDx.sizeBudget.ignoreModules = [\'@nuxtjs/robots\']')
   })
 
   it('falls back to a path key when the plugin is unnamed', () => {

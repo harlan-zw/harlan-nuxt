@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createSnapshotWriter, entryKey, parseSnapshot, resolveReportPath, SNAPSHOT_FILE, SNAPSHOT_VERSION } from '../src/size-budget/snapshot'
 
-function target(path: string, totalBytes: number, name?: string): MeasuredTarget {
+function target(path: string, totalBytes: number, name?: string, owner?: string): MeasuredTarget {
   return {
+    scope: 'client',
     path,
     name,
+    owner,
     measurement: {
       key: path,
       ownBytes: 512,
@@ -59,16 +61,16 @@ describe('createSnapshotWriter', () => {
     }])
   })
 
-  it('keeps a name when the target has one', async () => {
+  it('keeps runtime entry metadata', async () => {
     const { write, read } = await writerIn()
-    await write('modules', [target('/app/node_modules/@nuxtjs/i18n', 1024, '@nuxtjs/i18n')])
-    expect((await read()).entries[0]).toMatchObject({ name: '@nuxtjs/i18n', path: '@nuxtjs/i18n' })
+    await write('client', [target('/app/node_modules/@nuxtjs/i18n/runtime/plugin.ts', 1024, 'i18n', '@nuxtjs/i18n')])
+    expect((await read()).entries[0]).toMatchObject({ name: 'i18n', owner: '@nuxtjs/i18n', path: '@nuxtjs/i18n/runtime/plugin.ts' })
   })
 
   it('collects every scope into one report as each bundle finishes', async () => {
     const { write, read } = await writerIn()
     await write('client', [target('/app/app/plugins/a.ts', 1024)])
-    await write('nitro', [target('/app/server/plugins/b.ts', 2048)])
+    await write('nitro', [{ ...target('/app/server/plugins/b.ts', 2048), scope: 'nitro' }])
     expect((await read()).entries.map(entryKey)).toEqual(['client:app/plugins/a.ts', 'nitro:server/plugins/b.ts'])
   })
 

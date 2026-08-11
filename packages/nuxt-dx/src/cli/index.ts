@@ -46,7 +46,7 @@ function thresholdBytes(raw: string): number {
 const compare = defineCommand({
   meta: {
     name: 'compare',
-    description: 'Diff two size budget reports, failing when a plugin or module grows past the threshold',
+    description: 'Diff two size budget reports, failing when a runtime entry grows past the threshold',
   },
   args: {
     'base': { type: 'positional', description: 'Report from the build you are comparing against', required: true },
@@ -84,7 +84,7 @@ const compare = defineCommand({
 const main: CommandDef = defineCommand({
   meta: {
     name: 'nuxt-dx',
-    description: 'Bundle size budget tooling for Nuxt plugins, Nitro plugins and Nuxt modules',
+    description: 'JavaScript size budgets for Nuxt and Nitro runtime entries',
   },
   subCommands: { compare },
 })

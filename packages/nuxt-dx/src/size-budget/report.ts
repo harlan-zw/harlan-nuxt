@@ -28,11 +28,6 @@ function overrideSnippet(over: readonly BudgetVerdict[], rootDir: string): strin
   return `nuxtDx.sizeBudget.overridesKb = { ${entries.join(', ')} }`
 }
 
-function ignoreModulesSnippet(over: readonly BudgetVerdict[]): string | undefined {
-  const names = over.flatMap(verdict => verdict.name === undefined ? [] : [`'${verdict.name}'`])
-  return names.length ? `nuxtDx.sizeBudget.ignoreModules = [${names.join(', ')}]` : undefined
-}
-
 /** Every byte charged to the target, so the listed sizes always sum to the reported total. */
 function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string): TreeItem[] {
   const { ownBytes, exclusiveBytes, exclusiveCount, heaviestDependencies } = verdict.measurement
@@ -59,16 +54,17 @@ function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string):
 }
 
 export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerdict[], rootDir: string): string {
-  const { noun, bundle } = SCOPE[scope]
-  const lines = [`${over.length} ${noun}${over.length === 1 ? '' : 's'} over budget in the ${bundle} bundle`]
+  const { noun, plural, bundle } = SCOPE[scope]
+  const lines = [`${over.length} ${over.length === 1 ? noun : plural} over budget in the ${bundle} bundle`]
 
   for (const verdict of over) {
-    const { name, path, budgetBytes, measurement } = verdict
+    const { name, owner, path, budgetBytes, measurement } = verdict
     const file = displayId(path, rootDir)
     const overshoot = formatBytes(measurement.totalBytes - budgetBytes)
+    const label = name && name !== file ? `${colors.bold(name)}  ${colors.dim(file)}` : colors.bold(name ?? file)
     lines.push(
       '',
-      `  ${name && name !== file ? `${colors.bold(name)}  ${colors.dim(file)}` : colors.bold(name ?? file)}`,
+      `  ${label}${owner === undefined ? '' : colors.dim(`  Nuxt module: ${owner}`)}`,
       `  ${formatBytes(measurement.totalBytes)} bundled, ${colors.red(`${overshoot} over`)} the ${formatBytes(budgetBytes)} budget`,
       formatTree(breakdown(scope, verdict, rootDir), { prefix: '    ' }).trimEnd(),
     )
@@ -79,13 +75,5 @@ export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerd
     colors.dim('  Defer heavy imports with `await import()`, or allow the size:'),
     `    ${colors.cyan(overrideSnippet(over, rootDir))}`,
   )
-  const ignoreSnippet = scope === 'modules' ? ignoreModulesSnippet(over) : undefined
-  if (ignoreSnippet) {
-    lines.push(
-      '',
-      colors.dim('  Keep accepted modules in reports without absolute warnings:'),
-      `    ${colors.cyan(ignoreSnippet)}`,
-    )
-  }
   return lines.join('\n')
 }

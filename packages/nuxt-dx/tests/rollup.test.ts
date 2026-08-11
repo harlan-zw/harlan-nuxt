@@ -4,7 +4,7 @@ import { sizeBudgetRollupPlugin } from '../src/size-budget/rollup'
 describe('sizeBudgetRollupPlugin', () => {
   it('only measures the Vite environment it targets', async () => {
     const plugin = sizeBudgetRollupPlugin({
-      scope: 'modules',
+      name: 'client',
       environment: 'client',
       targets: () => [],
       onMeasured: () => {},

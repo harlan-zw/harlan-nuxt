@@ -1,33 +1,32 @@
 import type { CostTarget } from './graph'
-import type { ModuleOwner } from './module-packages'
+import type { BudgetScope } from './scope'
 import { matchTargetId } from './match'
-import { groupByOwner } from './module-packages'
 
-export interface BudgetTarget extends CostTarget {
-  /** Absolute path shown in the report. */
+export interface RuntimeEntry {
+  scope: BudgetScope
+  /** Absolute path registered with Nuxt or Nitro. */
   path: string
-  /** Display name, when it is known before measurement. */
+  /** Nuxt module that registered this entry, when known. */
+  owner?: string
+}
+
+export interface BudgetTarget extends CostTarget, RuntimeEntry {
+  /** Absolute path shown in the report. */
   name?: string
 }
 
-/** One plugin file, one target. Paths that were tree-shaken out have nothing to charge. */
-export function pluginTargets(paths: readonly string[], moduleIds: readonly string[]): BudgetTarget[] {
+/**
+ * One runtime file, one target. Plugins and middleware share the same pass so a dependency
+ * they both import is shared, not charged twice. Paths tree-shaken out cost nothing.
+ */
+export function runtimeTargets(entries: readonly RuntimeEntry[], moduleIds: readonly string[]): BudgetTarget[] {
   const byId = new Map<string, BudgetTarget>()
-  for (const path of paths) {
+  for (const entry of entries) {
+    const { path } = entry
     const id = matchTargetId(path, moduleIds)
-    // The same file can be registered twice; charging it twice would double the graph's owners.
+    // One file can be registered twice. The first registration owns it so totals stay disjoint.
     if (id && !byId.has(id))
-      byId.set(id, { key: id, path, ids: [id] })
+      byId.set(id, { key: `${entry.scope}:${id}`, ...entry, ids: [id] })
   }
   return [...byId.values()]
-}
-
-/** Every bundled file under a module's package directory is charged to that module. */
-export function moduleTargets(owners: readonly ModuleOwner[], moduleIds: readonly string[]): BudgetTarget[] {
-  return groupByOwner(owners, moduleIds).map(({ owner, ids }) => ({
-    key: owner.name ?? owner.root,
-    path: owner.root,
-    name: owner.name,
-    ids,
-  }))
 }

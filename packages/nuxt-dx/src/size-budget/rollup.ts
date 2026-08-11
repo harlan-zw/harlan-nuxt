@@ -5,17 +5,20 @@ import type { BudgetTarget } from './targets'
 import { measureCost } from './graph'
 
 export interface MeasuredTarget {
-  /** Absolute path to the plugin file or module package, as Nuxt or Nitro resolved it. */
+  scope: BudgetScope
+  /** Absolute path to the runtime entry, as Nuxt or Nitro resolved it. */
   path: string
   name?: string
+  owner?: string
   measurement: CostMeasurement
 }
 
 export interface SizeBudgetPluginOptions {
-  scope: BudgetScope
+  /** Distinguishes the client and server Rollup plugin instances. */
+  name: string
   /** Restrict a shared Vite plugin to one environment. Rollup builds leave this unset. */
   environment?: string
-  /** Read lazily so plugins and modules registered after this rollup plugin is created are included. */
+  /** Read lazily so runtime entries registered after this Rollup plugin is created are included. */
   targets: (moduleIds: readonly string[]) => readonly BudgetTarget[]
   onMeasured: (measured: readonly MeasuredTarget[]) => void | Promise<void>
 }
@@ -44,7 +47,7 @@ function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => reado
  */
 export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): EnvironmentPlugin {
   return {
-    name: `nuxt-dx:size-budget:${options.scope}`,
+    name: `nuxt-dx:size-budget:${options.name}`,
     applyToEnvironment: options.environment === undefined
       ? undefined
       : environment => environment.name === options.environment,
@@ -58,7 +61,7 @@ export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): Enviro
       const measurements = measureCost({ modules, targets, entryIds })
       await options.onMeasured(measurements.map((measurement) => {
         const target = byKey.get(measurement.key)!
-        return { path: target.path, name: target.name, measurement }
+        return { scope: target.scope, path: target.path, name: target.name, owner: target.owner, measurement }
       }))
     },
   }

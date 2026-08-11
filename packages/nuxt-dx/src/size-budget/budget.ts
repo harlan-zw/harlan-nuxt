@@ -2,14 +2,16 @@ import type { CostMeasurement } from './graph'
 
 export interface BudgetVerdict {
   path: string
-  /** A Nuxt module name, or the `name` from `defineNuxtPlugin` when the plugin declares one. */
+  /** The `name` from `defineNuxtPlugin`, when the plugin declares one. */
   name?: string
+  /** Nuxt module that registered this runtime entry, when known. */
+  owner?: string
   budgetBytes: number
   measurement: CostMeasurement
 }
 
 export interface BudgetOverride {
-  /** A plugin or module name, or any fragment of a path. */
+  /** A plugin name or any fragment of a runtime entry path. */
   fragment: string
   bytes: number
 }

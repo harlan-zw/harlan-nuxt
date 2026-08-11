@@ -16,6 +16,7 @@ function cell(text: string): string {
 function row(change: EntryChange): string {
   const columns = [
     `\`${cell(change.label)}\``,
+    change.owner === undefined ? '' : `\`${cell(change.owner)}\``,
     SCOPE[change.scope].noun,
     formatBytes(change.baseBytes),
     formatBytes(change.headBytes),
@@ -24,12 +25,13 @@ function row(change: EntryChange): string {
   return `| ${columns.join(' | ')} |`
 }
 
-/** One line per scope. Scopes overlap, so there is no honest single number to lead with. */
 function summary(diff: SnapshotDiff): string[] {
-  const lines = diff.scopeTotals.map(({ scope, baseBytes, headBytes, deltaBytes }) =>
-    `- **${SCOPE[scope].noun}s** ${formatBytes(baseBytes)} to ${formatBytes(headBytes)}, **${formatDelta(deltaBytes)}**`)
-  if (diff.scopeTotals.length > 1)
-    lines.push('', 'Scopes are totalled separately, since a Nuxt module is charged for the plugins it ships.')
+  const lines: string[] = []
+  for (const { bundle, baseBytes, headBytes, deltaBytes } of diff.bundleTotals) {
+    lines.push(`- **${bundle === 'client' ? 'Client' : 'Server'} runtime entries** ${formatBytes(baseBytes)} to ${formatBytes(headBytes)}, **${formatDelta(deltaBytes)}**`)
+    for (const total of diff.scopeTotals.filter(total => SCOPE[total.scope].bundle === bundle))
+      lines.push(`  - ${SCOPE[total.scope].plural}: ${formatBytes(total.baseBytes)} to ${formatBytes(total.headBytes)}, ${formatDelta(total.deltaBytes)}`)
+  }
   return lines
 }
 
@@ -64,14 +66,14 @@ export function formatMissingBaselineMarkdown(path: string): string {
 export function formatDiffMarkdown(diff: SnapshotDiff): string {
   const lines = ['### Bundle size budget', '']
   if (!diff.changes.length)
-    return [...lines, 'Neither build measured a plugin, a Nitro plugin or a Nuxt module.'].join('\n')
+    return [...lines, 'Neither build measured a runtime entry.'].join('\n')
 
   const moved = diff.changes.filter(change => change.kind !== 'unchanged')
   lines.push(...summary(diff), '', verdict(diff), '')
   if (moved.length) {
     lines.push(
-      '| Target | Scope | Base | Head | Change |',
-      '| --- | --- | --- | --- | --- |',
+      '| Target | Module | Scope | Base | Head | Change |',
+      '| --- | --- | --- | --- | --- | --- |',
       ...moved.map(row),
       '',
     )

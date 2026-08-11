@@ -6,7 +6,7 @@ import { displayId } from './report'
 import { isBudgetScope } from './scope'
 
 /** Bumped whenever the shape changes, so `compare` refuses a report it cannot read. */
-export const SNAPSHOT_VERSION = 1
+export const SNAPSHOT_VERSION = 2
 
 /**
  * Where the report lands, relative to the app root. Not `nuxt.options.buildDir`: that
@@ -31,6 +31,8 @@ export interface SnapshotEntry {
    * only by its file, which is every plugin whose budget was never at risk.
    */
   name?: string
+  /** Nuxt module that registered this runtime entry, when known. */
+  owner?: string
   /** Root-relative file or package path, so two checkouts of the same repo agree. */
   path: string
   /** Bytes of the target's own bundled files. */
@@ -55,6 +57,7 @@ function toEntry(scope: BudgetScope, target: MeasuredTarget, rootDir: string): S
   return {
     scope,
     ...(target.name === undefined ? {} : { name: target.name }),
+    ...(target.owner === undefined ? {} : { owner: target.owner }),
     path: displayId(target.path, rootDir),
     ownBytes,
     exclusiveBytes,
@@ -87,6 +90,7 @@ function isEntry(value: unknown): value is SnapshotEntry {
   return isBudgetScope(entry.scope)
     && typeof entry.path === 'string'
     && (entry.name === undefined || typeof entry.name === 'string')
+    && (entry.owner === undefined || typeof entry.owner === 'string')
     && ['ownBytes', 'exclusiveBytes', 'totalBytes'].every(field => typeof entry[field] === 'number')
 }
 

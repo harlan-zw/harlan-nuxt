@@ -1,6 +1,7 @@
 import type { SizeBudgetSnapshot, SnapshotEntry } from '../src/size-budget/snapshot'
 import { describe, expect, it } from 'vitest'
 import { diffSnapshots } from '../src/size-budget/diff'
+import { SNAPSHOT_VERSION } from '../src/size-budget/snapshot'
 
 function entry(partial: Partial<SnapshotEntry> & { totalBytes: number }): SnapshotEntry {
   return {
@@ -13,7 +14,7 @@ function entry(partial: Partial<SnapshotEntry> & { totalBytes: number }): Snapsh
 }
 
 function snapshot(...entries: SnapshotEntry[]): SizeBudgetSnapshot {
-  return { version: 1, entries }
+  return { version: SNAPSHOT_VERSION, entries }
 }
 
 const KB = 1024
@@ -53,9 +54,9 @@ describe('diffSnapshots', () => {
     expect(changeOf(diff, 'app/plugins/analytics.ts')).toMatchObject({ kind: 'unchanged', deltaBytes: 0 })
   })
 
-  it('pairs targets by name when they have one, so a moved package still matches', () => {
-    const base = snapshot(entry({ scope: 'modules', name: '@nuxtjs/i18n', path: 'node_modules/@nuxtjs/i18n', totalBytes: 20 * KB }))
-    const head = snapshot(entry({ scope: 'modules', name: '@nuxtjs/i18n', path: '.pnpm/@nuxtjs+i18n@10/i18n', totalBytes: 30 * KB }))
+  it('pairs named plugins when their generated path moves', () => {
+    const base = snapshot(entry({ name: 'i18n', path: 'node_modules/@nuxtjs/i18n/runtime/plugin.ts', totalBytes: 20 * KB }))
+    const head = snapshot(entry({ name: 'i18n', path: '.pnpm/@nuxtjs+i18n@10/runtime/plugin.ts', totalBytes: 30 * KB }))
     expect(diffSnapshots(base, head, 20 * KB).changes).toHaveLength(1)
   })
 
@@ -73,15 +74,19 @@ describe('diffSnapshots', () => {
     expect(diff.changes.reduce((sum, change) => sum + change.deltaBytes, 0)).toBe(15 * KB)
   })
 
-  it('totals each scope on its own, never adding scopes that count the same bytes twice', () => {
+  it('totals each entry kind and its disjoint bundle', () => {
     const plugin = entry({ scope: 'client', path: 'modules/telemetry/runtime/plugin.ts', totalBytes: 12 * KB })
-    const module = entry({ scope: 'modules', name: 'telemetry', path: 'modules/telemetry', totalBytes: 12 * KB })
+    const middleware = entry({ scope: 'client-middleware', path: 'middleware/auth.ts', totalBytes: 4 * KB })
     const nitro = entry({ scope: 'nitro', path: 'server/plugins/audit.ts', totalBytes: 6 * KB })
-    const diff = diffSnapshots(snapshot(plugin, module, nitro), snapshot(plugin, module, nitro), KB)
+    const diff = diffSnapshots(snapshot(plugin, middleware, nitro), snapshot(plugin, middleware, nitro), KB)
     expect(diff.scopeTotals.map(total => [total.scope, total.headBytes])).toEqual([
       ['client', 12 * KB],
+      ['client-middleware', 4 * KB],
       ['nitro', 6 * KB],
-      ['modules', 12 * KB],
+    ])
+    expect(diff.bundleTotals.map(total => [total.bundle, total.headBytes])).toEqual([
+      ['client', 16 * KB],
+      ['server', 6 * KB],
     ])
   })
 
