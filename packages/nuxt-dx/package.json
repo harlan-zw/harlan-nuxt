@@ -73,6 +73,7 @@
     "typescript": "catalog:",
     "unbuild": "catalog:",
     "vitest": "catalog:",
-    "vue": "catalog:"
+    "vue": "catalog:",
+    "yaml": "catalog:"
   }
 }

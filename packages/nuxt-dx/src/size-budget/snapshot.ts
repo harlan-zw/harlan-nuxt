@@ -14,6 +14,16 @@ export const SNAPSHOT_VERSION = 1
  */
 export const SNAPSHOT_FILE = '.nuxt/dx/size-budget.json'
 
+/**
+ * The path a build should write to, or nothing when the report is off. Reporting is
+ * opt-in: a build that nobody asked for a report from writes no files.
+ */
+export function resolveReportPath(option: boolean | { path?: string } | undefined): string | undefined {
+  if (!option)
+    return undefined
+  return (option === true ? undefined : option.path) ?? SNAPSHOT_FILE
+}
+
 export interface SnapshotEntry {
   scope: BudgetScope
   /**

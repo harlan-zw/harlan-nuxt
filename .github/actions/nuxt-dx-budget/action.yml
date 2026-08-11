@@ -1,0 +1,90 @@
+name: Nuxt DX size budget
+description: Diff this build's size budget report against the base branch, summarise what moved, and fail when a plugin or module grows past the threshold.
+
+inputs:
+  report-path:
+    description: Report this build wrote, relative to working-directory. Enable `nuxtDx.report` to produce it.
+    required: false
+    default: .nuxt/dx/size-budget.json
+  threshold-kb:
+    description: Growth allowed for a single target, never cumulative, before this fails.
+    required: false
+    default: '10'
+  artifact-name:
+    description: Artifact this uploads the report to, and reads the baseline back from.
+    required: false
+    default: nuxt-dx-size-budget
+  base-branch:
+    description: Branch whose last successful run of this workflow holds the baseline. Defaults to the pull request base, then the repository default branch.
+    required: false
+    default: ''
+  working-directory:
+    description: Directory the app was built in.
+    required: false
+    default: .
+  github-token:
+    description: 'Token used to list workflow runs and download the baseline artifact. Needs `actions: read`.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    # The baseline is the report the last green run on the base branch left behind, so
+    # nothing is rebuilt here and no baseline file is committed to the repository.
+    - name: Find the baseline run
+      id: baseline
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        WORKFLOW: ${{ github.workflow }}
+        BASE_BRANCH: ${{ inputs.base-branch || github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        REPORT_PATH: ${{ inputs.report-path }}
+      run: |
+        set -euo pipefail
+        echo "report-file=$(basename "$REPORT_PATH")" >> "$GITHUB_OUTPUT"
+        run_id=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BASE_BRANCH" \
+          --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+        echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
+        if [ -z "$run_id" ]; then
+          echo "No successful run of \"$WORKFLOW\" on $BASE_BRANCH yet, so this build has no baseline."
+        else
+          echo "Taking the baseline from run $run_id on $BASE_BRANCH."
+        fi
+
+    # Missing or expired artifacts are normal on a first run, so a failed download is
+    # reported as no baseline rather than as a broken pull request.
+    - name: Download the baseline report
+      if: steps.baseline.outputs.run-id != ''
+      continue-on-error: true
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/nuxt-dx-baseline
+        run-id: ${{ steps.baseline.outputs.run-id }}
+        github-token: ${{ inputs.github-token }}
+
+    - name: Compare against the baseline
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BASE_REPORT: ${{ runner.temp }}/nuxt-dx-baseline/${{ steps.baseline.outputs.report-file }}
+        HEAD_REPORT: ${{ inputs.report-path }}
+        THRESHOLD_KB: ${{ inputs.threshold-kb }}
+      run: |
+        set -uo pipefail
+        npx --no-install nuxt-dx compare "$BASE_REPORT" "$HEAD_REPORT" \
+          --threshold-kb "$THRESHOLD_KB" --allow-missing-base | tee -a "$GITHUB_STEP_SUMMARY"
+        exit "${PIPESTATUS[0]}"
+
+    # Uploaded even when the comparison failed, so the next run on this branch still has
+    # something to measure against.
+    - name: Keep this report as the next baseline
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.working-directory }}/${{ inputs.report-path }}
+        if-no-files-found: error
+        retention-days: 30

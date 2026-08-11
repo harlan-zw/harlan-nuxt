@@ -13,17 +13,26 @@ import { fileURLToPath } from 'node:url'
 import { defineCommand, runMain } from 'citty'
 import { colors } from 'consola/utils'
 import { diffSnapshots } from '../size-budget/diff'
-import { formatDiffMarkdown, formatDiffVerdict } from '../size-budget/diff-report'
+import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../size-budget/diff-report'
 import { kilobytesToBytes } from '../size-budget/size'
 import { parseSnapshot } from '../size-budget/snapshot'
 
 /** A target growing by more than this fails the comparison. */
 const DEFAULT_THRESHOLD_KB = 10
 
-async function readSnapshot(path: string): Promise<SizeBudgetSnapshot> {
-  const source = await readFile(path, 'utf-8').catch(() => {
-    throw new Error(`Cannot read ${path}. Build the app first; the report is written to .nuxt/dx/size-budget.json.`)
+/** Undefined only when the file is absent, which the baseline is allowed to be. */
+async function readSource(path: string): Promise<string | undefined> {
+  return await readFile(path, 'utf-8').catch((error: unknown) => {
+    if ((error as { code?: string }).code === 'ENOENT')
+      return undefined
+    throw new Error(`Cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`)
   })
+}
+
+async function readSnapshot(path: string): Promise<SizeBudgetSnapshot> {
+  const source = await readSource(path)
+  if (source === undefined)
+    throw new Error(`No report at ${path}. Build the app with \`nuxtDx.report\` enabled first.`)
   return parseSnapshot(source, path)
 }
 
@@ -42,13 +51,21 @@ const compare = defineCommand({
   args: {
     'base': { type: 'positional', description: 'Report from the build you are comparing against', required: true },
     'head': { type: 'positional', description: 'Report from the build you are checking', required: true },
-    'threshold-kb': { type: 'string', description: 'Growth allowed per target before this fails', default: String(DEFAULT_THRESHOLD_KB) },
+    'threshold-kb': { type: 'string', description: 'Growth allowed for a single target, never cumulative, before this fails', default: String(DEFAULT_THRESHOLD_KB) },
+    'allow-missing-base': { type: 'boolean', description: 'Report that there is no baseline and pass, instead of failing', default: false },
   },
   async run({ args }) {
     try {
       const threshold = thresholdBytes(args['threshold-kb'])
-      const [base, head] = await Promise.all([readSnapshot(args.base), readSnapshot(args.head)])
-      const diff = diffSnapshots(base, head, threshold)
+      const baseSource = await readSource(args.base)
+      if (baseSource === undefined && args['allow-missing-base']) {
+        process.stdout.write(`${formatMissingBaselineMarkdown(args.base)}\n`)
+        process.stderr.write(`${colors.yellow(`… no baseline report at ${args.base}, nothing compared`)}\n`)
+        return
+      }
+      if (baseSource === undefined)
+        throw new Error(`No report at ${args.base}. Pass --allow-missing-base to treat a missing baseline as a pass.`)
+      const diff = diffSnapshots(parseSnapshot(baseSource, args.base), await readSnapshot(args.head), threshold)
       // Markdown on stdout so it can be redirected straight into a step summary,
       // the verdict on stderr so a local run still reads as a pass or a fail.
       process.stdout.write(`${formatDiffMarkdown(diff)}\n`)

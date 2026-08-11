@@ -65,14 +65,29 @@ describe('diffSnapshots', () => {
     expect(diffSnapshots(base, base, KB).changes).toHaveLength(2)
   })
 
-  it('sums the per-target deltas into the change in bundled size', () => {
+  it('sums the per-target deltas into the change in that scope', () => {
     const base = snapshot(entry({ path: 'a.ts', totalBytes: 10 * KB }), entry({ path: 'b.ts', totalBytes: 10 * KB }))
     const head = snapshot(entry({ path: 'a.ts', totalBytes: 30 * KB }), entry({ path: 'c.ts', totalBytes: 5 * KB }))
     const diff = diffSnapshots(base, head, 100 * KB)
-    expect(diff.baseTotalBytes).toBe(20 * KB)
-    expect(diff.headTotalBytes).toBe(35 * KB)
-    expect(diff.totalDeltaBytes).toBe(15 * KB)
+    expect(diff.scopeTotals).toEqual([{ scope: 'client', baseBytes: 20 * KB, headBytes: 35 * KB, deltaBytes: 15 * KB }])
     expect(diff.changes.reduce((sum, change) => sum + change.deltaBytes, 0)).toBe(15 * KB)
+  })
+
+  it('totals each scope on its own, never adding scopes that count the same bytes twice', () => {
+    const plugin = entry({ scope: 'client', path: 'modules/telemetry/runtime/plugin.ts', totalBytes: 12 * KB })
+    const module = entry({ scope: 'modules', name: 'telemetry', path: 'modules/telemetry', totalBytes: 12 * KB })
+    const nitro = entry({ scope: 'nitro', path: 'server/plugins/audit.ts', totalBytes: 6 * KB })
+    const diff = diffSnapshots(snapshot(plugin, module, nitro), snapshot(plugin, module, nitro), KB)
+    expect(diff.scopeTotals.map(total => [total.scope, total.headBytes])).toEqual([
+      ['client', 12 * KB],
+      ['nitro', 6 * KB],
+      ['modules', 12 * KB],
+    ])
+  })
+
+  it('leaves out a scope neither build measured', () => {
+    const diff = diffSnapshots(snapshot(entry({ totalBytes: KB })), snapshot(entry({ totalBytes: KB })), KB)
+    expect(diff.scopeTotals.map(total => total.scope)).toEqual(['client'])
   })
 
   it('leads with the biggest growth', () => {
@@ -111,7 +126,7 @@ describe('growth threshold', () => {
     const shrinking = snapshot(entry({ path: 'a.ts', totalBytes: 100 * KB }), entry({ path: 'b.ts', totalBytes: KB }))
     const grown = snapshot(entry({ path: 'a.ts', totalBytes: KB }), entry({ path: 'b.ts', totalBytes: 40 * KB }))
     const diff = diffSnapshots(shrinking, grown, 10 * KB)
-    expect(diff.totalDeltaBytes).toBeLessThan(0)
+    expect(diff.scopeTotals[0]!.deltaBytes).toBeLessThan(0)
     expect(diff.breaches.map(change => change.label)).toEqual(['b.ts'])
   })
 })

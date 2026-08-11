@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { createSnapshotWriter, entryKey, parseSnapshot, SNAPSHOT_VERSION } from '../src/size-budget/snapshot'
+import { createSnapshotWriter, entryKey, parseSnapshot, resolveReportPath, SNAPSHOT_FILE, SNAPSHOT_VERSION } from '../src/size-budget/snapshot'
 
 function target(path: string, totalBytes: number, name?: string): MeasuredTarget {
   return {
@@ -26,6 +26,25 @@ async function writerIn(rootDir = '/app') {
   const write = createSnapshotWriter(file, rootDir)
   return { write, read: async () => parseSnapshot(await readFile(file, 'utf-8'), file) }
 }
+
+describe('resolveReportPath', () => {
+  it('writes nothing when the report was never asked for', () => {
+    expect(resolveReportPath(undefined)).toBeUndefined()
+    expect(resolveReportPath(false)).toBeUndefined()
+  })
+
+  it('takes the default path from a bare opt-in', () => {
+    expect(resolveReportPath(true)).toBe(SNAPSHOT_FILE)
+  })
+
+  it('takes a path from the object form', () => {
+    expect(resolveReportPath({ path: 'reports/size.json' })).toBe('reports/size.json')
+  })
+
+  it('falls back to the default path when the object names none', () => {
+    expect(resolveReportPath({})).toBe(SNAPSHOT_FILE)
+  })
+})
 
 describe('createSnapshotWriter', () => {
   it('writes what a build measured, keyed by identity', async () => {

@@ -25,7 +25,7 @@ Status: experimental. APIs may change before the first release.
 - 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
 - 📦 **Size budgets with exclusive attribution:** warn when a Nuxt plugin, a Nitro plugin, or an installed Nuxt module drags too much JavaScript into the bundle, each charged only for what it alone pulls in, with budgets keyed by plugin name, module name, or path fragment.
-- 📈 **Regression diffs:** every build writes a machine-readable report of what each plugin and module costs, and `nuxt-dx compare` diffs two of them so the pull request that quietly adds 40 kB fails instead of landing.
+- 📈 **Regression diffs:** opt into a machine-readable report of what each plugin and module costs, then diff two builds with `nuxt-dx compare` or the bundled GitHub action, so the pull request that quietly adds 40 kB fails instead of landing.
 
 ## Installation
 
@@ -144,7 +144,16 @@ Modules are reported by the name they declare in their own `meta`, which is also
 
 ## The size budget report
 
-Every build writes what it measured to `.nuxt/dx/size-budget.json`, whether or not anything breached a budget. It is the input to the regression check below, and it is readable on its own: one entry per Nuxt plugin, Nitro plugin, and installed Nuxt module, with the bytes broken down the same way the warning breaks them down.
+Reporting is off until you ask for it. With `report: true`, every build writes what it measured to `.nuxt/dx/size-budget.json`, whether or not anything breached a budget. It is the input to the regression check below, and it is readable on its own: one entry per Nuxt plugin, Nitro plugin, and installed Nuxt module, with the bytes broken down the same way the warning breaks them down.
+
+```ts
+export default defineNuxtConfig({
+  nuxtDx: {
+    // or `{ path: 'ci/size-budget.json' }` to write it somewhere else
+    report: true,
+  },
+})
+```
 
 ```json
 {
@@ -191,7 +200,11 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 ```md
 ### Bundle size budget
 
-53.6 kB to 72.1 kB, **+18.5 kB** across 5 targets.
+- **Nuxt plugins** 34.7 kB to 61.8 kB, **+27.1 kB**
+- **Nitro plugins** 6.4 kB to 6.4 kB, **+0 B**
+- **Nuxt modules** 12.5 kB to 3.9 kB, **-8.6 kB**
+
+Scopes are totalled separately, since a Nuxt module is charged for the plugins it ships.
 
 **1 target grew past the 10 kB threshold:** `app/plugins/analytics.client.ts` +35.7 kB.
 
@@ -204,64 +217,75 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 | `modules/telemetry/runtime/plugin.ts` | Nuxt plugin | 12.5 kB | 3.9 kB | -8.6 kB |
 ```
 
-Markdown goes to stdout so it can be redirected straight into a job summary; the pass or fail line goes to stderr so a local run still reads as one. Targets that held still are counted rather than listed.
+Markdown goes to stdout so it can be redirected straight into a job summary; the pass or fail line goes to stderr so a local run still reads as one. Targets that held still are counted rather than listed. Each scope is totalled on its own and the scopes are never added together, since the plugin a module ships is charged to the plugin and to the module both.
 
-`--threshold-kb` sets how much a single target may grow before this fails, defaulting to 10. Each target is judged on its own, so a 40 kB regression is caught even when an unrelated cleanup makes the totals look flat. Exit code 1 means something grew past the threshold, 2 means a report could not be read, and 0 means you are clear.
+`--threshold-kb` sets how much a single target may grow before this fails, defaulting to 10. **The threshold is per target, never cumulative:** twelve plugins each gaining 9 kB pass a 10 kB threshold, while the one plugin that gains 11 kB does not. This is aimed at the change that lands in one place, and reading the scope totals is how you catch a wide, shallow drift.
 
-### In GitHub Actions
+`--allow-missing-base` reports that there was no baseline and passes, rather than failing. Exit code 1 means something grew past the threshold, 2 means a report could not be read, and 0 means you are clear.
 
-Check out both commits, build both, and diff the two reports. Nothing is stored between runs, so there is no baseline file to go stale, and `$GITHUB_STEP_SUMMARY` needs no permissions and works on pull requests from forks.
+## GitHub Actions
+
+The comparison runs after your existing build step, in the job you already have. Nothing is rebuilt for it, since your build already wrote the report.
+
+First, turn the report on:
+
+```ts
+export default defineNuxtConfig({
+  nuxtDx: {
+    report: true,
+  },
+})
+```
+
+Then add the action to the workflow that builds your app:
 
 ```yaml
-name: Size budget
+name: CI
 
-on: pull_request
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
+  # the action lists workflow runs and downloads the baseline report from one
+  actions: read
 
 jobs:
-  size-budget:
+  build:
     runs-on: ubuntu-24.04
     steps:
-      - name: Check out the pull request
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
-        with:
-          persist-credentials: false
-
-      - name: Check out the base commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
-        with:
-          path: .base
-          persist-credentials: false
-          ref: ${{ github.event.pull_request.base.sha }}
-
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.0
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.2.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
         with:
           node-version: 24
           cache: pnpm
 
-      - name: Build the base commit
-        working-directory: .base
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
 
-      - name: Build the pull request
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
-
-      - name: Compare
-        run: >
-          pnpm exec nuxt-dx compare
-          .base/.nuxt/dx/size-budget.json
-          .nuxt/dx/size-budget.json
-          >> "$GITHUB_STEP_SUMMARY"
+      - uses: harlan-zw/harlan-nuxt/.github/actions/nuxt-dx-budget@main
+        with:
+          report-path: .nuxt/dx/size-budget.json
+          threshold-kb: 10
 ```
 
-The diff lands in the job summary either way; the step only fails when something grew past the threshold. Raise the bar for a pull request that legitimately ships something big by passing `--threshold-kb`.
+The baseline is the report left behind by the last successful run of the same workflow on the base branch, downloaded from that run's artifact. Every run uploads its own report, so a green run on `main` becomes the baseline for the pull requests that follow. Nothing is committed to your repository, so there is no baseline file to go stale or to conflict on every pull request.
+
+A run with no baseline says so in the job summary and passes. That covers the first ever run, a branch whose artifact has passed its retention window, and a workflow that has never been green on the base branch. A missing baseline never fails a pull request.
+
+The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and works on pull requests from forks. The step fails only when a target grew past the threshold.
+
+| Input | Default | |
+| --- | --- | --- |
+| `report-path` | `.nuxt/dx/size-budget.json` | Report your build wrote, relative to `working-directory` |
+| `threshold-kb` | `10` | Growth allowed for a single target |
+| `artifact-name` | `nuxt-dx-size-budget` | Artifact the report is uploaded to and read back from |
+| `base-branch` | pull request base, then the default branch | Branch the baseline comes from |
+| `working-directory` | `.` | Directory the app was built in |
+| `github-token` | `${{ github.token }}` | Needs `actions: read` |
 
 ## Configuring budgets
 
@@ -282,11 +306,11 @@ export default defineNuxtConfig({
         '@nuxtjs/i18n': 80,
         'server/plugins/queue': 120,
       },
-      // where the machine-readable report is written, relative to the app root
-      reportPath: '.nuxt/dx/size-budget.json',
       // throw instead of warning
       fail: false,
     },
+    // write the measurements to JSON for `nuxt-dx compare`, off by default
+    report: false,
   },
 })
 ```

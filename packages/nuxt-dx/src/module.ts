@@ -13,7 +13,7 @@ import { extractPluginName } from './size-budget/plugin-name'
 import { formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
 import { kilobytesToBytes } from './size-budget/size'
-import { createSnapshotWriter, SNAPSHOT_FILE } from './size-budget/snapshot'
+import { createSnapshotWriter, resolveReportPath } from './size-budget/snapshot'
 import { moduleTargets, pluginTargets } from './size-budget/targets'
 
 export interface SizeBudgetOptions {
@@ -35,15 +35,18 @@ export interface SizeBudgetOptions {
   /** Per-target kilobyte budgets, keyed by plugin name, module name, or any fragment of the path. */
   overridesKb?: Record<string, number>
   /**
-   * Where the machine-readable report is written, relative to the app root.
-   * @default '.nuxt/dx/size-budget.json'
-   */
-  reportPath?: string
-  /**
    * Fail the build instead of warning.
    * @default false
    */
   fail?: boolean
+}
+
+export interface ReportOptions {
+  /**
+   * Where the report is written, relative to the app root.
+   * @default '.nuxt/dx/size-budget.json'
+   */
+  path?: string
 }
 
 export interface ModuleOptions {
@@ -52,6 +55,12 @@ export interface ModuleOptions {
   sourceRoot?: string
   /** Warn when a plugin's or module's exclusive import graph exceeds a bundle size budget. */
   sizeBudget?: SizeBudgetOptions | false
+  /**
+   * Write what the size budgets measured to a JSON file, for `nuxt-dx compare` to diff
+   * against another build. Nothing is written unless you ask for it.
+   * @default false
+   */
+  report?: boolean | ReportOptions
 }
 
 interface ResolvedBudgets {
@@ -170,13 +179,18 @@ function installedModuleOwners(nuxt: Nuxt): ModuleOwner[] {
   return owners
 }
 
-function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
+function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined): void {
   const budgets = resolveBudgets(options)
   const clientBudget = budgets.client
   const nitroBudget = budgets.nitro
   const moduleBudget = budgets.modules
 
-  const writeSnapshot = createSnapshotWriter(resolve(nuxt.options.rootDir, options.reportPath ?? SNAPSHOT_FILE), nuxt.options.rootDir)
+  if (reportPath !== undefined && clientBudget === undefined && nitroBudget === undefined && moduleBudget === undefined)
+    logger.warn('`nuxtDx.report` is on, but every size budget is disabled, so there is nothing to measure.')
+
+  const writeSnapshot = reportPath === undefined
+    ? undefined
+    : createSnapshotWriter(resolve(nuxt.options.rootDir, reportPath), nuxt.options.rootDir)
   /**
    * Every measurement is recorded, then judged. The report covers the whole build so
    * a later run can diff it, and it is written before the verdict so a failing budget
@@ -185,7 +199,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
   const onMeasured = (scope: BudgetScope, defaultBytes: number, named: boolean) => {
     const report = reporter(scope, defaultBytes, budgets, nuxt, named)
     return async (measured: readonly MeasuredTarget[]) => {
-      await writeSnapshot(scope, measured)
+      await writeSnapshot?.(scope, measured)
       await report(measured)
     }
   }
@@ -250,8 +264,11 @@ export default defineNuxtModule<ModuleOptions>({
     if (!options.enabled)
       return
 
+    const reportPath = resolveReportPath(options.report)
     if (options.sizeBudget !== false)
-      setupSizeBudget(options.sizeBudget ?? {}, nuxt)
+      setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath)
+    else if (reportPath !== undefined)
+      logger.warn('`nuxtDx.report` is on, but `nuxtDx.sizeBudget` is `false`, so there is nothing to measure.')
 
     if (!nuxt.options.dev)
       return
