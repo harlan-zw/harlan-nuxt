@@ -1,41 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { moduleTargets, pluginTargets } from '../src/size-budget/targets'
+import { runtimeTargets } from '../src/size-budget/targets'
 
-describe('pluginTargets', () => {
-  it('matches a plugin path to its bundled id', () => {
-    expect(pluginTargets(['/app/plugins/analytics'], ['/app/plugins/analytics.ts', '/app/entry.js']))
-      .toEqual([{ key: '/app/plugins/analytics.ts', path: '/app/plugins/analytics', ids: ['/app/plugins/analytics.ts'] }])
+describe('runtimeTargets', () => {
+  it('matches plugins and middleware into one disjoint runtime graph', () => {
+    expect(runtimeTargets([
+      { scope: 'client', path: '/app/plugins/analytics' },
+      { scope: 'client-middleware', path: '/app/middleware/auth.ts', owner: '@fixture/auth' },
+    ], ['/app/plugins/analytics.ts', '/app/middleware/auth.ts', '/app/entry.js']))
+      .toEqual([
+        { key: 'client:/app/plugins/analytics.ts', scope: 'client', path: '/app/plugins/analytics', ids: ['/app/plugins/analytics.ts'] },
+        {
+          key: 'client-middleware:/app/middleware/auth.ts',
+          scope: 'client-middleware',
+          path: '/app/middleware/auth.ts',
+          owner: '@fixture/auth',
+          ids: ['/app/middleware/auth.ts'],
+        },
+      ])
   })
 
-  it('drops plugins that never landed in the bundle', () => {
-    expect(pluginTargets(['/app/plugins/gone.ts'], ['/app/entry.js'])).toEqual([])
+  it('drops runtime entries that never landed in the bundle', () => {
+    expect(runtimeTargets([{ scope: 'client', path: '/app/plugins/gone.ts' }], ['/app/entry.js'])).toEqual([])
   })
 
-  it('charges a plugin registered twice only once', () => {
-    expect(pluginTargets(['/app/plugins/a.ts', '/app/plugins/a'], ['/app/plugins/a.ts'])).toHaveLength(1)
-  })
-})
-
-describe('moduleTargets', () => {
-  const owners = [{ name: '@nuxtjs/robots', root: '/app/node_modules/@nuxtjs/robots' }]
-
-  it('charges a module for the package it ships from', () => {
-    expect(moduleTargets(owners, ['/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js', '/app/entry.js']))
-      .toEqual([{
-        key: '@nuxtjs/robots',
-        path: '/app/node_modules/@nuxtjs/robots',
-        name: '@nuxtjs/robots',
-        ids: ['/app/node_modules/@nuxtjs/robots/dist/runtime/plugin.js'],
-      }])
-  })
-
-  it('skips a module that bundled nothing', () => {
-    expect(moduleTargets(owners, ['/app/entry.js'])).toEqual([])
-  })
-
-  it('falls back to the package path when the module declares no name', () => {
-    const [target] = moduleTargets([{ root: '/app/modules/analytics' }], ['/app/modules/analytics/index.ts'])
-    expect(target!.key).toBe('/app/modules/analytics')
-    expect(target!.name).toBeUndefined()
+  it('charges one file once when it is registered twice', () => {
+    expect(runtimeTargets([
+      { scope: 'client', path: '/app/plugins/a.ts' },
+      { scope: 'client', path: '/app/plugins/a' },
+    ], ['/app/plugins/a.ts'])).toHaveLength(1)
   })
 })

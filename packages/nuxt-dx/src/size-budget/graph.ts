@@ -58,8 +58,7 @@ function walk(starts: readonly string[], byId: ReadonlyMap<string, GraphModule>,
  * only through it. Anything the app already reaches without passing through a target,
  * or that a second target also reaches, is shared and charged to nobody.
  *
- * A target is a group of module ids so the same attribution serves a single plugin file
- * and a whole Nuxt module package.
+ * A target is a group of module ids. Runtime entries currently own one bundled file each.
  *
  * This is pure measurement; budgets are applied afterwards so that only the targets
  * heavy enough to matter need their name resolved.

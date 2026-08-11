@@ -1,8 +1,8 @@
 {
   "name": "@harlan-zw/nuxt-dx",
   "type": "module",
-  "version": "0.0.5",
-  "description": "Experimental Nuxt diagnostics: dev error overlay and plugin and module bundle size budgets.",
+  "version": "0.0.6",
+  "description": "Experimental Nuxt diagnostics: dev error overlay and runtime JavaScript bundle size budgets.",
   "author": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com",

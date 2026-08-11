@@ -1,20 +1,22 @@
-import type { Nuxt } from '@nuxt/schema'
+import type { Nuxt, NuxtApp } from '@nuxt/schema'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
-import type { ModuleOwner } from './size-budget/module-packages'
+import type { ModuleOwner } from './size-budget/module-owner'
 import type { MeasuredTarget } from './size-budget/rollup'
 import type { BudgetScope } from './size-budget/scope'
+import type { RuntimeEntry } from './size-budget/targets'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { addPlugin, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
 import { budgetFor, smallestBudget } from './size-budget/budget'
-import { moduleRoot } from './size-budget/module-packages'
+import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { extractPluginName } from './size-budget/plugin-name'
 import { formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
+import { BUDGET_SCOPES } from './size-budget/scope'
 import { kilobytesToBytes } from './size-budget/size'
 import { createSnapshotWriter, resolveReportPath } from './size-budget/snapshot'
-import { moduleTargets, pluginTargets } from './size-budget/targets'
+import { runtimeTargets } from './size-budget/targets'
 
 export interface SizeBudgetOptions {
   /**
@@ -23,18 +25,21 @@ export interface SizeBudgetOptions {
    */
   pluginsKb?: number | false
   /**
+   * Kilobyte budget for each Nuxt route middleware in the client bundle. `false` disables the check.
+   * @default 20
+   */
+  middlewareKb?: number | false
+  /**
    * Kilobyte budget for each Nitro plugin in the server bundle. `false` disables the check.
    * @default 75
    */
   nitroPluginsKb?: number | false
   /**
-   * Kilobyte budget for each Nuxt module in the client bundle. `false` disables the check.
-   * @default 100
+   * Kilobyte budget for each Nitro middleware in the server bundle. `false` disables the check.
+   * @default 20
    */
-  modulesKb?: number | false
-  /** Nuxt module names excluded from absolute budget enforcement. Reports still measure them. */
-  ignoreModules?: string[]
-  /** Per-target kilobyte budgets, keyed by plugin name, module name, or any fragment of the path. */
+  nitroMiddlewareKb?: number | false
+  /** Per-target kilobyte budgets, keyed by plugin name or any fragment of the path. */
   overridesKb?: Record<string, number>
   /**
    * Fail the build instead of warning.
@@ -55,7 +60,7 @@ export interface ModuleOptions {
   enabled?: boolean
   position?: 'bottom-left' | 'bottom-right'
   sourceRoot?: string
-  /** Warn when a plugin's or module's exclusive import graph exceeds a bundle size budget. */
+  /** Warn when a runtime entry's exclusive import graph exceeds a bundle size budget. */
   sizeBudget?: SizeBudgetOptions | false
   /**
    * Write what the size budgets measured to a JSON file, for `nuxt-dx compare` to diff
@@ -66,10 +71,7 @@ export interface ModuleOptions {
 }
 
 interface ResolvedBudgets {
-  client: number | undefined
-  nitro: number | undefined
-  modules: number | undefined
-  ignoredModules: ReadonlySet<string>
+  byScope: Record<BudgetScope, number | undefined>
   overrides: BudgetOverride[]
   fail: boolean
 }
@@ -98,10 +100,12 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
   }
 
   return {
-    client: resolve(options.pluginsKb, 30, 'pluginsKb'),
-    nitro: resolve(options.nitroPluginsKb, 75, 'nitroPluginsKb'),
-    modules: resolve(options.modulesKb, 100, 'modulesKb'),
-    ignoredModules: new Set(options.ignoreModules),
+    byScope: {
+      'client': resolve(options.pluginsKb, 30, 'pluginsKb'),
+      'client-middleware': resolve(options.middlewareKb, 20, 'middlewareKb'),
+      'nitro': resolve(options.nitroPluginsKb, 75, 'nitroPluginsKb'),
+      'nitro-middleware': resolve(options.nitroMiddlewareKb, 20, 'nitroMiddlewareKb'),
+    },
     overrides,
     fail: options.fail ?? false,
   }
@@ -123,15 +127,14 @@ async function readPluginName(src: string, nuxt: Nuxt): Promise<string | undefin
 function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBudgets, nuxt: Nuxt, named: boolean) {
   const threshold = smallestBudget(defaultBytes, budgets.overrides)
   return async (measured: readonly MeasuredTarget[]) => {
-    const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold
-      && !(scope === 'modules' && entry.name !== undefined && budgets.ignoredModules.has(entry.name)))
+    const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold)
     if (!candidates.length)
       return
 
     const verdicts: BudgetVerdict[] = await Promise.all(candidates.map(async (target) => {
-      const { path, measurement } = target
+      const { path, owner, measurement } = target
       const name = target.name ?? (named ? await readPluginName(path, nuxt) : undefined)
-      return { path, name, budgetBytes: budgetFor(path, name, defaultBytes, budgets.overrides), measurement }
+      return { path, name, owner, budgetBytes: budgetFor(path, name, defaultBytes, budgets.overrides), measurement }
     }))
 
     const over = verdicts
@@ -184,13 +187,15 @@ function installedModuleOwners(nuxt: Nuxt): ModuleOwner[] {
   return owners
 }
 
+function runtimeEntries(scope: BudgetScope, paths: readonly string[], owners: readonly ModuleOwner[]): RuntimeEntry[] {
+  return paths.map(path => ({ scope, path, owner: moduleOwnerOf(path, owners) }))
+}
+
 function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined): void {
   const budgets = resolveBudgets(options)
-  const clientBudget = budgets.client
-  const nitroBudget = budgets.nitro
-  const moduleBudget = budgets.modules
+  const enabledScopes = BUDGET_SCOPES.filter(scope => budgets.byScope[scope] !== undefined)
 
-  if (reportPath !== undefined && clientBudget === undefined && nitroBudget === undefined && moduleBudget === undefined)
+  if (reportPath !== undefined && !enabledScopes.length)
     logger.warn('`nuxtDx.report` is on, but every size budget is disabled, so there is nothing to measure.')
 
   const writeSnapshot = reportPath === undefined
@@ -201,57 +206,73 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
    * a later run can diff it, and it is written before the verdict so a failing budget
    * still leaves the artifact behind.
    */
-  const onMeasured = (scope: BudgetScope, defaultBytes: number, named: boolean) => {
-    const report = reporter(scope, defaultBytes, budgets, nuxt, named)
+  const onMeasured = (scopes: readonly BudgetScope[]) => {
+    const reports = new Map(scopes.map((scope) => {
+      const defaultBytes = budgets.byScope[scope]!
+      return [scope, reporter(scope, defaultBytes, budgets, nuxt, scope === 'client')] as const
+    }))
     return async (measured: readonly MeasuredTarget[]) => {
-      await writeSnapshot?.(scope, measured)
-      await report(measured)
+      for (const scope of scopes) {
+        const entries = measured.filter(target => target.scope === scope)
+        await writeSnapshot?.(scope, entries)
+        await reports.get(scope)!(entries)
+      }
     }
   }
 
-  // `app:resolve` runs before the client build, and holds every plugin including module-registered ones.
-  let appPluginPaths: string[] = []
-  if (clientBudget !== undefined) {
+  const clientScopes = enabledScopes.filter(scope => scope === 'client' || scope === 'client-middleware')
+  // `app:resolve` holds app and module registrations before the client build starts.
+  let resolvedApp: NuxtApp | undefined
+  if (clientScopes.length) {
     nuxt.hook('app:resolve', (app) => {
-      appPluginPaths = app.plugins.filter(plugin => plugin.mode !== 'server').map(plugin => plugin.src)
+      // Keep the object itself. Modules registered later in this hook can still mutate its arrays.
+      resolvedApp = app
     })
-  }
-
-  if (clientBudget !== undefined || moduleBudget !== undefined) {
     nuxt.hook('vite:extendConfig', (config, env) => {
       if (!env.isClient)
         return
       // `vite:extendConfig` types the config as readonly, but mutating `plugins` is the supported extension point.
-      const plugins = config.plugins as unknown[] | undefined
-      if (clientBudget !== undefined) {
-        plugins?.push(sizeBudgetRollupPlugin({
-          scope: 'client',
-          environment: 'client',
-          targets: ids => pluginTargets(appPluginPaths, ids),
-          onMeasured: onMeasured('client', clientBudget, true),
-        }))
-      }
-      if (moduleBudget !== undefined) {
-        plugins?.push(sizeBudgetRollupPlugin({
-          scope: 'modules',
-          environment: 'client',
-          // Read at bundle time: modules keep installing while the config is assembled.
-          targets: ids => moduleTargets(installedModuleOwners(nuxt), ids),
-          onMeasured: onMeasured('modules', moduleBudget, false),
-        }))
-      }
+      const mutableConfig = config as { plugins?: unknown[] }
+      mutableConfig.plugins ||= []
+      mutableConfig.plugins.push(sizeBudgetRollupPlugin({
+        name: 'client',
+        environment: 'client',
+        targets: (ids) => {
+          const owners = installedModuleOwners(nuxt)
+          const entries = [
+            ...(budgets.byScope.client === undefined
+              ? []
+              : runtimeEntries('client', resolvedApp?.plugins.filter(plugin => plugin.mode !== 'server').map(plugin => plugin.src) ?? [], owners)),
+            ...(budgets.byScope['client-middleware'] === undefined
+              ? []
+              : runtimeEntries('client-middleware', resolvedApp?.middleware.map(middleware => middleware.path) ?? [], owners)),
+          ]
+          return runtimeTargets(entries, ids)
+        },
+        onMeasured: onMeasured(clientScopes),
+      }))
     })
   }
 
-  if (nitroBudget !== undefined) {
+  const nitroScopes = enabledScopes.filter(scope => scope === 'nitro' || scope === 'nitro-middleware')
+  if (nitroScopes.length) {
     nuxt.hook('nitro:init', (nitro) => {
       nitro.hooks.hook('rollup:before', (_nitro, config) => {
+        const owners = installedModuleOwners(nuxt)
+        const middleware = [...nitro.scannedHandlers, ...nitro.options.handlers]
+          .filter(handler => handler.middleware || !handler.route)
+          .map(handler => handler.handler)
+        const entries = [
+          ...(budgets.byScope.nitro === undefined ? [] : runtimeEntries('nitro', nitro.options.plugins, owners)),
+          ...(budgets.byScope['nitro-middleware'] === undefined
+            ? []
+            : runtimeEntries('nitro-middleware', [...new Set(middleware)], owners)),
+        ]
         config.plugins ||= []
         ;(config.plugins as unknown[]).push(sizeBudgetRollupPlugin({
-          scope: 'nitro',
-          // Nitro plugins have no name concept, so they are always identified by path.
-          targets: ids => pluginTargets(nitro.options.plugins, ids),
-          onMeasured: onMeasured('nitro', nitroBudget, false),
+          name: 'server',
+          targets: ids => runtimeTargets(entries, ids),
+          onMeasured: onMeasured(nitroScopes),
         }))
       })
     })

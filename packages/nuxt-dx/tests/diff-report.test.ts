@@ -3,6 +3,7 @@ import { stripAnsi } from 'consola/utils'
 import { describe, expect, it } from 'vitest'
 import { diffSnapshots } from '../src/size-budget/diff'
 import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../src/size-budget/diff-report'
+import { SNAPSHOT_VERSION } from '../src/size-budget/snapshot'
 
 const KB = 1024
 
@@ -17,7 +18,7 @@ function entry(partial: Partial<SnapshotEntry> & { totalBytes: number }): Snapsh
 }
 
 function snapshot(...entries: SnapshotEntry[]): SizeBudgetSnapshot {
-  return { version: 1, entries }
+  return { version: SNAPSHOT_VERSION, entries }
 }
 
 function markdown(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot, thresholdBytes = 10 * KB): string {
@@ -27,22 +28,17 @@ function markdown(base: SizeBudgetSnapshot, head: SizeBudgetSnapshot, thresholdB
 describe('formatDiffMarkdown', () => {
   it('leads with what each scope gained or lost', () => {
     const report = markdown(snapshot(entry({ totalBytes: 10 * KB })), snapshot(entry({ totalBytes: 50 * KB })))
-    expect(report).toContain('- **Nuxt plugins** 10 kB to 50 kB, **+40 kB**')
+    expect(report).toContain('- **Client runtime entries** 10 kB to 50 kB, **+40 kB**')
+    expect(report).toContain('  - Nuxt plugins: 10 kB to 50 kB, +40 kB')
   })
 
-  it('never adds two scopes together, since a module is charged for the plugins it ships', () => {
+  it('adds disjoint runtime entry kinds within one bundle', () => {
     const plugin = entry({ scope: 'client', path: 'modules/telemetry/runtime/plugin.ts', totalBytes: 12 * KB })
-    const owner = entry({ scope: 'modules', name: 'telemetry', path: 'modules/telemetry', totalBytes: 12 * KB })
-    const report = markdown(snapshot(plugin, owner), snapshot(plugin, owner))
-    expect(report).toContain('- **Nuxt plugins** 12 kB to 12 kB, **+0 B**')
-    expect(report).toContain('- **Nuxt modules** 12 kB to 12 kB, **+0 B**')
-    expect(report).not.toContain('24 kB')
-    expect(report).toContain('Scopes are totalled separately')
-  })
-
-  it('does not explain the scope split when only one scope was measured', () => {
-    const report = markdown(snapshot(entry({ totalBytes: KB })), snapshot(entry({ totalBytes: 2 * KB })))
-    expect(report).not.toContain('Scopes are totalled separately')
+    const middleware = entry({ scope: 'client-middleware', path: 'middleware/auth.ts', totalBytes: 4 * KB })
+    const report = markdown(snapshot(plugin, middleware), snapshot(plugin, middleware))
+    expect(report).toContain('- **Client runtime entries** 16 kB to 16 kB, **+0 B**')
+    expect(report).toContain('  - Nuxt plugins: 12 kB to 12 kB, +0 B')
+    expect(report).toContain('  - Nuxt middleware: 4 kB to 4 kB, +0 B')
   })
 
   it('names the targets that grew past the threshold', () => {
@@ -61,23 +57,23 @@ describe('formatDiffMarkdown', () => {
   })
 
   it('gives each changed target a row with both sizes and the change', () => {
-    const base = snapshot(entry({ scope: 'modules', name: '@nuxtjs/i18n', totalBytes: 10 * KB }))
-    const head = snapshot(entry({ scope: 'modules', name: '@nuxtjs/i18n', totalBytes: 50 * KB }))
-    expect(markdown(base, head)).toContain('| `@nuxtjs/i18n` | Nuxt module | 10 kB | 50 kB | +40 kB |')
+    const base = snapshot(entry({ scope: 'client-middleware', path: 'middleware/auth.ts', owner: '@nuxt/auth', totalBytes: 10 * KB }))
+    const head = snapshot(entry({ scope: 'client-middleware', path: 'middleware/auth.ts', owner: '@nuxt/auth', totalBytes: 50 * KB }))
+    expect(markdown(base, head)).toContain('| `middleware/auth.ts` | `@nuxt/auth` | Nuxt middleware | 10 kB | 50 kB | +40 kB |')
   })
 
   it('marks a target that appeared and one that disappeared', () => {
     const base = snapshot(entry({ path: 'gone.ts', totalBytes: 4 * KB }))
     const head = snapshot(entry({ path: 'new.ts', totalBytes: 4 * KB }))
     const report = markdown(base, head)
-    expect(report).toContain('| `new.ts` | Nuxt plugin | 0 B | 4 kB | +4 kB (new) |')
-    expect(report).toContain('| `gone.ts` | Nuxt plugin | 4 kB | 0 B | -4 kB (gone) |')
+    expect(report).toContain('| `new.ts` |  | Nuxt plugin | 0 B | 4 kB | +4 kB (new) |')
+    expect(report).toContain('| `gone.ts` |  | Nuxt plugin | 4 kB | 0 B | -4 kB (gone) |')
   })
 
   it('names the bundle each scope was measured in', () => {
     const base = snapshot(entry({ scope: 'nitro', path: 'server/plugins/queue.ts', totalBytes: KB }))
     const head = snapshot(entry({ scope: 'nitro', path: 'server/plugins/queue.ts', totalBytes: 2 * KB }))
-    expect(markdown(base, head)).toContain('| `server/plugins/queue.ts` | Nitro plugin |')
+    expect(markdown(base, head)).toContain('| `server/plugins/queue.ts` |  | Nitro plugin |')
   })
 
   it('counts the targets that held still instead of listing them', () => {

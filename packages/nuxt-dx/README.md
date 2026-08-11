@@ -5,7 +5,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to go looking for: client errors while you develop, and the plugins and modules that quietly bloat your bundle when you build.
+Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to find yourself: client errors during development, and runtime entries that quietly bloat your JavaScript bundles.
 
 Status: experimental. APIs may change before the first release.
 
@@ -24,8 +24,8 @@ Status: experimental. APIs may change before the first release.
 - 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
 - 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
-- 📦 **Size budgets with exclusive attribution:** warn when a Nuxt plugin, a Nitro plugin, or an installed Nuxt module drags too much JavaScript into the bundle, each charged only for what it alone pulls in, with budgets keyed by plugin name, module name, or path fragment.
-- 📈 **Regression diffs:** opt into a machine-readable report of what each plugin and module costs, then diff two builds with `nuxt-dx compare` or the bundled GitHub action, so the pull request that quietly adds 40 kB fails instead of landing.
+- 📦 **Runtime size budgets:** warn when a Nuxt plugin, route middleware, Nitro plugin, or Nitro middleware pulls too much JavaScript into its bundle.
+- 📈 **Regression diffs:** write a machine-readable report, then compare builds with the CLI or GitHub action before added JavaScript lands.
 
 ## Installation
 
@@ -80,11 +80,11 @@ The copied report gets the same treatment, one heading per mismatch:
 
 Node, text, children, class, style, and attribute mismatches are all recognised. Vue's follow-up `Hydration completed but contains mismatches.` console error is dropped, since every mismatch behind it is already listed. Two reports of the same mismatch collapse into one entry: a mismatch is identified by where it happened rather than by the values it printed, so a clock rendering `Date.now()` does not stack up a new entry every time it drifts.
 
-## Plugin size budgets
+## Runtime size budgets
 
-Warns when a Nuxt app plugin or a Nitro plugin drags too much JavaScript into the bundle.
+Runtime budgets cover four entry kinds. Nuxt plugins and route middleware apply to the client bundle. Nitro plugins and middleware apply to the server bundle. Entries registered by your app and installed Nuxt modules use the same budgets.
 
-Each plugin is charged its own bundled size plus every module reachable *only* through it. Anything the app already ships without going through that plugin, or that a second plugin also pulls in, is shared and charged to nobody. Sizes are post-tree-shaking bytes read off the final module graph, so the number reflects what actually ships.
+Each entry is charged its post-tree-shaking size plus every JavaScript module reachable only through it. Entries in one bundle share a single attribution pass. If two entries import a dependency, neither receives that shared cost.
 
 ```
 [nuxt-dx]  WARN  1 Nuxt plugin over budget in the client bundle
@@ -112,41 +112,11 @@ export default defineNuxtPlugin({
 })
 ```
 
-Both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })` are read. Plugins without a name are reported by path, as are Nitro plugins, which have no name concept.
-
-## Module size budgets
-
-Answers the question a plugin budget cannot: you installed five modules, which one added 80 kB to the client bundle?
-
-Every bundled file that ships from a module's own package is charged to that module, along with everything those files reach exclusively. A dependency two modules both import is shared, so neither is billed for it, and the number moves as your app changes: install a second module that also uses `cookie-es` and the first module's charge drops by that much.
-
-```
-[nuxt-dx]  WARN  2 Nuxt modules over budget in the client bundle
-
-  @nuxtjs/i18n
-  57.2 kB bundled, 52.2 kB over the 5 kB budget
-    ├─48.3 kB  the module's own files
-    ├─ 6.1 kB  @intlify/shared/dist/shared.mjs
-    ├─ 2.5 kB  h3/dist/index.mjs
-    └─  276 B  virtual:nuxt:.nuxt%2Fi18n-options.mjs
-
-  nuxt-site-config
-  5.2 kB bundled, 252 B over the 5 kB budget
-    ├─2.7 kB  the module's own files
-    ├─2.3 kB  site-config-stack/dist/index.mjs
-    └─ 219 B  virtual:nuxt:.nuxt%2Fnuxt-site-config%2Fi18n-plugin-deps.mjs
-
-  Defer heavy imports with `await import()`, or allow the size:
-    nuxtDx.sizeBudget.overridesKb = { '@nuxtjs/i18n': 58, 'nuxt-site-config': 6 }
-```
-
-Modules are reported by the name they declare in their own `meta`, which is also the key an override takes. Modules you never installed yourself show up too, `nuxt-site-config` above arrived as a dependency of another module, and it is charged like any other.
-
-Add a known expensive module to `ignoreModules` when its absolute size is accepted. The report and regression check still measure it, while local builds skip its budget warning.
+Both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })` are read. Other entries use their path. If a Nuxt module registered an entry, warnings and reports include that module as its owner. Ownership is metadata and never creates a second charge.
 
 ## The size budget report
 
-Reporting is off until you ask for it. With `report: true`, every build writes what it measured to `.nuxt/dx/size-budget.json`, whether or not anything breached a budget. It is the input to the regression check below, and it is readable on its own: one entry per Nuxt plugin, Nitro plugin, and installed Nuxt module, with the bytes broken down the same way the warning breaks them down.
+Reporting is off until you ask for it. With `report: true`, every build writes `.nuxt/dx/size-budget.json`. The report contains one entry per measured runtime entry.
 
 ```ts
 export default defineNuxtConfig({
@@ -159,7 +129,7 @@ export default defineNuxtConfig({
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     {
       "scope": "client",
@@ -169,11 +139,11 @@ export default defineNuxtConfig({
       "totalBytes": 7808
     },
     {
-      "scope": "modules",
-      "name": "fixture-telemetry",
-      "path": "modules/telemetry",
-      "ownBytes": 12834,
-      "exclusiveBytes": 0,
+      "scope": "client-middleware",
+      "owner": "fixture-auth-module",
+      "path": "node_modules/fixture-auth-module/runtime/auth.global.ts",
+      "ownBytes": 834,
+      "exclusiveBytes": 12000,
       "totalBytes": 12834
     },
     {
@@ -187,9 +157,9 @@ export default defineNuxtConfig({
 }
 ```
 
-`scope` is `client` for a Nuxt app plugin, `nitro` for a Nitro plugin, and `modules` for an installed Nuxt module. Paths are relative to the app root so two checkouts of the same repository agree on them. Modules carry the name they declare; plugins are keyed by path, since a plugin's declared name is only read for the plugins close enough to their budget to need it.
+`scope` is `client`, `client-middleware`, `nitro`, or `nitro-middleware`. Paths are relative to the app root. `owner` names the Nuxt module that registered an entry when Nuxt exposes that relationship.
 
-Only the scopes you left enabled are measured, so `pluginsKb: false` also drops plugins from the report. The client bundle is only built by `nuxi build`, so a `nuxi dev` run writes the Nitro plugins alone.
+Disabled entry kinds are omitted from reports. The client bundle requires `nuxi build`. Development runs only report Nitro entries.
 
 ## Catching regressions
 
@@ -202,26 +172,24 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 ```md
 ### Bundle size budget
 
-- **Nuxt plugins** 34.7 kB to 61.8 kB, **+27.1 kB**
-- **Nitro plugins** 6.4 kB to 6.4 kB, **+0 B**
-- **Nuxt modules** 12.5 kB to 3.9 kB, **-8.6 kB**
-
-Scopes are totalled separately, since a Nuxt module is charged for the plugins it ships.
+- **Client runtime entries** 47.2 kB to 65.7 kB, **+18.5 kB**
+  - Nuxt plugins: 34.7 kB to 61.8 kB, +27.1 kB
+  - Nuxt middleware: 12.5 kB to 3.9 kB, -8.6 kB
+- **Server runtime entries** 6.4 kB to 6.4 kB, **+0 B**
+  - Nitro plugins: 6.4 kB to 6.4 kB, +0 B
 
 **1 target grew past the 10 kB threshold:** `app/plugins/analytics.client.ts` +35.7 kB.
 
-| Target | Scope | Base | Head | Change |
-| --- | --- | --- | --- | --- |
-| `app/plugins/analytics.client.ts` | Nuxt plugin | 7.6 kB | 43.3 kB | +35.7 kB |
-| `app/plugins/consent.client.ts` | Nuxt plugin | 0 B | 170 B | +170 B (new) |
-| `app/plugins/legacy.client.ts` | Nuxt plugin | 159 B | 0 B | -159 B (gone) |
-| `fixture-telemetry` | Nuxt module | 12.5 kB | 3.9 kB | -8.6 kB |
-| `modules/telemetry/runtime/plugin.ts` | Nuxt plugin | 12.5 kB | 3.9 kB | -8.6 kB |
+| Target | Module | Scope | Base | Head | Change |
+| --- | --- | --- | --- | --- | --- |
+| `app/plugins/analytics.client.ts` |  | Nuxt plugin | 7.6 kB | 43.3 kB | +35.7 kB |
+| `runtime/consent.client.ts` | `fixture-consent` | Nuxt plugin | 0 B | 170 B | +170 B (new) |
+| `app/middleware/legacy.global.ts` |  | Nuxt middleware | 12.5 kB | 3.9 kB | -8.6 kB |
 ```
 
-Markdown goes to stdout so it can be redirected straight into a job summary; the pass or fail line goes to stderr so a local run still reads as one. Targets that held still are counted rather than listed. Each scope is totalled on its own and the scopes are never added together, since the plugin a module ships is charged to the plugin and to the module both.
+Markdown goes to stdout for job summaries. The local verdict goes to stderr. Client and server totals combine their disjoint runtime entries.
 
-`--threshold-kb` sets how much a single target may grow before this fails, defaulting to 10. **The threshold is per target, never cumulative:** twelve plugins each gaining 9 kB pass a 10 kB threshold, while the one plugin that gains 11 kB does not. This is aimed at the change that lands in one place, and reading the scope totals is how you catch a wide, shallow drift.
+`--threshold-kb` sets how much one target may grow before failure. The default is 10 kB. The threshold is per target. Bundle totals expose cumulative drift.
 
 `--allow-missing-base` reports that there was no baseline and passes, rather than failing. Exit code 1 means something grew past the threshold, 2 means a report could not be read, and 0 means you are clear.
 
@@ -284,7 +252,7 @@ The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and wo
 | --- | --- | --- |
 | `report-path` | `.nuxt/dx/size-budget.json` | Report your build wrote, relative to `working-directory` |
 | `threshold-kb` | `10` | Growth allowed for a single target |
-| `artifact-name` | `nuxt-dx-size-budget` | Artifact the report is uploaded to and read back from |
+| `artifact-name` | `nuxt-dx-size-budget-v2` | Artifact the report is uploaded to and read back from |
 | `base-branch` | pull request base, then the default branch | Branch the baseline comes from |
 | `working-directory` | `.` | Directory the app was built in |
 | `github-token` | `${{ github.token }}` | Needs `actions: read` |
@@ -297,19 +265,17 @@ export default defineNuxtConfig({
     sizeBudget: {
       // kB budget per Nuxt app plugin in the client bundle, `false` to disable
       pluginsKb: 30,
+      // kB budget per Nuxt route middleware in the client bundle
+      middlewareKb: 20,
       // kB budget per Nitro plugin in the server bundle, `false` to disable
       nitroPluginsKb: 75,
-      // kB budget per Nuxt module in the client bundle, `false` to disable
-      modulesKb: 100,
-      // skip absolute budget enforcement for these exact Nuxt module names;
-      // reports and regression checks still include them
-      ignoreModules: ['@nuxt/ui'],
-      // raise or lower the budget for individual plugins and modules,
-      // keyed by plugin name, module name, or any fragment of the path
+      // kB budget per Nitro middleware in the server bundle
+      nitroMiddlewareKb: 20,
+      // keyed by plugin name or any fragment of an entry path
       overridesKb: {
         'analytics': 60,
-        '@nuxtjs/i18n': 80,
         'server/plugins/queue': 120,
+        'server/middleware/auth': 30,
       },
       // throw instead of warning
       fail: false,
@@ -322,7 +288,7 @@ export default defineNuxtConfig({
 
 Set `sizeBudget: false` to turn the check off entirely.
 
-Budgets are measured whenever a bundle is produced. Nitro is bundled in both `nuxi dev` and `nuxi build`, so Nitro plugin budgets report in either. The client is served unbundled in dev, so app plugin and module budgets only report on `nuxi build`.
+Budgets are measured whenever a bundle is produced. Nitro entries report during development and builds. Client entries only report during builds.
 
 ## Sponsors
 

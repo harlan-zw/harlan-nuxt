@@ -1,5 +1,5 @@
 export default defineNuxtPlugin(() => ({
   provide: {
-    fixtureEnforcedModule: 'measured',
+    ownedRuntimeBudget: 'plugin',
   },
 }))

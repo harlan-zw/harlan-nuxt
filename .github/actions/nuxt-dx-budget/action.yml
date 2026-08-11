@@ -1,5 +1,5 @@
 name: Nuxt DX size budget
-description: Diff this build's size budget report against the base branch, summarise what moved, and fail when a plugin or module grows past the threshold.
+description: Diff this build's size budget report against the base branch, summarise what moved, and fail when a runtime entry grows past the threshold.
 
 inputs:
   report-path:
@@ -13,7 +13,7 @@ inputs:
   artifact-name:
     description: Artifact this uploads the report to, and reads the baseline back from.
     required: false
-    default: nuxt-dx-size-budget
+    default: nuxt-dx-size-budget-v2
   base-branch:
     description: Branch whose last successful run of this workflow holds the baseline. Defaults to the pull request base, then the repository default branch.
     required: false
