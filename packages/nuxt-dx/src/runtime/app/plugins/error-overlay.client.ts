@@ -1,7 +1,8 @@
 import type { ComponentPublicInstance } from 'vue'
 import type { DiagnosticIssue } from '../report'
 import { defineNuxtPlugin, useRoute, useRuntimeConfig } from '#app'
-import { formatDiagnosticReport, relativeSourcePath } from '../report'
+import { HYDRATION_SUMMARY_ERROR, parseComponentTrace, parseHydrationWarning } from '../hydration'
+import { formatDiagnosticReport, formatIssueLine, issueSignature, relativeSourcePath } from '../report'
 
 interface DebugComponent extends ComponentPublicInstance {
   $: ComponentPublicInstance['$'] & {
@@ -70,26 +71,31 @@ export default defineNuxtPlugin((nuxtApp) => {
   document.body.append(badge, panel)
 
   const render = () => {
-    const errors = issues.filter(issue => issue.kind === 'error').length
-    const warnings = issues.length - errors
-    badge.textContent = issues.length ? `${errors} err | ${warnings} warn` : '0 issues'
-    badge.style.background = errors ? '#dc2626' : warnings ? '#ca8a04' : '#16a34a'
-    content.textContent = issues.map(issue => `${issue.kind === 'error' ? 'ERR' : 'WARN'} ${issue.message}`).join('\n\n') || 'No issues'
+    const count = (kind: DiagnosticIssue['kind']) => issues.filter(issue => issue.kind === kind).length
+    const errors = count('error')
+    const warnings = count('warning')
+    const hydration = count('hydration')
+    badge.textContent = issues.length ? `${errors} err | ${warnings} warn | ${hydration} hydration` : '0 issues'
+    badge.style.background = errors ? '#dc2626' : hydration ? '#7c3aed' : warnings ? '#ca8a04' : '#16a34a'
+    content.textContent = issues.map(formatIssueLine).join('\n\n') || 'No issues'
   }
 
-  const addIssue = (kind: DiagnosticIssue['kind'], message: string) => {
-    const key = `${kind}:${message}`
+  const addIssue = (issue: DiagnosticIssue) => {
+    const key = issueSignature(issue)
     if (seen.has(key))
       return
     seen.add(key)
-    issues.push({ kind, message })
+    issues.push(issue)
     render()
   }
 
+  const sourceFile = (instance: ComponentPublicInstance | null): string | undefined => {
+    const file = (instance as DebugComponent | null)?.$?.type?.__file
+    return file ? relativeSourcePath(file, config.sourceRoot) : undefined
+  }
   const sourceDetails = (instance: ComponentPublicInstance | null): string => {
-    const debug = instance as DebugComponent | null
-    const file = debug?.$?.type?.__file
-    return file ? `\n  file: ${relativeSourcePath(file, config.sourceRoot)}` : ''
+    const file = sourceFile(instance)
+    return file ? `\n  file: ${file}` : ''
   }
 
   const makeButton = (label: string, action: () => void) => {
@@ -104,15 +110,23 @@ export default defineNuxtPlugin((nuxtApp) => {
   const previousWarnHandler = nuxtApp.vueApp.config.warnHandler
   const previousErrorHandler = nuxtApp.vueApp.config.errorHandler
 
-  const warnHandler: typeof previousWarnHandler = (message, instance) => {
+  const warnHandler: typeof previousWarnHandler = (message, instance, trace) => {
+    const mismatch = parseHydrationWarning(message.trim())
+    if (mismatch) {
+      const chain = parseComponentTrace(trace)
+      const issue: DiagnosticIssue = { kind: 'hydration', mismatch, component: chain[0], componentFile: sourceFile(instance), trace: chain }
+      addIssue(issue)
+      console.warn(`[nuxt-dx] ${formatIssueLine(issue)}`)
+      return
+    }
     const formatted = `${message.trim()}${sourceDetails(instance)}`
-    addIssue('warning', formatted)
+    addIssue({ kind: 'warning', message: formatted })
     console.warn(`[Vue warn]: ${formatted}`)
   }
   const errorHandler: typeof previousErrorHandler = (error, instance, info) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error)
     const formatted = `${info}: ${message}${sourceDetails(instance)}`
-    addIssue('error', formatted)
+    addIssue({ kind: 'error', message: formatted })
     originalConsoleError(`[Vue error]: ${formatted}`)
   }
   nuxtApp.vueApp.config.warnHandler = warnHandler
@@ -120,14 +134,15 @@ export default defineNuxtPlugin((nuxtApp) => {
 
   const patchedConsoleError = (...args: unknown[]) => {
     const message = args.map(value => value instanceof Error ? value.stack ?? value.message : String(value)).join(' ').trim()
-    if (message && !message.startsWith('[Vue error]:'))
-      addIssue('error', message)
+    // Vue logs its hydration summary after warning about each mismatch, which the panel already lists.
+    if (message && !message.startsWith('[Vue error]:') && message !== HYDRATION_SUMMARY_ERROR)
+      addIssue({ kind: 'error', message })
     originalConsoleError(...args)
   }
   console.error = patchedConsoleError
 
-  const onWindowError = (event: ErrorEvent) => addIssue('error', event.message || String(event.error))
-  const onUnhandledRejection = (event: PromiseRejectionEvent) => addIssue('error', `Unhandled rejection: ${String(event.reason)}`)
+  const onWindowError = (event: ErrorEvent) => addIssue({ kind: 'error', message: event.message || String(event.error) })
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => addIssue({ kind: 'error', message: `Unhandled rejection: ${String(event.reason)}` })
   window.addEventListener('error', onWindowError)
   window.addEventListener('unhandledrejection', onUnhandledRejection)
 

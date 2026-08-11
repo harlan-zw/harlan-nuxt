@@ -22,10 +22,10 @@ Status: experimental. APIs may change before the first release.
 ## Features
 
 - 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
+- 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
 - 📦 **Plugin size budgets:** warn when a Nuxt or Nitro plugin drags too much JavaScript into the bundle.
-- 🔍 **Exclusive attribution:** each plugin is charged only for what it alone pulls in, so shared dependencies are not double counted.
-- 🎯 **Per-plugin overrides:** budgets keyed by `defineNuxtPlugin` name or path fragment, with an optional build failure.
+- 🔍 **Exclusive attribution and overrides:** each plugin is charged only for what it alone pulls in, with budgets keyed by `defineNuxtPlugin` name or path fragment.
 
 ## Installation
 
@@ -52,6 +52,33 @@ export default defineNuxtConfig({
   },
 })
 ```
+
+## Hydration mismatches
+
+Hydration mismatches get their own count on the badge and their own section in the report. Vue hands them to `warnHandler` with the DOM nodes already flattened into the message, so the overlay parses that string back apart and pairs it with the component that was hydrating and its source file.
+
+The badge reads `1 err | 1 warn | 5 hydration`, and the panel lists each mismatch as:
+
+```
+HYDRATION Class mismatch in <RandomBadge>
+  file: app/components/RandomBadge.vue
+  on: HTMLSpanElement
+  server: class="warm"
+  client: class="cool"
+```
+
+The copied report gets the same treatment, one heading per mismatch:
+
+```md
+### 2. Class mismatch in <RandomBadge>
+- Component file: `app/components/RandomBadge.vue`
+- Component chain: RandomBadge < Index < RouteProvider < RouterView < NuxtPage
+- DOM node: `HTMLSpanElement`
+- Server rendered: `class="warm"`
+- Client rendered: `class="cool"`
+```
+
+Node, text, children, class, style, and attribute mismatches are all recognised. Vue's follow-up `Hydration completed but contains mismatches.` console error is dropped, since every mismatch behind it is already listed. Two reports of the same mismatch collapse into one entry: a mismatch is identified by where it happened rather than by the values it printed, so a clock rendering `Date.now()` does not stack up a new entry every time it drifts.
 
 ## Plugin size budgets
 
