@@ -2,7 +2,7 @@
   "name": "@harlan-zw/nuxt-dx",
   "type": "module",
   "version": "0.0.1",
-  "description": "Experimental development-only diagnostics for Nuxt.",
+  "description": "Experimental Nuxt diagnostics: dev error overlay and plugin bundle size budgets.",
   "author": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com",
@@ -52,7 +52,10 @@
     "nuxt": ">=4.2.0 <5.0.0"
   },
   "dependencies": {
-    "@nuxt/kit": "catalog:"
+    "@nuxt/kit": "catalog:",
+    "consola": "catalog:",
+    "oxc-parser": "catalog:",
+    "oxc-walker": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
@@ -62,6 +65,7 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "nuxt": "catalog:",
+    "rollup": "catalog:",
     "typescript": "catalog:",
     "unbuild": "catalog:",
     "vitest": "catalog:",

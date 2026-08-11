@@ -31,6 +31,7 @@ catalog:
   oxc-parser: 0.140.0
   oxc-walker: 1.0.0
   pathe: ^2.0.3
+  rollup: ^4.62.4
   typescript: ^5.9.3
   unbuild: ^3.6.1
   vitest: ^4.1.10

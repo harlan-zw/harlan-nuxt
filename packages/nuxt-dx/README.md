@@ -1,10 +1,6 @@
 # `@harlan-zw/nuxt-dx`
 
-Experimental, development-only diagnostics for Nuxt.
-
-The initial feature is a client error overlay that collects Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections. It can copy a concise report with route and source-file context for an agent handoff.
-
-The module is a strict production no-op. It only registers its client plugin when Nuxt runs in development mode.
+Experimental diagnostics for Nuxt: a development error overlay, and bundle size budgets for Nuxt and Nitro plugins.
 
 ```bash
 pnpm add -D @harlan-zw/nuxt-dx
@@ -13,10 +9,80 @@ pnpm add -D @harlan-zw/nuxt-dx
 ```ts
 export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-dx'],
+})
+```
+
+## Error overlay
+
+A client error overlay that collects Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections. It can copy a concise report with route and source-file context for an agent handoff.
+
+The overlay is a strict production no-op; its client plugin is only registered when Nuxt runs in development mode.
+
+```ts
+export default defineNuxtConfig({
   nuxtDx: {
     position: 'bottom-right',
   },
 })
 ```
+
+## Plugin size budgets
+
+Warns when a Nuxt app plugin or a Nitro plugin drags too much JavaScript into the bundle.
+
+Each plugin is charged its own bundled size plus every module reachable *only* through it. Anything the app already ships without going through that plugin, or that a second plugin also pulls in, is shared and charged to nobody. Sizes are post-tree-shaking bytes read off the final module graph, so the number reflects what actually ships.
+
+```
+[nuxt-dx]  WARN  1 Nuxt plugin over budget in the client bundle
+
+  analytics  app/plugins/heavy.client.ts
+  31.5 kB bundled, 21.5 kB over the 10 kB budget
+    ├─  310 B  the plugin file
+    ├─ 3.9 kB  app/lib/part1.ts
+    ├─ 3.9 kB  app/lib/part2.ts
+    ├─ 3.9 kB  app/lib/part3.ts
+    └─19.5 kB  across 5 more modules
+
+  Defer heavy imports with `await import()`, or allow the size:
+    nuxtDx.sizeBudget.overridesKb = { 'analytics': 32 }
+```
+
+The three heaviest modules are listed and the remainder is folded into one line, so the breakdown always sums to the reported total. The suggested override is rounded up past the current size, and every offender lands in a single copy-pasteable snippet.
+
+A plugin that declares a name gets reported by it, with the file kept alongside so the warning stays clickable:
+
+```ts
+export default defineNuxtPlugin({
+  name: 'analytics',
+  setup() {},
+})
+```
+
+Both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })` are read. Plugins without a name are reported by path, as are Nitro plugins, which have no name concept.
+
+```ts
+export default defineNuxtConfig({
+  nuxtDx: {
+    sizeBudget: {
+      // kB budget per Nuxt app plugin in the client bundle, `false` to disable
+      pluginsKb: 20,
+      // kB budget per Nitro plugin in the server bundle, `false` to disable
+      nitroPluginsKb: 50,
+      // raise or lower the budget for individual plugins,
+      // keyed by plugin name or by any fragment of the plugin path
+      overridesKb: {
+        'analytics': 60,
+        'server/plugins/queue': 120,
+      },
+      // throw instead of warning
+      fail: false,
+    },
+  },
+})
+```
+
+Set `sizeBudget: false` to turn the check off entirely.
+
+Budgets are measured whenever a bundle is produced. Nitro is bundled in both `nuxi dev` and `nuxi build`, so Nitro plugin budgets report in either. The client is served unbundled in dev, so app plugin budgets only report on `nuxi build`.
 
 APIs may change before the first release.

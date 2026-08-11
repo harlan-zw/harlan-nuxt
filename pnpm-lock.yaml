@@ -81,6 +81,9 @@ catalogs:
     pathe:
       specifier: ^2.0.3
       version: 2.0.3
+    rollup:
+      specifier: ^4.62.4
+      version: 4.62.4
     typescript:
       specifier: ^5.9.3
       version: 5.9.3
@@ -237,6 +240,15 @@ importers:
       '@nuxt/kit':
         specifier: 'catalog:'
         version: 4.5.2(magic-string@1.1.0)(magicast@0.5.4)(oxc-parser@0.140.0)(rolldown@1.2.3)(unplugin@3.3.0(esbuild@0.28.2)(rolldown@1.2.3)(rollup@4.62.4)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.49.2)(yaml@2.9.0)))
+      consola:
+        specifier: 'catalog:'
+        version: 3.4.2
+      oxc-parser:
+        specifier: 'catalog:'
+        version: 0.140.0
+      oxc-walker:
+        specifier: 'catalog:'
+        version: 1.0.0(esbuild@0.28.2)(oxc-parser@0.140.0)(rolldown@1.2.3)(rollup@4.62.4)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.49.2)(yaml@2.9.0))
     devDependencies:
       '@antfu/eslint-config':
         specifier: 'catalog:'
@@ -259,6 +271,9 @@ importers:
       nuxt:
         specifier: 'catalog:'
         version: 4.5.2(@babel/plugin-syntax-jsx@7.29.7(@babel/core@7.29.7))(@babel/plugin-syntax-typescript@7.29.7(@babel/core@7.29.7))(@oxc-project/types@0.143.0)(@types/node@26.2.0)(@vue/compiler-sfc@3.5.41)(db0@0.3.4)(esbuild@0.28.2)(eslint@10.8.1(jiti@2.7.0))(ioredis@5.11.1)(lightningcss@1.33.0)(magicast@0.5.4)(optionator@0.9.4)(oxc-parser@0.140.0)(rolldown@1.2.3)(rollup-plugin-visualizer@7.0.1(rolldown@1.2.3)(rollup@4.62.4))(rollup@4.62.4)(terser@5.49.2)(typescript@5.9.3)(vite@8.2.1(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.49.2)(yaml@2.9.0))(vue-tsc@3.3.9(typescript@5.9.3))(yaml@2.9.0)
+      rollup:
+        specifier: 'catalog:'
+        version: 4.62.4
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
