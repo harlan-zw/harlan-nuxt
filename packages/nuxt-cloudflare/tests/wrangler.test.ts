@@ -21,6 +21,7 @@ describe('applyCloudflareDefaults', () => {
         logs: { enabled: true, head_sampling_rate: 0.25, invocation_logs: true },
         traces: { enabled: true, head_sampling_rate: 0.01 },
       },
+      placement: { mode: 'smart' },
       secrets: { required: ['API_TOKEN'] },
       upload_source_maps: true,
       version_metadata: { binding: 'CF_VERSION_METADATA' },
@@ -29,6 +30,11 @@ describe('applyCloudflareDefaults', () => {
 
   it('preserves an explicit source-map opt-out', () => {
     expect(applyCloudflareDefaults({ upload_source_maps: false })).toMatchObject({ upload_source_maps: false })
+  })
+
+  it('preserves explicit placement over the smart default', () => {
+    expect(applyCloudflareDefaults({ placement: { region: 'gcp:us-east4' } }).placement)
+      .toEqual({ region: 'gcp:us-east4' })
   })
 
   it('preserves an authored Workers Caching policy', () => {

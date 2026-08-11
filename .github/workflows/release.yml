@@ -44,24 +44,24 @@ jobs:
 
       - name: Publish nuxt-cf-jobs
         if: startsWith(github.ref_name, 'nuxt-cf-jobs-v')
-        run: npm publish packages/nuxt-cf-jobs/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-cf-jobs/.pack/*.tgz --access public
 
       - name: Publish nuxt-use-query
         if: startsWith(github.ref_name, 'nuxt-use-query-v')
-        run: npm publish packages/nuxt-use-query/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-use-query/.pack/*.tgz --access public
 
       - name: Publish nuxt-domain-events
         if: startsWith(github.ref_name, 'nuxt-domain-events-v')
-        run: npm publish packages/nuxt-domain-events/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-domain-events/.pack/*.tgz --access public
 
       - name: Publish nuxt-dx
         if: startsWith(github.ref_name, 'nuxt-dx-v')
-        run: npm publish packages/nuxt-dx/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-dx/.pack/*.tgz --access public
 
       - name: Publish nuxt-github-sponsors
         if: startsWith(github.ref_name, 'nuxt-github-sponsors-v')
-        run: npm publish packages/nuxt-github-sponsors/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-github-sponsors/.pack/*.tgz --access public
 
       - name: Publish nuxt-cloudflare
         if: startsWith(github.ref_name, 'nuxt-cloudflare-v')
-        run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public --tag experimental
+        run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public

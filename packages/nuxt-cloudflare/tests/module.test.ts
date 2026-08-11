@@ -54,6 +54,14 @@ describe('configureNitroCloudflare', () => {
     })
   })
 
+  it('enables Smart Placement by default', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.cloudflare?.wrangler?.placement).toEqual({ mode: 'smart' })
+  })
+
   it('supports version-isolated Workers Caching as an explicit policy', () => {
     const nitro: NitroCloudflareShape = {}
 
