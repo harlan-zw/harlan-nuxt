@@ -32,6 +32,8 @@ export interface SizeBudgetOptions {
    * @default 50
    */
   modulesKb?: number | false
+  /** Nuxt module names excluded from absolute budget enforcement. Reports still measure them. */
+  ignoreModules?: string[]
   /** Per-target kilobyte budgets, keyed by plugin name, module name, or any fragment of the path. */
   overridesKb?: Record<string, number>
   /**
@@ -67,6 +69,7 @@ interface ResolvedBudgets {
   client: number | undefined
   nitro: number | undefined
   modules: number | undefined
+  ignoredModules: ReadonlySet<string>
   overrides: BudgetOverride[]
   fail: boolean
 }
@@ -98,6 +101,7 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
     client: resolve(options.pluginsKb, 20, 'pluginsKb'),
     nitro: resolve(options.nitroPluginsKb, 50, 'nitroPluginsKb'),
     modules: resolve(options.modulesKb, 50, 'modulesKb'),
+    ignoredModules: new Set(options.ignoreModules),
     overrides,
     fail: options.fail ?? false,
   }
@@ -119,7 +123,8 @@ async function readPluginName(src: string, nuxt: Nuxt): Promise<string | undefin
 function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBudgets, nuxt: Nuxt, named: boolean) {
   const threshold = smallestBudget(defaultBytes, budgets.overrides)
   return async (measured: readonly MeasuredTarget[]) => {
-    const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold)
+    const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold
+      && !(scope === 'modules' && entry.name !== undefined && budgets.ignoredModules.has(entry.name)))
     if (!candidates.length)
       return
 
