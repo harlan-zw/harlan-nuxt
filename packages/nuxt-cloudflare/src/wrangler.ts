@@ -11,6 +11,12 @@ export interface WranglerWorkersCacheInput {
   cross_version_cache?: boolean
 }
 
+export type WranglerPlacementInput
+  = | { mode: 'smart', host?: never, hostname?: never, region?: never }
+    | { host: string, hostname?: never, mode?: never, region?: never }
+    | { hostname: string, host?: never, mode?: never, region?: never }
+    | { region: string, host?: never, hostname?: never, mode?: never }
+
 export type WorkersCachePolicy
   = | { _tag: 'disabled' }
     | { _tag: 'enabled', crossVersion: boolean }
@@ -37,6 +43,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   env?: Record<string, WranglerConfigInput>
   keep_vars?: boolean
   observability?: WranglerObservabilityInput
+  placement?: WranglerPlacementInput
   preview_urls?: boolean
   queues?: {
     consumers?: Array<Record<string, unknown>>
@@ -256,6 +263,7 @@ function applyEnvironmentDefaults(
   const inheritedTraces = inherited.observability?.traces
   const uploadSourceMaps = config.upload_source_maps ?? inherited.upload_source_maps ?? options.uploadSourceMaps ?? true
   const previewUrls = config.preview_urls ?? inherited.preview_urls ?? false
+  const placement = config.placement ?? inherited.placement ?? { mode: 'smart' }
   const workersDev = config.workers_dev
     ?? inherited.workers_dev
     ?? ((config.route !== undefined || (config.routes?.length ?? 0) > 0) ? false : undefined)
@@ -290,6 +298,7 @@ function applyEnvironmentDefaults(
         head_sampling_rate: traces?.head_sampling_rate ?? inheritedTraces?.head_sampling_rate ?? options.tracesSampleRate ?? 0.01,
       },
     },
+    placement,
     ...(requiredSecrets.length > 0 ? { secrets: { ...config.secrets, required: requiredSecrets } } : {}),
     upload_source_maps: uploadSourceMaps,
     ...(versionMetadata ? { version_metadata: versionMetadata } : {}),
@@ -674,6 +683,7 @@ function resolveEnvironmentPolicy(
     exports: environment.exports ?? root.exports,
     migrations: environment.migrations ?? root.migrations,
     observability: mergeObservability(root.observability, environment.observability),
+    placement: environment.placement ?? root.placement,
     preview_urls: environment.preview_urls ?? root.preview_urls,
     upload_source_maps: environment.upload_source_maps ?? root.upload_source_maps,
     workers_dev: environment.workers_dev ?? root.workers_dev,

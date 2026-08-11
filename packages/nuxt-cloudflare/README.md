@@ -13,6 +13,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
 - Workers Caching explicitly disabled by default; opt-in requires a version-sharing decision
+- Smart Placement enabled by default; explicit region, host, or hostname placement is preserved
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
 - Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
@@ -58,6 +59,8 @@ export default defineNuxtConfig({
 Cloudflare KV requires TTLs of at least 60 seconds.
 
 Workers Caching is separate from Nitro's KV-backed cache. Enabling it lets Cloudflare serve responses without invoking the Worker. Keep `crossVersion: false` for deploy isolation; choose `true` only when stale responses across deployments are acceptable and a purge path exists. An authored `nitro.cloudflare.wrangler.cache` block is preserved unless `nuxtCloudflare.workersCache` is set.
+
+Smart Placement moves fetch handlers only when Cloudflare measures a faster location near upstream services. Assets-first delivery remains close to the user. Queue handlers, RPC methods, and named entrypoints are unaffected. An authored region, host, or hostname placement overrides the smart default.
 
 ## Doctor
 
@@ -177,7 +180,7 @@ The writer uses exclusive creation and mode 0600. It removes partial files after
 
 ## Deliberate boundaries
 
-The module does not choose Worker names, routes, domains, resource IDs, placement, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
+The module does not choose Worker names, routes, domains, resource IDs, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
 
 Next high-value extractions from Nuxt SEO and gscdump:
 

@@ -49,7 +49,7 @@ Packages are pnpm workspace members under `packages/*`. Shared dependency versio
 
 ## Releases
 
-Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted GitHub Actions publisher releases that package under the `experimental` npm tag with provenance.
+Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted GitHub Actions publisher releases that package under the `latest` npm tag with provenance.
 
 ## Sponsors
 
