@@ -8,6 +8,7 @@ on:
       - 'nuxt-domain-events-v*'
       - 'nuxt-dx-v*'
       - 'nuxt-github-sponsors-v*'
+      - 'nuxt-cloudflare-v*'
 
 permissions:
   contents: read
@@ -60,3 +61,7 @@ jobs:
       - name: Publish nuxt-github-sponsors
         if: startsWith(github.ref_name, 'nuxt-github-sponsors-v')
         run: npm publish packages/nuxt-github-sponsors/.pack/*.tgz --access public --tag experimental
+
+      - name: Publish nuxt-cloudflare
+        if: startsWith(github.ref_name, 'nuxt-cloudflare-v')
+        run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public --tag experimental
