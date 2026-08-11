@@ -153,9 +153,13 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     if (resolveModuleWorkersCachePolicy(options)._tag === 'disabled')
       return
     const violations = findHtmlCacheRouteRuleViolations(nitroConfig.routeRules)
-    if (violations.length > 0) {
+    const warnings = violations.filter(violation => violation.severity === 'warning')
+    const errors = violations.filter(violation => violation.severity === 'error')
+    if (warnings.length > 0)
+      logger.warn(formatHtmlCacheRouteRuleViolations(warnings))
+    if (errors.length > 0) {
       throw new Error(
-        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(violations)}`,
+        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}`,
       )
     }
   })

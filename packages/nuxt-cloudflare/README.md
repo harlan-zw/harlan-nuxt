@@ -13,7 +13,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
 - Workers Caching enabled by default with per-version isolation
-- Dynamic responses default to `private, no-store`; rendered HTML is forcibly private and conflicting page route rules fail the build
+- Dynamic responses default to `private, no-store`; rendered HTML is forcibly private and conflicting route rules are diagnosed
 - Smart Placement enabled by default; explicit region, host, or hostname placement is preserved
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
@@ -60,7 +60,7 @@ Cloudflare KV requires TTLs of at least 60 seconds.
 
 Workers Caching is separate from Nitro's KV-backed cache. It is enabled by default with `cross_version_cache: false`, so each deployment starts with an isolated cache. Dynamic Nitro responses default to `Cache-Control: private, no-store` and `Cloudflare-CDN-Cache-Control: no-store` unless they declare an explicit cache policy. Rendered HTML always receives those private directives; this is required because Cloudflare otherwise heuristically caches a `200` response with no cache header for two hours.
 
-HTML-capable route rules fail the build when they use `cache`, `isr`, `swr`, or publicly cacheable `Cache-Control`, `CDN-Cache-Control`, and `Cloudflare-CDN-Cache-Control` headers. Explicit `private` and `no-store` policies are safe. API and static asset routes remain available for explicit caching. Disable Workers Caching only for a gateway that must execute on every request:
+Potential HTML route rules warn when they use `cache`, `isr`, `swr`, or publicly cacheable `Cache-Control`, `CDN-Cache-Control`, and `Cloudflare-CDN-Cache-Control` headers. Rules proven to be HTML through prerendering, a `.html` path, or an explicit `text/html` content type fail the build. Explicit `private` and `no-store` policies are safe. API, Nuxt OG Image, and static asset routes remain available for explicit caching. Disable Workers Caching only for a gateway that must execute on every request:
 
 ```ts
 export default defineNuxtConfig({

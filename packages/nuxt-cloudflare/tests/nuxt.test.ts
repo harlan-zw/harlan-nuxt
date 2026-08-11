@@ -34,7 +34,7 @@ describe('nuxt integration', () => {
     await nuxt.close()
   })
 
-  it('blocks an HTML route rule that can populate Workers Cache', async () => {
+  it('warns for ambiguous cache rules and blocks prerendered HTML cache rules', async () => {
     const nuxt = await loadNuxt({
       cwd: import.meta.dirname,
       dev: true,
@@ -46,8 +46,18 @@ describe('nuxt integration', () => {
 
     await nuxt.ready()
     await expect(nuxt.callHook('nitro:config', {
+      virtual: {},
       routeRules: {
         '/docs/**': {
+          headers: { 'cloudflare-cdn-cache-control': 'public, max-age=3600' },
+        },
+      },
+    } as never)).resolves.toBeUndefined()
+    await expect(nuxt.callHook('nitro:config', {
+      virtual: {},
+      routeRules: {
+        '/docs/**': {
+          prerender: true,
           headers: { 'cloudflare-cdn-cache-control': 'public, max-age=3600' },
         },
       },

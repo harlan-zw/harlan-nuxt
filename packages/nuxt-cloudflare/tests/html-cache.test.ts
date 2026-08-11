@@ -6,10 +6,10 @@ import {
 import { hasExplicitCachePolicy, withHtmlNoStoreHeaders } from '../src/runtime/server/utils/workers-cache'
 
 describe('html cache route rules', () => {
-  it('rejects every cache mechanism on HTML-capable routes', () => {
+  it('warns for ambiguous routes and rejects only explicit HTML routes', () => {
     const violations = findHtmlCacheRouteRuleViolations({
       '/': { swr: 60 },
-      '/blog/**': { isr: 300 },
+      '/blog/**': { isr: 300, prerender: true },
       '/docs/**': {
         headers: {
           'Cache-Control': 'no-cache',
@@ -20,11 +20,11 @@ describe('html cache route rules', () => {
     })
 
     expect(violations).toEqual([
-      { _tag: 'html-cache-route-rule', route: '/', configPath: 'routeRules./.swr' },
-      { _tag: 'html-cache-route-rule', route: '/blog/**', configPath: 'routeRules./blog/**.isr' },
-      { _tag: 'html-cache-header', route: '/docs/**', configPath: 'routeRules./docs/**.headers.Cache-Control' },
-      { _tag: 'html-cache-header', route: '/docs/**', configPath: 'routeRules./docs/**.headers.Cloudflare-CDN-Cache-Control' },
-      { _tag: 'html-cache-route-rule', route: '/shop/**', configPath: 'routeRules./shop/**.cache' },
+      { _tag: 'html-cache-route-rule', severity: 'warning', route: '/', configPath: 'routeRules./.swr' },
+      { _tag: 'html-cache-route-rule', severity: 'error', route: '/blog/**', configPath: 'routeRules./blog/**.isr' },
+      { _tag: 'html-cache-header', severity: 'warning', route: '/docs/**', configPath: 'routeRules./docs/**.headers.Cache-Control' },
+      { _tag: 'html-cache-header', severity: 'warning', route: '/docs/**', configPath: 'routeRules./docs/**.headers.Cloudflare-CDN-Cache-Control' },
+      { _tag: 'html-cache-route-rule', severity: 'warning', route: '/shop/**', configPath: 'routeRules./shop/**.cache' },
     ])
     expect(formatHtmlCacheRouteRuleViolations(violations)).toContain('routeRules./docs/**.headers.Cloudflare-CDN-Cache-Control')
   })
@@ -32,6 +32,9 @@ describe('html cache route rules', () => {
   it('allows cache rules on API and static asset routes', () => {
     expect(findHtmlCacheRouteRuleViolations({
       '/api/**': { cache: { maxAge: 60 } },
+      '/_og/d/**': { headers: { 'cache-control': 'public, immutable' } },
+      '/_og/r/**': { headers: { 'cache-control': 'public, immutable' } },
+      '/_og/s/**': { headers: { 'cache-control': 'public, immutable' } },
       '/_nuxt/**': { headers: { 'cache-control': 'public, immutable' } },
       '/fonts/**': { headers: { 'cache-control': 'public, immutable' } },
       '/sitemap.xml': { headers: { 'cache-control': 'public, max-age=60' } },
