@@ -142,6 +142,8 @@ Every bundled file that ships from a module's own package is charged to that mod
 
 Modules are reported by the name they declare in their own `meta`, which is also the key an override takes. Modules you never installed yourself show up too, `nuxt-site-config` above arrived as a dependency of another module, and it is charged like any other.
 
+Add a known expensive module to `ignoreModules` when its absolute size is accepted. The report and regression check still measure it, while local builds skip its budget warning.
+
 ## The size budget report
 
 Reporting is off until you ask for it. With `report: true`, every build writes what it measured to `.nuxt/dx/size-budget.json`, whether or not anything breached a budget. It is the input to the regression check below, and it is readable on its own: one entry per Nuxt plugin, Nitro plugin, and installed Nuxt module, with the bytes broken down the same way the warning breaks them down.
@@ -299,6 +301,9 @@ export default defineNuxtConfig({
       nitroPluginsKb: 50,
       // kB budget per Nuxt module in the client bundle, `false` to disable
       modulesKb: 50,
+      // skip absolute budget enforcement for these exact Nuxt module names;
+      // reports and regression checks still include them
+      ignoreModules: ['@nuxt/ui'],
       // raise or lower the budget for individual plugins and modules,
       // keyed by plugin name, module name, or any fragment of the path
       overridesKb: {
