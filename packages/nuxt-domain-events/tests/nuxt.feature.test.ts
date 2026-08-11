@@ -1,13 +1,44 @@
+import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { buildNuxt } from '@nuxt/kit'
 import { loadNuxt } from 'nuxt'
 import { describe, expect, it } from 'vitest'
 import { generateEventRegistryTemplate } from '../src/build/registry'
 import domainEventsModule from '../src/module'
 
+const execFileAsync = promisify(execFile)
+
 describe('nuxt module integration', () => {
+  it('exposes generated event payload types through the server alias', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-types-'))
+    await Promise.all([
+      mkdir(join(root, 'server/events'), { recursive: true }),
+      symlink(join(import.meta.dirname, '../node_modules'), join(root, 'node_modules'), 'dir'),
+    ])
+    await Promise.all([
+      writeFile(join(root, 'server/events/event.ts'), `export default defineEvent({ name: 'test:event', transport: { _tag: 'local' }, input: { parse: (input: unknown): { value: string } => input as { value: string } } })`),
+      writeFile(join(root, 'server/type-probe.ts'), `import { dispatchEvent } from '#domain-events/server'\n\nawait dispatchEvent('test:event', { value: 'valid' })\n// @ts-expect-error event payloads reject the wrong value type\nawait dispatchEvent('test:event', { value: 1 })\n`),
+    ])
+
+    const nuxt = await loadNuxt({
+      cwd: root,
+      ready: true,
+      overrides: {
+        alias: {
+          '@harlan-zw/nuxt-domain-events/server': join(import.meta.dirname, '../src/runtime/server/index'),
+        },
+        dev: false,
+        modules: [[domainEventsModule, { allowEmptyEvents: ['test:event'] }]],
+      },
+    })
+    await buildNuxt(nuxt)
+    await execFileAsync('pnpm', ['exec', 'tsc', '--noEmit', '--pretty', 'false', '-p', join(nuxt.options.buildDir, 'tsconfig.server.json')])
+    await nuxt.close()
+  }, 30_000)
+
   it('wires the generated server alias and discovers app plus Nuxt layer sources', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nuxt-domain-events-'))
     const layer = join(root, 'layer')
