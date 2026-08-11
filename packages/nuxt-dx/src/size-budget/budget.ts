@@ -1,21 +1,21 @@
-import type { PluginMeasurement } from './graph'
+import type { CostMeasurement } from './graph'
 
-export interface PluginVerdict {
+export interface BudgetVerdict {
   path: string
-  /** `name` from `defineNuxtPlugin`, when the plugin declares one. */
+  /** A Nuxt module name, or the `name` from `defineNuxtPlugin` when the plugin declares one. */
   name?: string
   budgetBytes: number
-  measurement: PluginMeasurement
+  measurement: CostMeasurement
 }
 
 export interface BudgetOverride {
-  /** A plugin name, or any fragment of a plugin path. */
+  /** A plugin or module name, or any fragment of a path. */
   fragment: string
   bytes: number
 }
 
 /**
- * The threshold below which no plugin can possibly breach its budget. Used to skip
+ * The threshold below which nothing can possibly breach its budget. Used to skip
  * name resolution for plugins that are comfortably small.
  */
 export function smallestBudget(defaultBytes: number, overrides: readonly BudgetOverride[]): number {
@@ -24,7 +24,7 @@ export function smallestBudget(defaultBytes: number, overrides: readonly BudgetO
 
 export function budgetFor(path: string, name: string | undefined, defaultBytes: number, overrides: readonly BudgetOverride[]): number {
   const normalized = path.replace(/\\/g, '/')
-  // An override keyed by plugin name wins over one keyed by a path fragment.
+  // An override keyed by name wins over one keyed by a path fragment.
   const override = overrides.find(candidate => candidate.fragment === name)
     ?? overrides.find(candidate => normalized.includes(candidate.fragment))
   return override?.bytes ?? defaultBytes

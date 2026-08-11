@@ -5,7 +5,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to go looking for: client errors while you develop, and plugins that quietly bloat your bundle when you build.
+Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to go looking for: client errors while you develop, and the plugins and modules that quietly bloat your bundle when you build.
 
 Status: experimental. APIs may change before the first release.
 
@@ -24,8 +24,8 @@ Status: experimental. APIs may change before the first release.
 - 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
 - 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
-- 📦 **Plugin size budgets:** warn when a Nuxt or Nitro plugin drags too much JavaScript into the bundle.
-- 🔍 **Exclusive attribution and overrides:** each plugin is charged only for what it alone pulls in, with budgets keyed by `defineNuxtPlugin` name or path fragment.
+- 📦 **Size budgets:** warn when a Nuxt plugin, a Nitro plugin, or an installed Nuxt module drags too much JavaScript into the bundle, so you can answer which of your modules cost you 80 kB.
+- 🔍 **Exclusive attribution and overrides:** each plugin and module is charged only for what it alone pulls in, with budgets keyed by plugin name, module name, or path fragment.
 
 ## Installation
 
@@ -114,6 +114,36 @@ export default defineNuxtPlugin({
 
 Both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })` are read. Plugins without a name are reported by path, as are Nitro plugins, which have no name concept.
 
+## Module size budgets
+
+Answers the question a plugin budget cannot: you installed five modules, which one added 80 kB to the client bundle?
+
+Every bundled file that ships from a module's own package is charged to that module, along with everything those files reach exclusively. A dependency two modules both import is shared, so neither is billed for it, and the number moves as your app changes: install a second module that also uses `cookie-es` and the first module's charge drops by that much.
+
+```
+[nuxt-dx]  WARN  2 Nuxt modules over budget in the client bundle
+
+  @nuxtjs/i18n
+  57.2 kB bundled, 52.2 kB over the 5 kB budget
+    ├─48.3 kB  the module's own files
+    ├─ 6.1 kB  @intlify/shared/dist/shared.mjs
+    ├─ 2.5 kB  h3/dist/index.mjs
+    └─  276 B  virtual:nuxt:.nuxt%2Fi18n-options.mjs
+
+  nuxt-site-config
+  5.2 kB bundled, 252 B over the 5 kB budget
+    ├─2.7 kB  the module's own files
+    ├─2.3 kB  site-config-stack/dist/index.mjs
+    └─ 219 B  virtual:nuxt:.nuxt%2Fnuxt-site-config%2Fi18n-plugin-deps.mjs
+
+  Defer heavy imports with `await import()`, or allow the size:
+    nuxtDx.sizeBudget.overridesKb = { '@nuxtjs/i18n': 58, 'nuxt-site-config': 6 }
+```
+
+Modules are reported by the name they declare in their own `meta`, which is also the key an override takes. Modules you never installed yourself show up too, `nuxt-site-config` above arrived as a dependency of another module, and it is charged like any other.
+
+## Configuring budgets
+
 ```ts
 export default defineNuxtConfig({
   nuxtDx: {
@@ -122,10 +152,13 @@ export default defineNuxtConfig({
       pluginsKb: 20,
       // kB budget per Nitro plugin in the server bundle, `false` to disable
       nitroPluginsKb: 50,
-      // raise or lower the budget for individual plugins,
-      // keyed by plugin name or by any fragment of the plugin path
+      // kB budget per Nuxt module in the client bundle, `false` to disable
+      modulesKb: 50,
+      // raise or lower the budget for individual plugins and modules,
+      // keyed by plugin name, module name, or any fragment of the path
       overridesKb: {
         'analytics': 60,
+        '@nuxtjs/i18n': 80,
         'server/plugins/queue': 120,
       },
       // throw instead of warning
@@ -137,7 +170,7 @@ export default defineNuxtConfig({
 
 Set `sizeBudget: false` to turn the check off entirely.
 
-Budgets are measured whenever a bundle is produced. Nitro is bundled in both `nuxi dev` and `nuxi build`, so Nitro plugin budgets report in either. The client is served unbundled in dev, so app plugin budgets only report on `nuxi build`.
+Budgets are measured whenever a bundle is produced. Nitro is bundled in both `nuxi dev` and `nuxi build`, so Nitro plugin budgets report in either. The client is served unbundled in dev, so app plugin and module budgets only report on `nuxi build`.
 
 ## Sponsors
 

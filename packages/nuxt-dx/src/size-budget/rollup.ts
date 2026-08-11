@@ -1,20 +1,21 @@
 import type { OutputBundle, Plugin } from 'rollup'
-import type { GraphModule, PluginMeasurement } from './graph'
+import type { CostMeasurement, GraphModule } from './graph'
 import type { BudgetScope } from './report'
-import { measurePluginCost } from './graph'
-import { matchTargetId } from './match'
+import type { BudgetTarget } from './targets'
+import { measureCost } from './graph'
 
-export interface MeasuredPlugin {
-  /** Absolute path to the plugin file, as Nuxt or Nitro resolved it. */
+export interface MeasuredTarget {
+  /** Absolute path to the plugin file or module package, as Nuxt or Nitro resolved it. */
   path: string
-  measurement: PluginMeasurement
+  name?: string
+  measurement: CostMeasurement
 }
 
 export interface SizeBudgetPluginOptions {
   scope: BudgetScope
-  /** Read lazily so plugins registered after this rollup plugin is created are included. */
-  paths: () => readonly string[]
-  onMeasured: (measured: readonly MeasuredPlugin[]) => void | Promise<void>
+  /** Read lazily so plugins and modules registered after this rollup plugin is created are included. */
+  targets: (moduleIds: readonly string[]) => readonly BudgetTarget[]
+  onMeasured: (measured: readonly MeasuredTarget[]) => void | Promise<void>
 }
 
 function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => readonly string[]) {
@@ -32,33 +33,24 @@ function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => reado
 }
 
 /**
- * Measures the bundled weight of each plugin once the graph is final, so the cost
+ * Measures the bundled weight of each target once the graph is final, so the cost
  * reflects post-tree-shaking bytes rather than what the source file imports on paper.
  */
 export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): Plugin {
   return {
     name: `nuxt-dx:size-budget:${options.scope}`,
     async generateBundle(_outputOptions, bundle) {
-      const paths = options.paths()
-      if (!paths.length)
-        return
-
       const { modules, entryIds } = collectGraph(bundle, id => this.getModuleInfo(id)?.importedIds ?? [])
-      const ids = modules.map(module => module.id)
-      const pathById = new Map<string, string>()
-      for (const path of paths) {
-        const id = matchTargetId(path, ids)
-        if (id)
-          pathById.set(id, path)
-      }
-      if (!pathById.size)
+      const targets = options.targets(modules.map(module => module.id))
+      if (!targets.length)
         return
 
-      const measurements = measurePluginCost({ modules, targetIds: [...pathById.keys()], entryIds })
-      await options.onMeasured(measurements.map(measurement => ({
-        path: pathById.get(measurement.id)!,
-        measurement,
-      })))
+      const byKey = new Map(targets.map(target => [target.key, target]))
+      const measurements = measureCost({ modules, targets, entryIds })
+      await options.onMeasured(measurements.map((measurement) => {
+        const target = byKey.get(measurement.key)!
+        return { path: target.path, name: target.name, measurement }
+      }))
     },
   }
 }

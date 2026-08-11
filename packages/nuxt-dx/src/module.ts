@@ -1,14 +1,19 @@
 import type { Nuxt } from '@nuxt/schema'
-import type { BudgetOverride, PluginVerdict } from './size-budget/budget'
+import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
+import type { ModuleOwner } from './size-budget/module-packages'
 import type { BudgetScope } from './size-budget/report'
-import type { MeasuredPlugin } from './size-budget/rollup'
+import type { MeasuredTarget } from './size-budget/rollup'
+import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { addPlugin, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { isAbsolute } from 'node:path'
+import { addPlugin, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
 import { budgetFor, smallestBudget } from './size-budget/budget'
+import { moduleRoot } from './size-budget/module-packages'
 import { extractPluginName } from './size-budget/plugin-name'
 import { formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
 import { kilobytesToBytes } from './size-budget/size'
+import { moduleTargets, pluginTargets } from './size-budget/targets'
 
 export interface SizeBudgetOptions {
   /**
@@ -21,7 +26,12 @@ export interface SizeBudgetOptions {
    * @default 50
    */
   nitroPluginsKb?: number | false
-  /** Per-plugin kilobyte budgets, keyed by plugin name or by any fragment of the plugin path. */
+  /**
+   * Kilobyte budget for each Nuxt module in the client bundle. `false` disables the check.
+   * @default 50
+   */
+  modulesKb?: number | false
+  /** Per-target kilobyte budgets, keyed by plugin name, module name, or any fragment of the path. */
   overridesKb?: Record<string, number>
   /**
    * Fail the build instead of warning.
@@ -34,13 +44,14 @@ export interface ModuleOptions {
   enabled?: boolean
   position?: 'bottom-left' | 'bottom-right'
   sourceRoot?: string
-  /** Warn when a plugin's exclusive import graph exceeds a bundle size budget. */
+  /** Warn when a plugin's or module's exclusive import graph exceeds a bundle size budget. */
   sizeBudget?: SizeBudgetOptions | false
 }
 
 interface ResolvedBudgets {
   client: number | undefined
   nitro: number | undefined
+  modules: number | undefined
   overrides: BudgetOverride[]
   fail: boolean
 }
@@ -53,7 +64,7 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
       return undefined
     if (kilobytes === undefined)
       return kilobytesToBytes(fallback)
-    // A negative or NaN budget would flag every plugin, so drop it rather than drown the build in warnings.
+    // A negative or NaN budget would flag everything, so drop it rather than drown the build in warnings.
     if (!Number.isFinite(kilobytes) || kilobytes < 0) {
       logger.warn(`Ignoring \`sizeBudget.${label}\`: expected a non-negative number of kilobytes, received ${kilobytes}`)
       return undefined
@@ -71,6 +82,7 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
   return {
     client: resolve(options.pluginsKb, 20, 'pluginsKb'),
     nitro: resolve(options.nitroPluginsKb, 50, 'nitroPluginsKb'),
+    modules: resolve(options.modulesKb, 50, 'modulesKb'),
     overrides,
     fail: options.fail ?? false,
   }
@@ -86,18 +98,19 @@ async function readPluginName(src: string, nuxt: Nuxt): Promise<string | undefin
 }
 
 /**
- * Measurement only knows paths. Names are reconciled here, once, for the plugins big
+ * Measurement only knows paths. Plugin names are reconciled here, once, for the plugins big
  * enough to be at risk, so a build where everything fits parses no plugin sources at all.
  */
 function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBudgets, nuxt: Nuxt, named: boolean) {
   const threshold = smallestBudget(defaultBytes, budgets.overrides)
-  return async (measured: readonly MeasuredPlugin[]) => {
+  return async (measured: readonly MeasuredTarget[]) => {
     const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold)
     if (!candidates.length)
       return
 
-    const verdicts: PluginVerdict[] = await Promise.all(candidates.map(async ({ path, measurement }) => {
-      const name = named ? await readPluginName(path, nuxt) : undefined
+    const verdicts: BudgetVerdict[] = await Promise.all(candidates.map(async (target) => {
+      const { path, measurement } = target
+      const name = target.name ?? (named ? await readPluginName(path, nuxt) : undefined)
       return { path, name, budgetBytes: budgetFor(path, name, defaultBytes, budgets.overrides), measurement }
     }))
 
@@ -114,27 +127,78 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
   }
 }
 
+/**
+ * The file a module was loaded from. `entryPath` is whatever `modules` held, usually a bare
+ * specifier, and vite resolves through symlinks, so a pnpm module's bundled ids sit under the
+ * store path rather than under the link Nuxt loaded it from.
+ */
+function moduleEntryFile(entryPath: string, nuxt: Nuxt): string | undefined {
+  let file = entryPath
+  if (!isAbsolute(file)) {
+    try {
+      file = resolveModule(entryPath, { paths: [nuxt.options.rootDir, ...nuxt.options.modulesDir] })
+    }
+    catch {
+      // A module Nuxt can no longer resolve cannot be matched to bundled files; leave it unattributed.
+      return undefined
+    }
+  }
+  try {
+    return realpathSync(file)
+  }
+  catch {
+    return file
+  }
+}
+
+function installedModuleOwners(nuxt: Nuxt): ModuleOwner[] {
+  const owners: ModuleOwner[] = []
+  for (const installed of nuxt.options._installedModules ?? []) {
+    // Inline and function modules have no file of their own, so nothing can be charged to them.
+    if (!installed.entryPath)
+      continue
+    const file = moduleEntryFile(installed.entryPath, nuxt)
+    if (file)
+      owners.push({ name: installed.meta?.name, root: moduleRoot(file) })
+  }
+  return owners
+}
+
 function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
   const budgets = resolveBudgets(options)
   const clientBudget = budgets.client
   const nitroBudget = budgets.nitro
+  const moduleBudget = budgets.modules
 
+  // `app:resolve` runs before the client build, and holds every plugin including module-registered ones.
+  let appPluginPaths: string[] = []
   if (clientBudget !== undefined) {
-    // `app:resolve` runs before the client build, and holds every plugin including module-registered ones.
-    let appPluginPaths: string[] = []
     nuxt.hook('app:resolve', (app) => {
       appPluginPaths = app.plugins.filter(plugin => plugin.mode !== 'server').map(plugin => plugin.src)
     })
+  }
+
+  if (clientBudget !== undefined || moduleBudget !== undefined) {
     nuxt.hook('vite:extendConfig', (config, env) => {
       if (!env.isClient)
         return
       // `vite:extendConfig` types the config as readonly, but mutating `plugins` is the supported extension point.
       const plugins = config.plugins as unknown[] | undefined
-      plugins?.push(sizeBudgetRollupPlugin({
-        scope: 'client',
-        paths: () => appPluginPaths,
-        onMeasured: reporter('client', clientBudget, budgets, nuxt, true),
-      }))
+      if (clientBudget !== undefined) {
+        plugins?.push(sizeBudgetRollupPlugin({
+          scope: 'client',
+          targets: ids => pluginTargets(appPluginPaths, ids),
+          onMeasured: reporter('client', clientBudget, budgets, nuxt, true),
+        }))
+      }
+      if (moduleBudget !== undefined) {
+        plugins?.push(sizeBudgetRollupPlugin({
+          scope: 'modules',
+          // Read at bundle time: modules keep installing while the config is assembled.
+          targets: ids => moduleTargets(installedModuleOwners(nuxt), ids),
+          onMeasured: reporter('modules', moduleBudget, budgets, nuxt, false),
+        }))
+      }
     })
   }
 
@@ -144,8 +208,8 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt): void {
         config.plugins ||= []
         ;(config.plugins as unknown[]).push(sizeBudgetRollupPlugin({
           scope: 'nitro',
-          paths: () => nitro.options.plugins,
           // Nitro plugins have no name concept, so they are always identified by path.
+          targets: ids => pluginTargets(nitro.options.plugins, ids),
           onMeasured: reporter('nitro', nitroBudget, budgets, nuxt, false),
         }))
       })

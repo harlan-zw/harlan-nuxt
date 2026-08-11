@@ -10,11 +10,18 @@ export interface ModuleWeight {
   bytes: number
 }
 
-export interface PluginMeasurement {
-  id: string
-  /** Size of the plugin file itself. */
+export interface CostTarget {
+  /** Identifies the target across the measurement; unique per target. */
+  key: string
+  /** Bundled module ids charged directly to this target. */
+  ids: readonly string[]
+}
+
+export interface CostMeasurement {
+  key: string
+  /** Size of the target's own modules. */
   ownBytes: number
-  /** Size of the modules reachable only through this plugin. */
+  /** Size of the modules reachable only through this target. */
   exclusiveBytes: number
   /** How many modules that covers, so the report can say what it left out. */
   exclusiveCount: number
@@ -24,9 +31,8 @@ export interface PluginMeasurement {
 
 interface MeasureInput {
   modules: readonly GraphModule[]
-  /** Bundled module ids of the plugins to measure. */
-  targetIds: readonly string[]
-  /** Bundle entry modules, used to discover what the app ships without any plugin. */
+  targets: readonly CostTarget[]
+  /** Bundle entry modules, used to discover what the app ships without any target. */
   entryIds: readonly string[]
   maxDependencies?: number
 }
@@ -48,37 +54,43 @@ function walk(starts: readonly string[], byId: ReadonlyMap<string, GraphModule>,
 }
 
 /**
- * Charge each plugin the weight of its own module plus every module that is reachable
- * only through it. Anything the app already reaches without passing through a plugin,
- * or that a second plugin also reaches, is shared and charged to nobody.
+ * Charge each target the weight of its own modules plus every module that is reachable
+ * only through it. Anything the app already reaches without passing through a target,
+ * or that a second target also reaches, is shared and charged to nobody.
  *
- * This is pure measurement; budgets are applied afterwards so that only the plugins
+ * A target is a group of module ids so the same attribution serves a single plugin file
+ * and a whole Nuxt module package.
+ *
+ * This is pure measurement; budgets are applied afterwards so that only the targets
  * heavy enough to matter need their name resolved.
  */
-export function measurePluginCost(input: MeasureInput): PluginMeasurement[] {
-  const { modules, targetIds, entryIds, maxDependencies = 3 } = input
+export function measureCost(input: MeasureInput): CostMeasurement[] {
+  const { modules, targets, entryIds, maxDependencies = 3 } = input
   const byId = new Map(modules.map(module => [module.id, module]))
-  const present = targetIds.filter(id => byId.has(id))
-  const targets = new Set(present)
+  const present = targets
+    .map(target => ({ key: target.key, ids: target.ids.filter(id => byId.has(id)) }))
+    .filter(target => target.ids.length > 0)
+  const owned = new Set(present.flatMap(target => target.ids))
 
-  const sharedWithApp = walk(entryIds, byId, targets)
+  const sharedWithApp = walk(entryIds, byId, owned)
 
   const owners = new Map<string, Set<string>>()
   const reachedByTarget = new Map<string, Set<string>>()
-  for (const id of present) {
-    const reached = walk(byId.get(id)!.importedIds, byId, targets)
-    reachedByTarget.set(id, reached)
+  for (const target of present) {
+    const imports = target.ids.flatMap(id => [...byId.get(id)!.importedIds])
+    const reached = walk(imports, byId, owned)
+    reachedByTarget.set(target.key, reached)
     for (const reachedId of reached) {
       const existing = owners.get(reachedId)
       if (existing)
-        existing.add(id)
-      else owners.set(reachedId, new Set([id]))
+        existing.add(target.key)
+      else owners.set(reachedId, new Set([target.key]))
     }
   }
 
-  return present.map((id) => {
+  return present.map(({ key, ids }) => {
     const exclusive: ModuleWeight[] = []
-    for (const reachedId of reachedByTarget.get(id)!) {
+    for (const reachedId of reachedByTarget.get(key)!) {
       // Imports can point outside the bundle (node builtins, externals); those cost nothing here.
       const module = byId.get(reachedId)
       if (!module || sharedWithApp.has(reachedId) || owners.get(reachedId)!.size > 1)
@@ -87,10 +99,10 @@ export function measurePluginCost(input: MeasureInput): PluginMeasurement[] {
     }
     exclusive.sort((a, b) => b.bytes - a.bytes || a.id.localeCompare(b.id))
 
-    const ownBytes = byId.get(id)!.bytes
+    const ownBytes = ids.reduce((total, id) => total + byId.get(id)!.bytes, 0)
     const exclusiveBytes = exclusive.reduce((total, module) => total + module.bytes, 0)
     return {
-      id,
+      key,
       ownBytes,
       exclusiveBytes,
       exclusiveCount: exclusive.length,

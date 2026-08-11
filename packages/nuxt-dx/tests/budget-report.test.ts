@@ -1,4 +1,4 @@
-import type { PluginVerdict } from '../src/size-budget/budget'
+import type { BudgetVerdict } from '../src/size-budget/budget'
 import type { BudgetScope } from '../src/size-budget/report'
 import { stripAnsi } from 'consola/utils'
 import { describe, expect, it } from 'vitest'
@@ -18,11 +18,11 @@ describe('displayId', () => {
   })
 })
 
-const verdict: PluginVerdict = {
+const verdict: BudgetVerdict = {
   path: '/app/plugins/analytics.ts',
   budgetBytes: 20_480,
   measurement: {
-    id: '/app/plugins/analytics.ts',
+    key: '/app/plugins/analytics.ts',
     ownBytes: 1024,
     exclusiveBytes: 81_920,
     exclusiveCount: 1,
@@ -32,7 +32,7 @@ const verdict: PluginVerdict = {
 }
 
 /** Colours are terminal dressing; assert on the text underneath. */
-function report(over: PluginVerdict[], scope: BudgetScope = 'client'): string {
+function report(over: BudgetVerdict[], scope: BudgetScope = 'client'): string {
   return stripAnsi(formatBudgetReport(scope, over, '/app'))
 }
 
@@ -40,6 +40,14 @@ describe('formatBudgetReport', () => {
   it('says which bundle the budget applies to', () => {
     expect(report([verdict])).toContain('1 Nuxt plugin over budget in the client bundle')
     expect(report([verdict, verdict], 'nitro')).toContain('2 Nitro plugins over budget in the server bundle')
+  })
+
+  it('reports a Nuxt module by name without repeating it as a path', () => {
+    const module: BudgetVerdict = { ...verdict, path: '/app/node_modules/@nuxtjs/robots', name: '@nuxtjs/robots' }
+    const lines = report([module], 'modules')
+    expect(lines).toContain('1 Nuxt module over budget in the client bundle')
+    expect(lines).toContain('1 kB  the module\'s own files')
+    expect(lines).not.toContain('@nuxtjs/robots  @nuxtjs/robots')
   })
 
   it('states the overshoot, not just the total', () => {
@@ -70,7 +78,7 @@ describe('formatBudgetReport', () => {
   })
 
   it('accounts for dependencies it did not list', () => {
-    const truncated: PluginVerdict = {
+    const truncated: BudgetVerdict = {
       ...verdict,
       measurement: { ...verdict.measurement, exclusiveCount: 4, exclusiveBytes: 100_000 },
     }

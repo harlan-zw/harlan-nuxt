@@ -24,7 +24,7 @@ Every package here publishes under the `experimental` npm tag. Versions and rele
 | [`@harlan-zw/nuxt-cf-jobs`](./packages/nuxt-cf-jobs) | ☁️ Typed Cloudflare Queue jobs with file-based definitions, optional D1 durability, scheduled tasks, and an operations CLI. |
 | [`@harlan-zw/nuxt-use-query`](./packages/nuxt-use-query) | 🔄 Nuxt-native queries, mutations, and subscriptions with SWR, invalidation, polling, and typed RPC contracts. |
 | [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
-| [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and bundle size budgets for Nuxt and Nitro plugins. |
+| [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and bundle size budgets for Nuxt plugins, Nitro plugins, and Nuxt modules. |
 | [`@harlan-zw/nuxt-github-sponsors`](./packages/nuxt-github-sponsors) | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
 
 ## Development
