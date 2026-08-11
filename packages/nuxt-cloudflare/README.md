@@ -172,15 +172,17 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 ### Bindings
 
 ```ts
-import type { CloudflareEventLike } from '@harlan-zw/nuxt-cloudflare/bindings'
-import { requireCloudflareBinding } from '@harlan-zw/nuxt-cloudflare/bindings'
+import type { CloudflareBindingSource } from '@harlan-zw/nuxt-cloudflare/bindings'
+import { createCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
 
-function requireDatabase(event: CloudflareEventLike<Env>) {
-  return requireCloudflareBinding(event, 'DB')
+const cloudflare = createCloudflareBindings<Env>()
+
+function requireDatabase(source?: CloudflareBindingSource) {
+  return cloudflare.require('DB', source)
 }
 ```
 
-`Env` comes from `wrangler types`. Binding access is request-bound and binding names are constrained to `keyof Env`. Missing required bindings throw; there is no global or empty-object fallback.
+`Env` comes from `wrangler types`. The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names are constrained to `keyof Env`. Missing required bindings throw.
 
 ### Scoped secrets file
 
