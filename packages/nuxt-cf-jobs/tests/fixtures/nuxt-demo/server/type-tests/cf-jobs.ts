@@ -1,8 +1,12 @@
 import type { BroadcastEnvelope, JobBroadcastEnvelope, JobBroadcastMessage, JobDefinitionOf, JobName, JobPayload, JobQueue } from '#cf-jobs/app'
 import {
   buildJobPayload,
+  getQueue,
   loadJobDefinition,
 } from '#cf-jobs/app'
+import { defineJob } from '#cf-jobs/server'
+import analyticsJob from '../jobs/analytics/rollup-rebuild'
+import syncJob from '../jobs/sync/table'
 
 const syncJobName: JobName = 'sync/table'
 const analyticsJobName: JobName = 'analytics/rollup-rebuild'
@@ -20,8 +24,17 @@ const analyticsPayload = {
   force: true,
 } satisfies JobPayload<'analytics/rollup-rebuild'>
 
+const externalJob = defineJob({
+  name: 'external/job',
+  queue: 'default',
+  async handle(_payload: { externalId: string }) {},
+})
+
 buildJobPayload(syncJobName, syncPayload)
 buildJobPayload(analyticsJobName, analyticsPayload)
+getQueue(syncJob).send(syncPayload)
+getQueue(analyticsJob).send(analyticsPayload)
+getQueue(externalJob).send({ externalId: 'external_1' })
 
 type SyncDefinition = JobDefinitionOf<'sync/table'>
 type SyncQueue = JobQueue<'sync/table'>
