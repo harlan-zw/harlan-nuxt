@@ -1,3 +1,4 @@
+import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
 import { defineNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
@@ -93,6 +94,21 @@ async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions
     throw new Error(`[nuxt-cloudflare]\n${formatWranglerDiagnostics(errors)}`)
 }
 
+export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void {
+  if (!options.enabled)
+    return
+
+  configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
+  nuxt.hook('modules:done', () => {
+    configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
+  })
+  if (!nuxt.options.dev) {
+    nuxt.hook('nitro:init', (nitro) => {
+      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options))
+    })
+  }
+}
+
 export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-cloudflare',
@@ -106,18 +122,5 @@ export default defineNuxtModule<ModuleOptions>({
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
   },
-  setup(options, nuxt) {
-    if (!options.enabled)
-      return
-
-    configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
-    nuxt.hook('modules:done', () => {
-      configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
-    })
-    if (!nuxt.options.dev) {
-      nuxt.hook('nitro:init', (nitro) => {
-        nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options))
-      })
-    }
-  },
+  setup: setupCloudflareModule,
 })
