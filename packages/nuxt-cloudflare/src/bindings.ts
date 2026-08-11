@@ -2,12 +2,16 @@ type BindingName<Environment extends object> = Extract<keyof Environment, string
 
 type CloudflareEntryHost = typeof globalThis & { __env__?: unknown }
 
+declare global {
+  interface CloudflareBindings {}
+}
+
 export interface CloudflareBindingSource {
   cloudflare?: unknown
   context?: unknown
 }
 
-export interface CloudflareBindings<Environment extends object> {
+export interface CloudflareBindingAccessor<Environment extends object> {
   resolve: (source?: CloudflareBindingSource) => Environment | undefined
   get: <Name extends BindingName<Environment>>(
     name: Name,
@@ -38,12 +42,12 @@ function resolveEnvironment<Environment extends object>(source?: CloudflareBindi
 }
 
 /**
- * Creates typed binding access for Wrangler's generated `Env` or `CloudflareEnv`.
+ * Creates typed binding access for the generated `CloudflareBindings` environment.
  *
  * The source may be an H3 event, a Nitro task run input, or a Nitro task context.
  * If the source has no environment, Nitro's Cloudflare entry shim is used.
  */
-export function createCloudflareBindings<Environment extends object>(): CloudflareBindings<Environment> {
+export function createCloudflareBindings<Environment extends object = CloudflareBindings>(): CloudflareBindingAccessor<Environment> {
   function get<Name extends BindingName<Environment>>(
     name: Name,
     source?: CloudflareBindingSource,

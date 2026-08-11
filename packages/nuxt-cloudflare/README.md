@@ -22,6 +22,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Final generated Wrangler config validated through Wrangler, then audited after production Nitro compiles
 - Production builds fail when server runtime config contains a value copied from a secret build environment variable. The error lists config paths only
 - Complete defaults and diagnostics applied to every named Wrangler environment
+- Exact Cloudflare binding and runtime types generated during `nuxt prepare`
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
 
@@ -175,14 +176,16 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 import type { CloudflareBindingSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 import { createCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
 
-const cloudflare = createCloudflareBindings<Env>()
+const cloudflare = createCloudflareBindings()
 
 function requireDatabase(source?: CloudflareBindingSource) {
   return cloudflare.require('DB', source)
 }
 ```
 
-`Env` comes from `wrangler types`. The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names are constrained to `keyof Env`. Missing required bindings throw.
+`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. The declaration is available only to Nitro server code. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
+
+The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
 
 ### Scoped secrets file
 
