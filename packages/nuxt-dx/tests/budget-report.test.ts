@@ -68,6 +68,13 @@ describe('formatBudgetReport', () => {
     expect(report([{ ...verdict, name: 'analytics' }])).toContain('nuxtDx.sizeBudget.overridesKb = { \'analytics\': 81 }')
   })
 
+  it('suggests ignoring an accepted module without removing it from reports', () => {
+    const module: BudgetVerdict = { ...verdict, path: '/app/node_modules/@nuxtjs/robots', name: '@nuxtjs/robots' }
+    const lines = report([module], 'modules')
+    expect(lines).toContain('Keep accepted modules in reports without absolute warnings:')
+    expect(lines).toContain('nuxtDx.sizeBudget.ignoreModules = [\'@nuxtjs/robots\']')
+  })
+
   it('falls back to a path key when the plugin is unnamed', () => {
     expect(report([verdict])).toContain('{ \'plugins/analytics.ts\': 81 }')
   })

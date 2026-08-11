@@ -296,11 +296,11 @@ export default defineNuxtConfig({
   nuxtDx: {
     sizeBudget: {
       // kB budget per Nuxt app plugin in the client bundle, `false` to disable
-      pluginsKb: 20,
+      pluginsKb: 30,
       // kB budget per Nitro plugin in the server bundle, `false` to disable
-      nitroPluginsKb: 50,
+      nitroPluginsKb: 75,
       // kB budget per Nuxt module in the client bundle, `false` to disable
-      modulesKb: 50,
+      modulesKb: 100,
       // skip absolute budget enforcement for these exact Nuxt module names;
       // reports and regression checks still include them
       ignoreModules: ['@nuxt/ui'],
