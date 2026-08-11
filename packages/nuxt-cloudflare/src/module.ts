@@ -224,7 +224,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
         bindingTypeSignature = artifact.signature
         return artifact.content
       },
-    }, { nitro: true })
+    }, { nitro: true, nuxt: true })
   }
 
   configure()

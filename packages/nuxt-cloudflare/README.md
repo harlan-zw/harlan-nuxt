@@ -183,7 +183,7 @@ function requireDatabase(source?: CloudflareBindingSource) {
 }
 ```
 
-`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. The declaration is available only to Nitro server code. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
+`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
 
 The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
 
