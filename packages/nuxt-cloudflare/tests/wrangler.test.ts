@@ -30,6 +30,30 @@ describe('applyCloudflareDefaults', () => {
   it('preserves an explicit source-map opt-out', () => {
     expect(applyCloudflareDefaults({ upload_source_maps: false })).toMatchObject({ upload_source_maps: false })
   })
+
+  it('applies the complete policy to named environments', () => {
+    const config = applyCloudflareDefaults({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      env: {
+        production: {
+          compatibility_flags: ['global_fetch_strictly_public'],
+          observability: { enabled: false },
+        },
+      },
+      observability: { enabled: true },
+      secrets: { required: ['API_TOKEN'] },
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    })
+
+    expect(config.env?.production).toMatchObject({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['global_fetch_strictly_public', 'nodejs_compat'],
+      observability: { enabled: false },
+      secrets: { required: ['API_TOKEN'] },
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    })
+  })
 })
 
 describe('diagnoseWranglerConfig', () => {
@@ -70,5 +94,59 @@ describe('diagnoseWranglerConfig', () => {
       observability: { enabled: true },
     }, { now: new Date('2026-08-11T00:00:00Z'), compatibilityMaxAgeDays: 90 }))
       .toContainEqual(expect.objectContaining({ _tag: 'warning', code: 'stale-compatibility-date' }))
+  })
+
+  it('audits the effective policy of named environments', () => {
+    const diagnostics = diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      env: {
+        production: {
+          compatibility_flags: ['global_fetch_strictly_public'],
+          observability: { enabled: false },
+        },
+      },
+      observability: { enabled: true },
+      upload_source_maps: true,
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    }, { now: new Date('2026-08-11T00:00:00Z') })
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      _tag: 'error',
+      code: 'missing-nodejs-compat',
+      path: 'env.production.compatibility_flags',
+    }))
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      _tag: 'warning',
+      code: 'observability-disabled',
+      path: 'env.production.observability.enabled',
+    }))
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      _tag: 'warning',
+      code: 'version-metadata-missing',
+      path: 'env.production.version_metadata',
+    }))
+  })
+
+  it.each([
+    'DATABASE_URL',
+    'ENCRYPTION_KEY',
+    'COOKIE_SIGNING_KEY',
+    'STRIPE_KEY',
+  ])('rejects high-signal plaintext secret variable %s', (name) => {
+    const diagnostics = diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      upload_source_maps: true,
+      vars: { [name]: 'secret' },
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    }, { now: new Date('2026-08-11T00:00:00Z') })
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      _tag: 'error',
+      code: 'plaintext-secret-var',
+      path: `vars.${name}`,
+    }))
   })
 })

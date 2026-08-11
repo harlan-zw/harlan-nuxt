@@ -114,8 +114,10 @@ export default defineNuxtModule<ModuleOptions>({
     nuxt.hook('modules:done', () => {
       configureNitroCloudflare(nuxt.options.nitro as NitroCloudflareShape, options)
     })
-    nuxt.hook('nitro:init', (nitro) => {
-      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options))
-    })
+    if (!nuxt.options.dev) {
+      nuxt.hook('nitro:init', (nitro) => {
+        nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options))
+      })
+    }
   },
 })

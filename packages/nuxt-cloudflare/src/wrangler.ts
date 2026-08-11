@@ -79,7 +79,7 @@ export type WranglerJsonFileResult
     | { _tag: 'missing', path: string }
     | { _tag: 'invalid', path: string, reason: string }
 
-const SECRET_NAME_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|PASSWORD|PRIVATE_KEY|SECRET|TOKEN)(?:_|$)/i
+const SECRET_NAME_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|DATABASE_URL|DB_URL|ENCRYPTION_KEY|KEY|PASSWORD|PRIVATE_KEY|SECRET|SIGNING_KEY|TOKEN)(?:_|$)/i
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 
@@ -106,45 +106,55 @@ export function applyCloudflareDefaults(
   config: WranglerConfigInput,
   options: CloudflareDefaultOptions = {},
 ): WranglerConfigInput {
-  const compatibilityFlags = unique([...(config.compatibility_flags ?? []), 'nodejs_compat'])
+  const root = applyEnvironmentDefaults(config, options)
+  const environments = config.env && Object.fromEntries(
+    Object.entries(config.env).map(([name, environment]) => [name, applyEnvironmentDefaults(environment, {
+      ...options,
+      requiredSecrets: root.secrets?.required,
+    }, root)]),
+  )
+  return environments ? { ...root, env: environments } : root
+}
+
+function applyEnvironmentDefaults(
+  config: WranglerConfigInput,
+  options: CloudflareDefaultOptions,
+  inherited: WranglerConfigInput = {},
+): WranglerConfigInput {
+  const compatibilityDate = config.compatibility_date ?? inherited.compatibility_date ?? options.compatibilityDate
+  const compatibilityFlags = unique([...(config.compatibility_flags ?? inherited.compatibility_flags ?? []), 'nodejs_compat'])
   const requiredSecrets = unique([...(config.secrets?.required ?? []), ...(options.requiredSecrets ?? [])])
   const logs = config.observability?.logs
+  const inheritedLogs = inherited.observability?.logs
   const traces = config.observability?.traces
-  const uploadSourceMaps = config.upload_source_maps ?? options.uploadSourceMaps ?? true
-  const environments = config.env && Object.fromEntries(
-    Object.entries(config.env).map(([name, environment]) => [name, {
-      ...environment,
-      ...(requiredSecrets.length > 0
-        ? { secrets: { ...environment.secrets, required: unique([...(environment.secrets?.required ?? []), ...requiredSecrets]) } }
-        : {}),
-    }]),
-  )
+  const inheritedTraces = inherited.observability?.traces
+  const uploadSourceMaps = config.upload_source_maps ?? inherited.upload_source_maps ?? options.uploadSourceMaps ?? true
 
   return {
     ...config,
-    ...(config.compatibility_date === undefined && options.compatibilityDate
-      ? { compatibility_date: options.compatibilityDate }
-      : {}),
+    ...(compatibilityDate === undefined ? {} : { compatibility_date: compatibilityDate }),
     compatibility_flags: compatibilityFlags,
     observability: {
+      ...inherited.observability,
       ...config.observability,
-      enabled: config.observability?.enabled ?? true,
+      enabled: config.observability?.enabled ?? inherited.observability?.enabled ?? true,
       logs: {
+        ...inheritedLogs,
         ...logs,
-        enabled: logs?.enabled ?? true,
-        head_sampling_rate: logs?.head_sampling_rate ?? options.logsSampleRate ?? 0.1,
-        invocation_logs: logs?.invocation_logs ?? true,
+        enabled: logs?.enabled ?? inheritedLogs?.enabled ?? true,
+        head_sampling_rate: logs?.head_sampling_rate ?? inheritedLogs?.head_sampling_rate ?? options.logsSampleRate ?? 0.1,
+        invocation_logs: logs?.invocation_logs ?? inheritedLogs?.invocation_logs ?? true,
       },
       traces: {
+        ...inheritedTraces,
         ...traces,
-        enabled: traces?.enabled ?? true,
-        head_sampling_rate: traces?.head_sampling_rate ?? options.tracesSampleRate ?? 0.01,
+        enabled: traces?.enabled ?? inheritedTraces?.enabled ?? true,
+        head_sampling_rate: traces?.head_sampling_rate ?? inheritedTraces?.head_sampling_rate ?? options.tracesSampleRate ?? 0.01,
       },
     },
     ...(requiredSecrets.length > 0 ? { secrets: { ...config.secrets, required: requiredSecrets } } : {}),
-    ...(environments ? { env: environments } : {}),
     upload_source_maps: uploadSourceMaps,
-    version_metadata: config.version_metadata ?? {
+    version_metadata: config.version_metadata ?? inherited.version_metadata ?? {
       binding: options.versionMetadataBinding ?? 'CF_VERSION_METADATA',
     },
   }
@@ -201,13 +211,13 @@ function diagnoseEnvironment(
   })
 }
 
-export function diagnoseWranglerConfig(
+function diagnosePolicy(
   config: WranglerConfigInput,
-  options: WranglerDiagnosticOptions = {},
-): WranglerDiagnostic[] {
-  const diagnostics: WranglerDiagnostic[] = []
-  const now = options.now ?? new Date()
-  const maxAgeDays = options.compatibilityMaxAgeDays ?? 90
+  prefix: string,
+  diagnostics: WranglerDiagnostic[],
+  options: Required<Pick<WranglerDiagnosticOptions, 'compatibilityMaxAgeDays' | 'now'>>,
+  publicVarNames: ReadonlySet<string>,
+): void {
   const compatibilityDate = config.compatibility_date
 
   if (compatibilityDate === undefined) {
@@ -215,7 +225,7 @@ export function diagnoseWranglerConfig(
       _tag: 'error',
       code: 'compatibility-date-missing',
       message: 'Set an explicit compatibility_date.',
-      path: 'compatibility_date',
+      path: `${prefix}compatibility_date`,
     })
   }
   else {
@@ -225,15 +235,15 @@ export function diagnoseWranglerConfig(
         _tag: 'error',
         code: 'compatibility-date-invalid',
         message: 'compatibility_date must be a real YYYY-MM-DD date.',
-        path: 'compatibility_date',
+        path: `${prefix}compatibility_date`,
       })
     }
-    else if ((now.getTime() - parsed.getTime()) / MILLISECONDS_PER_DAY > maxAgeDays) {
+    else if ((options.now.getTime() - parsed.getTime()) / MILLISECONDS_PER_DAY > options.compatibilityMaxAgeDays) {
       diagnostics.push({
         _tag: 'warning',
         code: 'stale-compatibility-date',
-        message: `compatibility_date is older than the ${maxAgeDays}-day project policy. Review compatibility flags before advancing it.`,
-        path: 'compatibility_date',
+        message: `compatibility_date is older than the ${options.compatibilityMaxAgeDays}-day project policy. Review compatibility flags before advancing it.`,
+        path: `${prefix}compatibility_date`,
       })
     }
   }
@@ -243,7 +253,7 @@ export function diagnoseWranglerConfig(
       _tag: 'error',
       code: 'missing-nodejs-compat',
       message: 'Add nodejs_compat to compatibility_flags.',
-      path: 'compatibility_flags',
+      path: `${prefix}compatibility_flags`,
     })
   }
   if (config.observability?.enabled !== true) {
@@ -251,7 +261,7 @@ export function diagnoseWranglerConfig(
       _tag: 'warning',
       code: 'observability-disabled',
       message: 'Enable Workers observability.',
-      path: 'observability.enabled',
+      path: `${prefix}observability.enabled`,
     })
   }
   if (config.upload_source_maps !== true) {
@@ -259,7 +269,7 @@ export function diagnoseWranglerConfig(
       _tag: 'warning',
       code: 'source-maps-disabled',
       message: 'Enable upload_source_maps when the Worker build emits source maps.',
-      path: 'upload_source_maps',
+      path: `${prefix}upload_source_maps`,
     })
   }
   if (!config.version_metadata?.binding) {
@@ -267,7 +277,7 @@ export function diagnoseWranglerConfig(
       _tag: 'warning',
       code: 'version-metadata-missing',
       message: 'Add a version_metadata binding for deployment correlation.',
-      path: 'version_metadata',
+      path: `${prefix}version_metadata`,
     })
   }
   if (config.workers_dev === true) {
@@ -275,14 +285,66 @@ export function diagnoseWranglerConfig(
       _tag: 'warning',
       code: 'workers-dev-enabled',
       message: 'Production workers.dev exposure is enabled; verify this is intentional.',
-      path: 'workers_dev',
+      path: `${prefix}workers_dev`,
     })
   }
 
+  diagnoseEnvironment(config, prefix, diagnostics, publicVarNames)
+}
+
+function mergeObservability(
+  inherited: WranglerObservabilityInput | undefined,
+  environment: WranglerObservabilityInput | undefined,
+): WranglerObservabilityInput | undefined {
+  if (!inherited && !environment)
+    return undefined
+  return {
+    ...inherited,
+    ...environment,
+    logs: inherited?.logs || environment?.logs
+      ? { ...inherited?.logs, ...environment?.logs }
+      : undefined,
+    traces: inherited?.traces || environment?.traces
+      ? { ...inherited?.traces, ...environment?.traces }
+      : undefined,
+  }
+}
+
+function resolveEnvironmentPolicy(
+  root: WranglerConfigInput,
+  environment: WranglerConfigInput,
+): WranglerConfigInput {
+  return {
+    ...environment,
+    compatibility_date: environment.compatibility_date ?? root.compatibility_date,
+    compatibility_flags: environment.compatibility_flags ?? root.compatibility_flags,
+    observability: mergeObservability(root.observability, environment.observability),
+    upload_source_maps: environment.upload_source_maps ?? root.upload_source_maps,
+    workers_dev: environment.workers_dev ?? root.workers_dev,
+  }
+}
+
+export function diagnoseWranglerConfig(
+  config: WranglerConfigInput,
+  options: WranglerDiagnosticOptions = {},
+): WranglerDiagnostic[] {
+  const diagnostics: WranglerDiagnostic[] = []
+  const diagnosticOptions = {
+    compatibilityMaxAgeDays: options.compatibilityMaxAgeDays ?? 90,
+    now: options.now ?? new Date(),
+  }
+
   const publicVarNames = new Set(options.publicVarNames ?? [])
-  diagnoseEnvironment(config, '', diagnostics, publicVarNames)
-  for (const [name, environment] of Object.entries(config.env ?? {}))
-    diagnoseEnvironment(environment, `env.${name}.`, diagnostics, publicVarNames)
+  diagnosePolicy(config, '', diagnostics, diagnosticOptions, publicVarNames)
+  for (const [name, environment] of Object.entries(config.env ?? {})) {
+    diagnosePolicy(
+      resolveEnvironmentPolicy(config, environment),
+      `env.${name}.`,
+      diagnostics,
+      diagnosticOptions,
+      publicVarNames,
+    )
+  }
 
   return diagnostics
 }

@@ -1,25 +1,31 @@
-export interface CloudflareEventLike {
+export interface CloudflareEventLike<Environment extends object> {
   context?: {
     cloudflare?: {
-      env?: Record<string, unknown>
+      env?: Environment
     }
   }
 }
 
-export function getCloudflareBinding<Binding = unknown>(
-  event: CloudflareEventLike,
-  name: string,
-): Binding | undefined {
+export function getCloudflareBinding<
+  Environment extends object,
+  Name extends Extract<keyof Environment, string>,
+>(
+  event: CloudflareEventLike<Environment>,
+  name: Name,
+): Environment[Name] | undefined {
   const env = event.context?.cloudflare?.env
-  return env && name in env ? env[name] as Binding : undefined
+  return env && Object.hasOwn(env, name) ? env[name] : undefined
 }
 
-export function requireCloudflareBinding<Binding = unknown>(
-  event: CloudflareEventLike,
-  name: string,
-): Binding {
-  const binding = getCloudflareBinding<Binding>(event, name)
+export function requireCloudflareBinding<
+  Environment extends object,
+  Name extends Extract<keyof Environment, string>,
+>(
+  event: CloudflareEventLike<Environment>,
+  name: Name,
+): Exclude<Environment[Name], undefined> {
+  const binding = getCloudflareBinding(event, name)
   if (binding === undefined)
     throw new Error(`Cloudflare binding "${name}" is unavailable`)
-  return binding
+  return binding as Exclude<Environment[Name], undefined>
 }

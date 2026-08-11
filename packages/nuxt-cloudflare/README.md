@@ -13,7 +13,8 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Source-map upload when the Nitro build emits maps; explicit `false` is preserved
 - `secrets.required` names only, with plaintext secret-looking `vars` rejected
 - Raw `cloudflare-kv-binding` on Nitro's `cache` mount upgraded to a 30-day physical expiry
-- Final generated Wrangler config audited after Nitro compiles
+- Final generated Wrangler config audited after production Nitro compiles
+- Complete defaults and diagnostics applied to every named Wrangler environment
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
 
@@ -92,26 +93,37 @@ One `first-primary` session is cached per request and binding. D1 already retrie
 ### Bindings
 
 ```ts
+import type { CloudflareEventLike } from '@harlan-zw/nuxt-cloudflare/bindings'
 import { requireCloudflareBinding } from '@harlan-zw/nuxt-cloudflare/bindings'
 
-const db = requireCloudflareBinding<D1Database>(event, 'DB')
+function requireDatabase(event: CloudflareEventLike<Env>) {
+  return requireCloudflareBinding(event, 'DB')
+}
 ```
 
-Binding access is request-bound. Missing required bindings throw; there is no global or empty-object fallback.
+`Env` comes from `wrangler types`. Binding access is request-bound and binding names are constrained to `keyof Env`. Missing required bindings throw; there is no global or empty-object fallback.
 
-### Atomic secrets file
+### Scoped secrets file
 
 ```ts
-import { resolveWorkerSecrets, writeWorkerSecretsFile } from '@harlan-zw/nuxt-cloudflare/deploy'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { resolveWorkerSecrets, withWorkerSecretsFile } from '@harlan-zw/nuxt-cloudflare/deploy'
+
+const exec = promisify(execFile)
 
 const resolved = resolveWorkerSecrets(['API_TOKEN'], process.env)
 if (resolved._tag === 'missing')
   throw new Error(`Missing Worker secrets: ${resolved.names.join(', ')}`)
 
-await writeWorkerSecretsFile('/secure/temp/secrets.json', resolved.secrets)
+await withWorkerSecretsFile({
+  path: '/secure/temp/secrets.json',
+  secrets: resolved.secrets,
+  use: path => exec('pnpm', ['wrangler', 'deploy', '--secrets-file', path]),
+})
 ```
 
-The writer uses exclusive creation and mode 0600. Pass the file to `wrangler deploy --secrets-file`; delete it after deployment.
+The writer uses exclusive creation and mode 0600. It removes partial files after write failures and removes the completed file after deployment succeeds or fails.
 
 ## Deliberate boundaries
 
