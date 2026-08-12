@@ -1,4 +1,5 @@
 import type { Nuxt, NuxtApp } from '@nuxt/schema'
+import type { DiagnosticIssue } from './runtime/app/report'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
 import type { ModuleOwner } from './size-budget/module-owner'
 import type { MeasuredTarget } from './size-budget/rollup'
@@ -7,7 +8,7 @@ import type { RuntimeEntry } from './size-budget/targets'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { addPlugin, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
+import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { extractPluginName } from './size-budget/plugin-name'
@@ -68,6 +69,16 @@ export interface ModuleOptions {
    * @default false
    */
   report?: boolean | ReportOptions
+}
+
+export type { DiagnosticIssue as NuxtDxIssue } from './runtime/app/report'
+
+export interface NuxtDxRuntimeNuxtHooks {
+  'nuxt-dx:issue': (issue: DiagnosticIssue) => void
+}
+
+declare module 'nuxt/app' {
+  interface RuntimeNuxtHooks extends NuxtDxRuntimeNuxtHooks {}
 }
 
 interface ResolvedBudgets {
@@ -297,6 +308,23 @@ export default defineNuxtModule<ModuleOptions>({
       setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath)
     else if (reportPath !== undefined)
       logger.warn('`nuxtDx.report` is on, but `nuxtDx.sizeBudget` is `false`, so there is nothing to measure.')
+
+    addTypeTemplate({
+      filename: 'types/nuxt-dx.d.ts',
+      getContents: () => `
+import type { NuxtDxRuntimeNuxtHooks } from '@harlan-zw/nuxt-dx'
+
+declare module '#app' {
+  interface RuntimeNuxtHooks extends NuxtDxRuntimeNuxtHooks {}
+}
+
+declare module 'nuxt/app' {
+  interface RuntimeNuxtHooks extends NuxtDxRuntimeNuxtHooks {}
+}
+
+export {}
+`,
+    })
 
     if (!nuxt.options.dev)
       return

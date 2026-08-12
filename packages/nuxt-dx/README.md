@@ -53,6 +53,21 @@ export default defineNuxtConfig({
 })
 ```
 
+Other modules can send errors and warnings to the same overlay through the typed `nuxt-dx:issue` runtime hook. The DX plugin runs first, so module plugins can report during setup without losing the issue.
+
+```ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('nuxt-use-query:telemetry:query:finish', (event) => {
+    if (event.status === 'error') {
+      return nuxtApp.callHook('nuxt-dx:issue', {
+        kind: 'error',
+        message: `Query failed: ${event.request}`,
+      })
+    }
+  })
+})
+```
+
 ## Hydration mismatches
 
 Hydration mismatches get their own count on the badge and their own section in the report. Vue hands them to `warnHandler` with the DOM nodes already flattened into the message, so the overlay parses that string back apart and pairs it with the component that was hydrating and its source file.
