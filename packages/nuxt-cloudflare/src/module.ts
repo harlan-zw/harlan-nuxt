@@ -207,7 +207,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   let bindingTypeSignature: string | undefined
 
   if (options.bindingTypes !== false) {
-    addTypeTemplate({
+    const bindingTypesTemplate = addTypeTemplate({
       filename: 'types/cloudflare-bindings.d.ts',
       getContents: async () => {
         const { prepareCloudflareBindingTypes } = await import('./binding-types')
@@ -224,7 +224,10 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
         bindingTypeSignature = artifact.signature
         return artifact.content
       },
-    }, { nitro: true, nuxt: true })
+    }, { nitro: true })
+    nuxt.hook('prepare:types', ({ references }) => {
+      references.push({ path: bindingTypesTemplate.dst })
+    })
   }
 
   configure()
