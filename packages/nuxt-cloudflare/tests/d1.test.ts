@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   assertD1BoundParameters,
   chunkD1Items,
+  classifyD1RetryError,
   D1_MAX_BOUND_PARAMETERS,
   defineD1ParameterPlan,
+  getRecoveringRequestD1Session,
   getRequestD1Session,
+  isReplayableD1Sql,
   isTransientD1Error,
   retryIdempotentD1Write,
+  withD1ResetRecovery,
 } from '../src/d1'
 
 describe('d1 parameter budget', () => {
@@ -80,6 +84,221 @@ describe('getRequestD1Session', () => {
     expect(getRequestD1Session(context, 'DB', database)).toBe(session)
     expect(database.withSession).toHaveBeenCalledOnce()
     expect(database.withSession).toHaveBeenCalledWith('first-primary')
+  })
+})
+
+describe('d1 retry classification', () => {
+  it('separates session resets from retryable transport failures', () => {
+    expect(classifyD1RetryError(new Error('D1_ERROR: {"D1_RESET_DO":true}')))
+      .toEqual({ _tag: 'session-reset' })
+    expect(classifyD1RetryError(new Error('query failed', {
+      cause: new Error('D1_ERROR: Replica disconnected from primary.'),
+    }))).toEqual({ _tag: 'transient' })
+  })
+})
+
+describe('isReplayableD1Sql', () => {
+  it.each([
+    'select "id" from "teams"',
+    '/* drizzle */ select 1',
+    'WITH recent AS (SELECT 1) SELECT * FROM recent',
+    'EXPLAIN QUERY PLAN SELECT * FROM teams',
+  ])('accepts a read: %s', (sql) => {
+    expect(isReplayableD1Sql(sql)).toBe(true)
+  })
+
+  it.each([
+    'insert into "events" ("id") values (?)',
+    'update "events" set "id" = ?',
+    'delete from "events" where "id" = ?',
+    'WITH recent AS (SELECT 1) INSERT INTO events SELECT * FROM recent',
+    'PRAGMA journal_mode = WAL',
+  ])('rejects a statement that may write: %s', (sql) => {
+    expect(isReplayableD1Sql(sql)).toBe(false)
+  })
+})
+
+interface FakeD1Call {
+  method: string
+  parameters: unknown[]
+  session: number
+  sql: string
+}
+
+function createFakeD1(failures: unknown[]) {
+  const calls: FakeD1Call[] = []
+  const constraints: string[] = []
+  let sessionCount = 0
+
+  function withSession(constraint: string) {
+    const session = ++sessionCount
+
+    function execute(sql: string, parameters: unknown[], method: string) {
+      calls.push({ method, parameters, session, sql })
+      const error = failures.shift()
+      if (error)
+        return Promise.reject(error)
+      return Promise.resolve({ parameters, session, sql })
+    }
+
+    function prepare(sql: string, parameters: unknown[] = []) {
+      return {
+        bind: (...values: unknown[]) => prepare(sql, values),
+        first: () => execute(sql, parameters, 'first'),
+        run: () => execute(sql, parameters, 'run'),
+        all: () => execute(sql, parameters, 'all'),
+        raw: () => execute(sql, parameters, 'raw'),
+      }
+    }
+
+    constraints.push(constraint)
+    return {
+      prepare,
+      batch: (statements: Array<{ all: () => unknown }>) => Promise.all(statements.map(statement => statement.all())),
+      getBookmark: () => `bookmark-${session}`,
+    }
+  }
+
+  return {
+    calls,
+    constraints,
+    database: { withSession },
+    sessionCount: () => sessionCount,
+  }
+}
+
+describe('withD1ResetRecovery', () => {
+  it('caches one recovering session per request and binding', () => {
+    const d1 = createFakeD1([])
+    const context = {}
+
+    const first = getRecoveringRequestD1Session(context, 'DB', d1.database)
+    const second = getRecoveringRequestD1Session(context, 'DB', d1.database)
+
+    expect(second).toBe(first)
+  })
+
+  it('replays a bound read on a fresh session carrying the bookmark', async () => {
+    const d1 = createFakeD1([new Error('D1_ERROR: {"D1_RESET_DO":true}')])
+    const session = withD1ResetRecovery(d1.database, { sleep: async () => {} })
+
+    await expect(session.prepare('select * from teams where id = ?').bind('t1').all())
+      .resolves
+      .toEqual({ parameters: ['t1'], session: 2, sql: 'select * from teams where id = ?' })
+    expect(d1.constraints).toEqual(['first-primary', 'bookmark-1'])
+    expect(d1.calls.map(call => call.session)).toEqual([1, 2])
+  })
+
+  it('does not replay a write but renews the session for the next statement', async () => {
+    const reset = new Error('D1_ERROR: {"D1_RESET_DO":true}')
+    const d1 = createFakeD1([reset])
+    const session = withD1ResetRecovery(d1.database, { sleep: async () => {} })
+
+    await expect(session.prepare('insert into teams (id) values (?)').bind('t1').run())
+      .rejects
+      .toBe(reset)
+    await expect(session.prepare('select 1').all()).resolves.toMatchObject({ session: 2 })
+    expect(d1.calls.map(call => call.session)).toEqual([1, 2])
+  })
+
+  it('retries a replica disconnect on the same session', async () => {
+    const d1 = createFakeD1([new Error('Replica disconnected from primary.')])
+    const session = withD1ResetRecovery(d1.database, { sleep: async () => {} })
+
+    await expect(session.prepare('select 1').all()).resolves.toMatchObject({ session: 1 })
+    expect(d1.sessionCount()).toBe(1)
+    expect(d1.calls).toHaveLength(2)
+  })
+
+  it('rebuilds an all-read batch on the replacement session', async () => {
+    const d1 = createFakeD1([new Error('D1_ERROR: {"D1_RESET_DO":true}')])
+    const session = withD1ResetRecovery(d1.database, { sleep: async () => {} })
+
+    await expect(session.batch([
+      session.prepare('select 1'),
+      session.prepare('select 2'),
+    ])).resolves.toEqual([
+      { parameters: [], session: 2, sql: 'select 1' },
+      { parameters: [], session: 2, sql: 'select 2' },
+    ])
+    expect(d1.constraints).toEqual(['first-primary', 'bookmark-1'])
+  })
+
+  it('does not replay a batch containing a write', async () => {
+    const reset = new Error('D1_ERROR: {"D1_RESET_DO":true}')
+    const d1 = createFakeD1([reset])
+    const session = withD1ResetRecovery(d1.database, { sleep: async () => {} })
+
+    await expect(session.batch([
+      session.prepare('select 1'),
+      session.prepare('insert into events (id) values (1)'),
+    ])).rejects.toBe(reset)
+    expect(d1.calls.every(call => call.session === 1)).toBe(true)
+  })
+
+  it('reports whether recovery replays or stops', async () => {
+    const reset = new Error('D1_ERROR: {"D1_RESET_DO":true}')
+    const d1 = createFakeD1([reset])
+    const events: unknown[] = []
+    const session = withD1ResetRecovery(d1.database, {
+      onRecovery: event => events.push(event),
+      sleep: async () => {},
+    })
+
+    await expect(session.prepare('delete from teams').run()).rejects.toBe(reset)
+    expect(events).toEqual([{
+      _tag: 'stopped',
+      attempt: 0,
+      failure: { _tag: 'session-reset' },
+      reason: 'unsafe-statement',
+      sql: 'delete from teams',
+    }])
+  })
+
+  it('stops at the attempt budget and keeps the next session healthy', async () => {
+    const resets = Array.from(
+      { length: 2 },
+      () => new Error('D1_ERROR: {"D1_RESET_DO":true}'),
+    )
+    const d1 = createFakeD1(resets)
+    const events: unknown[] = []
+    const session = withD1ResetRecovery(d1.database, {
+      maxAttempts: 2,
+      onRecovery: event => events.push(event),
+      sleep: async () => {},
+    })
+
+    await expect(session.prepare('select 1').all()).rejects.toThrow('D1_RESET_DO')
+    await expect(session.prepare('select 2').all()).resolves.toMatchObject({ session: 3 })
+    expect(events).toEqual([
+      {
+        _tag: 'retrying',
+        attempt: 0,
+        failure: { _tag: 'session-reset' },
+        sql: 'select 1',
+      },
+      {
+        _tag: 'stopped',
+        attempt: 1,
+        failure: { _tag: 'session-reset' },
+        reason: 'attempts-exhausted',
+        sql: 'select 1',
+      },
+    ])
+  })
+
+  it('surfaces permanent failures without retrying or reporting recovery', async () => {
+    const failure = new Error('D1_ERROR: UNIQUE constraint failed: teams.id')
+    const d1 = createFakeD1([failure])
+    const events: unknown[] = []
+    const session = withD1ResetRecovery(d1.database, {
+      onRecovery: event => events.push(event),
+      sleep: async () => {},
+    })
+
+    await expect(session.prepare('select 1').all()).rejects.toBe(failure)
+    expect(d1.calls).toHaveLength(1)
+    expect(events).toEqual([])
   })
 })
 
