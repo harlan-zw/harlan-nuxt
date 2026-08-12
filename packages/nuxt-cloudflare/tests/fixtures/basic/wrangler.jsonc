@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "kv_namespaces": [
+    { "binding": "CACHE", "id": "fixture-cache" }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "fixture-files" }
+  ]
+}

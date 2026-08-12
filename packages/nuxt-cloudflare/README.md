@@ -8,7 +8,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
 - Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
-- Workers Logs sampled at 10%, traces at 1%, both overridable
+- Workers Logs sampled at 1%, traces at 1%, both overridable
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
@@ -22,6 +22,7 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Final generated Wrangler config validated through Wrangler, then audited after production Nitro compiles
 - Production builds fail when server runtime config contains a value copied from a secret build environment variable. The error lists config paths only
 - Complete defaults and diagnostics applied to every named Wrangler environment
+- Exact Cloudflare binding and runtime types generated during `nuxt prepare`
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
 
@@ -62,6 +63,23 @@ Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises sho
 Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
 
 Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Rendered HTML always stays private. API and asset responses keep explicit cache policies. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+
+## Cost controls
+
+Cloudflare pricing changes. Check the linked pricing pages before making a budget.
+
+- Workers Logs use a 1% routine sample. Paid plans include 20 million monthly events. Extra events cost $0.60 per million. See [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing).
+- Invocation logs remain enabled. High-volume Workers with complete error telemetry can set `observability.logs.invocation_logs: false`. This removes one event per sampled invocation.
+- Traces use a separate 1% sample. Each span is metered. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) lists 10 million included monthly events. It also says the quota is shared with logs. The Workers Logs page lists 20 million. Budget against 10 million until the pages agree.
+- Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests. This includes static assets and Worker-to-Worker requests. Disable caching when CPU savings do not exceed the added request cost.
+- Static assets stay asset first. Their requests are free and unlimited. The module warns when blanket Worker-first routing makes assets billable.
+- Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000. A higher ceiling increases runaway-cost exposure.
+- Queue retries add billed read operations. Each 64 KB message chunk incurs write, read, and delete operations. Keep payloads small and retries deliberate.
+- The KV-backed Nitro cache expires entries after 30 days. This bounds stored cache data. It does not reduce billed operations.
+
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas add no separate charge. The module preserves D1 routing and session behavior.
+
+Doctor warnings surface log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
 
 ## Doctor
 
@@ -166,15 +184,19 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 ### Bindings
 
 ```ts
-import type { CloudflareEventLike } from '@harlan-zw/nuxt-cloudflare/bindings'
-import { requireCloudflareBinding } from '@harlan-zw/nuxt-cloudflare/bindings'
+import type { CloudflareBindingSource } from '@harlan-zw/nuxt-cloudflare/bindings'
+import { createCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
 
-function requireDatabase(event: CloudflareEventLike<Env>) {
-  return requireCloudflareBinding(event, 'DB')
+const cloudflare = createCloudflareBindings()
+
+function requireDatabase(source?: CloudflareBindingSource) {
+  return cloudflare.require('DB', source)
 }
 ```
 
-`Env` comes from `wrangler types`. Binding access is request-bound and binding names are constrained to `keyof Env`. Missing required bindings throw; there is no global or empty-object fallback.
+`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
+
+The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
 
 ### Scoped secrets file
 
