@@ -135,9 +135,16 @@ Pass the final generated config explicitly to `types` and `check startup`; Nitro
 ### D1 sessions and safe retries
 
 ```ts
-import { getRequestD1Session, retryIdempotentD1Write } from '@harlan-zw/nuxt-cloudflare/d1'
+import {
+  getRecoveringRequestD1Session,
+  retryIdempotentD1Write,
+} from '@harlan-zw/nuxt-cloudflare/d1'
 
-const session = getRequestD1Session(event.context, 'DB', event.context.cloudflare.env.DB)
+const session = getRecoveringRequestD1Session(
+  event.context,
+  'DB',
+  event.context.cloudflare.env.DB,
+)
 
 await retryIdempotentD1Write({
   safety: { _tag: 'replay-safe' },
@@ -145,7 +152,11 @@ await retryIdempotentD1Write({
 })
 ```
 
-One `first-primary` session is cached per request and binding. D1 already retries read-only queries. Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
+`getRecoveringRequestD1Session` caches one `first-primary` session per request and binding. Use `withD1ResetRecovery` when no request context exists. D1 already retries read-only queries. Recovery handles failures that outlive those retries. It opens a replacement session after `D1_RESET_DO`, carries the last bookmark, and rebuilds the prepared statement with its bound values. Replica disconnects and connection loss retry on the current session.
+
+Recovery replays only `SELECT`, read-only CTE, and `EXPLAIN` statements. It never replays writes, PRAGMA statements, mixed batches, or unknown statements. A session reset still opens a healthy session for the next statement. `onRecovery` receives tagged `retrying` or `stopped` events for request telemetry.
+
+Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
 
 ### D1 parameter plans
 
