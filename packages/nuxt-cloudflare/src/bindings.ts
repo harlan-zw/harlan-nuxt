@@ -6,20 +6,24 @@ declare global {
   interface CloudflareBindings {}
 }
 
-export interface CloudflareBindingSource {
-  cloudflare?: unknown
-  context?: unknown
+export interface CloudflareRuntimeConfigSource<Environment extends object> {
+  context: {
+    nitro: Record<string, never>
+    cloudflare: {
+      env: Environment
+    }
+  }
 }
 
 export interface CloudflareBindingAccessor<Environment extends object> {
-  resolve: (source?: CloudflareBindingSource) => Environment | undefined
+  resolve: (source?: unknown) => Environment | undefined
   get: <Name extends BindingName<Environment>>(
     name: Name,
-    source?: CloudflareBindingSource,
+    source?: unknown,
   ) => Environment[Name] | undefined
   require: <Name extends BindingName<Environment>>(
     name: Name,
-    source?: CloudflareBindingSource,
+    source?: unknown,
   ) => Exclude<Environment[Name], undefined>
 }
 
@@ -34,11 +38,21 @@ function envFromContext(value: unknown): Record<string, unknown> | undefined {
   return asRecord(asRecord(cloudflare)?.env)
 }
 
-function resolveEnvironment<Environment extends object>(source?: CloudflareBindingSource): Environment | undefined {
+export function resolveCloudflareBindings<Environment extends object = CloudflareBindings>(source?: unknown): Environment | undefined {
   const sourceRecord = asRecord(source)
   const sourceEnv = envFromContext(sourceRecord?.context) ?? envFromContext(sourceRecord)
   const globalEnv = asRecord((globalThis as CloudflareEntryHost).__env__)
   return (sourceEnv ?? globalEnv) as Environment | undefined
+}
+
+/** Creates the event-shaped source required by Nitro runtime config resolution. */
+export function runtimeConfigSource<Environment extends object>(env: Environment): CloudflareRuntimeConfigSource<Environment> {
+  return {
+    context: {
+      nitro: {},
+      cloudflare: { env },
+    },
+  }
 }
 
 /**
@@ -50,15 +64,15 @@ function resolveEnvironment<Environment extends object>(source?: CloudflareBindi
 export function createCloudflareBindings<Environment extends object = CloudflareBindings>(): CloudflareBindingAccessor<Environment> {
   function get<Name extends BindingName<Environment>>(
     name: Name,
-    source?: CloudflareBindingSource,
+    source?: unknown,
   ): Environment[Name] | undefined {
-    const env = resolveEnvironment<Environment>(source)
+    const env = resolveCloudflareBindings<Environment>(source)
     return env && Object.hasOwn(env, name) ? env[name] : undefined
   }
 
   function requireBinding<Name extends BindingName<Environment>>(
     name: Name,
-    source?: CloudflareBindingSource,
+    source?: unknown,
   ): Exclude<Environment[Name], undefined> {
     const binding = get(name, source)
     if (binding === undefined)
@@ -67,7 +81,7 @@ export function createCloudflareBindings<Environment extends object = Cloudflare
   }
 
   return {
-    resolve: resolveEnvironment,
+    resolve: resolveCloudflareBindings,
     get,
     require: requireBinding,
   }

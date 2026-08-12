@@ -1,3 +1,7 @@
+import { resolveCloudflareBindings as resolveBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
+
+export { runtimeConfigSource }
+
 export type QueueSource
   = | Record<string, unknown>
     | {
@@ -14,17 +18,8 @@ function nitroTaskEnvHost(): NitroTaskEnvHost {
   return globalThis as NitroTaskEnvHost
 }
 
-/**
- * Resolves the Cloudflare runtime env from a Nitro task context where no `H3Event` is available.
- *
- * Nitro tasks (`defineTask`) run without an event, so Cloudflare bindings must be threaded through
- * `globalThis.__env__`. This helper reads that shim and returns the env (or `undefined`).
- */
-export function resolveNitroTaskEnv(): Record<string, unknown> | undefined {
-  const globalEnv = nitroTaskEnvHost().__env__
-  if (globalEnv && typeof globalEnv === 'object')
-    return globalEnv as Record<string, unknown>
-  return undefined
+export function resolveCloudflareBindings(): Record<string, unknown> | undefined {
+  return resolveBindings<Record<string, unknown>>()
 }
 
 export function writeNitroTaskEnv(env: Record<string, unknown> | undefined): void {
@@ -51,13 +46,4 @@ export function resolveQueueSourceEnv(source: QueueSource | undefined): Record<s
 
   const maybeEvent = source as { context?: { cloudflare?: { env?: Record<string, unknown> } } }
   return maybeEvent.context?.cloudflare?.env ?? source as Record<string, unknown>
-}
-
-/**
- * Wraps a Cloudflare env as the event-shaped source `useRuntimeConfig` expects.
- * Queue consumers run without an `H3Event`, so without this the `queues` resolver
- * would call `useRuntimeConfig()` bare and miss per-deployment `NUXT_*` env overrides.
- */
-export function runtimeConfigSource(env: Record<string, unknown>): QueueSource {
-  return { context: { cloudflare: { env } } }
 }

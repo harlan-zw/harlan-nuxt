@@ -57,7 +57,7 @@ async function loadPlugin() {
 describe('dev-queues nitro plugin', () => {
   it('mirrors the queue runtime onto globalThis.__env__ so getQueue(job) resolves in task/cron contexts', async () => {
     // (a) The task-env shim must carry the in-process queue bindings after the
-    // plugin runs — `resolveNitroTaskEnv()` reads `globalThis.__env__`, so
+    // plugin runs because `resolveCloudflareBindings()` reads `globalThis.__env__`, so
     // without this task/cron/listener-triggered jobs enqueue to nothing.
     runtimeConfig.cfJobs = { queues: { default: 'JOBS', billing: { binding: 'BILLING_QUEUE' } } }
     const nitroApp = createNitroAppStub()

@@ -1,12 +1,13 @@
-import { open, unlink } from 'node:fs/promises'
+import { mkdtemp, open, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 export type WorkerSecretsResolution
   = | { _tag: 'missing', names: string[] }
     | { _tag: 'resolved', secrets: Record<string, string> }
 
 export interface WorkerSecretsFileOptions<T> {
-  path: string
-  secrets: Readonly<Record<string, string>>
+  secrets: Readonly<Record<string, string | null>>
   use: (path: string) => Promise<T> | T
 }
 
@@ -36,27 +37,16 @@ function settle<T>(promise: Promise<T>): Promise<AsyncOutcome<T>> {
   )
 }
 
-function isMissingFileError(error: unknown): boolean {
-  return error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT'
-}
-
 function throwFailures(errors: unknown[], message: string): never {
   if (errors.length === 1)
     throw errors[0]
   throw new AggregateError(errors, message)
 }
 
-async function removeWorkerSecretsFile(path: string): Promise<void> {
-  const outcome = await settle(unlink(path))
-  if (outcome._tag === 'error' && !isMissingFileError(outcome.error))
-    throw outcome.error
-}
-
 async function writeWorkerSecretsFile(
   path: string,
-  secrets: Readonly<Record<string, string>>,
+  payload: string,
 ): Promise<void> {
-  const payload = `${JSON.stringify(secrets)}\n`
   const handle = await open(path, 'wx', 0o600)
   const writeOutcome = await settle(handle.writeFile(payload, 'utf8'))
   const closeOutcome = await settle(handle.close())
@@ -66,16 +56,24 @@ async function writeWorkerSecretsFile(
   if (failures.length === 0)
     return
 
-  const cleanupOutcome = await settle(removeWorkerSecretsFile(path))
-  if (cleanupOutcome._tag === 'error')
-    failures.push(cleanupOutcome.error)
   throwFailures(failures, 'Failed to write and clean up the Worker secrets file')
 }
 
 export async function withWorkerSecretsFile<T>(options: WorkerSecretsFileOptions<T>): Promise<T> {
-  await writeWorkerSecretsFile(options.path, options.secrets)
-  const useOutcome = await settle(Promise.resolve().then(() => options.use(options.path)))
-  const cleanupOutcome = await settle(removeWorkerSecretsFile(options.path))
+  const payload = `${JSON.stringify(options.secrets)}\n`
+  const directory = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-secrets-'))
+  const path = join(directory, 'secrets.json')
+  const writeOutcome = await settle(writeWorkerSecretsFile(path, payload))
+  if (writeOutcome._tag === 'error') {
+    const cleanupOutcome = await settle(rm(directory, { force: true, recursive: true }))
+    const failures = cleanupOutcome._tag === 'error'
+      ? [writeOutcome.error, cleanupOutcome.error]
+      : [writeOutcome.error]
+    throwFailures(failures, 'Failed to write and clean up the Worker secrets file')
+  }
+
+  const useOutcome = await settle(Promise.resolve().then(() => options.use(path)))
+  const cleanupOutcome = await settle(rm(directory, { force: true, recursive: true }))
   const failures = [useOutcome, cleanupOutcome]
     .filter((outcome): outcome is Extract<AsyncOutcome<unknown>, { _tag: 'error' }> => outcome._tag === 'error')
     .map(outcome => outcome.error)

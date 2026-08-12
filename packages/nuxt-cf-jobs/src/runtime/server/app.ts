@@ -35,7 +35,7 @@ import {
 import { defineJobRegistry, validateJobDefinitions } from './registry'
 import { createDurableJobsRuntime } from './runtime'
 import { useJobRuntimeConfig } from './runtime-config'
-import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
+import { resolveCloudflareBindings, runtimeConfigSource } from './runtime-env'
 
 export interface CfJobsRuntimeConfig {
   cfJobs: { queues: QueueBindingsConfig }
@@ -119,7 +119,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     const source = (isJobOnly ? undefined : sourceOrJob) as QueueSource | undefined
     const resolvedSource: QueueSource | undefined = source
       ?? (() => {
-        const env = resolveNitroTaskEnv()
+        const env = resolveCloudflareBindings()
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
     const runtimeConfig = readRuntimeConfig(resolvedSource)
