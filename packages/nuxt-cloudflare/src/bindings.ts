@@ -45,6 +45,24 @@ export function resolveCloudflareBindings<Environment extends object = Cloudflar
   return (sourceEnv ?? globalEnv) as Environment | undefined
 }
 
+/** Sets the environment used by eventless Cloudflare binding resolution. */
+export function setCloudflareBindings<Environment extends object>(env: Environment | undefined): void {
+  const host = globalThis as CloudflareEntryHost
+  if (env === undefined)
+    delete host.__env__
+  else
+    host.__env__ = env
+}
+
+/** Merges binding sources into the eventless environment. Later sources win. */
+export function mergeCloudflareBindings<Environment extends object = CloudflareBindings>(
+  ...sources: Array<Partial<Environment> | undefined>
+): Environment {
+  const merged = Object.assign({}, ...sources.filter(source => source !== undefined)) as Environment
+  setCloudflareBindings(merged)
+  return merged
+}
+
 /** Creates the event-shaped source required by Nitro runtime config resolution. */
 export function runtimeConfigSource<Environment extends object>(env: Environment): CloudflareRuntimeConfigSource<Environment> {
   return {

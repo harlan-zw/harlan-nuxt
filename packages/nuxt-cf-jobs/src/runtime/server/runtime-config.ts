@@ -1,5 +1,5 @@
 import type { useRuntimeConfig } from 'nitropack/runtime'
-import { resolveCloudflareBindings, runtimeConfigSource } from './runtime-env'
+import { resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 
 type UseRuntimeConfig = typeof useRuntimeConfig
 
@@ -47,6 +47,6 @@ export function useJobRuntimeConfig(event?: unknown): ReturnType<typeof useRunti
   }
   if (event)
     return injectedUseRuntimeConfig(event as never)
-  const env = resolveCloudflareBindings()
+  const env = resolveCloudflareBindings<Record<string, unknown>>()
   return injectedUseRuntimeConfig(env ? runtimeConfigSource(env) as never : undefined)
 }

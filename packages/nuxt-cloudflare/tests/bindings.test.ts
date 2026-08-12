@@ -1,7 +1,13 @@
 import type { H3Event } from 'h3'
 import type { TaskContext, TaskEvent } from 'nitropack/types'
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
-import { createCloudflareBindings, resolveCloudflareBindings, runtimeConfigSource } from '../src/bindings'
+import {
+  createCloudflareBindings,
+  mergeCloudflareBindings,
+  resolveCloudflareBindings,
+  runtimeConfigSource,
+  setCloudflareBindings,
+} from '../src/bindings'
 
 interface TestEnvironment {
   DB: { marker: 'db' }
@@ -50,6 +56,30 @@ describe('cloudflare bindings', () => {
     taskEnvHost.__env__ = { DB: { marker: 'db' } }
 
     expect(bindings.get('DB')).toEqual({ marker: 'db' })
+  })
+
+  it('sets and clears the Cloudflare entry environment', () => {
+    const env = { DB: { marker: 'db' as const } }
+
+    setCloudflareBindings(env)
+    expect(resolveCloudflareBindings<TestEnvironment>()).toBe(env)
+
+    setCloudflareBindings(undefined)
+    expect(resolveCloudflareBindings<TestEnvironment>()).toBeUndefined()
+  })
+
+  it('merges Cloudflare entry bindings with later sources taking precedence', () => {
+    const merged = mergeCloudflareBindings<Record<string, unknown>>(
+      { DB: { marker: 'base' }, CACHE: { marker: 'cache' } },
+      undefined,
+      { DB: { marker: 'override' } },
+    )
+
+    expect(merged).toEqual({
+      DB: { marker: 'override' },
+      CACHE: { marker: 'cache' },
+    })
+    expect(resolveCloudflareBindings<Record<string, unknown>>()).toBe(merged)
   })
 
   it('returns undefined for an unavailable optional binding', () => {
