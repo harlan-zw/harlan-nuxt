@@ -16,11 +16,12 @@ import process from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
+import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import { defineCommand, runMain } from 'citty'
 import { d1DurableJobMigrationSql } from '../runtime/server/d1'
 import { recentTerminalJobs, snapshotDurableQueues } from '../runtime/server/dev-worker-snapshot'
 import { collectTasks } from '../tasks'
-import { findWranglerConfig, parseWranglerConfig } from '../wrangler'
+import { parseWranglerConfig } from '../wrangler'
 import { D1ResolutionError, execD1, execD1Batch, resolveD1Target } from './d1'
 import {
   activeJobsSql,
@@ -716,7 +717,7 @@ const LEASE_PING_MS = 10_000
  */
 function loadQueueSizing(cwd: string): Map<string, { maxConcurrency?: number, maxBatchSize?: number }> {
   const sizing = new Map<string, { maxConcurrency?: number, maxBatchSize?: number }>()
-  const configPath = findWranglerConfig(cwd)
+  const configPath = findProjectWranglerConfig(cwd)
   if (!configPath)
     return sizing
   try {

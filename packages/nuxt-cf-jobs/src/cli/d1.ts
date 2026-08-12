@@ -12,7 +12,8 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { findWranglerConfig, parseWranglerConfig } from '../wrangler'
+import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
+import { parseWranglerConfig } from '../wrangler'
 
 const execFileAsync = promisify(execFile)
 const JSON_START_RE = /[[{]/
@@ -59,7 +60,7 @@ export function resolveD1Target(opts: ResolveD1Options = {}): D1Target {
   const cwd = opts.cwd ?? process.cwd()
   const configPath = opts.configPath
     ? resolve(cwd, opts.configPath)
-    : findWranglerConfig(cwd)
+    : findProjectWranglerConfig(cwd)
   if (!configPath)
     throw new D1ResolutionError(`No wrangler.{toml,jsonc,json} found in ${cwd}. Pass --config <path>.`)
   const config: WranglerConfig = parseWranglerConfig(configPath)

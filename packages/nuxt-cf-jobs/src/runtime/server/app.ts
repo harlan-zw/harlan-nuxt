@@ -21,6 +21,7 @@ import type {
 } from './runtime'
 import type { QueueSource } from './runtime-env'
 import type { QueueBindingsConfig } from './types'
+import { resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 import { cfJobsAppExportNames } from '../shared/app-exports'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
@@ -35,7 +36,6 @@ import {
 import { defineJobRegistry, validateJobDefinitions } from './registry'
 import { createDurableJobsRuntime } from './runtime'
 import { useJobRuntimeConfig } from './runtime-config'
-import { resolveCloudflareBindings, runtimeConfigSource } from './runtime-env'
 
 export interface CfJobsRuntimeConfig {
   cfJobs: { queues: QueueBindingsConfig }
@@ -119,7 +119,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     const source = (isJobOnly ? undefined : sourceOrJob) as QueueSource | undefined
     const resolvedSource: QueueSource | undefined = source
       ?? (() => {
-        const env = resolveCloudflareBindings()
+        const env = resolveCloudflareBindings<Record<string, unknown>>()
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
     const runtimeConfig = readRuntimeConfig(resolvedSource)

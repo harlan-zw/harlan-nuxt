@@ -1,9 +1,9 @@
 import type { WranglerConfigInput } from './wrangler'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { parseJSON, parseJSONC, parseTOML } from 'confbox'
-import { extname, resolve } from 'pathe'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { resolve } from 'pathe'
 import { experimental_generateTypes } from 'wrangler'
 import { discoverWranglerSourceConfigs } from './diagnostics'
+import { readWranglerConfigFile } from './wrangler-file'
 
 interface BindingTypeGenerationOptions {
   buildDir: string
@@ -104,13 +104,12 @@ async function readAuthoredConfig(rootDir: string): Promise<WranglerConfigInput>
   const [path] = discoverWranglerSourceConfigs(rootDir)
   if (!path)
     return {}
-  const source = await readFile(path, 'utf8')
-  const extension = extname(path)
-  if (extension === '.toml')
-    return parseTOML(source) as WranglerConfigInput
-  if (extension === '.jsonc')
-    return parseJSONC(source) as WranglerConfigInput
-  return parseJSON(source) as WranglerConfigInput
+  const loaded = readWranglerConfigFile(path)
+  if (loaded._tag === 'loaded')
+    return loaded.config
+  if (loaded._tag === 'missing')
+    return {}
+  throw new SyntaxError(`Invalid Wrangler config "${path}": ${loaded.reason}`)
 }
 
 async function generateCloudflareBindingTypes(

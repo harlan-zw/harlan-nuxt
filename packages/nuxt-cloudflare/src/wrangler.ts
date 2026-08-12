@@ -1,5 +1,8 @@
 import { readFile } from 'node:fs/promises'
 
+export type { WranglerConfigFileResult } from './wrangler-file'
+export { findProjectWranglerConfig, readWranglerConfigFile } from './wrangler-file'
+
 export interface WranglerAssetsInput {
   directory?: string
   binding?: string
