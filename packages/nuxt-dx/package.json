@@ -56,6 +56,7 @@
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
+    "@vueuse/core": "catalog:",
     "citty": "catalog:",
     "consola": "catalog:",
     "oxc-parser": "catalog:",
