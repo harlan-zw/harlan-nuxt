@@ -9,6 +9,7 @@ catalog:
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
   '@cloudflare/workers-types': ^5.20260811.1
+  '@sentry/cloudflare': ^10.70.0
   '@nuxt/kit': ^4.5.2
   '@nuxt/module-builder': ^1.0.2
   '@nuxt/schema': ^4.5.2

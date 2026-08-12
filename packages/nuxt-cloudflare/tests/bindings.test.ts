@@ -1,7 +1,7 @@
 import type { H3Event } from 'h3'
 import type { TaskContext, TaskEvent } from 'nitropack/types'
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
-import { createCloudflareBindings } from '../src/bindings'
+import { createCloudflareBindings, resolveCloudflareBindings, runtimeConfigSource } from '../src/bindings'
 
 interface TestEnvironment {
   DB: { marker: 'db' }
@@ -16,6 +16,23 @@ afterEach(() => {
 })
 
 describe('cloudflare bindings', () => {
+  it('resolves an environment without creating an accessor', () => {
+    const event = { context: { cloudflare: { env: { DB: { marker: 'db' } } } } }
+
+    expect(resolveCloudflareBindings<TestEnvironment>(event)).toEqual({ DB: { marker: 'db' } })
+  })
+
+  it('creates a Nitro runtime config source with initialized Nitro context', () => {
+    const env = { NUXT_API_TOKEN: 'secret' }
+
+    expect(runtimeConfigSource(env)).toEqual({
+      context: {
+        nitro: {},
+        cloudflare: { env },
+      },
+    })
+  })
+
   it('reads a binding from a request event', () => {
     const event = { context: { cloudflare: { env: { DB: { marker: 'db' } } } } }
 

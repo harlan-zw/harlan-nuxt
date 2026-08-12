@@ -184,14 +184,16 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 ### Bindings
 
 ```ts
-import type { CloudflareBindingSource } from '@harlan-zw/nuxt-cloudflare/bindings'
-import { createCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
+import { createCloudflareBindings, resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 
 const cloudflare = createCloudflareBindings()
 
-function requireDatabase(source?: CloudflareBindingSource) {
+function requireDatabase(source?: unknown) {
   return cloudflare.require('DB', source)
 }
+
+const env = resolveCloudflareBindings(event)
+const config = useRuntimeConfig(runtimeConfigSource(env ?? {}))
 ```
 
 `nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
@@ -212,13 +214,12 @@ if (resolved._tag === 'missing')
   throw new Error(`Missing Worker secrets: ${resolved.names.join(', ')}`)
 
 await withWorkerSecretsFile({
-  path: '/secure/temp/secrets.json',
   secrets: resolved.secrets,
   use: path => exec('pnpm', ['wrangler', 'deploy', '--secrets-file', path]),
 })
 ```
 
-The writer uses exclusive creation and mode 0600. It removes partial files after write failures and removes the completed file after deployment succeeds or fails.
+The helper owns a private temporary directory and creates the JSON file with mode 0600. It removes the directory after deployment succeeds or fails. Secret values may be strings or `null`; Wrangler treats `null` as a deletion marker.
 
 ## Deliberate boundaries
 
