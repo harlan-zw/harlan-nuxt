@@ -15,10 +15,12 @@ import {
   createResolver,
   defineNuxtModule,
   importModule,
+  updateTemplates,
   useLogger,
 } from '@nuxt/kit'
 import { assertSupportedOptions } from './config'
 import { contentComponentDirectories } from './components'
+import { runContentBuild } from './build'
 import { ingestCollections } from './core/ingest'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 import { excludeNuxtContentSitemapSource } from './sitemap'
@@ -176,12 +178,15 @@ export default defineNuxtModule<ModuleOptions>({
       logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
     }
 
-    nuxt.hook('modules:done', buildCollections)
+    const rebuildCollections = () => runContentBuild(buildCollections, () => updateTemplates({
+      filter: template => template.dst === componentsTemplate.dst,
+    }))
+    nuxt.hook('modules:done', rebuildCollections)
     let rebuild = Promise.resolve()
     nuxt.hook('builder:watch', (event, path) => {
       if (event !== 'change' || !path.endsWith('.md'))
         return
-      rebuild = rebuild.then(buildCollections)
+      rebuild = rebuild.then(rebuildCollections)
       return rebuild
     })
   },
