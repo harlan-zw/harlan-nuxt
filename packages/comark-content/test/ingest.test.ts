@@ -45,6 +45,29 @@ describe('Markdown ingestion', () => {
     ])
   })
 
+  it('loads a site-defined Shiki language and transformer', async () => {
+    const parse = await createContentParser({
+      highlight: {
+        langs: [{ name: 'fixture', scopeName: 'source.fixture', patterns: [{ match: 'ready', name: 'keyword.fixture' }] }],
+        transformers: [{
+          name: 'fixture-transformer',
+          tokens(lines: Array<Array<{ content: string }>>) {
+            if (lines[0]?.[0])
+              lines[0][0].content = 'transformed'
+            return lines
+          },
+        }],
+      },
+    })
+    const document = await parse('```fixture\nready\n```')
+
+    expect(document.nodes[0]).toMatchObject([
+      'pre',
+      { class: expect.stringContaining('shiki') },
+      ['code', {}, expect.arrayContaining([expect.arrayContaining(['span', expect.any(Object), 'transformed'])])],
+    ])
+  })
+
   it('returns an empty collection when no Markdown matches', async () => {
     const root = await temporaryRoot()
     const result = await ingestCollections([

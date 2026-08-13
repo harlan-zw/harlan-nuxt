@@ -1,10 +1,11 @@
 export interface ContentHighlightOptions {
-  langs?: string[]
+  langs?: Array<string | object>
   theme?: {
     default?: string
     light?: string
     dark?: string
   }
+  transformers?: object[]
 }
 
 export type ContentHighlight = boolean | ContentHighlightOptions
@@ -13,6 +14,7 @@ type BundledLoader = () => Promise<{ default: unknown }>
 type ResolvedShikiOptions = {
   languages?: unknown[]
   themes?: { light?: unknown, dark?: unknown }
+  transformers?: object[]
 }
 
 const plainLanguages = new Set(['text', 'txt', 'plaintext'])
@@ -33,8 +35,8 @@ export const resolveShikiOptions = async (highlight: Exclude<ContentHighlight, f
     const { bundledLanguages, bundledLanguagesAlias } = await import('shiki/langs')
     const loaders = { ...bundledLanguages, ...bundledLanguagesAlias } as Record<string, BundledLoader>
     options.languages = await Promise.all(highlight.langs
-      .filter(name => !plainLanguages.has(name))
-      .map(name => loadRegistration(name, loaders, 'language')))
+      .filter(language => typeof language !== 'string' || !plainLanguages.has(language))
+      .map(language => typeof language === 'string' ? loadRegistration(language, loaders, 'language') : language))
   }
 
   if (highlight.theme) {
@@ -47,6 +49,8 @@ export const resolveShikiOptions = async (highlight: Exclude<ContentHighlight, f
       ...(dark ? { dark: await loadRegistration(dark, loaders, 'theme') } : {}),
     }
   }
+
+  options.transformers = highlight.transformers
 
   return options
 }

@@ -88,6 +88,7 @@ export const createSearchSections = (pages: PageCollectionItemBase[]): ContentSe
   const sections: ContentSearchSection[] = []
   const titles: string[] = []
   let current: ContentSearchSection | undefined
+  let preface = ''
   for (const node of page.body.nodes) {
     if (typeof node !== 'string' && typeof node[0] === 'string' && /^h[1-6]$/.test(node[0])) {
       const level = Number(node[0].slice(1))
@@ -101,11 +102,15 @@ export const createSearchSections = (pages: PageCollectionItemBase[]): ContentSe
         level,
       }
       sections.push(current)
+      if (sections.length === 1)
+        appendText(current, preface)
       titles[level - 1] = title
       continue
     }
     if (current)
       appendText(current, text(node))
+    else
+      preface = `${preface} ${text(node)}`.trim()
   }
   return sections
 })

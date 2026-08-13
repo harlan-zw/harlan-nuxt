@@ -10,6 +10,7 @@ import {
   addComponent,
   addImports,
   addServerHandler,
+  addServerPlugin,
   addTemplate,
   createResolver,
   defineNuxtModule,
@@ -116,6 +117,7 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'queryCollectionSearchSections', from: resolver.resolve('./runtime/client') },
     ])
     addServerHandler({ route: '/__comark_content/query', method: 'post', handler: resolver.resolve('./runtime/server/api/query.post') })
+    addServerPlugin(resolver.resolve('./runtime/server/plugins/sitemap'))
 
     nuxt.hook('nitro:config', (config: NitroConfig) => {
       config.serverAssets ||= []
@@ -137,6 +139,7 @@ export default defineNuxtModule<ModuleOptions>({
       await rm(outputDir, { recursive: true, force: true })
       await mkdir(outputDir, { recursive: true })
       await Promise.all(Object.entries(result.value.collections).map(([name, items]) => writeFile(join(outputDir, `${name}.json`), JSON.stringify(items))))
+      await writeFile(join(outputDir, 'collections.json'), JSON.stringify(Object.keys(result.value.collections)))
       const files = Object.values(result.value.collections).reduce((sum, items) => sum + items.length, 0)
       logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
     }

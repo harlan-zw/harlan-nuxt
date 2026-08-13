@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
 import { createNavigation, createSearchSections, createSurroundings } from '../src/runtime/core/navigation'
+import { createSitemapEntries } from '../src/runtime/core/sitemap'
 
 const body: PageCollectionItemBase['body'] = {
   frontmatter: {},
@@ -71,5 +72,25 @@ describe('derived collection data', () => {
       { id: '/guide#guide', title: 'Guide', titles: [], content: 'Opening text.', level: 1 },
       { id: '/guide#install', title: 'Install', titles: ['Guide'], content: 'Run the command.', level: 2 },
     ])
+  })
+
+  it('keeps searchable text before the first heading', () => {
+    const [page] = pages
+    if (!page)
+      throw new Error('Missing page fixture.')
+    const sections = createSearchSections([{
+      ...page,
+      body: { ...page.body, nodes: [['p', {}, 'Preface.'], ...page.body.nodes] },
+    }])
+
+    expect(sections[0]?.content).toBe('Preface. Opening text.')
+  })
+
+  it('projects collection pages into sitemap entries', () => {
+    expect(createSitemapEntries([
+      { ...pages[0]!, updatedAt: '2026-08-14', sitemap: { changefreq: 'weekly' } },
+      { ...pages[1]!, robots: false },
+      { ...pages[2]!, navigation: true, sitemap: false },
+    ])).toEqual([{ loc: '/guide', lastmod: '2026-08-14', changefreq: 'weekly' }])
   })
 })

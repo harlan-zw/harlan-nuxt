@@ -11,3 +11,10 @@ export const loadCollection = async (name: string): Promise<PageCollectionItemBa
     throw new TypeError(`<request>:1:1 Unknown collection "${name}".`)
   return value
 }
+
+export const loadCollectionNames = async (): Promise<string[]> => {
+  const names = await useStorage('assets:comark-content').getItem<string[]>('collections.json')
+  if (!names)
+    throw new TypeError('<request>:1:1 Missing generated collection metadata.')
+  return names
+}
