@@ -30,3 +30,13 @@ npx 0x --tree-debug --output-dir .profiles/raw bench/profile.mjs raw 3000000
 ```
 
 Treat wall time as a local diagnostic. Use the Vitest benchmark and Nitro HTTP matrix for repeated comparisons.
+
+## Field ownership optimization
+
+A paired profile serialized three million fresh 20 Field records with fixed clocks. The optimized build reduced wall time from 6.12 to 2.60 seconds and maximum RSS from 69.3 to 66.1 MB.
+
+Package self samples fell from 1,600 to 440. Garbage collection samples fell from 166 to 51. The build now transfers validated inline Field literals into the Wide Event. Public runtime calls still copy their input.
+
+```sh
+npx 0x --tree-debug --output-dir .profiles/wide-fixed bench/profile.mjs wide-fixed 3000000
+```

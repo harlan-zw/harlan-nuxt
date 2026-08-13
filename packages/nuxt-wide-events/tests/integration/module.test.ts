@@ -44,6 +44,11 @@ describe('nuxt module integration', () => {
         path: '/api/failure',
         status: 404,
       }),
+      expect.objectContaining({
+        method: 'POST',
+        path: '/api/created',
+        status: 201,
+      }),
     ])
     expect(record.missingStatus).toBe(404)
     expect(JSON.stringify(record.logs)).not.toContain('untrusted-request-id')
@@ -61,6 +66,31 @@ describe('nuxt module integration', () => {
       _tag: 'Err',
       output: expect.stringContaining('server/api/record.get.ts:3 Field "password" is not configured in wideEvents.fields.'),
     })
+  }, 60_000)
+
+  it('excludes matching routes and keeps sampled errors by status', async () => {
+    await runNuxt(['build', 'tests/fixtures/basic'], { NUXT_WIDE_EVENTS_POLICY: 'true' })
+
+    expect(await requestPolicyFixture()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        path: '/api/failure',
+        status: 404,
+      }),
+    ])
+  }, 60_000)
+
+  it('keeps standalone collection and removes request collection when disabled', async () => {
+    await runNuxt(['build', 'tests/fixtures/basic'], { NUXT_WIDE_EVENTS_STANDALONE: 'true' })
+
+    expect(await requestStandaloneFixture()).toEqual([
+      expect.objectContaining({
+        'level': 'warn',
+        'method': 'UNKNOWN',
+        'service': 'integration-fixture',
+        'user.id': 'standalone_1',
+      }),
+    ])
   }, 60_000)
 
   it('validates imported graph modules with a custom server directory', async () => {
@@ -139,6 +169,63 @@ async function requestBuiltFixture(): Promise<{ logs: Record<string, unknown>[],
     .finally(() => child.kill('SIGTERM'))
 }
 
+async function requestPolicyFixture(): Promise<Record<string, unknown>[]> {
+  const port = await availablePort()
+  const child = spawn(process.execPath, ['.output/server/index.mjs'], {
+    cwd: basicFixture,
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      NO_COLOR: '1',
+      PORT: String(port),
+    },
+    stdio: 'pipe',
+  })
+  let output = ''
+  child.stdout.on('data', chunk => output += String(chunk))
+  child.stderr.on('data', chunk => output += String(chunk))
+
+  try {
+    await waitForServer(child, port, () => output)
+    await fetch(`http://127.0.0.1:${port}/api/record`)
+    await fetch(`http://127.0.0.1:${port}/api/excluded/ping?token=secret`)
+    await fetch(`http://127.0.0.1:${port}/api/failure`)
+    await waitFor(() => eventLogs(output).length === 1, child, () => output)
+    return eventLogs(output)
+  }
+  finally {
+    child.kill('SIGTERM')
+  }
+}
+
+async function requestStandaloneFixture(): Promise<Record<string, unknown>[]> {
+  const port = await availablePort()
+  const child = spawn(process.execPath, ['.output/server/index.mjs'], {
+    cwd: basicFixture,
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      NO_COLOR: '1',
+      PORT: String(port),
+    },
+    stdio: 'pipe',
+  })
+  let output = ''
+  child.stdout.on('data', chunk => output += String(chunk))
+  child.stderr.on('data', chunk => output += String(chunk))
+
+  try {
+    await waitForServer(child, port, () => output)
+    output = ''
+    await fetch(`http://127.0.0.1:${port}/api/standalone`)
+    await waitFor(() => eventLogs(output).length === 1, child, () => output)
+    return eventLogs(output)
+  }
+  finally {
+    child.kill('SIGTERM')
+  }
+}
+
 async function runRequest(
   child: ChildProcessWithoutNullStreams,
   port: number,
@@ -150,7 +237,8 @@ async function runRequest(
   }).then(value => value.json())
   const missingStatus = await fetch(`http://127.0.0.1:${port}/api/failure`)
     .then(value => value.status)
-  await waitFor(() => eventLogs(output()).length === 2, child, output)
+  await fetch(`http://127.0.0.1:${port}/api/created`, { method: 'POST' })
+  await waitFor(() => eventLogs(output()).length === 3, child, output)
   return { logs: eventLogs(output()), missingStatus, response }
 }
 

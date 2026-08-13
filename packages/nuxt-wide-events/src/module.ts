@@ -1,6 +1,7 @@
-import type { ModuleOptions, WideEventsRuntimeConfig } from './types'
+import type { ModuleOptions } from './types'
 import { addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
 import { formatWideEventFieldIssues, resolveWideEventFields } from './build/fields'
+import { resolveWideEventsRuntimeConfig, serializeWideEventsRuntimeConfig } from './build/runtime-config'
 import { createWideEventValidationPlugin } from './build/source-scan'
 
 export type { ModuleOptions } from './types'
@@ -22,6 +23,7 @@ export default defineNuxtModule<ModuleOptions>({
   },
   defaults: {
     enabled: true,
+    request: true,
     fields: [],
     console: true,
     drain: false,
@@ -36,15 +38,11 @@ export default defineNuxtModule<ModuleOptions>({
 
     const fields = new Set(resolvedFields.fields)
     const resolver = createResolver(import.meta.url)
-    const runtimeConfig: WideEventsRuntimeConfig = {
-      console: options.console ?? true,
-      drain: options.drain ?? false,
-      ...(options.service === undefined ? {} : { service: options.service }),
-    }
+    const runtimeConfig = resolveWideEventsRuntimeConfig(options)
     const configTemplate = addTemplate({
       filename: 'wide-events/config.mjs',
       write: true,
-      getContents: () => `export default ${JSON.stringify(runtimeConfig)}\n`,
+      getContents: () => serializeWideEventsRuntimeConfig(runtimeConfig),
     })
     nuxt.options.alias['#wide-events/config'] = configTemplate.dst
     const nitro = ((nuxt.options as unknown as { nitro?: NitroConfigLike }).nitro ??= {})
@@ -54,12 +52,22 @@ export default defineNuxtModule<ModuleOptions>({
     nitro.rollupConfig.plugins ||= []
     nitro.rollupConfig.plugins.push(createWideEventValidationPlugin(nuxt.options.rootDir, fields))
 
-    addServerPlugin(resolver.resolve(nuxt.options.dev
-      ? './runtime/server/development-plugin'
-      : './runtime/server/production-plugin'))
+    if (options.request ?? true) {
+      addServerPlugin(resolver.resolve(nuxt.options.dev
+        ? './runtime/server/development-plugin'
+        : runtimeConfig.exclude || runtimeConfig.sampling
+          ? './runtime/server/production-policy-plugin'
+          : './runtime/server/production-plugin'))
+    }
     addServerImports({
       name: 'addWideEventFields',
       from: resolver.resolve('./runtime/server/index'),
+    })
+    addServerImports({
+      name: 'createWideEvent',
+      from: resolver.resolve(nuxt.options.dev
+        ? './runtime/server/standalone-development'
+        : './runtime/server/standalone-production'),
     })
     addWideEventTypes(resolvedFields.fields)
   },

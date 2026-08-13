@@ -68,7 +68,7 @@ This constraint keeps the Field boundary visible to reviewers and coding agents.
 
 ## Production Output
 
-Production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.
+Default production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.
 
 ```json
 { "timestamp": "2026-08-13T04:12:00.000Z", "level": "info", "service": "shop", "method": "GET", "path": "/api/cart", "status": 200, "durationMs": 1.4, "requestId": "req_123", "cart.itemCount": 2, "user.id": "user_123" }
@@ -77,6 +77,60 @@ Production performs no stack formatting, deep redaction, regular expression matc
 Production errors include status only. All error strings remain absent because they can contain unapproved data.
 
 Development records include error messages and stacks. Development uses object output for easier inspection.
+
+## Background Operations
+
+`createWideEvent` is available in server code for Queue Jobs, scheduled work, and other background operations.
+
+```ts
+export default defineTask({
+  run() {
+    const wideEvent = createWideEvent({ 'job.id': 'job_123' })
+    wideEvent.setLevel('info')
+    return wideEvent.emit()
+  },
+})
+```
+
+The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service` and `console` options.
+
+Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. This package export always uses production JSON output without module configuration.
+
+Set `request: false` to disable request collection. Field enforcement and `createWideEvent` remain available.
+
+## Migrate from evlog
+
+Map `env.service` to `service`. Keep `exclude` and `sampling` unchanged. Do not copy `console: false`: evlog applies it to browser output, while this option controls server output.
+
+For requests, replace `log.set({ section: { value } })` with an approved flat Field:
+
+```ts
+addWideEventFields(event, { 'section.value': value })
+```
+
+For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()` and `.emit()`.
+
+Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
+
+## Production Filtering
+
+The configuration shape matches evlog for direct migration:
+
+```ts
+export default defineNuxtConfig({
+  wideEvents: {
+    exclude: ['/api/_nuxt_icon/**', '/api/_content/**'],
+    sampling: {
+      rates: { info: 10, warn: 50, debug: 0 },
+      keep: [{ duration: 1000 }, { status: 400 }],
+    },
+  },
+})
+```
+
+Rates are percentages. Keep conditions use `>=` and OR logic. Request Wide Events use `info` and `error` rates. Standalone Wide Events also use `debug` and `warn` rates.
+
+The module compiles route patterns during the build. Default production uses a separate plugin without filtering code.
 
 ## Drain Records
 
@@ -97,8 +151,11 @@ Set `drain: true` to enable this hook. Set `console: false` when the hook owns o
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Register request collection and output. |
+| `request` | `true` | Collect one Wide Event for each request. |
 | `fields` | `[]` | Allow application Fields. |
 | `service` | none | Add a service name. |
+| `exclude` | `[]` | Exclude routes that match a glob pattern. |
+| `sampling` | none | Set rates and keep conditions for production. |
 | `console` | `true` | Write records to stdout. |
 | `drain` | `false` | Call the `wide-events:emit` hook. |
 
@@ -124,9 +181,9 @@ The Cloudflare fixture builds with the Workers preset, passes a Wrangler deploy 
 
 ## Scope
 
-The first version supports Nuxt server requests, flat primitive Fields, stdout, and a Nitro hook.
+The first version supports Nuxt server requests, flat primitive Fields, route exclusion, sampling, stdout, and a Nitro hook.
 
-It excludes browser logging, transports, sampling, route matching, audit logs, and error presentation.
+It excludes browser logging, transports, audit logs, and production error presentation.
 
 ## License
 

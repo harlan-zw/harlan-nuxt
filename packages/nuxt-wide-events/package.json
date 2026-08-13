@@ -32,6 +32,10 @@
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
     },
+    "./standalone": {
+      "types": "./dist/runtime/server/standalone.d.ts",
+      "import": "./dist/runtime/server/standalone.js"
+    },
     "./build": {
       "types": "./dist/build/index.d.mts",
       "import": "./dist/build/index.mjs"
@@ -42,6 +46,7 @@
   "typesVersions": {
     "*": {
       "server": ["dist/runtime/server/index.d.ts"],
+      "standalone": ["dist/runtime/server/standalone.d.ts"],
       "build": ["dist/build/index.d.mts"]
     }
   },

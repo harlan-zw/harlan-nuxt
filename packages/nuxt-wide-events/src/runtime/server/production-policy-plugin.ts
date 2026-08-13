@@ -2,6 +2,7 @@ import type { NitroApp } from 'nitropack/types'
 import type { WideEventLike, WideEventRecord } from './index'
 import config from '#wide-events/config'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
+import { shouldEmitWideEvent } from './production-policy'
 
 interface ErrorHookContext {
   event?: RequestEvent
@@ -13,10 +14,14 @@ interface RequestEvent extends WideEventLike {
   node?: { res?: { statusCode?: number } }
 }
 
-export default function wideEventPlugin(nitroApp: NitroApp): void {
+const EXCLUDED_KEY = Symbol('excluded')
+
+export default function wideEventPolicyPlugin(nitroApp: NitroApp): void {
   function output(event: WideEventLike, status: number, path?: string): Promise<void> | undefined {
+    if (isExcluded(event))
+      return
     const record = emitWideEvent(event, status, config.service, path)
-    if (!record)
+    if (!record || (config.sampling && !shouldEmitWideEvent(record, config.sampling)))
       return
     if (config.console)
       console.log(JSON.stringify(record))
@@ -26,11 +31,12 @@ export default function wideEventPlugin(nitroApp: NitroApp): void {
 
   nitroApp.hooks.hook('request', (event) => {
     const request = event as unknown as RequestEvent
-    startWideEvent(request)
+    if (!isExcluded(request))
+      startWideEvent(request)
   })
 
   nitroApp.hooks.hook('error', (error, context: ErrorHookContext) => {
-    if (!context.event)
+    if (!context.event || isExcluded(context.event))
       return
     captureWideEventError(context.event, error)
     const path = routeTemplate(context.event)
@@ -47,6 +53,18 @@ export default function wideEventPlugin(nitroApp: NitroApp): void {
       routeTemplate(request),
     )
   })
+}
+
+function isExcluded(event: WideEventLike): boolean {
+  const context = event.context as Record<PropertyKey, unknown>
+  const cached = context[EXCLUDED_KEY]
+  if (typeof cached === 'boolean')
+    return cached
+  const path = event.path ?? ''
+  const query = path.indexOf('?')
+  const excluded = config.exclude?.test(query === -1 ? path : path.slice(0, query)) ?? false
+  context[EXCLUDED_KEY] = excluded
+  return excluded
 }
 
 function routeTemplate(event: WideEventLike): string | undefined {
