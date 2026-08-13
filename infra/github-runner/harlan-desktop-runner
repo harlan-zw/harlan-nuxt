@@ -3,9 +3,9 @@
 # Status for Harlan's desktop GitHub runner, and for whatever is currently in
 # flight across the sites it serves.
 #
-#   harlans-desktop-runner            both sections
-#   harlans-desktop-runner pool       the workstation only, no network calls
-#   harlans-desktop-runner sites      open pull requests and their checks
+#   harlan-desktop-runner            both sections
+#   harlan-desktop-runner pool       the workstation only, no network calls
+#   harlan-desktop-runner sites      open pull requests and their checks
 #
 # Pool numbers come from the supervisor's own reservation files under
 # XDG_RUNTIME_DIR, which are the same files it sizes bursts from, so this reports
@@ -13,8 +13,8 @@
 
 set -uo pipefail
 
-readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlans-desktop-github-runner"
-readonly unit='harlans-desktop-github-runner.service'
+readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
+readonly unit='harlan-desktop-github-runner.service'
 readonly container_label='com.harlanzw.desktop-runner'
 
 # The site inventory, mirroring SITES.md. `path` is the main checkout, used to
@@ -70,7 +70,7 @@ pool_section() {
   unit_state="$(systemctl --user is-active "$unit" 2>/dev/null)"
 
   if [[ "$unit_state" != active ]]; then
-    printf '%sharlans-desktop-github-runner%s  %s%s%s\n' \
+    printf '%sharlan-desktop-github-runner%s  %s%s%s\n' \
       "$bold" "$reset" "$red" "${unit_state:-not installed}" "$reset"
     printf '  %sstart it with: systemctl --user start %s%s\n' "$dim" "$unit" "$reset"
     return
@@ -91,7 +91,7 @@ pool_section() {
     fi
   fi
 
-  printf '%sharlans-desktop-github-runner%s  %s%s%s\n\n' \
+  printf '%sharlan-desktop-github-runner%s  %s%s%s\n\n' \
     "$bold" "$reset" "$green" "${uptime:-active}" "$reset"
 
   if [[ ! -d "$state_root/burst" ]]; then
@@ -108,11 +108,11 @@ pool_section() {
 
     local slug burst busy
     slug="$(printf '%s-%s' "${repository##*/}" "${labels%%,*}" \
-      | sed 's/^\(.*\)-harlans-desktop-/\1-/' \
+      | sed 's/^\(.*\)-harlan-desktop-/\1-/' \
       | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')"
     burst="$(count_files "$state_root/burst/$slug")"
     # Every reservation whose container belongs to this pool is a job in flight.
-    busy="$(find "$state_root/spend" -maxdepth 1 -type f -name "harlans-desktop-$slug-*" 2>/dev/null | grep --count '' || true)"
+    busy="$(find "$state_root/spend" -maxdepth 1 -type f -name "harlan-desktop-$slug-*" 2>/dev/null | grep --count '' || true)"
 
     local marker="$dim"
     (( busy > 0 )) && marker="$green"
@@ -205,7 +205,7 @@ main() {
     sites) sites_section ;;
     all)   pool_section; printf '\n'; sites_section ;;
     *)
-      printf 'usage: harlans-desktop-runner [pool|sites]\n' >&2
+      printf 'usage: harlan-desktop-runner [pool|sites]\n' >&2
       return 2
       ;;
   esac

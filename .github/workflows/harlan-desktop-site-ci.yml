@@ -1,5 +1,10 @@
-name: Nuxt site CI
+name: Harlan Desktop site CI
 
+# NOT GENERAL PURPOSE. This is Harlan's own gate for Harlan's own sites, and its
+# default is to dispatch to ephemeral containers on Harlan's desktop. Nothing here
+# is supported for anyone else, which is why every name in this family carries the
+# `harlan-desktop-` prefix.
+#
 # The pull request gate shared by every Harlan site. A calling repository keeps a
 # ten line workflow and gets lint, typecheck, and test as three separate,
 # separately required checks.
@@ -11,7 +16,7 @@ name: Nuxt site CI
 #
 # Moving a site between GitHub-hosted and the workstation pool is one input:
 #
-#   runs-on: '["self-hosted", "linux", "x64", "harlans-desktop-ci"]'
+#   runs-on: '["self-hosted", "linux", "x64", "harlan-desktop-ci"]'
 #
 # WHY THE SETUP STEPS ARE INLINE
 #
