@@ -26,7 +26,6 @@ Every package here publishes under the `experimental` npm tag. Versions and rele
 | [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
 | [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and JavaScript budgets for Nuxt and Nitro runtime entries. |
 | [`@harlan-zw/nuxt-github-sponsors`](./packages/nuxt-github-sponsors) | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
-| [`@harlan-zw/nuxt-wide-events`](./packages/nuxt-wide-events) | 📝 Minimal Wide Events with build-time Field enforcement and a small production runtime. |
 
 ## Development
 
