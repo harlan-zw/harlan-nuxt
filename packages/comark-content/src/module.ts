@@ -3,11 +3,12 @@ import type { LoadedCollection } from './core/ingest'
 import type { ContentHighlight } from './highlight'
 import type { NitroConfig } from 'nitropack/types'
 import { existsSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import {
   addComponent,
+  addComponentsDir,
   addImports,
   addServerHandler,
   addServerPlugin,
@@ -18,6 +19,7 @@ import {
   useLogger,
 } from '@nuxt/kit'
 import { assertSupportedOptions } from './config'
+import { contentComponentDirectories } from './components'
 import { ingestCollections } from './core/ingest'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 import { excludeNuxtContentSitemapSource } from './sitemap'
@@ -95,6 +97,12 @@ export default defineNuxtModule<ModuleOptions>({
     const remoteCacheDir = join(nuxt.options.rootDir, 'node_modules/.cache/comark-content/git')
     const logger = useLogger('comark-content')
     const componentTags = new Set<string>()
+
+    for (const path of contentComponentDirectories(nuxt.options._layers)) {
+      if (!(await stat(path).catch(() => undefined))?.isDirectory())
+        continue
+      addComponentsDir({ path, pathPrefix: false, prefix: '' })
+    }
 
     const componentsTemplate = addTemplate({
       filename: 'comark-content/components.mjs',
