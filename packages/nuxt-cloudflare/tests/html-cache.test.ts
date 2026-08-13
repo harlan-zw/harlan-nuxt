@@ -29,8 +29,10 @@ describe('html cache route rules', () => {
     expect(formatHtmlCacheRouteRuleViolations(violations)).toContain('routeRules./docs/**.headers.Cloudflare-CDN-Cache-Control')
   })
 
-  it('allows cache rules on API, generated image, and static asset routes', () => {
+  it('allows cache rules on internal, API, generated image, and static asset routes', () => {
     expect(findHtmlCacheRouteRuleViolations({
+      '/_fonts/**': { cache: { maxAge: 60 } },
+      '/_scripts/assets/**': { cache: { maxAge: 60 } },
       '/api/**': { cache: { maxAge: 60 } },
       '/mcp/server-card': { headers: { 'cache-control': 'public, max-age=3600' } },
       '/_nuxt/**': { headers: { 'cache-control': 'public, immutable' } },
