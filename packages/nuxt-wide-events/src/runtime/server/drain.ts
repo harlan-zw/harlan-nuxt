@@ -1,9 +1,12 @@
 import type { NitroApp } from 'nitropack/types'
 import type { WideEventRecord } from './index'
+import type { StandaloneWideEventRecord } from './standalone-core'
+
+type DrainedWideEventRecord = StandaloneWideEventRecord | WideEventRecord
 
 declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
-    'wide-events:emit': (record: WideEventRecord) => void | Promise<void>
+    'wide-events:emit': (record: DrainedWideEventRecord) => void | Promise<void>
   }
 }
 
@@ -11,7 +14,7 @@ interface WideEventDrainContext {
   waitUntil: (promise: Promise<unknown>) => void
 }
 
-export async function drainWideEvent(app: NitroApp, record: WideEventRecord): Promise<void> {
+export async function drainWideEvent(app: NitroApp, record: DrainedWideEventRecord): Promise<void> {
   await app.hooks.callHookParallel('wide-events:emit', record)
 }
 

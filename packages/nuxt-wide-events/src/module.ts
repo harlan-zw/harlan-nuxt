@@ -94,10 +94,11 @@ export {}
     filename: 'wide-events/hooks.d.ts',
     getContents: () => `
 import type { WideEventRecord } from '@harlan-zw/nuxt-wide-events/server'
+import type { StandaloneWideEventRecord } from '@harlan-zw/nuxt-wide-events/standalone'
 
 declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
-    'wide-events:emit': (record: WideEventRecord) => void | Promise<void>
+    'wide-events:emit': (record: StandaloneWideEventRecord | WideEventRecord) => void | Promise<void>
   }
 }
 

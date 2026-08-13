@@ -11,7 +11,7 @@ export type WideEventFields = [ConfiguredWideEventField] extends [never]
 
 export interface WideEventRecord extends Record<string, WideEventValue | undefined> {
   durationMs: number
-  level: 'debug' | 'error' | 'info' | 'warn'
+  level: 'error' | 'info'
   method: string
   requestId: string
   status: number

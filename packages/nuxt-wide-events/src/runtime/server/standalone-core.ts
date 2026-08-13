@@ -3,7 +3,7 @@ import { addWideEventFields, emitWideEvent, startWideEvent } from './index'
 
 export type StandaloneWideEventLevel = 'debug' | 'error' | 'info' | 'warn'
 
-export interface StandaloneWideEventRecord extends WideEventRecord {
+export interface StandaloneWideEventRecord extends Omit<WideEventRecord, 'level'> {
   level: StandaloneWideEventLevel
 }
 
