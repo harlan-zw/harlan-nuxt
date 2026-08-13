@@ -2,6 +2,7 @@ import process from 'node:process'
 
 const measureSize = process.env.NUXT_WIDE_EVENTS_MEASURE === 'true'
 const testPolicy = process.env.NUXT_WIDE_EVENTS_POLICY === 'true'
+const testDrain = process.env.NUXT_WIDE_EVENTS_DRAIN === 'true'
 const standaloneOnly = process.env.NUXT_WIDE_EVENTS_STANDALONE === 'true'
 
 export default defineNuxtConfig({
@@ -14,7 +15,8 @@ export default defineNuxtConfig({
     ...(measureSize ? ['../../../../nuxt-dx/src/module'] : []),
   ],
   wideEvents: {
-    console: true,
+    console: !testDrain,
+    drain: testDrain,
     fields: ['cache.hit', 'user.id'],
     request: !standaloneOnly,
     service: 'integration-fixture',

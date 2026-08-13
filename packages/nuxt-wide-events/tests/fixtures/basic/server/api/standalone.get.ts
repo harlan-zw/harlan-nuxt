@@ -1,5 +1,5 @@
-export default defineEventHandler(() => {
+export default defineEventHandler(async () => {
   const wideEvent = createWideEvent({ 'user.id': 'standalone_1' })
   wideEvent.setLevel('warn')
-  return wideEvent.emit()
+  return await wideEvent.emit()
 })

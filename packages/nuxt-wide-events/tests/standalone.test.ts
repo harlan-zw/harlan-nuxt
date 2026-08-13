@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { addWideEventFields } from '../src/runtime/server/index'
 import { createWideEvent } from '../src/runtime/server/standalone'
-import { createStandaloneWideEvent } from '../src/runtime/server/standalone-core'
+import { createDrainedStandaloneWideEvent, createStandaloneWideEvent } from '../src/runtime/server/standalone-core'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -90,5 +90,34 @@ describe('standalone Wide Event', () => {
 
     expect(kept.emit()).toEqual(expect.objectContaining({ level: 'warn', service: 'worker' }))
     expect(output).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn', service: 'worker' }))
+  })
+
+  it('waits for asynchronous drain output before resolving', async () => {
+    let finishDrain: (() => void) | undefined
+    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
+      output: () => new Promise<void>((resolve) => {
+        finishDrain = resolve
+      }),
+    })
+
+    const pending = wideEvent.emit()
+    let settled = false
+    void pending.then(() => settled = true)
+    await Promise.resolve()
+
+    expect(settled).toBe(false)
+    finishDrain!()
+    await pending
+    expect(settled).toBe(true)
+  })
+
+  it('surfaces asynchronous drain failures', async () => {
+    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
+      output: async () => {
+        throw new Error('D1 unavailable')
+      },
+    })
+
+    await expect(wideEvent.emit()).rejects.toThrow('D1 unavailable')
   })
 })

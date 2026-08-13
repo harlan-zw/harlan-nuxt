@@ -1,6 +1,7 @@
 import type { NitroApp } from 'nitropack/types'
-import type { WideEventLike, WideEventRecord } from './index'
+import type { WideEventLike } from './index'
 import config from '#wide-events/config'
+import { scheduleWideEventDrain } from './drain'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
 
 interface ErrorHookContext {
@@ -11,17 +12,18 @@ interface ErrorHookContext {
 interface RequestEvent extends WideEventLike {
   path: string
   node?: { res?: { statusCode?: number } }
+  waitUntil: (promise: Promise<unknown>) => void
 }
 
 export default function wideEventPlugin(nitroApp: NitroApp): void {
-  function output(event: WideEventLike, status: number, path?: string): Promise<void> | undefined {
+  function output(event: RequestEvent, status: number, path?: string): void {
     const record = emitWideEvent(event, status, config.service, path)
     if (!record)
       return
     if (config.console)
       console.log(JSON.stringify(record))
     if (config.drain)
-      return drain(nitroApp, record)
+      scheduleWideEventDrain(nitroApp, event, record)
   }
 
   nitroApp.hooks.hook('request', (event) => {
@@ -36,12 +38,12 @@ export default function wideEventPlugin(nitroApp: NitroApp): void {
     const path = routeTemplate(context.event)
     if (!context.tags?.includes('request') || path === undefined)
       return
-    return output(context.event, errorStatus(error), path)
+    output(context.event, errorStatus(error), path)
   })
 
   nitroApp.hooks.hook('afterResponse', (event, response) => {
     const request = event as unknown as RequestEvent
-    return output(
+    output(
       request,
       (response as { status?: number } | undefined)?.status ?? request.node?.res?.statusCode ?? 200,
       routeTemplate(request),
@@ -59,9 +61,4 @@ function errorStatus(error: unknown): number {
   const input = error as Record<string, unknown>
   const status = input.statusCode ?? input.status
   return typeof status === 'number' && Number.isInteger(status) ? status : 500
-}
-
-async function drain(nitroApp: { hooks: { callHook: (...input: any[]) => Promise<unknown> } }, record: WideEventRecord): Promise<void> {
-  await nitroApp.hooks.callHook('wide-events:emit', record)
-    .catch(error => console.error('[nuxt-wide-events] Wide Event drain failed.', error))
 }

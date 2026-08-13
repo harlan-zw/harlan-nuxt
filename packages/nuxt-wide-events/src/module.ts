@@ -65,9 +65,11 @@ export default defineNuxtModule<ModuleOptions>({
     })
     addServerImports({
       name: 'createWideEvent',
-      from: resolver.resolve(nuxt.options.dev
-        ? './runtime/server/standalone-development'
-        : './runtime/server/standalone-production'),
+      from: resolver.resolve(runtimeConfig.drain
+        ? './runtime/server/standalone-drain'
+        : nuxt.options.dev
+          ? './runtime/server/standalone-development'
+          : './runtime/server/standalone-production'),
     })
     addWideEventTypes(resolvedFields.fields)
   },
@@ -92,14 +94,15 @@ export {}
     filename: 'wide-events/hooks.d.ts',
     getContents: () => `
 import type { WideEventRecord } from '@harlan-zw/nuxt-wide-events/server'
+import type { StandaloneWideEventRecord } from '@harlan-zw/nuxt-wide-events/standalone'
 
 declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
-    'wide-events:emit': (record: WideEventRecord) => void | Promise<void>
+    'wide-events:emit': (record: StandaloneWideEventRecord | WideEventRecord) => void | Promise<void>
   }
 }
 
 export {}
 `,
-  }, { nitro: true })
+  }, { nuxt: true, nitro: true })
 }

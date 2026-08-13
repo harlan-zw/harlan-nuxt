@@ -12,10 +12,19 @@ export interface StandaloneWideEvent extends WideEventLike {
   setLevel: (level: StandaloneWideEventLevel) => void
 }
 
+export interface DrainedStandaloneWideEvent extends WideEventLike {
+  emit: () => Promise<StandaloneWideEventRecord | null>
+  setLevel: (level: StandaloneWideEventLevel) => void
+}
+
 interface StandaloneWideEventOptions {
   output?: (record: StandaloneWideEventRecord) => void
   sampling?: StandaloneWideEventSampling
   service?: string
+}
+
+interface DrainedStandaloneWideEventOptions extends StandaloneWideEventOptions {
+  output: (record: StandaloneWideEventRecord) => Promise<void>
 }
 
 interface StandaloneWideEventSampling {
@@ -61,6 +70,24 @@ export function createStandaloneWideEvent(
   }
 
   return event
+}
+
+export function createDrainedStandaloneWideEvent(
+  initialFields: WideEventFields | undefined,
+  options: DrainedStandaloneWideEventOptions,
+): DrainedStandaloneWideEvent {
+  const event = createStandaloneWideEvent(initialFields, {
+    sampling: options.sampling,
+    service: options.service,
+  })
+  const emit = event.emit
+  event.emit = (() => {
+    const record = emit()
+    if (!record)
+      return Promise.resolve(null)
+    return options.output(record).then(() => record)
+  }) as never
+  return event as unknown as DrainedStandaloneWideEvent
 }
 
 function shouldEmitStandaloneWideEvent(

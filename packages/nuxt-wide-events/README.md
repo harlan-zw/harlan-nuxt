@@ -84,15 +84,15 @@ Development records include error messages and stacks. Development uses object o
 
 ```ts
 export default defineTask({
-  run() {
+  async run() {
     const wideEvent = createWideEvent({ 'job.id': 'job_123' })
     wideEvent.setLevel('info')
-    return wideEvent.emit()
+    return await wideEvent.emit()
   },
 })
 ```
 
-The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service` and `console` options.
+The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` remains synchronous.
 
 Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. This package export always uses production JSON output without module configuration.
 
@@ -108,7 +108,7 @@ For requests, replace `log.set({ section: { value } })` with an approved flat Fi
 addWideEventFields(event, { 'section.value': value })
 ```
 
-For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()` and `.emit()`.
+For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()`. If `drain` is enabled, await or return `.emit()`.
 
 Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
 
@@ -134,7 +134,7 @@ The module compiles route patterns during the build. Default production uses a s
 
 ## Drain Records
 
-Use the Nitro hook when stdout is not the final destination:
+Use the Nitro hook when D1, Sentry, or another adapter owns the record:
 
 ```ts
 export default defineNitroPlugin((nitroApp) => {
@@ -145,6 +145,7 @@ export default defineNitroPlugin((nitroApp) => {
 ```
 
 Set `drain: true` to enable this hook. Set `console: false` when the hook owns output.
+Request drains use `event.waitUntil()`. Background `emit()` waits for every hook adapter and surfaces adapter failures.
 
 ## Options
 
@@ -157,7 +158,7 @@ Set `drain: true` to enable this hook. Set `console: false` when the hook owns o
 | `exclude` | `[]` | Exclude routes that match a glob pattern. |
 | `sampling` | none | Set rates and keep conditions for production. |
 | `console` | `true` | Write records to stdout. |
-| `drain` | `false` | Call the `wide-events:emit` hook. |
+| `drain` | `false` | Call the `wide-events:emit` hook for request and background records. |
 
 ## Benchmarks
 
