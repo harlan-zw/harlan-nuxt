@@ -122,9 +122,12 @@ pool_section() {
 
   local spent budget
   spent="$(sum_files "$state_root/spend")"
-  budget="${HARLANS_DESKTOP_RUNNER_CPU_BUDGET:-32}"
-  printf '\nCPU budget  %s of %s' "$spent" "$budget"
-  (( spent >= budget )) && printf '  %sfull, bursts are being held%s' "$yellow" "$reset"
+  budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
+  # Deliberately not "budget". This number can and does exceed the threshold: the
+  # threshold only holds back bursts, and a warm container's job arrives straight
+  # from GitHub with no say from the supervisor.
+  printf '\nCPU in flight  %s, burst threshold %s' "$spent" "$budget"
+  (( spent >= budget )) && printf '  %sbursts held%s' "$yellow" "$reset"
   printf '\n'
 
   local containers
@@ -136,7 +139,7 @@ pool_section() {
 # no pull request yet, which is the state most likely to be forgotten.
 sites_section() {
   # Most recently committed branches only. Raise it when you want the long tail.
-  local local_branch_limit="${HARLANS_DESKTOP_RUNNER_BRANCH_LIMIT:-3}"
+  local local_branch_limit="${HARLAN_DESKTOP_RUNNER_BRANCH_LIMIT:-3}"
 
   printf '%sSITES%s\n' "$bold" "$reset"
 

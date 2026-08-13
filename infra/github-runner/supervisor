@@ -39,15 +39,15 @@
 
 set -euo pipefail
 
-readonly runner_image="${HARLANS_DESKTOP_RUNNER_IMAGE:-harlan-desktop-github-runner:2.336.0}"
-readonly config_file="${HARLANS_DESKTOP_RUNNER_CONFIG:-/etc/harlan-desktop-github-runner/runners.conf}"
+readonly runner_image="${HARLAN_DESKTOP_RUNNER_IMAGE:-harlan-desktop-github-runner:2.336.0}"
+readonly config_file="${HARLAN_DESKTOP_RUNNER_CONFIG:-/etc/harlan-desktop-github-runner/runners.conf}"
 # 24 physical cores. Runner work is IO-heavy and rarely saturates its quota, so a
 # modest oversubscription keeps a wide matrix moving without starving
 # interactive work on the workstation.
-readonly cpu_budget="${HARLANS_DESKTOP_RUNNER_CPU_BUDGET:-32}"
+readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
-readonly burst_idle_seconds="${HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
+readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
 # Readable by the status command, unlike /tmp under this unit's PrivateTmp.
 readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
@@ -315,7 +315,7 @@ run_scaler() {
 
       spent="$(sum_markers "$state_dir/spend")"
       if (( spent + pool_cpus[pool_index] > cpu_budget )); then
-        log "CPU budget spent ($spent of $cpu_budget); holding $slug at $live"
+        log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
         continue
       fi
 
@@ -412,6 +412,16 @@ main() {
       prune_offline_runners "${pool_repository[$pool_index]}"
     fi
   done
+
+  # Sizing mistakes here are silent otherwise: the pool simply stops bursting and
+  # every wide matrix serialises behind its warm slots for no visible reason.
+  local warm_floor=0
+  for pool_index in "${!pool_repository[@]}"; do
+    warm_floor=$(( warm_floor + pool_warm[pool_index] * pool_cpus[pool_index] ))
+  done
+  if (( warm_floor >= cpu_budget )); then
+    log "Warm floor is $warm_floor CPU against a burst threshold of $cpu_budget, so bursting is off whenever most pools are busy. Lower warm, or raise HARLAN_DESKTOP_RUNNER_CPU_BUDGET."
+  fi
 
   run_scaler &
 

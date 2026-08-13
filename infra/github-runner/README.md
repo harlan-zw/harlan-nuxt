@@ -81,7 +81,7 @@ state in `/tmp`: `PrivateTmp` would hide it from this command.
 `sites` lists every open pull request across the inventory with its check state,
 then up to three recent local branches per repository that have commits and no
 pull request. That last part is capped on purpose, since nuxtseo.com alone keeps
-over a hundred branches. Raise `HARLANS_DESKTOP_RUNNER_BRANCH_LIMIT` for the long
+over a hundred branches. Raise `HARLAN_DESKTOP_RUNNER_BRANCH_LIMIT` for the long
 tail.
 
 Check capacity and logs:
@@ -111,17 +111,28 @@ service drains the queue.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `HARLANS_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Cores that in-flight jobs may hold at once, across all pools. |
-| `HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
-| `HARLANS_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
-| `HARLANS_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
+| `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
+| `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
+| `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
+| `HARLAN_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
 
-Idle warm containers cost about 60 MB each and no CPU, so they do not spend the
-budget. Only a warm container holding a job, and a burst container from the
-moment it launches, do.
+Idle warm containers cost about 60 MB each and no CPU, so they do not spend
+against the threshold. Only a warm container holding a job, and a burst container
+from the moment it launches, do.
+
+`CPU_BUDGET` holds back **bursts**; it cannot cap total load. A warm container
+claims its job straight from GitHub and the supervisor has no say in it, so the
+real floor is `sum(warm * cpus)` across every pool, and in-flight CPU exceeds the
+threshold whenever enough warm runners are busy at once. That is intended: under
+a wide multi-repository push, warm capacity absorbs the work and the rest queues
+for a few seconds rather than piling burst containers onto a 24 core box.
+
+The catch is that when the warm floor is at or above the threshold, bursting is
+effectively off. The supervisor warns at startup when that is true, since the
+symptom otherwise is every wide matrix serialising for no visible reason.
 
 ## Updating the runner
 
 Update `RUNNER_VERSION` and `RUNNER_SHA256` in the Dockerfile, update the tag in
-`HARLANS_DESKTOP_RUNNER_IMAGE` or the supervisor default, rebuild, then restart the
+`HARLAN_DESKTOP_RUNNER_IMAGE` or the supervisor default, rebuild, then restart the
 service. GitHub requires a runner update within 30 days of a release.
