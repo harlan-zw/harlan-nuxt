@@ -1,4 +1,4 @@
-import { parseSync } from 'oxc-parser'
+import { parseSync } from 'vite'
 
 export function parseSourceAst(file: string, source: string): any {
   return parseSync(file, source, {

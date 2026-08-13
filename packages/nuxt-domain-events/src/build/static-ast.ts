@@ -1,4 +1,4 @@
-import { parseSync } from 'oxc-parser'
+import { parseSync } from 'vite'
 
 export interface StaticAstNode {
   type: string

@@ -1,4 +1,4 @@
-import { walk } from 'oxc-walker'
+import { Visitor } from 'vite'
 import { directoryPatternToRegExp } from './options'
 
 export interface RpcOperationCall {
@@ -69,26 +69,26 @@ export function createSourceAstAnalyzer(apiPrefixes: string[], contractDirs: str
     let hasApiLiteral = false
     let hasContractImport = false
 
-    walk(ast.program, {
-      enter(node: any) {
+    new Visitor({
+      Literal(node) {
         if (!hasApiLiteral && isApiLiteralNode(node, normalizedApiPrefixes))
           hasApiLiteral = true
-
-        if (node.type === 'ImportDeclaration') {
-          const source = node.source?.value
-          if (typeof source !== 'string')
-            return
-          if (!hasContractImport && contractPatterns.some(pattern => pattern.test(source)))
-            hasContractImport = true
-          if (source !== 'zod' && !source.startsWith('zod/'))
-            return
-          collectZodImports(node, zodNamespaces, zodFactories)
+      },
+      TemplateElement(node) {
+        if (!hasApiLiteral && isApiLiteralNode(node, normalizedApiPrefixes))
+          hasApiLiteral = true
+      },
+      ImportDeclaration(node) {
+        const source = node.source?.value
+        if (typeof source !== 'string')
           return
-        }
-
-        if (node.type !== 'CallExpression')
+        if (!hasContractImport && contractPatterns.some(pattern => pattern.test(source)))
+          hasContractImport = true
+        if (source !== 'zod' && !source.startsWith('zod/'))
           return
-
+        collectZodImports(node, zodNamespaces, zodFactories)
+      },
+      CallExpression(node) {
         collectRpcOperationCall(node, rpcOperationCalls)
         if (node.callee?.type === 'MemberExpression' && node.callee.object?.type === 'Identifier') {
           const factory = getPropertyName(node.callee.property)
@@ -99,7 +99,7 @@ export function createSourceAstAnalyzer(apiPrefixes: string[], contractDirs: str
           zodFactoryCalls.add(node.callee.name)
         }
       },
-    })
+    }).visit(ast.program)
 
     const hasZodUsage = setsIntersect(zodMemberCallNamespaces, zodNamespaces)
       || setsIntersect(zodFactoryCalls, zodFactories)

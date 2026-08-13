@@ -48,6 +48,7 @@ export default defineNuxtModule<ModuleOptions>().with({
   meta: {
     name: '@harlan-zw/nuxt-cf-jobs',
     configKey: 'cfJobs',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     queues: {},
@@ -60,7 +61,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     tasksIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
     registryAlias: '#cf-jobs/app',
   },
-  async setup(options, nuxt) {
+  setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
     const queues = options.queues as ModuleOptions['queues']
     const hasQueues = Object.keys(queues).length > 0
@@ -138,8 +139,10 @@ export default defineNuxtModule<ModuleOptions>().with({
     if (options.validateWrangler !== false && hasQueues)
       runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), (nuxt.options as { nitro?: unknown }).nitro)
 
-    if (options.tasksDir || reconcile)
-      await wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
+    if (options.tasksDir || reconcile) {
+      nuxt.hook('modules:done', () =>
+        wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs')))
+    }
   },
 })
 

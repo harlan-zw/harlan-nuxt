@@ -25,18 +25,18 @@ catalog:
   eslint: ^10.8.1
   eslint-plugin-harlanzw: ^0.17.1
   eslint-plugin-vue: ^10.10.0
+  evlog: ^2.26.0
   h3: 2.0.1-rc.25
   happy-dom: ^20.11.1
-  magicast: ^0.5.3
   nitropack: ^2.13.4
   nuxt: ^4.5.2
-  oxc-parser: 0.140.0
-  oxc-walker: 1.0.0
   pathe: ^2.0.3
+  pino: ^10.3.1
   rollup: ^4.62.4
   typescript: ^5.9.3
   unbuild: ^3.6.1
   unstorage: ^1.17.5
+  vite: ^8.0.0
   vitest: ^4.1.10
   vue: ^3.5.40
   vue-router: ^5.2.0
