@@ -3,17 +3,17 @@ import { addWideEventFields, emitWideEvent, startWideEvent } from './index'
 
 export type StandaloneWideEventLevel = 'debug' | 'error' | 'info' | 'warn'
 
-export interface StandaloneWideEventRecord extends Omit<WideEventRecord, 'level'> {
+export interface StandaloneWideEventRecord extends WideEventRecord {
   level: StandaloneWideEventLevel
 }
 
 export interface StandaloneWideEvent extends WideEventLike {
-  emit: () => StandaloneWideEventRecord | null
+  emit: () => Promise<StandaloneWideEventRecord | null>
   setLevel: (level: StandaloneWideEventLevel) => void
 }
 
 interface StandaloneWideEventOptions {
-  output?: (record: StandaloneWideEventRecord) => void
+  output?: (record: StandaloneWideEventRecord) => Promise<void> | void
   sampling?: StandaloneWideEventSampling
   service?: string
 }
@@ -47,7 +47,7 @@ export function createStandaloneWideEvent(
       throw new Error('The Wide Event was already emitted.')
     level = parseLevel(nextLevel)
   }
-  event.emit = () => {
+  event.emit = async () => {
     const record = emitWideEvent(event, 200, options.service)
     if (!record)
       return null
@@ -56,7 +56,7 @@ export function createStandaloneWideEvent(
     output.level = level
     if (options.sampling && !shouldEmitStandaloneWideEvent(output, options.sampling))
       return null
-    options.output?.(output)
+    await options.output?.(output)
     return output
   }
 

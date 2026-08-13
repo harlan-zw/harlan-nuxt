@@ -1,17 +1,19 @@
-import type { WideEventLike, WideEventRecord } from './index'
+import type { WideEventLike } from './index'
 import { defineNitroPlugin } from 'nitropack/runtime'
 import config from '#wide-events/config'
 import { enrichDevelopmentWideEvent } from './development'
+import { scheduleWideEventDrain } from './drain'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
 
 interface ErrorHookContext {
-  event?: WideEventLike
+  event?: ServerEvent
   tags?: string[]
 }
 
 interface ServerEvent extends WideEventLike {
   node?: { res?: { statusCode?: number } }
   response?: { status?: number }
+  waitUntil: (promise: Promise<unknown>) => void
 }
 
 interface RequestEvent extends WideEventLike {
@@ -53,7 +55,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (config.console)
       console.log('Wide Event', record)
     if (config.drain)
-      return drain(nitroApp, record)
+      scheduleWideEventDrain(nitroApp, context.event, record)
   })
 
   nitroApp.hooks.hook('afterResponse', (event, response) => {
@@ -74,7 +76,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (config.console)
       console.log('Wide Event', record)
     if (config.drain)
-      return drain(nitroApp, record)
+      scheduleWideEventDrain(nitroApp, request, record)
   })
 })
 
@@ -128,9 +130,4 @@ function errorStatus(error: unknown): number {
   if (typeof input.status === 'number' && Number.isInteger(input.status))
     return input.status
   return 500
-}
-
-async function drain(nitroApp: { hooks: { callHook: (...input: any[]) => Promise<unknown> } }, record: WideEventRecord): Promise<void> {
-  await nitroApp.hooks.callHook('wide-events:emit', record)
-    .catch(error => console.error('[nuxt-wide-events] Wide Event drain failed.', error))
 }

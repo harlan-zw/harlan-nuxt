@@ -8,7 +8,7 @@ afterEach(() => {
 })
 
 describe('standalone Wide Event', () => {
-  it('collects configured Fields and writes one JSON record', () => {
+  it('collects configured Fields and writes one JSON record', async () => {
     const output = vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent({
       'job.id': 'job_1',
@@ -17,7 +17,7 @@ describe('standalone Wide Event', () => {
 
     addWideEventFields(wideEvent, { 'job.outcome': 'completed' } as never)
     wideEvent.setLevel('warn')
-    const record = wideEvent.emit()
+    const record = await wideEvent.emit()
 
     expect(record).toEqual(expect.objectContaining({
       'job.id': 'job_1',
@@ -29,12 +29,12 @@ describe('standalone Wide Event', () => {
     expect(JSON.parse(output.mock.calls[0]![0] as string)).toEqual(record)
   })
 
-  it('emits only once and rejects later Field mutation', () => {
+  it('emits only once and rejects later Field mutation', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent()
 
-    expect(wideEvent.emit()).not.toBeNull()
-    expect(wideEvent.emit()).toBeNull()
+    expect(await wideEvent.emit()).not.toBeNull()
+    expect(await wideEvent.emit()).toBeNull()
     expect(() => addWideEventFields(wideEvent, { 'job.id': 'late' } as never)).toThrow(/already emitted/)
   })
 
@@ -45,10 +45,10 @@ describe('standalone Wide Event', () => {
     expect(output).not.toHaveBeenCalled()
   })
 
-  it('rejects a level change after output', () => {
+  it('rejects a level change after output', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent()
-    wideEvent.emit()
+    await wideEvent.emit()
 
     expect(() => wideEvent.setLevel('error')).toThrow(/already emitted/)
   })
@@ -59,16 +59,16 @@ describe('standalone Wide Event', () => {
     expect(() => wideEvent.setLevel('secret' as never)).toThrow(/level must be/)
   })
 
-  it('copies initial Fields before later caller mutation', () => {
+  it('copies initial Fields before later caller mutation', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const fields = { 'job.id': 'job_1' } as never
     const wideEvent = createWideEvent(fields)
     ;(fields as { 'job.id': string })['job.id'] = 'changed'
 
-    expect(wideEvent.emit()).toEqual(expect.objectContaining({ 'job.id': 'job_1' }))
+    expect(await wideEvent.emit()).toEqual(expect.objectContaining({ 'job.id': 'job_1' }))
   })
 
-  it('applies standalone levels and emits an object to development output', () => {
+  it('applies standalone levels and emits an object to development output', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const output = vi.fn()
     const sampled = createStandaloneWideEvent(undefined, {
@@ -78,7 +78,7 @@ describe('standalone Wide Event', () => {
     })
     sampled.setLevel('debug')
 
-    expect(sampled.emit()).toBeNull()
+    expect(await sampled.emit()).toBeNull()
     expect(output).not.toHaveBeenCalled()
 
     const kept = createStandaloneWideEvent(undefined, {
@@ -88,7 +88,36 @@ describe('standalone Wide Event', () => {
     })
     kept.setLevel('warn')
 
-    expect(kept.emit()).toEqual(expect.objectContaining({ level: 'warn', service: 'worker' }))
+    expect(await kept.emit()).toEqual(expect.objectContaining({ level: 'warn', service: 'worker' }))
     expect(output).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn', service: 'worker' }))
+  })
+
+  it('waits for asynchronous drain output before resolving', async () => {
+    let finishDrain: (() => void) | undefined
+    const wideEvent = createStandaloneWideEvent(undefined, {
+      output: () => new Promise<void>((resolve) => {
+        finishDrain = resolve
+      }),
+    })
+
+    const pending = wideEvent.emit()
+    let settled = false
+    void pending.then(() => settled = true)
+    await Promise.resolve()
+
+    expect(settled).toBe(false)
+    finishDrain!()
+    await pending
+    expect(settled).toBe(true)
+  })
+
+  it('surfaces asynchronous drain failures', async () => {
+    const wideEvent = createStandaloneWideEvent(undefined, {
+      output: async () => {
+        throw new Error('D1 unavailable')
+      },
+    })
+
+    await expect(wideEvent.emit()).rejects.toThrow('D1 unavailable')
   })
 })

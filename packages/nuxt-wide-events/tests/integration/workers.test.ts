@@ -43,6 +43,7 @@ describe('cloudflare Workers integration', () => {
         .then(value => value.json())
       const created = await fetch(`http://127.0.0.1:${port}/api/created`, { method: 'POST' })
       await waitFor(() => eventLogs(output).length === 2, child, () => output)
+      await waitFor(() => drainLogs(output).length === 2, child, () => output)
 
       expect(response).toEqual({ recorded: true })
       expect(created.status).toBe(201)
@@ -62,6 +63,7 @@ describe('cloudflare Workers integration', () => {
         }),
       ])
       expect(JSON.stringify(eventLogs(output))).not.toContain('secret-query-token')
+      expect(drainLogs(output)).toEqual(eventLogs(output))
     }
     finally {
       child.kill('SIGTERM')
@@ -80,8 +82,17 @@ function command(program: string, arguments_: string[], cwd: string): Promise<vo
 function eventLogs(output: string): Record<string, unknown>[] {
   return output
     .split(/\r?\n/)
+    .filter(line => !line.includes('Workerd Drain '))
     .map(line => line.slice(line.indexOf('{')))
     .filter(line => line.startsWith('{') && line.includes('"requestId"'))
+    .map(line => JSON.parse(line) as Record<string, unknown>)
+}
+
+function drainLogs(output: string): Record<string, unknown>[] {
+  return output
+    .split(/\r?\n/)
+    .filter(line => line.includes('Workerd Drain '))
+    .map(line => line.slice(line.indexOf('Workerd Drain ') + 'Workerd Drain '.length))
     .map(line => JSON.parse(line) as Record<string, unknown>)
 }
 

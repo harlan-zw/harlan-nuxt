@@ -93,6 +93,20 @@ describe('nuxt module integration', () => {
     ])
   }, 60_000)
 
+  it('drains request and background Wide Events through one hook', async () => {
+    await runNuxt(['build', 'tests/fixtures/basic'], { NUXT_WIDE_EVENTS_DRAIN: 'true' })
+
+    const result = await requestDrainFixture()
+
+    expect(result.standaloneStatus).toBe(500)
+    expect(result.d1).toEqual([
+      expect.objectContaining({ 'path': '/api/record', 'user.id': 'user_1' }),
+      expect.objectContaining({ 'method': 'UNKNOWN', 'user.id': 'standalone_1' }),
+      expect.objectContaining({ level: 'error', path: '/api/standalone', status: 500 }),
+    ])
+    expect(result.sentry).toEqual(result.d1)
+  }, 60_000)
+
   it('validates imported graph modules with a custom server directory', async () => {
     const fixture = await createGraphFixture()
     try {
@@ -226,6 +240,42 @@ async function requestStandaloneFixture(): Promise<Record<string, unknown>[]> {
   }
 }
 
+async function requestDrainFixture(): Promise<{
+  d1: Record<string, unknown>[]
+  sentry: Record<string, unknown>[]
+  standaloneStatus: number
+}> {
+  const port = await availablePort()
+  const child = spawn(process.execPath, ['.output/server/index.mjs'], {
+    cwd: basicFixture,
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      NO_COLOR: '1',
+      PORT: String(port),
+    },
+    stdio: 'pipe',
+  })
+  let output = ''
+  child.stdout.on('data', chunk => output += String(chunk))
+  child.stderr.on('data', chunk => output += String(chunk))
+
+  try {
+    await waitForServer(child, port, () => output)
+    await fetch(`http://127.0.0.1:${port}/api/record`)
+    const standaloneStatus = await fetch(`http://127.0.0.1:${port}/api/standalone`).then(response => response.status)
+    await waitFor(() => drainLogs(output, 'Sentry').length === 3, child, () => output)
+    return {
+      d1: drainLogs(output, 'D1'),
+      sentry: drainLogs(output, 'Sentry'),
+      standaloneStatus,
+    }
+  }
+  finally {
+    child.kill('SIGTERM')
+  }
+}
+
 async function runRequest(
   child: ChildProcessWithoutNullStreams,
   port: number,
@@ -247,6 +297,14 @@ function eventLogs(output: string): Record<string, unknown>[] {
     .split(/\r?\n/)
     .filter(line => line.startsWith('{') && line.includes('"requestId"'))
     .map(line => JSON.parse(line) as Record<string, unknown>)
+}
+
+function drainLogs(output: string, adapter: 'D1' | 'Sentry'): Record<string, unknown>[] {
+  const prefix = `${adapter} Wide Event `
+  return output
+    .split(/\r?\n/)
+    .filter(line => line.startsWith(prefix))
+    .map(line => JSON.parse(line.slice(prefix.length)) as Record<string, unknown>)
 }
 
 async function waitForServer(child: ChildProcessWithoutNullStreams, port: number, output: () => string): Promise<void> {

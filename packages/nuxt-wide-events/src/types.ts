@@ -13,7 +13,7 @@ export interface ModuleOptions {
   sampling?: WideEventSamplingConfig
   /** Write each Wide Event as one JSON line to stdout. */
   console?: boolean
-  /** Call the wide-events:emit hook after each request. */
+  /** Call the wide-events:emit hook for each request and background Wide Event. */
   drain?: boolean
 }
 
