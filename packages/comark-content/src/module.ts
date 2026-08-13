@@ -11,16 +11,14 @@ import {
   addImports,
   addServerHandler,
   addServerPlugin,
-  addTemplate,
   createResolver,
   defineNuxtModule,
   importModule,
   useLogger,
 } from '@nuxt/kit'
 import { assertSupportedOptions } from './config'
-import { contentComponentDirectories, renderComponentManifest } from './components'
+import { addUnprefixedContentAliases, contentComponentDirectories, renderComponentManifest } from './components'
 import { ingestCollections } from './core/ingest'
-import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 import { excludeNuxtContentSitemapSource } from './sitemap'
 
 export * from './config'
@@ -97,30 +95,18 @@ export default defineNuxtModule<ModuleOptions>({
     const logger = useLogger('comark-content')
     const componentTags = new Set<string>()
 
-    const contentComponents: Array<{ path: string, pathPrefix: boolean, prefix: string }> = []
+    const contentComponents: string[] = []
     for (const path of contentComponentDirectories(nuxt.options._layers)) {
       if ((await stat(path).catch(() => undefined))?.isDirectory())
-        contentComponents.push({ path, pathPrefix: false, prefix: '' })
+        contentComponents.push(path)
     }
-    nuxt.hook('components:dirs', (dirs) => {
-      dirs.unshift(...contentComponents)
-    })
-
-    const componentsTemplate = addTemplate({
-      filename: 'comark-content/components.mjs',
-      write: true,
-      getContents: ({ app }) => renderComponentManifest(componentTags, app.components, join(nuxt.options.buildDir, 'comark-content')),
-    })
-    nuxt.options.alias['#comark-content/components'] = componentsTemplate.dst
+    const componentsTemplate = join(nuxt.options.buildDir, 'comark-content/components.mjs')
+    nuxt.options.alias['#comark-content/components'] = componentsTemplate
 
     nuxt.hook('components:extend', async (components) => {
-      for (const component of components) {
-        if (![...componentTags].some(tag => componentMatchesTag(tag, component.pascalName)))
-          continue
-        component.global = 'sync'
-      }
-      await mkdir(dirname(componentsTemplate.dst), { recursive: true })
-      await writeFile(componentsTemplate.dst, renderComponentManifest(componentTags, components, join(nuxt.options.buildDir, 'comark-content')))
+      components.splice(0, components.length, ...addUnprefixedContentAliases(components, contentComponents))
+      await mkdir(dirname(componentsTemplate), { recursive: true })
+      await writeFile(componentsTemplate, renderComponentManifest(componentTags, components, dirname(componentsTemplate)))
     })
 
     addComponent({ name: 'ContentRenderer', filePath: resolver.resolve('./runtime/components/ContentRenderer') })

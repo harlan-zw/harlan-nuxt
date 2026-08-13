@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assertSupportedOptions, defineCollection } from '../src/config'
-import { contentComponentDirectories, renderComponentManifest } from '../src/components'
+import { addUnprefixedContentAliases, contentComponentDirectories, renderComponentManifest } from '../src/components'
 
 describe('configuration boundary', () => {
   it('finds unprefixed content component directories in layer priority order', () => {
@@ -24,6 +24,37 @@ describe('configuration boundary', () => {
       ],
       '/site/.nuxt/comark-content',
     )).toContain('"project-list": { name: "ProjectList"')
+  })
+
+  it('renders content components before Markdown ingestion completes', () => {
+    const manifest = renderComponentManifest(
+      new Set(),
+      [
+        { pascalName: 'ContentPostList', filePath: '/site/app/components/content/PostList.vue' },
+        { pascalName: 'ProseA', filePath: '/ui/runtime/components/prose/A.vue' },
+      ],
+      '/site/.nuxt/comark-content',
+    )
+
+    expect(manifest).toContain('"postlist": { name: "ContentPostList"')
+    expect(manifest).toContain('"a": { name: "ProseA"')
+  })
+
+  it('preserves Content aliases while adding native names', () => {
+    const components = addUnprefixedContentAliases([
+      {
+        pascalName: 'ContentPostMeta',
+        kebabName: 'content-post-meta',
+        export: 'default',
+        filePath: '/site/app/components/content/PostMeta.vue',
+        shortPath: 'content/PostMeta.vue',
+        chunkName: 'components/content-post-meta',
+        prefetch: false,
+        preload: false,
+      },
+    ], ['/site/app/components/content'])
+
+    expect(components.map(component => component.pascalName)).toEqual(['ContentPostMeta', 'PostMeta'])
   })
 
   it('rejects non-Markdown data collections', () => {
