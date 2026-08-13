@@ -105,6 +105,34 @@ describe('Markdown ingestion', () => {
     expect(result.value.collections.pages?.[0]?.body.toc.links).toEqual([{ id: 'next', depth: 2, text: 'Next' }])
   })
 
+  it('runs Nuxt Content parse hooks around each Markdown document', async () => {
+    const root = await temporaryRoot()
+    const path = await writeFixture(root, 'content/guide.md', '# Original')
+    const calls: string[] = []
+
+    const result = await ingestCollections([
+      { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md' }) },
+    ], {
+      cacheFile: join(root, 'cache.json'),
+      beforeParse: async (context) => {
+        calls.push(`before:${context.file.id}`)
+        expect(context.file.path).toBe(path)
+        expect(context.collection).toMatchObject({ name: 'pages', type: 'page' })
+        context.file.body = '# Changed by hook'
+      },
+      afterParse: async (context) => {
+        calls.push(`after:${context.content.path}`)
+        context.content = { ...context.content, seo: { robots: 'noindex' } }
+      },
+    })
+
+    expect(calls).toEqual(['before:pages/guide.md', 'after:/guide'])
+    expect(result).toMatchObject({
+      _tag: 'Ok',
+      value: { collections: { pages: [{ title: 'Changed by hook', seo: { robots: 'noindex' } }] } },
+    })
+  })
+
   it('builds paths relative to the static source directory', async () => {
     const root = await temporaryRoot()
     await writeFixture(root, 'content/docs/guide.md', '# Guide')

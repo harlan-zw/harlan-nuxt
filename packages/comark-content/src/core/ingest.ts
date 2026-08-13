@@ -1,6 +1,7 @@
 import type { MarkdownDocument } from 'comark'
 import type { CollectionDefinition, StandardSchemaIssue } from '../config'
 import type { ContentHighlight } from '../highlight'
+import type { ContentHook } from '../hooks'
 import type { PageCollectionItemBase, Result } from '../runtime/types'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -14,6 +15,7 @@ import { contentPath, sourceStem } from './path'
 import { prepareRemoteSource } from './remote'
 import { err, ok, sourceError } from './result'
 import { resolveCollectionSource, scanSource } from './source'
+import { contentHookCollection, contentHookFile, parserOptions } from '../hooks'
 
 export type LoadedCollection = {
   name: string
@@ -28,7 +30,7 @@ export type IngestionResult = {
   componentTags: string[]
 }
 
-type IngestionOptions = {
+type IngestionOptions = ContentHook & {
   cacheFile: string
   remoteCacheDir?: string
   parse?: (source: string) => Promise<MarkdownDocument>
@@ -145,7 +147,11 @@ export const ingestCollections = async (
     }
     const items: PageCollectionItemBase[] = []
     for (const file of files) {
-      const markdown = await readFile(file.path, 'utf8')
+      const fileId = `${collection.name}/${file.key}`
+      const hookFile = contentHookFile(fileId, file.path, await readFile(file.path, 'utf8'))
+      const hookCollection = contentHookCollection(collection.name, collection.definition)
+      await options.beforeParse?.({ file: hookFile, collection: hookCollection, parserOptions: parserOptions() })
+      const markdown = hookFile.body
       const checksum = digest(markdown, JSON.stringify(options.highlight ?? false))
       const cacheKey = `${collection.name}:${file.path}`
       let document: MarkdownDocument
@@ -176,8 +182,8 @@ export const ingestCollections = async (
         componentTags.add(tag)
       const path = contentPath(file.key, source.prefix)
       const meta = document.meta as Record<string, unknown>
-      items.push({
-        id: `${collection.name}/${file.key}`,
+      const item: PageCollectionItemBase = {
+        id: fileId,
         path,
         stem: sourceStem(file.key),
         extension: 'md',
@@ -193,7 +199,10 @@ export const ingestCollections = async (
         },
         body: { ...document, toc: (meta.toc ?? { links: [] }) } as PageCollectionItemBase['body'],
         _source: file.path,
-      })
+      }
+      const afterParse = { file: hookFile, content: item, collection: contentHookCollection(collection.name, collection.definition, item) }
+      await options.afterParse?.(afterParse)
+      items.push(afterParse.content)
     }
     collections[collection.name] = items
   }

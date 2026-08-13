@@ -24,6 +24,7 @@ import { excludeNuxtContentSitemapSource } from './sitemap'
 
 export * from './config'
 export type * from './highlight'
+export type * from './hooks'
 export type * from './runtime/types'
 
 export interface ModuleOptions {
@@ -70,6 +71,18 @@ export default defineNuxtModule<ModuleOptions>({
     name: '@harlan-zw/comark-content',
     configKey: 'content',
     compatibility: { nuxt: '>=4.5.0 <5.0.0' },
+  },
+  moduleDependencies: {
+    '@nuxt/ui': {
+      version: '>=4.0.0',
+      optional: true,
+      defaults: { content: true, prose: true },
+    },
+    '@nuxtjs/sitemap': {
+      version: '>=8.0.0',
+      optional: true,
+      defaults: { excludeAppSources: ['@nuxt/content@v3:urls'] },
+    },
   },
   defaults: {},
   async setup(options, nuxt) {
@@ -133,7 +146,13 @@ export default defineNuxtModule<ModuleOptions>({
     const buildCollections = async () => {
       const loaded = await loadCollections(nuxt.options._layers as unknown as ReadonlyArray<Record<string, unknown>>)
       const startedAt = performance.now()
-      const result = await ingestCollections(loaded, { cacheFile, remoteCacheDir, highlight: options.highlight })
+      const result = await ingestCollections(loaded, {
+        cacheFile,
+        remoteCacheDir,
+        highlight: options.highlight,
+        beforeParse: context => nuxt.callHook('content:file:beforeParse', context),
+        afterParse: context => nuxt.callHook('content:file:afterParse', context),
+      })
       if (result._tag === 'Err')
         throw new Error(result.error.message, { cause: result.error.cause })
       componentTags.clear()

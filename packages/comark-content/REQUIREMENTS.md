@@ -31,7 +31,7 @@ The fleet has 34 Markdown page collections across eight consumers. `zhead.dev` a
 | Navigation | Navigation tree, item surroundings, heading search sections, hidden navigation entries | General-purpose navigation customization not present in scoped content |
 | Rendering | Direct Comark nodes, semantic HTML, renderer classes, `ContentProseX` and `ProseX` HTML overrides, `ContentX`, `ProseX`, and `LazyContentX` component resolution, aliases, named slots, bound props, `unwrap="p"`, described images, styled links, and code blocks. Shiki loads only configured themes and languages. | MDC nodes, MDC parser, `@nuxtjs/mdc`, runtime Markdown parsing, a general MDC compatibility layer |
 | Dependencies | `comark` and `@nuxt/kit` are direct runtime dependencies. Nuxt and Vue are peers. Shiki is an optional peer for configured highlighting. | Runtime utility, glob, Git, database, schema, Markdown, and rendering packages |
-| Integrations | Sitemap entries projected from collections at Nitro build time | Nuxt Content `content:*` hooks and compatibility endpoints |
+| Integrations | Sitemap entries projected from collections at Nitro build time. Nuxt UI prose and content components. `content:file:beforeParse` and `content:file:afterParse` for Nuxt SEO modules. | Nuxt Content compatibility endpoints and database hooks |
 | Database | None | D1, SQLite, PostgreSQL, browser WASM, generated SQL endpoint |
 | Authoring | Build-time read only | Studio, preview API, live edit, content writes |
 
