@@ -294,6 +294,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-dx',
     configKey: 'nuxtDx',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     enabled: true,

@@ -42,10 +42,10 @@ function emptyMeta(): JobStaticMeta {
  * Parsing is tolerant: any parse failure (or absence of a `defineJob` call)
  * yields the all-default shape rather than throwing.
  */
-export function extractJobMeta(code: string): JobStaticMeta {
+export function extractJobMeta(code: string, filename = 'job.ts'): JobStaticMeta {
   const meta = emptyMeta()
 
-  const arg = findStaticObjectCall(code, ['defineJob'])
+  const arg = findStaticObjectCall(code, ['defineJob'], filename)
   if (!arg)
     return meta
 

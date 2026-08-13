@@ -18,6 +18,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-github-sponsors',
     configKey: 'githubSponsors',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     mode: 'runtime',

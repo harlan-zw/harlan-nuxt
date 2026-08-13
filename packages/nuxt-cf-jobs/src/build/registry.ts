@@ -126,7 +126,7 @@ export async function buildRegistryPlan(options: ModuleOptions, rootDir: string,
   const uniqueSources = dedupeRegistrySources([...discovered, ...sources])
   const entries = await Promise.all(uniqueSources.map(async (source): Promise<RegistryBuildPlanEntry> => {
     const file = resolve(source.file)
-    const meta = extractJobMeta(await readFile(file, 'utf8'))
+    const meta = extractJobMeta(await readFile(file, 'utf8'), file)
     return {
       file,
       meta,
