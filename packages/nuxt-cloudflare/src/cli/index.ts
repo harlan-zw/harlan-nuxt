@@ -63,7 +63,7 @@ const doctor = defineCommand({
 const main = defineCommand({
   meta: {
     name: 'nuxt-cloudflare',
-    version: '0.0.12',
+    version: '0.0.13',
     description: 'Cloudflare deployment defaults and diagnostics for Nuxt',
   },
   subCommands: { doctor },
