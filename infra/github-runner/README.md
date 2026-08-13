@@ -65,6 +65,25 @@ systemctl --user daemon-reload
 systemctl --user enable --now harlans-desktop-github-runner.service
 ```
 
+## Status
+
+```bash
+harlans-desktop-runner          # both sections
+harlans-desktop-runner pool     # the workstation only, no network calls
+harlans-desktop-runner sites    # open pull requests and their checks
+```
+
+`pool` reads the supervisor's own reservation files under `XDG_RUNTIME_DIR`, the
+same ones it sizes bursts from, so it reports what the supervisor believes rather
+than a second guess from `docker ps`. That is also why the unit does not put its
+state in `/tmp`: `PrivateTmp` would hide it from this command.
+
+`sites` lists every open pull request across the inventory with its check state,
+then up to three recent local branches per repository that have commits and no
+pull request. That last part is capped on purpose, since nuxtseo.com alone keeps
+over a hundred branches. Raise `HARLANS_DESKTOP_RUNNER_BRANCH_LIMIT` for the long
+tail.
+
 Check capacity and logs:
 
 ```bash

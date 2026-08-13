@@ -49,6 +49,11 @@ readonly cpu_budget="${HARLANS_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 # returns the pool to `warm` after a quiet spell.
 readonly burst_idle_seconds="${HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
+# Readable by the status command, unlike /tmp under this unit's PrivateTmp.
+readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlans-desktop-github-runner"
+# Copied here at startup so the status command can size pools without reading a
+# config path it would otherwise have to guess.
+readonly published_config="$state_root/runners.conf"
 
 state_dir=''
 scale_pipe=''
@@ -380,9 +385,15 @@ main() {
 
   read_config
 
-  state_dir="$(mktemp --directory --tmpdir harlans-desktop-github-runner.XXXXXX)"
+  # A fixed path under the runtime directory, not mktemp under /tmp. The unit sets
+  # PrivateTmp, so anything in /tmp is invisible to `harlans-desktop-runner status`
+  # and the counts it reports would have to be guessed from `docker ps` instead of
+  # read from the real reservations.
+  state_dir="$state_root"
+  rm --recursive --force "$state_dir"
   mkdir --parents "$state_dir/spend" "$state_dir/claimed" "$state_dir/burst"
   scale_pipe="$state_dir/scale"
+  cp "$config_file" "$published_config"
   mkfifo --mode 0600 "$scale_pipe"
 
   # Leftovers from a previous supervisor hold registrations this process cannot
