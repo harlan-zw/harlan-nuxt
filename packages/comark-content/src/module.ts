@@ -20,6 +20,7 @@ import {
 import { assertSupportedOptions } from './config'
 import { ingestCollections } from './core/ingest'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
+import { excludeNuxtContentSitemapSource } from './sitemap'
 
 export * from './config'
 export type * from './highlight'
@@ -73,6 +74,8 @@ export default defineNuxtModule<ModuleOptions>({
   defaults: {},
   async setup(options, nuxt) {
     assertSupportedOptions(options as Record<string, unknown>, join(nuxt.options.rootDir, 'nuxt.config.ts'))
+    const nuxtOptions = nuxt.options as typeof nuxt.options & { sitemap?: Parameters<typeof excludeNuxtContentSitemapSource>[0] }
+    nuxtOptions.sitemap = excludeNuxtContentSitemapSource(nuxtOptions.sitemap)
     const resolver = createResolver(import.meta.url)
     const outputDir = join(nuxt.options.rootDir, 'node_modules/.cache/comark-content/generated')
     const cacheFile = join(nuxt.options.rootDir, '.data/comark-content/cache.json')

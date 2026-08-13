@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
 import { createNavigation, createSearchSections, createSurroundings } from '../src/runtime/core/navigation'
 import { createSitemapEntries } from '../src/runtime/core/sitemap'
+import { excludeNuxtContentSitemapSource } from '../src/sitemap'
 
 const body: PageCollectionItemBase['body'] = {
   frontmatter: {},
@@ -22,6 +23,18 @@ const pages: PageCollectionItemBase[] = [
 ]
 
 describe('derived collection data', () => {
+  it('disables the sitemap source inferred from a transitive Nuxt Content dependency', () => {
+    expect(excludeNuxtContentSitemapSource(undefined)).toEqual({
+      excludeAppSources: ['@nuxt/content@v3:urls'],
+    })
+    expect(excludeNuxtContentSitemapSource({ excludeAppSources: ['nuxt:prerender'] })).toEqual({
+      excludeAppSources: ['nuxt:prerender', '@nuxt/content@v3:urls'],
+    })
+    expect(excludeNuxtContentSitemapSource({ excludeAppSources: true })).toEqual({
+      excludeAppSources: true,
+    })
+  })
+
   it('creates nested navigation and carries requested fields', () => {
     expect(createNavigation(pages, ['new'])).toEqual([{
       title: 'Guide',
