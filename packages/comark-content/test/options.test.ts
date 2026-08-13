@@ -5,9 +5,14 @@ import { contentComponentDirectories } from '../src/components'
 describe('configuration boundary', () => {
   it('finds unprefixed content component directories in layer priority order', () => {
     expect(contentComponentDirectories([
-      { config: { srcDir: '/app' } },
-      { config: { srcDir: '/layer' } },
-    ])).toEqual(['/layer/components/content', '/app/components/content'])
+      { config: { srcDir: '/site', dir: { app: 'app' } } },
+      { config: { srcDir: '/layer', dir: { app: 'application' } } },
+    ])).toEqual([
+      '/layer/application/components/content',
+      '/layer/components/content',
+      '/site/app/components/content',
+      '/site/components/content',
+    ])
   })
 
   it('rejects non-Markdown data collections', () => {
