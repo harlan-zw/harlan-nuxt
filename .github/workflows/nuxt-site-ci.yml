@@ -1,0 +1,122 @@
+name: Nuxt site CI
+
+# The pull request gate shared by every Harlan site. A calling repository keeps a
+# ten line workflow and gets lint, typecheck, and test as three separate,
+# separately required checks.
+#
+# Build is deliberately absent. A build needs that site's own production secrets,
+# and a reusable workflow cannot take an open-ended env block, so build stays in
+# the site's deploy workflow where those secrets already live. The same split
+# holds on nuxtseo.com, where the deploy workflow builds and the PR gate does not.
+#
+# Moving a site between GitHub-hosted and the workstation pool is one input:
+#
+#   runs-on: '["self-hosted", "linux", "x64", "harlan-ci"]'
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: JSON array of runner labels. Self-hosted pools are private repositories only.
+        type: string
+        required: false
+        default: '["ubuntu-24.04-arm"]'
+      node-version:
+        type: string
+        required: false
+        default: '24'
+      install-args:
+        description: Extra `pnpm install` flags, on top of `--frozen-lockfile`.
+        type: string
+        required: false
+        default: '--ignore-scripts'
+      prepare-command:
+        description: >-
+          Runs before every job's own command, for generated output a check needs.
+          Usually `pnpm nuxt:prepare` or a filtered form of it. Empty runs nothing.
+        type: string
+        required: false
+        default: ''
+      lint-command:
+        description: Empty skips the lint job.
+        type: string
+        required: false
+        default: 'pnpm lint'
+      typecheck-command:
+        description: Empty skips the typecheck job.
+        type: string
+        required: false
+        default: 'pnpm typecheck'
+      test-command:
+        description: Empty skips the test job.
+        type: string
+        required: false
+        default: 'pnpm test:run'
+      typecheck-node-options:
+        description: vue-tsc on a large workspace needs a raised heap.
+        type: string
+        required: false
+        default: '--max-old-space-size=8192'
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: inputs.lint-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          install-args: ${{ inputs.install-args }}
+      # ESLint does no type-aware linting on these sites, so it never reads a
+      # `.nuxt` directory and the prepare cascade is pure cost here.
+      - run: ${{ inputs.lint-command }}
+        shell: bash
+
+  typecheck:
+    if: inputs.typecheck-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          install-args: ${{ inputs.install-args }}
+      - if: inputs.prepare-command != ''
+        run: ${{ inputs.prepare-command }}
+        shell: bash
+      - run: ${{ inputs.typecheck-command }}
+        shell: bash
+        env:
+          NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
+
+  test:
+    if: inputs.test-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+        with:
+          node-version: ${{ inputs.node-version }}
+          install-args: ${{ inputs.install-args }}
+      - if: inputs.prepare-command != ''
+        run: ${{ inputs.prepare-command }}
+        shell: bash
+      - run: ${{ inputs.test-command }}
+        shell: bash

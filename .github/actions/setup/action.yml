@@ -1,0 +1,40 @@
+name: Setup pnpm workspace
+description: Install pnpm, Node, and the workspace, with the store cached and lifecycle scripts off.
+
+# The four steps below were copied into ten repositories, which is why the action
+# SHA, the Node version, and the install flags had drifted apart across 22, 24,
+# 24.x, lts/*, 24.11.0, and 24.18.0. Pin them once here instead.
+
+inputs:
+  node-version:
+    description: Node to install. Keep this the version production builds on.
+    required: false
+    default: '24'
+  install:
+    description: Set to `false` to install by hand, for a job that needs different flags.
+    required: false
+    default: 'true'
+  install-args:
+    description: >-
+      Extra `pnpm install` flags. `--frozen-lockfile` is always applied.
+      `--ignore-scripts` is the default because a Nuxt workspace's postinstall
+      cascade can cost minutes that most jobs never use.
+    required: false
+    default: '--ignore-scripts'
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+    # `cache: pnpm` keys the pnpm store on pnpm-lock.yaml. Without it a job
+    # re-downloads the whole dependency set; on nuxtseo.com that measured about
+    # 56s of every job.
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: pnpm
+
+    - if: inputs.install == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
