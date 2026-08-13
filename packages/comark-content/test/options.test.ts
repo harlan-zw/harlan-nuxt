@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assertSupportedOptions, defineCollection } from '../src/config'
-import { contentComponentDirectories } from '../src/components'
-import { runContentBuild } from '../src/build'
+import { contentComponentDirectories, renderComponentManifest } from '../src/components'
 
 describe('configuration boundary', () => {
   it('finds unprefixed content component directories in layer priority order', () => {
@@ -16,13 +15,15 @@ describe('configuration boundary', () => {
     ])
   })
 
-  it('refreshes generated templates after content tags become available', async () => {
-    const calls: string[] = []
-    await runContentBuild(
-      async () => { calls.push('ingest') },
-      async () => { calls.push('templates') },
-    )
-    expect(calls).toEqual(['ingest', 'templates'])
+  it('renders discovered tags from the completed component scan', () => {
+    expect(renderComponentManifest(
+      new Set(['project-list', 'post-list']),
+      [
+        { pascalName: 'ProjectList', filePath: '/site/app/components/content/ProjectList.vue' },
+        { pascalName: 'PostList', filePath: '/site/app/components/content/PostList.vue' },
+      ],
+      '/site/.nuxt/comark-content',
+    )).toContain('"project-list": { name: "ProjectList"')
   })
 
   it('rejects non-Markdown data collections', () => {

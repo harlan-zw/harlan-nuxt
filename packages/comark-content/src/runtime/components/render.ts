@@ -1,6 +1,7 @@
 import type { Component, VNode, VNodeChild } from 'vue'
 import type { Node } from 'comark'
 import { createCommentVNode, h } from 'vue'
+import { htmlTags } from './names'
 
 type RenderOptions = {
   source: string
@@ -8,11 +9,17 @@ type RenderOptions = {
   resolveTag?: (tag: string) => string | Component
 }
 
-const componentProps = (node: Exclude<Node, string>, attributes: Record<string, unknown>, options: RenderOptions) => {
+const scalarProperty = (value: unknown) => {
+  if (typeof value !== 'string' || !/^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(value))
+    return value
+  return JSON.parse(value)
+}
+
+const componentProps = (node: Exclude<Node, string>, attributes: Record<string, unknown>, options: RenderOptions, nativeTag: boolean) => {
   const props: Record<string, unknown> = { __node: node }
   for (const [name, value] of Object.entries(attributes)) {
     if (!name.startsWith(':')) {
-      props[name] = value
+      props[name] = nativeTag ? value : scalarProperty(value)
       continue
     }
     const prop = name.slice(1)
@@ -20,6 +27,10 @@ const componentProps = (node: Exclude<Node, string>, attributes: Record<string, 
       props[prop] = typeof value === 'string' ? JSON.parse(value) : value
     }
     catch (cause) {
+      if (nativeTag && typeof value === 'string') {
+        props[prop] = value
+        continue
+      }
       throw new TypeError(`${options.source}:${node[1].$?.line ?? 1}:1 Could not parse the bound property "${prop}".`, { cause })
     }
   }
@@ -60,7 +71,7 @@ const renderNode = (node: Node, options: RenderOptions, key: string): VNodeChild
     const name = String(template[1].name)
     slots[name] = () => template.slice(2).map((child, index) => renderNode(child as Node, options, `${key}.${name}.${index}`))
   }
-  return h(resolved, { ...componentProps(node, props, options), key }, slots)
+  return h(resolved, { ...componentProps(node, props, options, htmlTags.has(tag)), key }, slots)
 }
 
 export const renderNodes = (nodes: readonly Node[], options: RenderOptions): VNodeChild[] => {

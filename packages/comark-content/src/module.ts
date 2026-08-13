@@ -4,7 +4,7 @@ import type { ContentHighlight } from './highlight'
 import type { NitroConfig } from 'nitropack/types'
 import { existsSync } from 'node:fs'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import {
   addComponent,
@@ -15,12 +15,10 @@ import {
   createResolver,
   defineNuxtModule,
   importModule,
-  updateTemplates,
   useLogger,
 } from '@nuxt/kit'
 import { assertSupportedOptions } from './config'
-import { contentComponentDirectories } from './components'
-import { runContentBuild } from './build'
+import { contentComponentDirectories, renderComponentManifest } from './components'
 import { ingestCollections } from './core/ingest'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 import { excludeNuxtContentSitemapSource } from './sitemap'
@@ -111,30 +109,18 @@ export default defineNuxtModule<ModuleOptions>({
     const componentsTemplate = addTemplate({
       filename: 'comark-content/components.mjs',
       write: true,
-      getContents: ({ app }) => {
-        const components = new Map(app.components.map(component => [component.pascalName, component]))
-        const entries = [...componentTags].flatMap((tag) => {
-          const component = componentCandidates(tag).map(name => components.get(name)).find(Boolean)
-            ?? [...components.values()].find(value => componentMatchesTag(tag, value.pascalName))
-          if (!component || component.filePath.endsWith('.css'))
-            return []
-          const importPath = isAbsolute(component.filePath)
-            ? `./${relative(join(nuxt.options.buildDir, 'comark-content'), component.filePath).replaceAll('\\', '/')}`
-            : component.filePath
-          const exportName = component.export || 'default'
-          return [`${JSON.stringify(tag)}: { name: ${JSON.stringify(component.pascalName)}, load: () => import(${JSON.stringify(importPath)}).then(module => module[${JSON.stringify(exportName)}]) }`]
-        })
-        return `export default {\n  ${entries.join(',\n  ')}\n}\n`
-      },
+      getContents: ({ app }) => renderComponentManifest(componentTags, app.components, join(nuxt.options.buildDir, 'comark-content')),
     })
     nuxt.options.alias['#comark-content/components'] = componentsTemplate.dst
 
-    nuxt.hook('components:extend', (components) => {
+    nuxt.hook('components:extend', async (components) => {
       for (const component of components) {
         if (![...componentTags].some(tag => componentMatchesTag(tag, component.pascalName)))
           continue
         component.global = 'sync'
       }
+      await mkdir(dirname(componentsTemplate.dst), { recursive: true })
+      await writeFile(componentsTemplate.dst, renderComponentManifest(componentTags, components, join(nuxt.options.buildDir, 'comark-content')))
     })
 
     addComponent({ name: 'ContentRenderer', filePath: resolver.resolve('./runtime/components/ContentRenderer') })
@@ -178,15 +164,12 @@ export default defineNuxtModule<ModuleOptions>({
       logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
     }
 
-    const rebuildCollections = () => runContentBuild(buildCollections, () => updateTemplates({
-      filter: template => template.dst === componentsTemplate.dst,
-    }))
-    nuxt.hook('modules:done', rebuildCollections)
+    nuxt.hook('modules:done', buildCollections)
     let rebuild = Promise.resolve()
     nuxt.hook('builder:watch', (event, path) => {
       if (event !== 'change' || !path.endsWith('.md'))
         return
-      rebuild = rebuild.then(rebuildCollections)
+      rebuild = rebuild.then(buildCollections)
       return rebuild
     })
   },

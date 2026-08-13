@@ -63,6 +63,22 @@ describe('Comark rendering', () => {
     })
   })
 
+  it('preserves static HTML attributes when Comark marks them as bound', () => {
+    const proseLink = { name: 'ProseA' }
+    const node: Node = ['a', { href: 'https://example.com', ':target': '_blank' }, 'Example']
+    const [rendered] = renderNodes([node], { source: '/content/page.md', resolveTag: () => proseLink }) as VNode[]
+
+    expect(rendered?.props).toMatchObject({ href: 'https://example.com', target: '_blank' })
+  })
+
+  it('preserves scalar types for component attributes', () => {
+    const widget = { name: 'StudyIceberg' }
+    const node: Node = ['study-iceberg', { 'ui-rows': '1000', 'hidden-pct': '27.5', 'compact': 'true', 'label': 'Rows' }]
+    const [rendered] = renderNodes([node], { source: '/content/page.md', resolveTag: () => widget }) as VNode[]
+
+    expect(rendered?.props).toMatchObject({ 'ui-rows': 1000, 'hidden-pct': 27.5, compact: true, label: 'Rows' })
+  })
+
   it('renders an inline head reference as text', () => {
     const nodes: Node[] = [['p', {}, 'Document ', ['head', { $: { html: 1, block: 0 } }, ' tag manager.']]]
     const [paragraph] = renderNodes(nodes, { source: '/content/page.md' }) as VNode[]

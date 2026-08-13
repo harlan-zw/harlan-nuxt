@@ -1,6 +1,6 @@
 import type { Node } from 'comark'
 
-const htmlTags = new Set([
+export const htmlTags = new Set([
   'a', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em', 'figcaption',
   'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'iframe', 'img',
   'li', 'ol', 'p', 'pre', 'span', 'strong', 'summary', 'table', 'tbody', 'td',
