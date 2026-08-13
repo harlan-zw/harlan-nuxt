@@ -8,14 +8,23 @@ export interface StandaloneWideEventRecord extends WideEventRecord {
 }
 
 export interface StandaloneWideEvent extends WideEventLike {
+  emit: () => StandaloneWideEventRecord | null
+  setLevel: (level: StandaloneWideEventLevel) => void
+}
+
+export interface DrainedStandaloneWideEvent extends WideEventLike {
   emit: () => Promise<StandaloneWideEventRecord | null>
   setLevel: (level: StandaloneWideEventLevel) => void
 }
 
 interface StandaloneWideEventOptions {
-  output?: (record: StandaloneWideEventRecord) => Promise<void> | void
+  output?: (record: StandaloneWideEventRecord) => void
   sampling?: StandaloneWideEventSampling
   service?: string
+}
+
+interface DrainedStandaloneWideEventOptions extends StandaloneWideEventOptions {
+  output: (record: StandaloneWideEventRecord) => Promise<void>
 }
 
 interface StandaloneWideEventSampling {
@@ -47,7 +56,7 @@ export function createStandaloneWideEvent(
       throw new Error('The Wide Event was already emitted.')
     level = parseLevel(nextLevel)
   }
-  event.emit = async () => {
+  event.emit = () => {
     const record = emitWideEvent(event, 200, options.service)
     if (!record)
       return null
@@ -56,11 +65,29 @@ export function createStandaloneWideEvent(
     output.level = level
     if (options.sampling && !shouldEmitStandaloneWideEvent(output, options.sampling))
       return null
-    await options.output?.(output)
+    options.output?.(output)
     return output
   }
 
   return event
+}
+
+export function createDrainedStandaloneWideEvent(
+  initialFields: WideEventFields | undefined,
+  options: DrainedStandaloneWideEventOptions,
+): DrainedStandaloneWideEvent {
+  const event = createStandaloneWideEvent(initialFields, {
+    sampling: options.sampling,
+    service: options.service,
+  })
+  const emit = event.emit
+  event.emit = (() => {
+    const record = emit()
+    if (!record)
+      return Promise.resolve(null)
+    return options.output(record).then(() => record)
+  }) as never
+  return event as unknown as DrainedStandaloneWideEvent
 }
 
 function shouldEmitStandaloneWideEvent(

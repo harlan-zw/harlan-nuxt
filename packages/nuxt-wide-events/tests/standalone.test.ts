@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { addWideEventFields } from '../src/runtime/server/index'
 import { createWideEvent } from '../src/runtime/server/standalone'
-import { createStandaloneWideEvent } from '../src/runtime/server/standalone-core'
+import { createDrainedStandaloneWideEvent, createStandaloneWideEvent } from '../src/runtime/server/standalone-core'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('standalone Wide Event', () => {
-  it('collects configured Fields and writes one JSON record', async () => {
+  it('collects configured Fields and writes one JSON record', () => {
     const output = vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent({
       'job.id': 'job_1',
@@ -17,7 +17,7 @@ describe('standalone Wide Event', () => {
 
     addWideEventFields(wideEvent, { 'job.outcome': 'completed' } as never)
     wideEvent.setLevel('warn')
-    const record = await wideEvent.emit()
+    const record = wideEvent.emit()
 
     expect(record).toEqual(expect.objectContaining({
       'job.id': 'job_1',
@@ -29,12 +29,12 @@ describe('standalone Wide Event', () => {
     expect(JSON.parse(output.mock.calls[0]![0] as string)).toEqual(record)
   })
 
-  it('emits only once and rejects later Field mutation', async () => {
+  it('emits only once and rejects later Field mutation', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent()
 
-    expect(await wideEvent.emit()).not.toBeNull()
-    expect(await wideEvent.emit()).toBeNull()
+    expect(wideEvent.emit()).not.toBeNull()
+    expect(wideEvent.emit()).toBeNull()
     expect(() => addWideEventFields(wideEvent, { 'job.id': 'late' } as never)).toThrow(/already emitted/)
   })
 
@@ -45,10 +45,10 @@ describe('standalone Wide Event', () => {
     expect(output).not.toHaveBeenCalled()
   })
 
-  it('rejects a level change after output', async () => {
+  it('rejects a level change after output', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const wideEvent = createWideEvent()
-    await wideEvent.emit()
+    wideEvent.emit()
 
     expect(() => wideEvent.setLevel('error')).toThrow(/already emitted/)
   })
@@ -59,16 +59,16 @@ describe('standalone Wide Event', () => {
     expect(() => wideEvent.setLevel('secret' as never)).toThrow(/level must be/)
   })
 
-  it('copies initial Fields before later caller mutation', async () => {
+  it('copies initial Fields before later caller mutation', () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined)
     const fields = { 'job.id': 'job_1' } as never
     const wideEvent = createWideEvent(fields)
     ;(fields as { 'job.id': string })['job.id'] = 'changed'
 
-    expect(await wideEvent.emit()).toEqual(expect.objectContaining({ 'job.id': 'job_1' }))
+    expect(wideEvent.emit()).toEqual(expect.objectContaining({ 'job.id': 'job_1' }))
   })
 
-  it('applies standalone levels and emits an object to development output', async () => {
+  it('applies standalone levels and emits an object to development output', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const output = vi.fn()
     const sampled = createStandaloneWideEvent(undefined, {
@@ -78,7 +78,7 @@ describe('standalone Wide Event', () => {
     })
     sampled.setLevel('debug')
 
-    expect(await sampled.emit()).toBeNull()
+    expect(sampled.emit()).toBeNull()
     expect(output).not.toHaveBeenCalled()
 
     const kept = createStandaloneWideEvent(undefined, {
@@ -88,13 +88,13 @@ describe('standalone Wide Event', () => {
     })
     kept.setLevel('warn')
 
-    expect(await kept.emit()).toEqual(expect.objectContaining({ level: 'warn', service: 'worker' }))
+    expect(kept.emit()).toEqual(expect.objectContaining({ level: 'warn', service: 'worker' }))
     expect(output).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn', service: 'worker' }))
   })
 
   it('waits for asynchronous drain output before resolving', async () => {
     let finishDrain: (() => void) | undefined
-    const wideEvent = createStandaloneWideEvent(undefined, {
+    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
       output: () => new Promise<void>((resolve) => {
         finishDrain = resolve
       }),
@@ -112,7 +112,7 @@ describe('standalone Wide Event', () => {
   })
 
   it('surfaces asynchronous drain failures', async () => {
-    const wideEvent = createStandaloneWideEvent(undefined, {
+    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
       output: async () => {
         throw new Error('D1 unavailable')
       },

@@ -92,7 +92,7 @@ export default defineTask({
 })
 ```
 
-The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, and `drain` options. `emit()` returns a Promise and waits for background drain adapters.
+The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` remains synchronous.
 
 Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. This package export always uses production JSON output without module configuration.
 
@@ -108,7 +108,7 @@ For requests, replace `log.set({ section: { value } })` with an approved flat Fi
 addWideEventFields(event, { 'section.value': value })
 ```
 
-For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()`. Await or return `.emit()`.
+For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()`. If `drain` is enabled, await or return `.emit()`.
 
 Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
 

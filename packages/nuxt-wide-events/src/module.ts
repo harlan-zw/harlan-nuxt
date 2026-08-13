@@ -65,9 +65,11 @@ export default defineNuxtModule<ModuleOptions>({
     })
     addServerImports({
       name: 'createWideEvent',
-      from: resolver.resolve(nuxt.options.dev
-        ? './runtime/server/standalone-development'
-        : './runtime/server/standalone-production'),
+      from: resolver.resolve(runtimeConfig.drain
+        ? './runtime/server/standalone-drain'
+        : nuxt.options.dev
+          ? './runtime/server/standalone-development'
+          : './runtime/server/standalone-production'),
     })
     addWideEventTypes(resolvedFields.fields)
   },
@@ -101,5 +103,5 @@ declare module 'nitropack/types' {
 
 export {}
 `,
-  }, { nitro: true })
+  }, { nuxt: true, nitro: true })
 }
