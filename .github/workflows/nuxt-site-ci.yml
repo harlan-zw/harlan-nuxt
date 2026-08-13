@@ -11,7 +11,7 @@ name: Nuxt site CI
 #
 # Moving a site between GitHub-hosted and the workstation pool is one input:
 #
-#   runs-on: '["self-hosted", "linux", "x64", "harlan-ci"]'
+#   runs-on: '["self-hosted", "linux", "x64", "harlans-desktop-ci"]'
 #
 # WHY THE SETUP STEPS ARE INLINE
 #

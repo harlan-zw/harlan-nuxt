@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# Ephemeral GitHub Actions runners for every private Harlan site, on one host.
+# Harlan's desktop GitHub runner: ephemeral Actions runners for every private
+# Harlan site, all on this one workstation.
 #
 # GitHub scopes self-hosted runners to a repository, an organization, or an
 # enterprise. Nine of ten sites sit under the user account `harlan-zw`, and
@@ -38,16 +39,16 @@
 
 set -euo pipefail
 
-readonly runner_image="${HARLAN_RUNNER_IMAGE:-harlan-actions-runner:2.336.0}"
-readonly config_file="${HARLAN_RUNNER_CONFIG:-/etc/harlan-actions-runner/runners.conf}"
+readonly runner_image="${HARLANS_DESKTOP_RUNNER_IMAGE:-harlans-desktop-github-runner:2.336.0}"
+readonly config_file="${HARLANS_DESKTOP_RUNNER_CONFIG:-/etc/harlans-desktop-github-runner/runners.conf}"
 # 24 physical cores. Runner work is IO-heavy and rarely saturates its quota, so a
 # modest oversubscription keeps a wide matrix moving without starving
 # interactive work on the workstation.
-readonly cpu_budget="${HARLAN_RUNNER_CPU_BUDGET:-32}"
+readonly cpu_budget="${HARLANS_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
-readonly burst_idle_seconds="${HARLAN_RUNNER_BURST_IDLE_SECONDS:-300}"
-readonly container_label='com.harlan.github-runner'
+readonly burst_idle_seconds="${HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
+readonly container_label='com.harlanzw.desktop-runner'
 
 state_dir=''
 scale_pipe=''
@@ -76,7 +77,7 @@ require_command() {
   fi
 }
 
-# `harlan-zw/nuxtseo.com` + `harlan-ci` -> `nuxtseo-com-ci`. Used for container
+# `harlan-zw/nuxtseo.com` + `harlans-desktop-ci` -> `nuxtseo-com-ci`. Used for container
 # names and the Docker pool label, both of which reject `/` and `.`.
 #
 # A pool may carry several labels, so that a repository can answer to both its
@@ -86,7 +87,7 @@ pool_slug_for() {
   local repository="$1"
   local label="${2%%,*}"
 
-  printf '%s-%s' "${repository##*/}" "${label#harlan-}" \
+  printf '%s-%s' "${repository##*/}" "${label#harlans-desktop-}" \
     | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
     | tr '[:upper:]' '[:lower:]'
 }
@@ -203,7 +204,10 @@ run_container() {
     return 1
   fi
 
-  runner_name="${pool_slug[$pool_index]}-${HOSTNAME:-local}-$$-${RANDOM}"
+  # This string is what a job's log prints as `Runner name:`, and it is the only
+  # place a reader sees whose machine ran their code. Lead with the machine, not
+  # the pool.
+  runner_name="harlans-desktop-${pool_slug[$pool_index]}-$$-${RANDOM}"
 
   # The token enters on stdin, so it never lands on disk and never lands in an
   # env var that `docker inspect` would echo back.
@@ -260,7 +264,7 @@ run_container() {
 run_warm_slot() {
   local pool_index="$1"
   local slot_number="$2"
-  local container_name="${pool_slug[$pool_index]}-$slot_number"
+  local container_name="harlans-desktop-${pool_slug[$pool_index]}-$slot_number"
 
   while true; do
     if ! run_container "$pool_index" warm "$container_name"; then
@@ -311,7 +315,7 @@ run_scaler() {
       fi
 
       burst_counter=$(( burst_counter + 1 ))
-      container_name="$slug-burst-$burst_counter"
+      container_name="harlans-desktop-$slug-burst-$burst_counter"
       # Both reservations are written before the fork, so the next request in
       # this loop already sees this container.
       printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
@@ -376,7 +380,7 @@ main() {
 
   read_config
 
-  state_dir="$(mktemp --directory --tmpdir harlan-actions-runner.XXXXXX)"
+  state_dir="$(mktemp --directory --tmpdir harlans-desktop-github-runner.XXXXXX)"
   mkdir --parents "$state_dir/spend" "$state_dir/claimed" "$state_dir/burst"
   scale_pipe="$state_dir/scale"
   mkfifo --mode 0600 "$scale_pipe"

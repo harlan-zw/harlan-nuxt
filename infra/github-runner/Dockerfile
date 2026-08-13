@@ -32,10 +32,10 @@ RUN curl --fail --location --show-error \
   && rm /tmp/actions-runner.tar.gz \
   && chown --recursive runner:runner /opt/actions-runner
 
-COPY --chown=root:root entrypoint.sh /usr/local/bin/harlan-runner-entrypoint
+COPY --chown=root:root entrypoint.sh /usr/local/bin/harlans-desktop-runner-entrypoint
 
-RUN chmod 0755 /usr/local/bin/harlan-runner-entrypoint
+RUN chmod 0755 /usr/local/bin/harlans-desktop-runner-entrypoint
 
 USER runner
 
-ENTRYPOINT ["/usr/local/bin/harlan-runner-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/harlans-desktop-runner-entrypoint"]
