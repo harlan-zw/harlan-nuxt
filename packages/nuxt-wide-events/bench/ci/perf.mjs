@@ -1,3 +1,4 @@
+import { deepStrictEqual, ok } from 'node:assert/strict'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import v8 from 'node:v8'
@@ -20,33 +21,53 @@ const STARTED_AT = 10
 const ENDED_AT = 12.5
 const TIMESTAMP = '2026-08-13T00:00:00.000Z'
 const ALLOCATION_BATCH_SIZE = 20_000
-const fiveFields = {
-  userId: 'usr_abc123',
-  action: 'checkout',
-  cartItemCount: 3,
-  region: 'au-southeast-2',
-  sessionId: 'sess_xyz789',
-}
-const twentyFields = {
-  ...fiveFields,
-  cartTotal: 9999,
-  currency: 'AUD',
-  accountPlan: 'pro',
-  accountAgeDays: 365,
-  featureCheckoutV2: true,
-  paymentMethod: 'card',
-  paymentAttempt: 1,
-  inventoryReserved: true,
-  shippingCountry: 'AU',
-  shippingPostcode: '3000',
-  couponCode: null,
-  retryCount: 0,
-  queueDepth: 12,
-  responseCached: false,
-  experimentVariant: 'control',
-}
 const error = new Error('CI fixture error')
 let sink
+
+function createFiveFields() {
+  return {
+    action: 'checkout',
+    cartItemCount: 3,
+    region: 'au-southeast-2',
+    sessionId: 'sess_xyz789',
+    userId: 'usr_abc123',
+  }
+}
+
+function createTwentyFields() {
+  return {
+    accountAgeDays: 365,
+    accountPlan: 'pro',
+    action: 'checkout',
+    cartItemCount: 3,
+    cartTotal: 9999,
+    couponCode: null,
+    currency: 'AUD',
+    experimentVariant: 'control',
+    featureCheckoutV2: true,
+    inventoryReserved: true,
+    paymentAttempt: 1,
+    paymentMethod: 'card',
+    queueDepth: 12,
+    region: 'au-southeast-2',
+    responseCached: false,
+    retryCount: 0,
+    sessionId: 'sess_xyz789',
+    shippingCountry: 'AU',
+    shippingPostcode: '3000',
+    userId: 'usr_abc123',
+  }
+}
+
+function createLaterFields() {
+  return {
+    cacheHit: true,
+    queueDepth: 12,
+    retryCount: 0,
+    shippingCountry: 'AU',
+    tenantId: 'tenant_abc123',
+  }
+}
 
 function forceGarbageCollection() {
   globalThis.gc()
@@ -140,10 +161,10 @@ function measureAllocation(baseOperation, pullRequestOperation) {
 }
 
 function createScenarios(runtime) {
-  function fixedEvent(fields, hasError = false) {
+  function fixedEvent(createFields, hasError = false) {
     const event = { context: {}, method: 'POST' }
     runtime.startWideEvent(event, REQUEST_ID, STARTED_AT)
-    runtime.addWideEventFields(event, fields)
+    runtime.addWideEventFields(event, createFields(), true)
     if (hasError)
       runtime.captureWideEventError(event, error)
     return JSON.stringify(runtime.emitWideEvent(
@@ -159,15 +180,24 @@ function createScenarios(runtime) {
   function runtimeEvent() {
     const event = { context: {}, method: 'POST' }
     runtime.startWideEvent(event)
-    runtime.addWideEventFields(event, fiveFields)
+    runtime.addWideEventFields(event, createFiveFields(), true)
     return JSON.stringify(runtime.emitWideEvent(event, 200, 'ci', '/api/checkout'))
   }
 
+  function layeredEvent() {
+    const event = { context: {}, method: 'POST' }
+    runtime.startWideEvent(event, REQUEST_ID, STARTED_AT)
+    runtime.addWideEventFields(event, createFiveFields(), true)
+    runtime.addWideEventFields(event, createLaterFields(), true)
+    return JSON.stringify(runtime.emitWideEvent(event, 200, 'ci', '/api/checkout', ENDED_AT, TIMESTAMP))
+  }
+
   return [
-    { id: 'five', name: 'Five Fields serialized', operation: () => fixedEvent(fiveFields), cpuBatchSize: 1_500_000 },
-    { id: 'twenty', name: 'Twenty Fields serialized', operation: () => fixedEvent(twentyFields), cpuBatchSize: 250_000 },
+    { id: 'five', name: 'Five Fields serialized', operation: () => fixedEvent(createFiveFields), cpuBatchSize: 1_500_000 },
+    { id: 'twenty', name: 'Twenty Fields serialized', operation: () => fixedEvent(createTwentyFields), cpuBatchSize: 250_000 },
+    { id: 'layered', name: 'Two Field layers serialized', operation: layeredEvent, cpuBatchSize: 700_000 },
     { id: 'runtime', name: 'Runtime clocks and request ID', operation: runtimeEvent, cpuBatchSize: 600_000 },
-    { id: 'error', name: 'Error lifecycle', operation: () => fixedEvent(fiveFields, true), cpuBatchSize: 1_200_000 },
+    { id: 'error', name: 'Error lifecycle', operation: () => fixedEvent(createFiveFields, true), cpuBatchSize: 1_200_000 },
   ]
 }
 
@@ -182,6 +212,10 @@ async function main() {
   ])
   const baseScenarios = baseRuntime ? createScenarios(baseRuntime) : undefined
   const pullRequestScenarios = createScenarios(pullRequestRuntime)
+  if (baseScenarios) {
+    for (const [index, scenario] of pullRequestScenarios.entries())
+      deepStrictEqual(normalizedOutput(scenario, scenario.operation()), normalizedOutput(scenario, baseScenarios[index].operation()))
+  }
   const allocationOnly = process.argv.includes('--alloc-only')
   const baseBenches = []
   const pullRequestBenches = []
@@ -207,6 +241,16 @@ async function main() {
     base: baseBenches.length ? { benches: baseBenches } : null,
     pullRequest: { benches: pullRequestBenches },
   })}\n`)
+}
+
+function normalizedOutput(scenario, output) {
+  const record = JSON.parse(output)
+  if (scenario.id !== 'runtime')
+    return record
+  ok(typeof record.durationMs === 'number')
+  ok(typeof record.requestId === 'string')
+  ok(typeof record.timestamp === 'string')
+  return { ...record, durationMs: '<duration>', requestId: '<requestId>', timestamp: '<timestamp>' }
 }
 
 main().catch((error) => {

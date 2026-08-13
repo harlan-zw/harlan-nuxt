@@ -15,6 +15,51 @@ const fields = {
 }
 let sink
 
+function createFiveFields() {
+  return {
+    action: 'checkout',
+    cartItemCount: 3,
+    region: 'au-southeast-2',
+    sessionId: 'sess_xyz789',
+    userId: 'usr_abc123',
+  }
+}
+
+function createTwentyFields() {
+  return {
+    accountAgeDays: 365,
+    accountPlan: 'pro',
+    action: 'checkout',
+    cartItemCount: 3,
+    cartTotal: 9999,
+    couponCode: null,
+    currency: 'AUD',
+    experimentVariant: 'control',
+    featureCheckoutV2: true,
+    inventoryReserved: true,
+    paymentAttempt: 1,
+    paymentMethod: 'card',
+    queueDepth: 12,
+    region: 'au-southeast-2',
+    responseCached: false,
+    retryCount: 0,
+    sessionId: 'sess_xyz789',
+    shippingCountry: 'AU',
+    shippingPostcode: '3000',
+    userId: 'usr_abc123',
+  }
+}
+
+function createLaterFields() {
+  return {
+    cacheHit: true,
+    queueDepth: 12,
+    retryCount: 0,
+    shippingCountry: 'AU',
+    tenantId: 'tenant_abc123',
+  }
+}
+
 initLogger({
   env: { environment: 'production', service: 'profile' },
   pretty: false,
@@ -27,8 +72,35 @@ for (let iteration = 0; iteration < iterations; iteration++) {
   if (scenario === 'wide') {
     const event = { context: {}, method: 'POST' }
     startWideEvent(event)
-    addWideEventFields(event, fields)
+    addWideEventFields(event, createFiveFields(), true)
     sink = JSON.stringify(emitWideEvent(event, 200, 'profile', '/api/checkout'))
+  }
+  else if (scenario === 'wide-fixed') {
+    const event = { context: {}, method: 'POST' }
+    startWideEvent(event, 'req_profile_abc123', 10)
+    addWideEventFields(event, createTwentyFields(), true)
+    sink = JSON.stringify(emitWideEvent(
+      event,
+      200,
+      'profile',
+      '/api/checkout',
+      12.5,
+      '2026-08-13T00:00:00.000Z',
+    ))
+  }
+  else if (scenario === 'wide-layered') {
+    const event = { context: {}, method: 'POST' }
+    startWideEvent(event, 'req_profile_abc123', 10)
+    addWideEventFields(event, createFiveFields(), true)
+    addWideEventFields(event, createLaterFields(), true)
+    sink = JSON.stringify(emitWideEvent(
+      event,
+      200,
+      'profile',
+      '/api/checkout',
+      12.5,
+      '2026-08-13T00:00:00.000Z',
+    ))
   }
   else if (scenario === 'evlog') {
     const log = createLogger({

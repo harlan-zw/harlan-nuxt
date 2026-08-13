@@ -14,21 +14,28 @@ interface ServerEvent extends WideEventLike {
   response?: { status?: number }
 }
 
+interface RequestEvent extends WideEventLike {
+  path: string
+}
+
 interface ServerResponse {
   status?: number
   statusCode?: number
 }
 
 const ERROR_KEY = Symbol('developmentError')
+const EXCLUDED_KEY = Symbol('excluded')
 
 export default defineNitroPlugin((nitroApp) => {
   nitroApp.hooks.hook('request', (event) => {
-    const request = event as unknown as WideEventLike
+    const request = event as unknown as RequestEvent
+    if (isExcluded(request))
+      return
     startWideEvent(request)
   })
 
   nitroApp.hooks.hook('error', (error, context: ErrorHookContext) => {
-    if (!context.event)
+    if (!context.event || isExcluded(context.event))
       return
     captureWideEventError(context.event, error)
     ;(context.event.context as Record<PropertyKey, unknown>)[ERROR_KEY] = error
@@ -51,6 +58,8 @@ export default defineNitroPlugin((nitroApp) => {
 
   nitroApp.hooks.hook('afterResponse', (event, response) => {
     const request = event as unknown as ServerEvent
+    if (isExcluded(request))
+      return
     const error = (request.context as Record<PropertyKey, unknown>)[ERROR_KEY]
     const record = emitWideEvent(
       request,
@@ -68,6 +77,18 @@ export default defineNitroPlugin((nitroApp) => {
       return drain(nitroApp, record)
   })
 })
+
+function isExcluded(event: WideEventLike): boolean {
+  const context = event.context as Record<PropertyKey, unknown>
+  const cached = context[EXCLUDED_KEY]
+  if (typeof cached === 'boolean')
+    return cached
+  const path = event.path ?? ''
+  const query = path.indexOf('?')
+  const excluded = config.exclude?.test(query === -1 ? path : path.slice(0, query)) ?? false
+  context[EXCLUDED_KEY] = excluded
+  return excluded
+}
 
 function routeTemplate(event: WideEventLike): string | undefined {
   const route = event.context.matchedRoute

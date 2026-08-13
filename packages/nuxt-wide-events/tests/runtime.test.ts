@@ -9,6 +9,12 @@ function event() {
   }
 }
 
+const addCompilerOwnedFields = addWideEventFields as unknown as (
+  request: ReturnType<typeof event>,
+  fields: Record<string, unknown>,
+  owned: true,
+) => void
+
 describe('wide Event runtime', () => {
   it('emits one structured record with configured fields', () => {
     const request = event()
@@ -55,6 +61,74 @@ describe('wide Event runtime', () => {
 
     expect(emitWideEvent(request, 200, undefined, undefined, 11, 'now')).not.toBeNull()
     expect(emitWideEvent(request, 200, undefined, undefined, 12, 'later')).toBeNull()
+  })
+
+  it('keeps the first request identity when start runs twice', () => {
+    const request = event()
+    startWideEvent(request, 'req_first', 10)
+    startWideEvent(request, 'req_second', 20)
+
+    expect(emitWideEvent(request, 200, undefined, undefined, 12.5, 'now')).toEqual(expect.objectContaining({
+      durationMs: 2.5,
+      requestId: 'req_first',
+    }))
+  })
+
+  it('combines Fields collected by separate server layers', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    addWideEventFields(request, { 'user.id': 'user_1' } as never)
+    addWideEventFields(request, { 'cart.itemCount': 2 } as never)
+
+    expect(emitWideEvent(request, 200, undefined, undefined, 12, 'now')).toEqual(expect.objectContaining({
+      'cart.itemCount': 2,
+      'user.id': 'user_1',
+    }))
+  })
+
+  it('does not mutate Fields from an untransformed caller', () => {
+    const request = event()
+    const fields = { 'user.id': 'user_1' }
+    startWideEvent(request, 'req_1', 10)
+    addWideEventFields(request, fields as never)
+
+    emitWideEvent(request, 200, 'shop', '/api/cart', 12, 'now')
+
+    expect(fields).toEqual({ 'user.id': 'user_1' })
+  })
+
+  it('skips an undefined Field during migration', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    addWideEventFields(request, {
+      'cart.itemCount': undefined,
+      'user.id': 'user_1',
+    } as never)
+
+    const record = emitWideEvent(request, 200, undefined, undefined, 12, 'now')!
+
+    expect(record['user.id']).toBe('user_1')
+    expect(Object.hasOwn(record, 'cart.itemCount')).toBe(false)
+  })
+
+  it('leaves Fields untouched when a later value is invalid', () => {
+    const request = event()
+    const fields = {
+      'cart.itemCount': undefined,
+      'user.id': { secret: true },
+    }
+    startWideEvent(request, 'req_1', 10)
+
+    expect(() => addWideEventFields(request, fields as never)).toThrow(/user.id/)
+    expect(Object.hasOwn(fields, 'cart.itemCount')).toBe(true)
+  })
+
+  it('rejects prototype injection on the compiler-owned first literal', () => {
+    const request = event()
+    const fields = Object.assign(Object.create({ password: 'secret' }), { 'user.id': 'user_1' })
+    startWideEvent(request, 'req_1', 10)
+
+    expect(() => addCompilerOwnedFields(request, fields, true)).toThrow(/plain object literal/)
   })
 
   it('does not copy error strings into a production record', () => {

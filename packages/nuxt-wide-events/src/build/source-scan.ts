@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite'
 import { normalize, relative } from 'pathe'
-import { formatWideEventSourceIssues, validateWideEventSource } from './source-validation'
+import { formatWideEventSourceIssues, transformWideEventSource } from './source-validation'
 
 const SOURCE_PATTERN = /\.[cm]?[jt]sx?$/i
 
@@ -17,10 +17,10 @@ export function createWideEventValidationPlugin(
         return null
 
       const displayFile = normalize(relative(rootDir, file))
-      const result = validateWideEventSource(source, displayFile, fields)
+      const result = transformWideEventSource(source, displayFile, fields)
       if (result._tag === 'Err')
         throw new Error(`[nuxt-wide-events]\n${formatWideEventSourceIssues(result.issues)}`)
-      return null
+      return result.source === source ? null : { code: result.source, map: null }
     },
   }
 }

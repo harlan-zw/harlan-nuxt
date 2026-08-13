@@ -31,3 +31,17 @@ This case includes `crypto.randomUUID`, two `performance.now` calls, and ISO tim
 | evlog 2.26.0, redaction disabled | 653,709 | baseline |
 | pino 10.3.1, in-memory destination | 611,344 | 0.94x |
 | raw object plus JSON.stringify | 857,969 | 1.31x |
+
+## Optimization against origin/main
+
+This paired harness creates fresh Field objects for every operation. It compares the merged baseline with the optimized generated runtime.
+
+| Scenario | Baseline CPU | Optimized CPU | Change | Baseline allocation | Optimized allocation | Change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 Fields | 410 ns | 404 ns | -1.6% | 752 B | 696 B | -7.4% |
+| 20 Fields | 1.95 µs | 0.864 µs | -55.7% | 4,345 B | 1,137 B | -73.8% |
+| 2 Field layers | 614 ns | 618 ns | +0.7% | 1,161 B | 1,104 B | -4.8% |
+| Runtime clocks and request ID | 1.19 µs | 1.13 µs | -5.7% | 1,830 B | 1,776 B | -3.0% |
+| Error lifecycle | 513 ns | 433 ns | -15.6% | 752 B | 696 B | -7.5% |
+
+The 5 Field and layered CPU changes are within measurement noise. Build-validated inline Field literals use an ownership path. Public runtime calls remain nonmutating.

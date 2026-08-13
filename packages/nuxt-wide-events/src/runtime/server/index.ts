@@ -30,11 +30,12 @@ const STATE_KEY = Symbol.for('@harlan-zw/nuxt-wide-events/state')
 const STARTED_AT_KEY = Symbol('startedAt')
 const REQUEST_ID_KEY = Symbol('requestId')
 const ERROR_KEY = Symbol('error')
+const COLLECTING = Symbol('collecting')
 const EMITTED = Symbol('emitted')
 
 type CollectingWideEvent = Record<string, WideEventValue | undefined>
 
-type WideEventState = CollectingWideEvent | typeof EMITTED
+type WideEventState = CollectingWideEvent | typeof COLLECTING | typeof EMITTED
 
 export function startWideEvent(event: WideEventLike, requestId?: string, startedAt?: number): void {
   const context = stateContext(event)
@@ -44,27 +45,67 @@ export function startWideEvent(event: WideEventLike, requestId?: string, started
   if (current)
     return
 
-  context[STATE_KEY] = createCollectingState()
+  context[STATE_KEY] = COLLECTING
   context[REQUEST_ID_KEY] = requestId ?? crypto.randomUUID()
   context[STARTED_AT_KEY] = startedAt ?? performance.now()
 }
 
-export function addWideEventFields(event: WideEventLike, fields: WideEventFields): void {
-  const state = collectingState(event)
+export function addWideEventFields(event: WideEventLike, fields: WideEventFields): void
+export function addWideEventFields(event: WideEventLike, fields: WideEventFields, owned = false): void {
+  const context = stateContext(event)
+  const current = context[STATE_KEY] as WideEventState | undefined
+  if (current === EMITTED)
+    throw new Error('The Wide Event was already emitted.')
+
+  const firstFields = current === undefined || current === COLLECTING
+  if (owned && firstFields && Object.getPrototypeOf(fields) !== Object.prototype)
+    throw new TypeError('Compiler-owned Wide Event Fields must be a plain object literal.')
+
+  const output = !owned && firstFields ? {} as CollectingWideEvent : undefined
+  let undefinedFields: string[] | undefined
   for (const field in fields) {
+    if (!Object.hasOwn(fields, field))
+      continue
     const value = fields[field as ConfiguredWideEventField]
+    if (value === undefined) {
+      if (owned) {
+        undefinedFields ??= []
+        undefinedFields.push(field)
+      }
+      continue
+    }
     if (!isWideEventValue(value))
       throw new TypeError(`Wide Event field "${field}" must be a string, number, boolean, or null.`)
-    state[field] = value
+    if (output)
+      output[field] = value
+    else if (!firstFields)
+      current[field] = value
+  }
+  if (undefinedFields) {
+    if (owned) {
+      for (const field of undefinedFields)
+        delete fields[field as ConfiguredWideEventField]
+    }
+  }
+
+  if (current === undefined) {
+    initializeMetadata(context)
+  }
+  if (current === undefined || current === COLLECTING) {
+    context[STATE_KEY] = owned ? fields : output!
   }
 }
 
 /** Record an error without ending Field collection. */
 export function captureWideEventError(event: WideEventLike, _error: unknown): void {
   const context = stateContext(event)
-  if (context[STATE_KEY] === EMITTED)
+  const current = context[STATE_KEY] as WideEventState | undefined
+  if (current === EMITTED)
     return
-  collectingState(event)
+  if (current === undefined) {
+    initializeMetadata(context)
+    context[STATE_KEY] = COLLECTING
+  }
   context[ERROR_KEY] = true
 }
 
@@ -81,11 +122,12 @@ export function emitWideEvent(
   if (current === EMITTED)
     return null
 
-  const state = current ?? initializeCollectingState(context)
-  const hasError = context[ERROR_KEY] === true
+  if (current === undefined)
+    initializeMetadata(context)
+  const state = current === undefined || current === COLLECTING ? {} : current
   const record = state as WideEventRecord
   record.timestamp = timestamp
-  record.level = hasError ? 'error' : 'info'
+  record.level = context[ERROR_KEY] === true ? 'error' : 'info'
   if (service !== undefined)
     record.service = service
   record.method = safeMethod(event.method)
@@ -98,30 +140,13 @@ export function emitWideEvent(
   return record
 }
 
-function collectingState(event: WideEventLike): CollectingWideEvent {
-  const context = stateContext(event)
-  const current = context[STATE_KEY] as WideEventState | undefined
-  if (current === EMITTED)
-    throw new Error('The Wide Event was already emitted.')
-  if (current)
-    return current
-  return initializeCollectingState(context)
-}
-
 function stateContext(event: WideEventLike): Record<PropertyKey, unknown> {
   return event.context as Record<PropertyKey, unknown>
 }
 
-function createCollectingState(): CollectingWideEvent {
-  return {}
-}
-
-function initializeCollectingState(context: Record<PropertyKey, unknown>): CollectingWideEvent {
-  const state = createCollectingState()
-  context[STATE_KEY] = state
+function initializeMetadata(context: Record<PropertyKey, unknown>): void {
   context[REQUEST_ID_KEY] = crypto.randomUUID()
   context[STARTED_AT_KEY] = performance.now()
-  return state
 }
 
 function isWideEventValue(value: unknown): value is WideEventValue {

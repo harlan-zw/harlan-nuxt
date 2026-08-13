@@ -41,9 +41,11 @@ describe('cloudflare Workers integration', () => {
       output = ''
       const response = await fetch(`http://127.0.0.1:${port}/api/record?token=secret-query-token`)
         .then(value => value.json())
-      await waitFor(() => eventLogs(output).length === 1, child, () => output)
+      const created = await fetch(`http://127.0.0.1:${port}/api/created`, { method: 'POST' })
+      await waitFor(() => eventLogs(output).length === 2, child, () => output)
 
       expect(response).toEqual({ recorded: true })
+      expect(created.status).toBe(201)
       expect(eventLogs(output)).toEqual([
         expect.objectContaining({
           'level': 'info',
@@ -52,6 +54,11 @@ describe('cloudflare Workers integration', () => {
           'service': 'workers-fixture',
           'status': 200,
           'worker.ok': true,
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/created',
+          status: 201,
         }),
       ])
       expect(JSON.stringify(eventLogs(output))).not.toContain('secret-query-token')
