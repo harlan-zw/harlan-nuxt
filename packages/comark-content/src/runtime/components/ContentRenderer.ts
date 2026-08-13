@@ -2,9 +2,9 @@ import type { Component } from 'vue'
 import type { MarkdownDocument } from 'comark'
 import type { PageCollectionItemBase } from '../types'
 import componentLoaders from '#comark-content/components'
-import { defineAsyncComponent, defineComponent, resolveDynamicComponent } from 'vue'
+import { defineAsyncComponent, defineComponent, resolveDynamicComponent, useAttrs } from 'vue'
 import { componentCandidates } from './names'
-import { renderNodes } from './render'
+import { renderContentRoot, renderNodes } from './render'
 
 const contentComponents = Object.fromEntries(Object.entries(componentLoaders).map(([tag, entry]) => [tag, defineAsyncComponent(entry.load)]))
 
@@ -28,6 +28,7 @@ const resolveTag = (tag: string): string | Component => {
 
 export default defineComponent({
   name: 'ContentRenderer',
+  inheritAttrs: false,
   props: {
     value: {
       type: Object as () => PageCollectionItemBase | MarkdownDocument,
@@ -39,12 +40,14 @@ export default defineComponent({
     },
   },
   setup(props) {
+    const attributes = useAttrs()
     return () => {
       const value = props.value as PageCollectionItemBase | MarkdownDocument
       const body = 'body' in value ? value.body : value
       const source = 'body' in value ? value._source : '<Comark document>'
       const unwrap = typeof props.unwrap === 'string' ? [props.unwrap] : props.unwrap
-      return renderNodes(body.nodes, { source, unwrap, resolveTag })
+      const nodes = renderNodes(body.nodes, { source, unwrap, resolveTag })
+      return renderContentRoot(nodes, attributes)
     }
   },
 })

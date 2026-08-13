@@ -28,6 +28,23 @@ describe('Markdown ingestion', () => {
     expect(pre).toMatchObject(['pre', { class: expect.stringContaining('shiki') }, ['code', {}, expect.any(Array)]])
   })
 
+  it('loads declared code languages and themes', async () => {
+    const parse = await createContentParser({
+      highlight: {
+        langs: ['python'],
+        theme: { light: 'github-light-high-contrast', dark: 'github-dark-high-contrast' },
+      },
+    })
+    const document = await parse('```python\nprint("ready")\n```')
+    const pre = document.nodes[0]
+
+    expect(pre).toMatchObject([
+      'pre',
+      { class: expect.stringContaining('github-light-high-contrast') },
+      ['code', {}, expect.arrayContaining([expect.any(Array)])],
+    ])
+  })
+
   it('returns an empty collection when no Markdown matches', async () => {
     const root = await temporaryRoot()
     const result = await ingestCollections([
@@ -63,6 +80,52 @@ describe('Markdown ingestion', () => {
     expect(result.value.collections.pages?.[0]?.body.nodes[0]).toEqual(['h1', { id: 'guide' }, 'Guide'])
     expect(result.value.collections.pages?.[0]?.body.meta.toc.links).toEqual([{ id: 'next', depth: 2, text: 'Next' }])
     expect(result.value.collections.pages?.[0]?.body.toc.links).toEqual([{ id: 'next', depth: 2, text: 'Next' }])
+  })
+
+  it('builds paths relative to the static source directory', async () => {
+    const root = await temporaryRoot()
+    await writeFixture(root, 'content/docs/guide.md', '# Guide')
+
+    const result = await ingestCollections([
+      {
+        name: 'pages',
+        rootDir: root,
+        definition: defineCollection({
+          type: 'page',
+          source: { include: 'docs/**/*.md', prefix: '/reference' },
+        }),
+      },
+    ], { cacheFile: join(root, 'cache.json') })
+
+    expect(result).toMatchObject({
+      _tag: 'Ok',
+      value: { collections: { pages: [{ path: '/reference/guide', stem: 'guide' }] } },
+    })
+  })
+
+  it('preserves built-in frontmatter omitted by a stripping schema', async () => {
+    const root = await temporaryRoot()
+    await writeFixture(root, 'content/page.md', '---\ntitle: Kept title\nnavigation:\n  title: Kept navigation\ncustom: value\n---\n# Page')
+    const schema = {
+      '~standard': {
+        version: 1,
+        vendor: 'test',
+        validate: () => ({ value: { custom: 'transformed' } }),
+      },
+    }
+
+    const result = await ingestCollections([
+      { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md', schema }) },
+    ], { cacheFile: join(root, 'cache.json') })
+
+    expect(result).toMatchObject({
+      _tag: 'Ok',
+      value: {
+        collections: {
+          pages: [{ title: 'Kept title', navigation: { title: 'Kept navigation' }, custom: 'transformed' }],
+        },
+      },
+    })
   })
 
   it('reports malformed frontmatter with its file and location', async () => {

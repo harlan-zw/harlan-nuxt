@@ -1,4 +1,4 @@
-import type { Component, VNodeChild } from 'vue'
+import type { Component, VNode, VNodeChild } from 'vue'
 import type { Node } from 'comark'
 import { createCommentVNode, h } from 'vue'
 
@@ -71,3 +71,7 @@ export const renderNodes = (nodes: readonly Node[], options: RenderOptions): VNo
     return [renderNode(node, options, String(index))]
   })
 }
+
+export const renderContentRoot = (nodes: VNodeChild[], attributes: Record<string, unknown>): VNode | VNodeChild[] => Object.keys(attributes).length
+  ? h('div', attributes, nodes)
+  : nodes

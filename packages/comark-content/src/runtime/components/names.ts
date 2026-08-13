@@ -11,7 +11,12 @@ const pascalCase = (value: string) => value.split(/[-_:]/).filter(Boolean).map(p
 
 export const componentCandidates = (tag: string): string[] => {
   const name = pascalCase(tag)
-  return htmlTags.has(tag) ? [`Prose${name}`] : [`Content${name}`, name]
+  if (htmlTags.has(tag))
+    return [`ContentProse${name}`, `Prose${name}`]
+  const candidates = [`Content${name}`, name, `Prose${name}`]
+  if (name.startsWith('Lazy'))
+    candidates.push(`LazyContent${name.slice('Lazy'.length)}`)
+  return candidates
 }
 
 export const componentMatchesTag = (tag: string, componentName: string): boolean => {

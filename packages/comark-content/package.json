@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/comark-content",
   "type": "module",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Markdown-only Nuxt content powered by Comark.",
   "author": {
     "name": "Harlan Wilton",
@@ -40,7 +40,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=24.0.0 <25"
+    "node": ">=22.0.0 <27"
   },
   "scripts": {
     "bench": "node ./bench/run.mjs",

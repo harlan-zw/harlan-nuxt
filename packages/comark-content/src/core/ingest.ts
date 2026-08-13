@@ -1,5 +1,6 @@
 import type { MarkdownDocument } from 'comark'
 import type { CollectionDefinition, StandardSchemaIssue } from '../config'
+import type { ContentHighlight } from '../highlight'
 import type { PageCollectionItemBase, Result } from '../runtime/types'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -31,7 +32,7 @@ type IngestionOptions = {
   cacheFile: string
   remoteCacheDir?: string
   parse?: (source: string) => Promise<MarkdownDocument>
-  highlight?: boolean
+  highlight?: ContentHighlight
 }
 
 const plainParser = createMarkdownParser({
@@ -41,19 +42,28 @@ const plainParser = createMarkdownParser({
   ],
 })
 
-let highlightedParser: Promise<(source: string) => Promise<MarkdownDocument>> | undefined
+const highlightedParsers = new Map<string, Promise<(source: string) => Promise<MarkdownDocument>>>()
 
 export const createContentParser = async (options: Pick<IngestionOptions, 'highlight'> = {}) => {
   if (!options.highlight)
     return plainParser
-  highlightedParser ||= import('comark/plugins/shiki').then(({ default: shiki }) => createMarkdownParser({
+  const { highlightCacheKey, resolveShikiOptions } = await import('../highlight')
+  const key = highlightCacheKey(options.highlight)
+  const cached = highlightedParsers.get(key)
+  if (cached)
+    return cached
+  const parser = Promise.all([
+    import('comark/plugins/shiki'),
+    resolveShikiOptions(options.highlight),
+  ]).then(([{ default: shiki }, shikiOptions]) => createMarkdownParser({
     plugins: [
       headings(),
       toc({ depth: 3, searchDepth: 3 }),
-      shiki(),
+      shiki(shikiOptions as Parameters<typeof shiki>[0]),
     ],
   }))
-  return highlightedParser
+  highlightedParsers.set(key, parser)
+  return parser
 }
 
 const errorLocation = (cause: unknown, markdown: string) => {
@@ -99,7 +109,7 @@ const applySchema = async (definition: CollectionDefinition, frontmatter: Record
   return validate ? parseSchemaResult(await validate(frontmatter)) : { value: frontmatter }
 }
 
-const digest = (source: string, parser: 'plain' | 'highlight') => createHash('sha256').update(CACHE_VERSION).update('\0').update(parser).update('\0').update(source).digest('hex')
+const digest = (source: string, parser: string) => createHash('sha256').update(CACHE_VERSION).update('\0').update(parser).update('\0').update(source).digest('hex')
 
 export const ingestCollections = async (
   loadedCollections: LoadedCollection[],
@@ -136,7 +146,7 @@ export const ingestCollections = async (
     const items: PageCollectionItemBase[] = []
     for (const file of files) {
       const markdown = await readFile(file.path, 'utf8')
-      const checksum = digest(markdown, options.highlight ? 'highlight' : 'plain')
+      const checksum = digest(markdown, JSON.stringify(options.highlight ?? false))
       const cacheKey = `${collection.name}:${file.path}`
       let document: MarkdownDocument
       const cached = cache.entries[cacheKey]
@@ -161,7 +171,7 @@ export const ingestCollections = async (
         const location = frontmatterLocation(markdown, issue)
         return err(sourceError('SchemaError', file.path, location.line, location.column, issue.message))
       }
-      const frontmatter = schema.value ?? document.frontmatter
+      const frontmatter = { ...document.frontmatter, ...schema.value }
       for (const tag of collectComponentTags(document.nodes))
         componentTags.add(tag)
       const path = contentPath(file.key, source.prefix)

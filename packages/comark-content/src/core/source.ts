@@ -1,6 +1,6 @@
 import type { CollectionDefinition, CollectionSource } from '../config'
 import { readdir } from 'node:fs/promises'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 
 export type ResolvedSource = {
   cwd: string
@@ -49,6 +49,12 @@ export const globRegex = (glob: string) => {
   return new RegExp(`^${source}$`)
 }
 
+const sourceBase = (include: string) => {
+  const wildcard = include.search(/[*?{]/)
+  const directory = wildcard === -1 ? posix.dirname(include) : include.slice(0, wildcard).replace(/[^/]*$/, '')
+  return directory === '.' ? '' : directory.replace(/^\/+|\/+$/g, '')
+}
+
 export const resolveCollectionSource = (definition: CollectionDefinition, rootDir: string, remoteCwd?: string): ResolvedSource => {
   const source = definition.source ?? '**/*.md'
   if (typeof source === 'string') {
@@ -74,6 +80,7 @@ export const resolveCollectionSource = (definition: CollectionDefinition, rootDi
 export const scanSource = async (source: ResolvedSource) => {
   const include = globRegex(source.include)
   const excludes = source.exclude.map(globRegex)
+  const base = sourceBase(source.include)
   const files: Array<{ key: string, path: string }> = []
   const visit = async (directory: string) => {
     const entries = await readdir(directory, { withFileTypes: true }).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))
@@ -86,8 +93,10 @@ export const scanSource = async (source: ResolvedSource) => {
       if (!entry.isFile() || !entry.name.endsWith('.md'))
         continue
       const key = relative(source.cwd, path).replaceAll('\\', '/')
-      if (include.test(key) && !excludes.some(pattern => pattern.test(key)))
-        files.push({ key, path })
+      if (include.test(key) && !excludes.some(pattern => pattern.test(key))) {
+        const sourceKey = base && key.startsWith(`${base}/`) ? key.slice(base.length + 1) : key
+        files.push({ key: sourceKey, path })
+      }
     }
   }
   await visit(source.cwd)

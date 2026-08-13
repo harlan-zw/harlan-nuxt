@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Node } from 'comark'
 import type { VNode } from 'vue'
 import { componentCandidates, componentMatchesTag } from '../src/runtime/components/names'
-import { renderNodes } from '../src/runtime/components/render'
+import { renderContentRoot, renderNodes } from '../src/runtime/components/render'
 
 describe('Comark rendering', () => {
   it('renders direct nodes and removes internal source attributes', () => {
@@ -19,9 +19,24 @@ describe('Comark rendering', () => {
     expect(renderNodes(nodes, { source: '/content/page.md', unwrap: ['p'] })).toEqual(['Inline'])
   })
 
+  it('keeps attributes passed to the renderer', () => {
+    const rendered = renderContentRoot(['Body'], { class: 'mb-10', id: 'content' }) as VNode
+
+    expect(rendered).toMatchObject({ type: 'div', props: { class: 'mb-10', id: 'content' }, children: ['Body'] })
+  })
+
   it('prefers Nuxt content component names for custom Markdown tags', () => {
-    expect(componentCandidates('two-col')).toEqual(['ContentTwoCol', 'TwoCol'])
-    expect(componentCandidates('p')).toEqual(['ProseP'])
+    expect(componentCandidates('two-col')).toEqual(['ContentTwoCol', 'TwoCol', 'ProseTwoCol'])
+    expect(componentCandidates('code-group')).toEqual(['ContentCodeGroup', 'CodeGroup', 'ProseCodeGroup'])
+    expect(componentCandidates('callout')).toEqual(['ContentCallout', 'Callout', 'ProseCallout'])
+    expect(componentCandidates('p')).toEqual(['ContentProseP', 'ProseP'])
+    expect(componentCandidates('img')).toEqual(['ContentProseImg', 'ProseImg'])
+    expect(componentCandidates('lazy-chart-streaming-comparison')).toEqual([
+      'ContentLazyChartStreamingComparison',
+      'LazyChartStreamingComparison',
+      'ProseLazyChartStreamingComparison',
+      'LazyContentChartStreamingComparison',
+    ])
     expect(componentMatchesTag('newsletterlist', 'ContentNewsletterList')).toBe(true)
     expect(componentMatchesTag('img', 'ContentProseImg')).toBe(true)
   })

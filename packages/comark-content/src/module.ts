@@ -1,5 +1,6 @@
 import type { ContentConfig } from './config'
 import type { LoadedCollection } from './core/ingest'
+import type { ContentHighlight } from './highlight'
 import type { NitroConfig } from 'nitropack/types'
 import { existsSync } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
@@ -20,11 +21,12 @@ import { ingestCollections } from './core/ingest'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 
 export * from './config'
+export type * from './highlight'
 export type * from './runtime/types'
 
 export interface ModuleOptions {
   database?: never
-  highlight?: boolean
+  highlight?: ContentHighlight
 }
 
 declare module '@nuxt/schema' {
