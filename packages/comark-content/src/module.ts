@@ -8,7 +8,6 @@ import { dirname, isAbsolute, join, relative } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import {
   addComponent,
-  addComponentsDir,
   addImports,
   addServerHandler,
   addServerPlugin,
@@ -98,11 +97,14 @@ export default defineNuxtModule<ModuleOptions>({
     const logger = useLogger('comark-content')
     const componentTags = new Set<string>()
 
+    const contentComponents: Array<{ path: string, pathPrefix: boolean, prefix: string }> = []
     for (const path of contentComponentDirectories(nuxt.options._layers)) {
-      if (!(await stat(path).catch(() => undefined))?.isDirectory())
-        continue
-      addComponentsDir({ path, pathPrefix: false, prefix: '' })
+      if ((await stat(path).catch(() => undefined))?.isDirectory())
+        contentComponents.push({ path, pathPrefix: false, prefix: '' })
     }
+    nuxt.hook('components:dirs', (dirs) => {
+      dirs.unshift(...contentComponents)
+    })
 
     const componentsTemplate = addTemplate({
       filename: 'comark-content/components.mjs',

@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/comark-content",
   "type": "module",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Markdown-only Nuxt content powered by Comark.",
   "author": {
     "name": "Harlan Wilton",
