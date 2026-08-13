@@ -1,0 +1,7 @@
+{
+  "$schema": "../../../../../node_modules/wrangler/config-schema.json",
+  "name": "nuxt-wide-events-worker-test",
+  "main": ".output/server/index.mjs",
+  "compatibility_date": "2026-08-11",
+  "compatibility_flags": ["nodejs_compat"]
+}
