@@ -50,3 +50,18 @@ The result also records total Nitro server JavaScript size before and after gzip
 ```sh
 node bench/http/run.mjs
 ```
+
+## Pull request report
+
+Pull requests build the base and proposed revisions on one ARM runner.
+The CPU harness imports both built runtime files into one process and alternates their sample order.
+It reports main thread CPU time with a paired 95% relative margin of error.
+A CPU change appears after `max(5%, 2 × paired RME)`.
+
+The allocation run disables V8 optimization and pins its semi-space.
+It reports bytes allocated per request and surfaces changes above 2% and 32 bytes.
+The bundle rows compare the enabled and disabled Nitro fixtures.
+Gzip changes below 16 bytes stay inside the noise gate.
+
+The measurement workflow has read-only repository access.
+A separate trusted workflow validates the report artifact before updating one sticky pull request comment.

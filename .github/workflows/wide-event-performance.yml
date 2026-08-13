@@ -1,0 +1,110 @@
+name: Wide Event Performance
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/wide-event-performance.yml'
+      - '.github/workflows/wide-event-performance-comment.yml'
+      - 'packages/nuxt-wide-events/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Build base revision
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_RUN: ${{ runner.temp }}/wide-events-base
+        run: |
+          pull_request_sha=$(git rev-parse HEAD)
+          trap 'git checkout --force --detach "$pull_request_sha"' EXIT
+
+          git checkout --force --detach "$BASE_SHA"
+          if [ -f packages/nuxt-wide-events/bench/ci/build.mjs ]; then
+            pnpm install --frozen-lockfile
+            pnpm --filter @harlan-zw/nuxt-wide-events build
+            node packages/nuxt-wide-events/bench/ci/build.mjs "$BASE_RUN"
+          else
+            echo "The base revision predates the Wide Event performance harness."
+          fi
+
+          git checkout --force --detach "$pull_request_sha"
+          trap - EXIT
+
+      - name: Build pull request revision
+        env:
+          PR_RUN: ${{ runner.temp }}/wide-events-pr
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @harlan-zw/nuxt-wide-events build
+          node packages/nuxt-wide-events/bench/ci/build.mjs "$PR_RUN"
+
+      - name: Measure CPU and allocation
+        env:
+          BASE_RUN: ${{ runner.temp }}/wide-events-base
+          PR_RUN: ${{ runner.temp }}/wide-events-pr
+        run: |
+          NODE_FLAGS="--expose-gc --min-semi-space-size=256 --max-semi-space-size=256"
+          export WIDE_EVENTS_PR_DIST="$PR_RUN"
+          if [ -f "$BASE_RUN/server-runtime.js" ]; then
+            export WIDE_EVENTS_BASE_DIST="$BASE_RUN"
+          fi
+          node $NODE_FLAGS packages/nuxt-wide-events/bench/ci/perf.mjs > "$RUNNER_TEMP/cpu.json"
+          node --no-opt $NODE_FLAGS packages/nuxt-wide-events/bench/ci/perf.mjs --alloc-only > "$RUNNER_TEMP/alloc.json"
+
+      - name: Resolve baseline label
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          short_sha=$(git rev-parse --short "$BASE_SHA")
+          date=$(git show -s --format=%cs "$BASE_SHA")
+          echo "BASE_LABEL=$BASE_REF @ $short_sha · $date" >> "$GITHUB_ENV"
+
+      - name: Generate performance report
+        env:
+          BASE_RUN: ${{ runner.temp }}/wide-events-base
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PERF_COMPARISON: ${{ runner.temp }}/cpu.json,${{ runner.temp }}/alloc.json
+          PR_RUN: ${{ runner.temp }}/wide-events-pr
+          REPORT_DIR: ${{ runner.temp }}/wide-event-performance-report
+        run: |
+          mkdir -p "$REPORT_DIR"
+          node packages/nuxt-wide-events/bench/ci/report.mjs | tee "$REPORT_DIR/report.md"
+          cat "$REPORT_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$PR_NUMBER" > "$REPORT_DIR/pr-number.txt"
+          printf '%s\n' "$HEAD_SHA" > "$REPORT_DIR/head-sha.txt"
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wide-event-performance-report
+          path: ${{ runner.temp }}/wide-event-performance-report
+          if-no-files-found: error
+          retention-days: 1
