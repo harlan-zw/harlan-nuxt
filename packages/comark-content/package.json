@@ -53,7 +53,13 @@
   },
   "peerDependencies": {
     "nuxt": ">=4.5.0 <5.0.0",
+    "shiki": ">=4.3.1 <5.0.0",
     "vue": ">=3.5.0 <4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "shiki": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
@@ -62,6 +68,7 @@
   "devDependencies": {
     "@nuxt/module-builder": "catalog:",
     "nuxt": "catalog:",
+    "shiki": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:"

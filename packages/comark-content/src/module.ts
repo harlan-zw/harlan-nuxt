@@ -24,6 +24,7 @@ export type * from './runtime/types'
 
 export interface ModuleOptions {
   database?: never
+  highlight?: boolean
 }
 
 declare module '@nuxt/schema' {
@@ -125,7 +126,7 @@ export default defineNuxtModule<ModuleOptions>({
     const buildCollections = async () => {
       const loaded = await loadCollections(nuxt.options._layers as unknown as ReadonlyArray<Record<string, unknown>>)
       const startedAt = performance.now()
-      const result = await ingestCollections(loaded, { cacheFile, remoteCacheDir })
+      const result = await ingestCollections(loaded, { cacheFile, remoteCacheDir, highlight: options.highlight })
       if (result._tag === 'Err')
         throw new Error(result.error.message, { cause: result.error.cause })
       componentTags.clear()

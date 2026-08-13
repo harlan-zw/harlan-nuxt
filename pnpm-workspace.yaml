@@ -34,6 +34,7 @@ catalog:
   pathe: ^2.0.3
   pino: ^10.3.1
   rollup: ^4.62.4
+  shiki: ^4.4.3
   typescript: ^5.9.3
   unbuild: ^3.6.1
   unstorage: ^1.17.5

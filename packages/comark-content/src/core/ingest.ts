@@ -31,14 +31,30 @@ type IngestionOptions = {
   cacheFile: string
   remoteCacheDir?: string
   parse?: (source: string) => Promise<MarkdownDocument>
+  highlight?: boolean
 }
 
-const defaultParse = createMarkdownParser({
+const plainParser = createMarkdownParser({
   plugins: [
     headings(),
     toc({ depth: 3, searchDepth: 3 }),
   ],
 })
+
+let highlightedParser: Promise<(source: string) => Promise<MarkdownDocument>> | undefined
+
+export const createContentParser = async (options: Pick<IngestionOptions, 'highlight'> = {}) => {
+  if (!options.highlight)
+    return plainParser
+  highlightedParser ||= import('comark/plugins/shiki').then(({ default: shiki }) => createMarkdownParser({
+    plugins: [
+      headings(),
+      toc({ depth: 3, searchDepth: 3 }),
+      shiki(),
+    ],
+  }))
+  return highlightedParser
+}
 
 const errorLocation = (cause: unknown, markdown: string) => {
   if (!cause || typeof cause !== 'object')
@@ -83,13 +99,13 @@ const applySchema = async (definition: CollectionDefinition, frontmatter: Record
   return validate ? parseSchemaResult(await validate(frontmatter)) : { value: frontmatter }
 }
 
-const digest = (source: string) => createHash('sha256').update(CACHE_VERSION).update('\0').update(source).digest('hex')
+const digest = (source: string, parser: 'plain' | 'highlight') => createHash('sha256').update(CACHE_VERSION).update('\0').update(parser).update('\0').update(source).digest('hex')
 
 export const ingestCollections = async (
   loadedCollections: LoadedCollection[],
   options: IngestionOptions,
 ): Promise<Result<IngestionResult>> => {
-  const parse = options.parse ?? defaultParse
+  const parse = options.parse ?? await createContentParser({ highlight: options.highlight })
   const cache = await readCache(options.cacheFile)
   const nextCache = { version: CACHE_VERSION, entries: {} as typeof cache.entries }
   const collections: Record<string, PageCollectionItemBase[]> = {}
@@ -120,7 +136,7 @@ export const ingestCollections = async (
     const items: PageCollectionItemBase[] = []
     for (const file of files) {
       const markdown = await readFile(file.path, 'utf8')
-      const checksum = digest(markdown)
+      const checksum = digest(markdown, options.highlight ? 'highlight' : 'plain')
       const cacheKey = `${collection.name}:${file.path}`
       let document: MarkdownDocument
       const cached = cache.entries[cacheKey]

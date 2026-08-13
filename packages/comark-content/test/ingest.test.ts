@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MarkdownDocument } from 'comark'
 import { defineCollection } from '../src/config'
-import { ingestCollections } from '../src/core/ingest'
+import { createContentParser, ingestCollections } from '../src/core/ingest'
 import { writeFixture } from './fixtures'
 
 const temporaryRoots: string[] = []
@@ -20,6 +20,14 @@ afterEach(async () => {
 })
 
 describe('Markdown ingestion', () => {
+  it('highlights fenced code when requested', async () => {
+    const parse = await createContentParser({ highlight: true })
+    const document = await parse('```ts\nconst ready = true\n```')
+    const pre = document.nodes[0]
+
+    expect(pre).toMatchObject(['pre', { class: expect.stringContaining('shiki') }, ['code', {}, expect.any(Array)]])
+  })
+
   it('returns an empty collection when no Markdown matches', async () => {
     const root = await temporaryRoot()
     const result = await ingestCollections([
