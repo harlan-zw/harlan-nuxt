@@ -1,6 +1,9 @@
-name: Setup pnpm workspace
+name: Harlan Desktop setup
 description: Install pnpm, Node, and the workspace, with the store cached and lifecycle scripts off.
 
+# NOT GENERAL PURPOSE. Harlan's own sites only; the pinned versions track what
+# those sites run and change without notice.
+#
 # The four steps below were copied into ten repositories, which is why the action
 # SHA, the Node version, and the install flags had drifted apart across 22, 24,
 # 24.x, lts/*, 24.11.0, and 24.18.0. Pin them once here instead.

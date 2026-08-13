@@ -39,8 +39,8 @@
 
 set -euo pipefail
 
-readonly runner_image="${HARLANS_DESKTOP_RUNNER_IMAGE:-harlans-desktop-github-runner:2.336.0}"
-readonly config_file="${HARLANS_DESKTOP_RUNNER_CONFIG:-/etc/harlans-desktop-github-runner/runners.conf}"
+readonly runner_image="${HARLANS_DESKTOP_RUNNER_IMAGE:-harlan-desktop-github-runner:2.336.0}"
+readonly config_file="${HARLANS_DESKTOP_RUNNER_CONFIG:-/etc/harlan-desktop-github-runner/runners.conf}"
 # 24 physical cores. Runner work is IO-heavy and rarely saturates its quota, so a
 # modest oversubscription keeps a wide matrix moving without starving
 # interactive work on the workstation.
@@ -50,7 +50,7 @@ readonly cpu_budget="${HARLANS_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 readonly burst_idle_seconds="${HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
 # Readable by the status command, unlike /tmp under this unit's PrivateTmp.
-readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlans-desktop-github-runner"
+readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
 # Copied here at startup so the status command can size pools without reading a
 # config path it would otherwise have to guess.
 readonly published_config="$state_root/runners.conf"
@@ -82,7 +82,7 @@ require_command() {
   fi
 }
 
-# `harlan-zw/nuxtseo.com` + `harlans-desktop-ci` -> `nuxtseo-com-ci`. Used for container
+# `harlan-zw/nuxtseo.com` + `harlan-desktop-ci` -> `nuxtseo-com-ci`. Used for container
 # names and the Docker pool label, both of which reject `/` and `.`.
 #
 # A pool may carry several labels, so that a repository can answer to both its
@@ -92,7 +92,7 @@ pool_slug_for() {
   local repository="$1"
   local label="${2%%,*}"
 
-  printf '%s-%s' "${repository##*/}" "${label#harlans-desktop-}" \
+  printf '%s-%s' "${repository##*/}" "${label#harlan-desktop-}" \
     | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
     | tr '[:upper:]' '[:lower:]'
 }
@@ -212,7 +212,7 @@ run_container() {
   # This string is what a job's log prints as `Runner name:`, and it is the only
   # place a reader sees whose machine ran their code. Lead with the machine, not
   # the pool.
-  runner_name="harlans-desktop-${pool_slug[$pool_index]}-$$-${RANDOM}"
+  runner_name="harlan-desktop-${pool_slug[$pool_index]}-$$-${RANDOM}"
 
   # The token enters on stdin, so it never lands on disk and never lands in an
   # env var that `docker inspect` would echo back.
@@ -269,7 +269,7 @@ run_container() {
 run_warm_slot() {
   local pool_index="$1"
   local slot_number="$2"
-  local container_name="harlans-desktop-${pool_slug[$pool_index]}-$slot_number"
+  local container_name="harlan-desktop-${pool_slug[$pool_index]}-$slot_number"
 
   while true; do
     if ! run_container "$pool_index" warm "$container_name"; then
@@ -320,7 +320,7 @@ run_scaler() {
       fi
 
       burst_counter=$(( burst_counter + 1 ))
-      container_name="harlans-desktop-$slug-burst-$burst_counter"
+      container_name="harlan-desktop-$slug-burst-$burst_counter"
       # Both reservations are written before the fork, so the next request in
       # this loop already sees this container.
       printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
@@ -386,7 +386,7 @@ main() {
   read_config
 
   # A fixed path under the runtime directory, not mktemp under /tmp. The unit sets
-  # PrivateTmp, so anything in /tmp is invisible to `harlans-desktop-runner status`
+  # PrivateTmp, so anything in /tmp is invisible to `harlan-desktop-runner status`
   # and the counts it reports would have to be guessed from `docker ps` instead of
   # read from the real reservations.
   state_dir="$state_root"

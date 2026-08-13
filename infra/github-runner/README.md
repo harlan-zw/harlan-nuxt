@@ -40,10 +40,10 @@ everywhere and a site moves between hosted and self-hosted by changing one input
 
 | Label | Use |
 | --- | --- |
-| `harlans-desktop-ci` | Lint, typecheck, test, build. No production secret. |
-| `harlans-desktop-deploy` | Production deploys. Larger container, one at a time. |
+| `harlan-desktop-ci` | Lint, typecheck, test, build. No production secret. |
+| `harlan-desktop-deploy` | Production deploys. Larger container, one at a time. |
 
-Write them as `runs-on: [self-hosted, linux, x64, harlans-desktop-ci]`. The runner adds
+Write them as `runs-on: [self-hosted, linux, x64, harlan-desktop-ci]`. The runner adds
 `self-hosted`, `linux`, and `x64` itself.
 
 ## Host setup
@@ -52,25 +52,25 @@ Needs Docker, GitHub CLI authenticated with repository administration access on
 every repository in `runners.conf`.
 
 ```bash
-docker build --tag harlans-desktop-github-runner:2.336.0 infra/github-runner
+docker build --tag harlan-desktop-github-runner:2.336.0 infra/github-runner
 
 install -Dm755 infra/github-runner/supervisor \
-  ~/.local/lib/harlans-desktop-github-runner/supervisor
+  ~/.local/lib/harlan-desktop-github-runner/supervisor
 install -Dm644 infra/github-runner/runners.conf \
-  ~/.config/harlans-desktop-github-runner/runners.conf
-install -Dm644 infra/github-runner/harlans-desktop-github-runner.service \
-  ~/.config/systemd/user/harlans-desktop-github-runner.service
+  ~/.config/harlan-desktop-github-runner/runners.conf
+install -Dm644 infra/github-runner/harlan-desktop-github-runner.service \
+  ~/.config/systemd/user/harlan-desktop-github-runner.service
 
 systemctl --user daemon-reload
-systemctl --user enable --now harlans-desktop-github-runner.service
+systemctl --user enable --now harlan-desktop-github-runner.service
 ```
 
 ## Status
 
 ```bash
-harlans-desktop-runner          # both sections
-harlans-desktop-runner pool     # the workstation only, no network calls
-harlans-desktop-runner sites    # open pull requests and their checks
+harlan-desktop-runner          # both sections
+harlan-desktop-runner pool     # the workstation only, no network calls
+harlan-desktop-runner sites    # open pull requests and their checks
 ```
 
 `pool` reads the supervisor's own reservation files under `XDG_RUNTIME_DIR`, the
@@ -93,13 +93,13 @@ docker ps --filter label=com.harlanzw.desktop-runner=true \
 gh api repos/harlan-zw/nuxtseo.com/actions/runners \
   --jq '.runners[] | [.name, .status, .busy] | @tsv'
 
-journalctl --user --unit harlans-desktop-github-runner.service --follow
+journalctl --user --unit harlan-desktop-github-runner.service --follow
 ```
 
 Stop local CI before shutting down or doing CPU-heavy local work:
 
 ```bash
-systemctl --user stop harlans-desktop-github-runner.service
+systemctl --user stop harlan-desktop-github-runner.service
 ```
 
 Queued jobs wait up to 24 hours for a matching online runner, so starting the
@@ -113,8 +113,8 @@ service drains the queue.
 | --- | --- | --- |
 | `HARLANS_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Cores that in-flight jobs may hold at once, across all pools. |
 | `HARLANS_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
-| `HARLANS_DESKTOP_RUNNER_IMAGE` | `harlans-desktop-github-runner:2.336.0` | Image tag. |
-| `HARLANS_DESKTOP_RUNNER_CONFIG` | `/etc/harlans-desktop-github-runner/runners.conf` | Pool table. |
+| `HARLANS_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
+| `HARLANS_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
 
 Idle warm containers cost about 60 MB each and no CPU, so they do not spend the
 budget. Only a warm container holding a job, and a burst container from the

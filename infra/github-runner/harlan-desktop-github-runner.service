@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=HARLANS_DESKTOP_RUNNER_CONFIG=%h/.config/harlans-desktop-github-runner/runners.conf
-ExecStart=%h/.local/lib/harlans-desktop-github-runner/supervisor
+Environment=HARLANS_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner/runners.conf
+ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
 Restart=always
 RestartSec=10
 KillMode=mixed
