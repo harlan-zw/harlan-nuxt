@@ -12,6 +12,17 @@ name: Nuxt site CI
 # Moving a site between GitHub-hosted and the workstation pool is one input:
 #
 #   runs-on: '["self-hosted", "linux", "x64", "harlan-ci"]'
+#
+# WHY THE SETUP STEPS ARE INLINE
+#
+# `.github/actions/setup` holds the same three steps, and a deploy workflow
+# should use that action rather than copy them. This workflow cannot. A `uses:`
+# reference inside a reusable workflow resolves against THIS repository's default
+# branch, not against the ref the caller pinned, and `uses:` accepts no
+# expression, so the ref cannot be threaded through. Referencing the action here
+# would mean a change to it could never be proved by a pull request in a
+# consuming repository: the caller would pin `@my-branch` and still get `@main`'s
+# action. Inline steps make a caller's ref pin the whole gate.
 
 on:
   workflow_call:
@@ -26,13 +37,17 @@ on:
         required: false
         default: '24'
       install-args:
-        description: Extra `pnpm install` flags, on top of `--frozen-lockfile`.
+        description: >-
+          Extra `pnpm install` flags, on top of `--frozen-lockfile`.
+          `--ignore-scripts` is the default because a Nuxt workspace's postinstall
+          cascade can cost minutes that most jobs never use. Pass `''` for a
+          repository whose checks depend on a `postinstall: nuxt prepare`.
         type: string
         required: false
         default: '--ignore-scripts'
       prepare-command:
         description: >-
-          Runs before every job's own command, for generated output a check needs.
+          Runs before typecheck and test, for generated output those checks need.
           Usually `pnpm nuxt:prepare` or a filtered form of it. Empty runs nothing.
         type: string
         required: false
@@ -74,14 +89,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          install-args: ${{ inputs.install-args }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       # ESLint does no type-aware linting on these sites, so it never reads a
-      # `.nuxt` directory and the prepare cascade is pure cost here.
+      # `.nuxt` directory and `prepare-command` is pure cost here.
       - run: ${{ inputs.lint-command }}
-        shell: bash
 
   typecheck:
     if: inputs.typecheck-command != ''
@@ -91,15 +107,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          install-args: ${{ inputs.install-args }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: inputs.prepare-command != ''
         run: ${{ inputs.prepare-command }}
-        shell: bash
       - run: ${{ inputs.typecheck-command }}
-        shell: bash
         env:
           NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
 
@@ -111,12 +127,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: harlan-zw/harlan-nuxt/.github/actions/setup@main
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          install-args: ${{ inputs.install-args }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: inputs.prepare-command != ''
         run: ${{ inputs.prepare-command }}
-        shell: bash
       - run: ${{ inputs.test-command }}
-        shell: bash

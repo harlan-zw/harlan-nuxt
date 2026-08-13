@@ -12,7 +12,7 @@ RestartSec=10
 KillMode=mixed
 TimeoutStopSec=60
 NoNewPrivileges=true
-PrivateTmp=false
+PrivateTmp=true
 
 [Install]
 WantedBy=default.target

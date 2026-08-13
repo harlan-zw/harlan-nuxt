@@ -324,6 +324,32 @@ run_scaler() {
   done
 }
 
+# An ephemeral runner deregisters itself when it exits cleanly, but a host that
+# lost power, or a `docker kill`, leaves the registration behind. They accumulate
+# against the repository's runner limit and make `gh api ... /runners` unreadable,
+# so clear them once at startup. Only offline runners are touched, and a runner
+# this supervisor is about to create is not registered yet.
+prune_offline_runners() {
+  local repository="$1"
+  local -a runner_ids=()
+  local runner_id
+
+  if ! mapfile -t runner_ids < <(gh api --paginate \
+    "repos/$repository/actions/runners" \
+    --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null); then
+    return 0
+  fi
+
+  for runner_id in "${runner_ids[@]}"; do
+    [[ -n "$runner_id" ]] || continue
+    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+  done
+
+  if (( ${#runner_ids[@]} > 0 )); then
+    log "Pruned ${#runner_ids[@]} offline runner registrations from $repository"
+  fi
+}
+
 stop_all_containers() {
   local -a container_ids=()
 
@@ -361,8 +387,15 @@ main() {
   trap cleanup EXIT INT TERM
 
   local pool_index slot_number
+  local -A pruned_repositories=()
   for pool_index in "${!pool_repository[@]}"; do
     mkdir --parents "$state_dir/burst/${pool_slug[$pool_index]}"
+
+    # A repository can own several pools. Prune it once.
+    if [[ -z "${pruned_repositories[${pool_repository[$pool_index]}]:-}" ]]; then
+      pruned_repositories[${pool_repository[$pool_index]}]=done
+      prune_offline_runners "${pool_repository[$pool_index]}"
+    fi
   done
 
   run_scaler &
