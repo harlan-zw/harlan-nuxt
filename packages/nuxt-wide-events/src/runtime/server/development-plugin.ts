@@ -1,7 +1,7 @@
 import type { WideEventLike } from './index'
 import { defineNitroPlugin } from 'nitropack/runtime'
 import config from '#wide-events/config'
-import { enrichDevelopmentWideEvent } from './development'
+import { enrichDevelopmentWideEvent, writeDevelopmentWideEvent } from './development'
 import { scheduleWideEventDrain } from './drain'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
 
@@ -53,7 +53,7 @@ export default defineNitroPlugin((nitroApp) => {
       return
     enrichDevelopmentWideEvent(record, error)
     if (config.console)
-      console.log('Wide Event', record)
+      writeDevelopmentWideEvent(record)
     if (config.drain)
       scheduleWideEventDrain(nitroApp, context.event, record)
   })
@@ -74,7 +74,7 @@ export default defineNitroPlugin((nitroApp) => {
     if (error !== undefined)
       enrichDevelopmentWideEvent(record, error)
     if (config.console)
-      console.log('Wide Event', record)
+      writeDevelopmentWideEvent(record)
     if (config.drain)
       scheduleWideEventDrain(nitroApp, request, record)
   })

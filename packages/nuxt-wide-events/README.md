@@ -76,7 +76,7 @@ Default production performs no stack formatting, deep redaction, regular express
 
 Production errors include status only. All error strings remain absent because they can contain unapproved data.
 
-Development records include error messages and stacks. Development uses object output for easier inspection.
+Development records include error messages and stacks. Development uses compact terminal blocks with request metadata in the header and configured Fields in a tree.
 
 ## Background Operations
 

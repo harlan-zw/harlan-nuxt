@@ -3,6 +3,7 @@ import type { WideEventFields } from './index'
 import type { DrainedStandaloneWideEvent } from './standalone-core'
 import { useNitroApp } from 'nitropack/runtime'
 import config from '#wide-events/config'
+import { writeDevelopmentWideEvent } from './development'
 import { drainWideEvent } from './drain'
 import { createDrainedStandaloneWideEvent } from './standalone-core'
 
@@ -14,7 +15,7 @@ export function createWideEvent(initialFields?: WideEventFields): DrainedStandal
     output: async (record) => {
       if (runtimeConfig.console) {
         if (import.meta.dev)
-          console.log('Wide Event', record)
+          writeDevelopmentWideEvent(record)
         else
           console.log(JSON.stringify(record))
       }
