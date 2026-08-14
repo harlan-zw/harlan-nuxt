@@ -1,0 +1,552 @@
+{
+  "schemaVersion": 1,
+  "variant": "candidate",
+  "status": "complete",
+  "createdAt": "2026-08-14T07:09:48.094Z",
+  "environment": {
+    "node": "v24.17.0",
+    "pnpm": "11.2.1",
+    "samples": 10
+  },
+  "packageFingerprint": "2f035449882106efc93982c2ed3133173a516efbaed76dafc0aeb03abee2aeaa",
+  "source": {
+    "root": "/home/harlan/sites/harlanzw.com",
+    "canary": "harlanzw.com",
+    "incrementalFile": "content/blog/modern-package-development.md"
+  },
+  "classifier": {
+    "contentMarkers": [
+      "__comark_content",
+      "comark-content",
+      "ContentRenderer",
+      "queryCollection",
+      "rangi"
+    ]
+  },
+  "samples": [
+    {
+      "sample": 1,
+      "prepareMs": 3127.7625160000007,
+      "productionBuildMs": 26866.671136999998,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 78.59ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 78.59,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 25665.468622000008,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 32.76ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 32.76,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 17.95498999999836,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 2,
+      "prepareMs": 3128.668353000001,
+      "productionBuildMs": 27686.729309999995,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 77.80ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 77.8,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 25587.890102000005,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 32.33ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 32.33,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.469572999994853,
+        "status": 200,
+        "bytes": 19519
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 3,
+      "prepareMs": 3188.631005999996,
+      "productionBuildMs": 26002.345494999987,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 77.72ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 77.72,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 25031.123911000002,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 34.09ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 34.09,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.804824999999255,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 4,
+      "prepareMs": 3029.884474999999,
+      "productionBuildMs": 27084.709353000013,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 74.34ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 74.34,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 25641.946464000008,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 34.46ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 34.46,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.937716999993427,
+        "status": 200,
+        "bytes": 19519
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 5,
+      "prepareMs": 3156.2556350000086,
+      "productionBuildMs": 26033.375322000036,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 79.99ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 79.99,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 24401.16508299997,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 32.54ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 32.54,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.566688999999315,
+        "status": 200,
+        "bytes": 19519
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 6,
+      "prepareMs": 3078.6648300000234,
+      "productionBuildMs": 26740.271536000015,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 83.34ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 83.34,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 24914.55880400003,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 34.62ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 34.62,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.877990999957547,
+        "status": 200,
+        "bytes": 19519
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 7,
+      "prepareMs": 3068.4530459999805,
+      "productionBuildMs": 25897.74951699999,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 75.58ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 75.58,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 24296.561861000024,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 34.86ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 34.86,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 19.35424299997976,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314942,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31522,
+          "contentFiles": [
+            {
+              "path": "_nuxt/BtTNwUPS.js",
+              "bytes": 59448,
+              "gzipBytes": 16953,
+              "sha256": "dbd0ff19e2ab555e7d6be1e2c74b90f9e14fdbc4015ca4ac3d7be46fb8d2431a"
+            },
+            {
+              "path": "_nuxt/DlVqOxoK.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "6fc9a089a3bcb7a0f2b5df5ffee14f69e9d56970e46612279edcddd37de927ee"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 8,
+      "prepareMs": 3090.7514510000474,
+      "productionBuildMs": 25491.659404999984,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 79.02ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 79.02,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 24125.23134900001,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 32.87ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 32.87,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 19.60391399997752,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 9,
+      "prepareMs": 3088.237698000041,
+      "productionBuildMs": 24914.004417999997,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 78.31ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 78.31,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 23934.230211000016,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 33.39ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 33.39,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 18.8323649999802,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    },
+    {
+      "sample": 10,
+      "prepareMs": 3090.333770999976,
+      "productionBuildMs": 25419.920924000035,
+      "coldParseIndex": {
+        "line": "Processed 1 collections and 21 files in 76.48ms (0 cached, 21 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 76.48,
+        "cachedFiles": 0,
+        "parsedFiles": 21
+      },
+      "incrementalBuildMs": 24207.18047400005,
+      "incrementalParseIndex": {
+        "line": "Processed 1 collections and 21 files in 34.21ms (20 cached, 1 parsed)",
+        "collections": 1,
+        "files": 21,
+        "durationMs": 34.21,
+        "cachedFiles": 20,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 19.469737000064924,
+        "status": 200,
+        "bytes": 19520
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 942840,
+          "totalGzipBytes": 314924,
+          "contentBytes": 101330,
+          "contentGzipBytes": 31520,
+          "contentFiles": [
+            {
+              "path": "_nuxt/DQus5dXB.js",
+              "bytes": 59448,
+              "gzipBytes": 16951,
+              "sha256": "78db4dae4a84c79996ec4efa1e065ec3a1e5ae0c51cf3ee54c2c29a9fa95f88e"
+            },
+            {
+              "path": "_nuxt/DtFD39xA.js",
+              "bytes": 41882,
+              "gzipBytes": 14569,
+              "sha256": "14781b18c61bb45b9c91d1382c97c63c023a7f1b4b4a3f8a6e17d3e48d551330"
+            }
+          ]
+        },
+        "nitroServerBytes": 6401947,
+        "installedDependencyBytes": 941532126
+      }
+    }
+  ],
+  "medians": {
+    "prepareMs": 3090.5426110000117,
+    "productionBuildMs": 26017.86040850001,
+    "coldParseIndex.durationMs": 78.055,
+    "incrementalBuildMs": 24657.8619435,
+    "incrementalParseIndex.durationMs": 33.74,
+    "ssr.durationMs": 18.855177999968873,
+    "sizes.clientJavaScript.totalBytes": 942840,
+    "sizes.clientJavaScript.totalGzipBytes": 314924,
+    "sizes.clientJavaScript.contentBytes": 101330,
+    "sizes.clientJavaScript.contentGzipBytes": 31520,
+    "sizes.nitroServerBytes": 6401947,
+    "sizes.installedDependencyBytes": 941532126
+  }
+}
