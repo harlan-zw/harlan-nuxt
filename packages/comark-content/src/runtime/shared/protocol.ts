@@ -1,14 +1,28 @@
 import type { QueryPlan, QueryOperation } from '../core/query'
 
 export type QueryRequest =
-  | { _tag: 'Query', collection: string, plan: QueryPlan }
-  | { _tag: 'Surroundings', collection: string, path: string, fields: string[] }
-  | { _tag: 'SearchSections', collection: string }
+  { _tag: 'Query', collection: string, plan: QueryPlan }
 
 export type NavigationRequest = {
   collection: string
   fields: string[]
 }
+
+export type SearchRequest = {
+  collection: string
+}
+
+export type SurroundingsRequest = NavigationRequest & {
+  path: string
+}
+
+export type CacheableContentResponse<T> =
+  | { _tag: 'Fresh', status: 200, body: T, headers: Record<string, string> }
+  | { _tag: 'NotModified', status: 304, body: null, headers: Record<'cache-control' | 'cloudflare-cdn-cache-control' | 'etag', string> }
+
+export type ContentCachePolicy =
+  | { _tag: 'Immutable' }
+  | { _tag: 'NoStore' }
 
 const operators = new Set(['=', '<>', 'LIKE', 'IS NULL'])
 const directions = new Set(['ASC', 'DESC'])
@@ -16,18 +30,34 @@ const collectionName = /^[A-Za-z][A-Za-z0-9_]*$/
 const fieldName = /^[A-Za-z_][A-Za-z0-9_]*$/
 const forbiddenFields = new Set(['__proto__', 'constructor', 'prototype'])
 
-export const parseNavigationRequest = (collection: unknown, fields: unknown): NavigationRequest => {
+const parseCollection = (collection: unknown): string => {
   if (typeof collection !== 'string' || collection.length > 128 || !collectionName.test(collection))
     throw new TypeError('<request>:1:1 Expected a valid collection name.')
-  if (fields !== undefined && typeof fields !== 'string')
-    throw new TypeError('<request>:1:1 Expected comma-separated navigation fields.')
-  const requestedFields = fields ? fields.split(',') : []
-  if (requestedFields.length > 32 || requestedFields.some(field => !fieldName.test(field) || forbiddenFields.has(field)))
-    throw new TypeError('<request>:1:1 Expected valid navigation fields.')
-  return { collection, fields: [...new Set(requestedFields)] }
+  return collection
 }
 
-export const createNavigationEtag = (value: unknown): string => {
+const parseFields = (fields: unknown, subject: string): string[] => {
+  if (fields !== undefined && typeof fields !== 'string')
+    throw new TypeError(`<request>:1:1 Expected comma-separated ${subject} fields.`)
+  const requestedFields = fields ? fields.split(',') : []
+  if (requestedFields.length > 32 || requestedFields.some(field => !fieldName.test(field) || forbiddenFields.has(field)))
+    throw new TypeError(`<request>:1:1 Expected valid ${subject} fields.`)
+  return [...new Set(requestedFields)]
+}
+
+export const parseNavigationRequest = (collection: unknown, fields: unknown): NavigationRequest => {
+  return { collection: parseCollection(collection), fields: parseFields(fields, 'navigation') }
+}
+
+export const parseSearchRequest = (collection: unknown): SearchRequest => ({ collection: parseCollection(collection) })
+
+export const parseSurroundingsRequest = (collection: unknown, path: unknown, fields: unknown): SurroundingsRequest => {
+  if (typeof path !== 'string' || path.length > 2048 || !path.startsWith('/'))
+    throw new TypeError('<request>:1:1 Expected an absolute content path.')
+  return { collection: parseCollection(collection), path, fields: parseFields(fields, 'surroundings') }
+}
+
+const createContentEtag = (value: unknown): string => {
   const source = JSON.stringify(value)
   let hash = 0x811C9DC5
   for (let index = 0; index < source.length; index++) {
@@ -37,9 +67,36 @@ export const createNavigationEtag = (value: unknown): string => {
   return `W/"${source.length.toString(36)}-${(hash >>> 0).toString(36)}"`
 }
 
-export const matchesNavigationEtag = (header: string | undefined, etag: string): boolean => header
+const matchesContentEtag = (header: string | undefined, etag: string): boolean => header
   ?.split(',')
   .some(candidate => candidate.trim() === etag || candidate.trim() === '*') ?? false
+
+export const createCacheableContentResponse = <T>(
+  value: T,
+  ifNoneMatch?: string,
+  policy: ContentCachePolicy = { _tag: 'Immutable' },
+): CacheableContentResponse<T> => {
+  if (policy._tag === 'NoStore') {
+    return {
+      _tag: 'Fresh',
+      status: 200,
+      body: value,
+      headers: {
+        'cache-control': 'no-store',
+        'cloudflare-cdn-cache-control': 'no-store',
+      },
+    }
+  }
+  const etag = createContentEtag(value)
+  const headers = {
+    'cache-control': 'public, max-age=31536000, immutable',
+    'cloudflare-cdn-cache-control': 'public, max-age=31536000, immutable',
+    etag,
+  }
+  return matchesContentEtag(ifNoneMatch, etag)
+    ? { _tag: 'NotModified', status: 304, body: null, headers }
+    : { _tag: 'Fresh', status: 200, body: value, headers }
+}
 
 const isOperation = (value: unknown): value is QueryOperation => {
   if (!value || typeof value !== 'object')
@@ -60,20 +117,12 @@ export const parseQueryRequest = (value: unknown): QueryRequest => {
   if (!value || typeof value !== 'object')
     throw new TypeError('<request>:1:1 Expected a comark-content query object.')
   const request = value as Record<string, unknown>
-  if (typeof request.collection !== 'string' || !request.collection)
-    throw new TypeError('<request>:1:1 Expected a collection name.')
+  const collection = parseCollection(request.collection)
   if (request._tag === 'Query') {
     const plan = request.plan as Record<string, unknown> | undefined
     if (!Array.isArray(plan?.operations) || !plan.operations.every(isOperation))
       throw new TypeError('<request>:1:1 Expected valid query operations.')
-    return request as QueryRequest
+    return { _tag: 'Query', collection, plan: plan as QueryPlan }
   }
-  if (request._tag === 'Surroundings') {
-    if (typeof request.path !== 'string' || !Array.isArray(request.fields) || !request.fields.every(field => typeof field === 'string'))
-      throw new TypeError('<request>:1:1 Expected a path and surroundings fields.')
-    return request as QueryRequest
-  }
-  if (request._tag === 'SearchSections')
-    return request as QueryRequest
   throw new TypeError('<request>:1:1 Unsupported comark-content query.')
 }

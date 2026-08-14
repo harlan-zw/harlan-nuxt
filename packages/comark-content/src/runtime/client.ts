@@ -1,10 +1,11 @@
 import type { CollectionItem, CollectionName, ContentNavigationItem, ContentSearchSection } from './types'
 import type { QueryRequest } from './shared/protocol'
 import { createQueryBuilder } from './core/query'
+import { useRuntimeConfig } from '#imports'
 
 type Fetch = <T>(path: string, options:
   | { method: 'POST', body: QueryRequest }
-  | { method: 'GET', query: { fields: string } }
+  | { method: 'GET', query: Record<string, string> }
 ) => Promise<T>
 
 const request = <T>(body: QueryRequest): Promise<T> => (globalThis as typeof globalThis & { $fetch: Fetch }).$fetch<T>('/__comark_content/query', {
@@ -12,10 +13,17 @@ const request = <T>(body: QueryRequest): Promise<T> => (globalThis as typeof glo
   body,
 })
 
+const contentGetPath = (resource: string, collection: string) => {
+  const revision = useRuntimeConfig().public.comarkContentRevision
+  if (typeof revision !== 'string' || !revision)
+    throw new TypeError('comark-content:1:1 The content revision is unavailable.')
+  return `/__comark_content/${encodeURIComponent(revision)}/${resource}/${encodeURIComponent(collection)}`
+}
+
 export const queryCollection = <TName extends CollectionName | string>(collection: TName) => createQueryBuilder<CollectionItem<TName>>(plan => request({ _tag: 'Query', collection, plan }))
 
 export const queryCollectionNavigation = <TName extends CollectionName | string>(collection: TName, fields: string[] = []) => (globalThis as typeof globalThis & { $fetch: Fetch }).$fetch<ContentNavigationItem[]>(
-  `/__comark_content/navigation/${encodeURIComponent(collection)}`,
+  contentGetPath('navigation', collection),
   { method: 'GET', query: { fields: fields.join(',') } },
 )
 
@@ -23,14 +31,12 @@ export const queryCollectionItemSurroundings = <TName extends CollectionName | s
   collection: TName,
   path: string,
   options: { fields?: string[] } = {},
-) => request<[ContentNavigationItem | null, ContentNavigationItem | null]>({
-  _tag: 'Surroundings',
-  collection,
-  path,
-  fields: options.fields ?? [],
-})
+) => (globalThis as typeof globalThis & { $fetch: Fetch }).$fetch<[ContentNavigationItem | null, ContentNavigationItem | null]>(
+  contentGetPath('surroundings', collection),
+  { method: 'GET', query: { path, fields: (options.fields ?? []).join(',') } },
+)
 
-export const queryCollectionSearchSections = <TName extends CollectionName | string>(collection: TName) => request<ContentSearchSection[]>({
-  _tag: 'SearchSections',
-  collection,
-})
+export const queryCollectionSearchSections = <TName extends CollectionName | string>(collection: TName) => (globalThis as typeof globalThis & { $fetch: Fetch }).$fetch<ContentSearchSection[]>(
+  contentGetPath('search', collection),
+  { method: 'GET', query: {} },
+)

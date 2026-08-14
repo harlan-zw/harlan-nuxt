@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assertSupportedOptions, defineCollection } from '../src/config'
+import { assertCloudflareCacheModule, assertSupportedOptions, defineCollection } from '../src/config'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, selectContentComponents } from '../src/components'
 
 describe('configuration boundary', () => {
@@ -69,5 +69,16 @@ describe('configuration boundary', () => {
 
   it('reports database configuration as unsupported at its source', () => {
     expect(() => assertSupportedOptions({ database: { type: 'd1' } }, '/site/nuxt.config.ts')).toThrow('/site/nuxt.config.ts:1:1')
+  })
+
+  it('requires nuxt-cloudflare when Content runs on Cloudflare', () => {
+    expect(() => assertCloudflareCacheModule({ preset: 'cloudflare-module', moduleInstalled: false }, '/site/nuxt.config.ts')).toThrow(
+      '/site/nuxt.config.ts:1:1 Cloudflare deployments require @harlan-zw/nuxt-cloudflare',
+    )
+    expect(() => assertCloudflareCacheModule({ preset: 'cloudflare-durable', moduleInstalled: true, workersCache: { enabled: false } }, '/site/nuxt.config.ts')).toThrow(
+      '/site/nuxt.config.ts:1:1 Cloudflare deployments require Workers Caching',
+    )
+    expect(() => assertCloudflareCacheModule({ preset: 'cloudflare-durable', moduleInstalled: true, workersCache: { enabled: true } }, '/site/nuxt.config.ts')).not.toThrow()
+    expect(() => assertCloudflareCacheModule({ preset: 'node-server', moduleInstalled: false }, '/site/nuxt.config.ts')).not.toThrow()
   })
 })

@@ -17,6 +17,21 @@ export type ContentAssetPlan = {
 
 const bodyAssetName = (id: string) => `${createHash('sha256').update(id).digest('hex').slice(0, 32)}.json.gz`
 
+const canonicalContent = (collections: Record<string, PageCollectionItemBase[]>) => JSON.stringify(collections, (key, value) => {
+  if (key === '_source')
+    return undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return value
+  return Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]]))
+})
+
+export const createContentRevision = (buildId: string, collections: Record<string, PageCollectionItemBase[]>) => createHash('sha256')
+  .update('comark-content-assets-v1\0')
+  .update(buildId)
+  .update('\0')
+  .update(canonicalContent(collections))
+  .digest('hex')
+
 export const projectCollectionAssets = (name: string, items: PageCollectionItemBase[]): GeneratedContentAsset[] => {
   const index: IndexedContentDocument[] = []
   const navigation: NavigationCollectionItem[] = []

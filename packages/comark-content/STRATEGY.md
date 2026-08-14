@@ -26,6 +26,8 @@ Collections store only the Comark AST. Raw Markdown exists only while ingestion 
 
 The build emits a compact metadata index per collection and one compressed AST asset per document. Queries filter metadata first, then hydrate only matched documents. Navigation, surroundings, sitemap, and search use generated projections and never decode document ASTs. Browser queries use constrained Nitro endpoints. The browser never receives the parser or a complete AST collection.
 
+Navigation, surroundings, and search endpoints include a SHA-256 content revision in their path. The revision covers the Nuxt build ID and every projected content document, excluding local source paths. Their browser and Cloudflare cache policies are immutable for one year. A production deployment registers only its current revision, so stale URLs return 404 instead of new data. Cloudflare presets require `@harlan-zw/nuxt-cloudflare` with Workers Caching enabled. Other presets keep normal HTTP immutable caching. Development uses a stable route with `no-store`.
+
 The AST also defines the renderer component boundary. The build emits static imports only for tags present in collected nodes. HTML tags prefer site prose overrides. Custom tags prefer site content components, then Nuxt UI prose components, then plain components. The renderer never scans or resolves unused components at runtime.
 
 ## Success
