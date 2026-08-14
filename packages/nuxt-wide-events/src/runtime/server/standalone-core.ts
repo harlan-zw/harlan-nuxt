@@ -1,10 +1,17 @@
-import type { WideEventFields, WideEventLike, WideEventRecord } from './index'
+import type { WideEventFields, WideEventLike, WideEventValue } from './index'
 import { addWideEventFields, emitWideEvent, startWideEvent } from './index'
 
 export type StandaloneWideEventLevel = 'debug' | 'error' | 'info' | 'warn'
 
-export interface StandaloneWideEventRecord extends Omit<WideEventRecord, 'level'> {
+export interface StandaloneWideEventRecord extends Record<string, WideEventValue | undefined> {
+  durationMs: number
   level: StandaloneWideEventLevel
+  method: string
+  requestId: string
+  status: number
+  timestamp: string
+  path?: string
+  service?: string
 }
 
 export interface StandaloneWideEvent extends WideEventLike {
