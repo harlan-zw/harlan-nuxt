@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
-import { createContentAssetPlan, encodeCollectionAsset } from '../src/core/asset'
+import { createContentAssetPlan, createContentRevision, encodeCollectionAsset } from '../src/core/asset'
 import { createIndexedCollectionQuery } from '../src/runtime/core/query'
 import { decodeCollectionAsset } from '../src/runtime/server/asset'
 import { createContentStorage } from '../src/runtime/server/storage-core'
@@ -51,6 +51,22 @@ describe('generated collection storage', () => {
       { id: '/#home', title: 'Home', titles: [], content: '', level: 1 },
       { id: '/draft#draft', title: 'Draft', titles: [], content: '', level: 1 },
     ])
+  })
+
+  it('changes the content revision when either the application build or one document changes', () => {
+    const original = { pages }
+    const changed = {
+      pages: pages.map(page => page.path === '/draft'
+        ? { ...page, body: { ...page.body, nodes: [['p', {}, 'Changed body.']] as PageCollectionItemBase['body']['nodes'] } }
+        : page),
+    }
+
+    expect(createContentRevision('app-build', original)).toMatch(/^[a-f0-9]{64}$/)
+    expect(createContentRevision('app-build', { pages })).toBe(createContentRevision('app-build', original))
+    expect(createContentRevision('app-build', { empty: [], pages })).toBe(createContentRevision('app-build', { pages, empty: [] }))
+    expect(createContentRevision('app-build', { pages: pages.map(page => ({ ...page, _source: `/other${page._source}` })) })).toBe(createContentRevision('app-build', original))
+    expect(createContentRevision('app-build', changed)).not.toBe(createContentRevision('app-build', original))
+    expect(createContentRevision('next-app-build', original)).not.toBe(createContentRevision('app-build', original))
   })
 
   it('filters metadata before loading only matched document bodies', async () => {

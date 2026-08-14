@@ -2,6 +2,7 @@ import type { ContentConfig } from './config'
 import type { LoadedCollection } from './core/ingest'
 import type { ContentHighlight } from './highlight'
 import type { NitroConfig } from 'nitropack/types'
+import process from 'node:process'
 import { existsSync } from 'node:fs'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -14,13 +15,14 @@ import {
   addTemplate,
   createResolver,
   defineNuxtModule,
+  hasNuxtModule,
   importModule,
   updateTemplates,
   useLogger,
 } from '@nuxt/kit'
-import { assertSupportedOptions } from './config'
+import { assertCloudflareCacheModule, assertSupportedOptions } from './config'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
-import { createContentAssetPlan } from './core/asset'
+import { createContentAssetPlan, createContentRevision } from './core/asset'
 import { ingestCollections } from './core/ingest'
 import { excludeNuxtContentSitemapSource } from './sitemap'
 
@@ -85,6 +87,10 @@ export default defineNuxtModule<ModuleOptions>({
       optional: true,
       defaults: { excludeAppSources: ['@nuxt/content@v3:urls'] },
     },
+    '@harlan-zw/nuxt-cloudflare': {
+      version: '>=0.0.14',
+      optional: true,
+    },
   },
   defaults: {},
   async setup(options, nuxt) {
@@ -130,12 +136,17 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'queryCollectionSearchSections', from: resolver.resolve('./runtime/client') },
     ])
     addServerHandler({ route: '/__comark_content/query', method: 'post', handler: resolver.resolve('./runtime/server/api/query.post') })
-    addServerHandler({ route: '/__comark_content/navigation/:collection', method: 'get', handler: resolver.resolve('./runtime/server/api/navigation.get') })
     addServerPlugin(resolver.resolve('./runtime/server/plugins/sitemap'))
 
     nuxt.hook('nitro:config', (config: NitroConfig) => {
       config.serverAssets ||= []
       config.serverAssets.push({ baseName: 'comark-content', dir: outputDir })
+      const cloudflare = (config as NitroConfig & { cloudflare?: { wrangler?: { cache?: unknown } } }).cloudflare
+      assertCloudflareCacheModule({
+        preset: config.preset ?? process.env.NITRO_PRESET ?? nuxt.options.nitro.preset,
+        moduleInstalled: hasNuxtModule('@harlan-zw/nuxt-cloudflare', nuxt),
+        workersCache: cloudflare?.wrangler?.cache,
+      }, join(nuxt.options.rootDir, 'nuxt.config.ts'))
     })
 
     if (nuxt.options._prepare)
@@ -169,14 +180,24 @@ export default defineNuxtModule<ModuleOptions>({
       }))
       const files = Object.values(result.value.collections).reduce((sum, items) => sum + items.length, 0)
       logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
+      return nuxt.options.dev ? 'dev' : createContentRevision(nuxt.options.buildId, result.value.collections)
     }
 
-    nuxt.hook('modules:done', buildCollections)
+    nuxt.hook('modules:done', async () => {
+      const contentRevision = await buildCollections()
+      nuxt.options.runtimeConfig.public.comarkContentRevision = contentRevision
+      const contentRouteBase = `/__comark_content/${encodeURIComponent(contentRevision)}`
+      addServerHandler({ route: `${contentRouteBase}/navigation/:collection`, method: 'get', handler: resolver.resolve('./runtime/server/api/navigation.get') })
+      addServerHandler({ route: `${contentRouteBase}/search/:collection`, method: 'get', handler: resolver.resolve('./runtime/server/api/search.get') })
+      addServerHandler({ route: `${contentRouteBase}/surroundings/:collection`, method: 'get', handler: resolver.resolve('./runtime/server/api/surroundings.get') })
+    })
     let rebuild = Promise.resolve()
     nuxt.hook('builder:watch', (event, path) => {
       if (event !== 'change' || !path.endsWith('.md'))
         return
-      rebuild = rebuild.then(buildCollections)
+      rebuild = rebuild.then(async () => {
+        await buildCollections()
+      })
       return rebuild
     })
   },

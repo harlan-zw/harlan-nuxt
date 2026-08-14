@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
-import { queryCollectionNavigation } from '../src/runtime/client'
+import { queryCollectionItemSurroundings, queryCollectionNavigation, queryCollectionSearchSections } from '../src/runtime/client'
 import { createNavigation, createNavigationSource, createSearchSections, createSurroundings } from '../src/runtime/core/navigation'
 import { createSitemapEntries } from '../src/runtime/core/sitemap'
-import { createNavigationEtag, matchesNavigationEtag, parseNavigationRequest } from '../src/runtime/shared/protocol'
+import { createCacheableContentResponse, parseNavigationRequest, parseSearchRequest, parseSurroundingsRequest } from '../src/runtime/shared/protocol'
 import { excludeNuxtContentSitemapSource } from '../src/sitemap'
 
 const body: PageCollectionItemBase['body'] = {
@@ -68,9 +68,33 @@ describe('derived collection data', () => {
 
     await queryCollectionNavigation('pages', ['new'])
 
-    expect(fetch).toHaveBeenCalledWith('/__comark_content/navigation/pages', {
+    expect(fetch).toHaveBeenCalledWith('/__comark_content/test-build/navigation/pages', {
       method: 'GET',
       query: { fields: 'new' },
+    })
+  })
+
+  it('loads search sections through their cacheable GET boundary', async () => {
+    const fetch = vi.fn().mockResolvedValue([])
+    vi.stubGlobal('$fetch', fetch)
+
+    await queryCollectionSearchSections('pages')
+
+    expect(fetch).toHaveBeenCalledWith('/__comark_content/test-build/search/pages', {
+      method: 'GET',
+      query: {},
+    })
+  })
+
+  it('loads surroundings through their cacheable GET boundary', async () => {
+    const fetch = vi.fn().mockResolvedValue([null, null])
+    vi.stubGlobal('$fetch', fetch)
+
+    await queryCollectionItemSurroundings('pages', '/guide/install', { fields: ['title', 'description'] })
+
+    expect(fetch).toHaveBeenCalledWith('/__comark_content/test-build/surroundings/pages', {
+      method: 'GET',
+      query: { path: '/guide/install', fields: 'title,description' },
     })
   })
 
@@ -89,12 +113,49 @@ describe('derived collection data', () => {
     expect(() => parseNavigationRequest(collection, fields)).toThrow('<request>:1:1')
   })
 
-  it('revalidates unchanged navigation using a deterministic ETag', () => {
-    const etag = createNavigationEtag([{ title: 'Guide', path: '/guide' }])
+  it('parses cacheable search and surroundings requests once at their boundaries', () => {
+    expect(parseSearchRequest('docsV4')).toEqual({ collection: 'docsV4' })
+    expect(parseSurroundingsRequest('docsV4', '/guide/install', 'title,description,title')).toEqual({
+      collection: 'docsV4',
+      path: '/guide/install',
+      fields: ['title', 'description'],
+    })
+    expect(() => parseSearchRequest('../pages')).toThrow('<request>:1:1')
+    expect(() => parseSurroundingsRequest('pages', 'guide', 'title')).toThrow('<request>:1:1')
+    expect(() => parseSurroundingsRequest('pages', '/guide', '__proto__')).toThrow('<request>:1:1')
+  })
 
-    expect(createNavigationEtag([{ title: 'Guide', path: '/guide' }])).toBe(etag)
-    expect(createNavigationEtag([{ title: 'Changed', path: '/guide' }])).not.toBe(etag)
-    expect(matchesNavigationEtag(`"other", ${etag}`, etag)).toBe(true)
+  it('creates a content-addressed Cloudflare cache response with deterministic revalidation', () => {
+    const value = [{ title: 'Guide', path: '/guide' }]
+    const fresh = createCacheableContentResponse(value)
+    const notModified = createCacheableContentResponse(value, `"other", ${fresh.headers.etag}`)
+
+    expect(fresh).toEqual({
+      _tag: 'Fresh',
+      status: 200,
+      body: value,
+      headers: {
+        'cache-control': 'public, max-age=31536000, immutable',
+        'cloudflare-cdn-cache-control': 'public, max-age=31536000, immutable',
+        'etag': fresh.headers.etag,
+      },
+    })
+    expect(createCacheableContentResponse([{ title: 'Changed', path: '/guide' }]).headers.etag).not.toBe(fresh.headers.etag)
+    expect(notModified).toEqual({
+      _tag: 'NotModified',
+      status: 304,
+      body: null,
+      headers: fresh.headers,
+    })
+    expect(createCacheableContentResponse(value, fresh.headers.etag, { _tag: 'NoStore' })).toEqual({
+      _tag: 'Fresh',
+      status: 200,
+      body: value,
+      headers: {
+        'cache-control': 'no-store',
+        'cloudflare-cdn-cache-control': 'no-store',
+      },
+    })
   })
 
   it('creates folder nodes when no index page exists', () => {

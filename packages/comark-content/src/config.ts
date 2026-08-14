@@ -53,3 +53,19 @@ export const assertSupportedOptions = (options: Record<string, unknown>, source:
     return
   throw new TypeError(`${source}:1:1 Database adapters are outside the Markdown-only comark-content boundary.`)
 }
+
+export type ContentDeploymentCache = {
+  preset: unknown
+  moduleInstalled: boolean
+  workersCache?: unknown
+}
+
+export const assertCloudflareCacheModule = (integration: ContentDeploymentCache, source: string) => {
+  if (typeof integration.preset !== 'string' || !integration.preset.startsWith('cloudflare'))
+    return
+  if (!integration.moduleInstalled)
+    throw new TypeError(`${source}:1:1 Cloudflare deployments require @harlan-zw/nuxt-cloudflare for Content caching.`)
+  const cache = integration.workersCache
+  if (!cache || typeof cache !== 'object' || !('enabled' in cache) || cache.enabled !== true)
+    throw new TypeError(`${source}:1:1 Cloudflare deployments require Workers Caching from @harlan-zw/nuxt-cloudflare.`)
+}
