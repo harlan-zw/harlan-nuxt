@@ -52,7 +52,7 @@ export function formatDevelopmentWideEvent(
   const scope = typeof record.scope === 'string' ? record.scope : undefined
   const tag = safeTerminalText(record.service ?? scope ?? 'Wide Event')
   const level = record.level.toUpperCase()
-  const request = record.method !== 'UNKNOWN' && record.path !== undefined
+  const request = record.path !== undefined
   const header = [
     paint(formatTimestamp(record.timestamp), ANSI.dim, colors),
     paint(level, levelColor(record.level), colors),
@@ -172,7 +172,7 @@ function safeTerminalText(value: string): string {
 
 function supportsColor(): boolean {
   const process = runtimeProcess()
-  return process !== undefined && !process.env.NO_COLOR && process.stdout?.isTTY !== false
+  return process !== undefined && process.env.NO_COLOR === undefined && process.stdout?.isTTY === true
 }
 
 function runtimeProcess(): {
