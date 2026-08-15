@@ -36,6 +36,7 @@ catalog:
   rollup: ^4.62.4
   typescript: ^5.9.3
   unbuild: ^3.6.1
+  unenv: 2.0.0-rc.24
   unstorage: ^1.17.5
   vite: ^8.0.0
   vitest: ^4.1.10

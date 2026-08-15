@@ -103,6 +103,7 @@
     "h3": "catalog:",
     "nitropack": "catalog:",
     "pathe": "catalog:",
+    "unenv": "catalog:",
     "unstorage": "catalog:"
   },
   "devDependencies": {

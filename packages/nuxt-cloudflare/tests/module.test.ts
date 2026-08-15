@@ -169,63 +169,32 @@ describe('setupCloudflareModule', () => {
   })
 })
 
-describe('workerd console.createTask repair', () => {
-  it('injects a rollup banner that neutralises a throwing console.createTask', () => {
+describe('workerd console module', () => {
+  it('aliases the console module away from node:console', () => {
     const nitro: NitroCloudflareShape = {}
 
     configureNitroCloudflare(nitro, {})
 
-    const banner = nitro.rollupConfig?.output?.banner
-    expect(typeof banner).toBe('string')
-
-    // The banner is raw source injected at the top of every chunk, so exercise
-    // it the way workerd does: a console whose createTask throws.
-    const brokenConsole = {
-      createTask() {
-        throw new Error('The Console.createTask method is not implemented')
-      },
-    }
-    const globals = { console: brokenConsole } as { console: Record<string, unknown> }
-    // eslint-disable-next-line no-new-func
-    new Function('globalThis', banner as string)(globals)
-
-    expect(globals.console.createTask).toBeUndefined()
+    expect(nitro.alias?.console).toMatch(/workerd-console\.(?:mjs|js)$/)
+    expect(nitro.alias?.['node:console']).toBe(nitro.alias?.console)
   })
 
-  it('leaves a working console.createTask alone', () => {
-    const nitro: NitroCloudflareShape = {}
-
-    configureNitroCloudflare(nitro, {})
-
-    const task = { run: (fn: () => unknown) => fn() }
-    const workingConsole = { createTask: () => task }
-    const globals = { console: workingConsole } as { console: Record<string, unknown> }
-    // eslint-disable-next-line no-new-func
-    new Function('globalThis', nitro.rollupConfig!.output!.banner as string)(globals)
-
-    expect(typeof globals.console.createTask).toBe('function')
-    expect((globals.console.createTask as () => unknown)()).toBe(task)
-  })
-
-  it('keeps an existing banner', () => {
+  it('keeps a console alias the app already set', () => {
     const nitro: NitroCloudflareShape = {
-      rollupConfig: { output: { banner: '/* existing */' } },
+      alias: { 'console': '/app/my-console.mjs', 'node:console': '/app/my-console.mjs' },
     }
 
     configureNitroCloudflare(nitro, {})
 
-    expect(nitro.rollupConfig?.output?.banner).toContain('/* existing */')
-    expect(nitro.rollupConfig?.output?.banner).toContain('createTask')
+    expect(nitro.alias?.console).toBe('/app/my-console.mjs')
+    expect(nitro.alias?.['node:console']).toBe('/app/my-console.mjs')
   })
 
-  it('leaves a function banner untouched', () => {
-    const existing = () => '/* dynamic */'
-    const nitro: NitroCloudflareShape = {
-      rollupConfig: { output: { banner: existing } },
-    }
+  it('leaves unrelated aliases alone', () => {
+    const nitro: NitroCloudflareShape = { alias: { sharp: 'unenv/mock/empty' } }
 
     configureNitroCloudflare(nitro, {})
 
-    expect(nitro.rollupConfig?.output?.banner).toBe(existing)
+    expect(nitro.alias?.sharp).toBe('unenv/mock/empty')
   })
 })

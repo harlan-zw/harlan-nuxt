@@ -49,11 +49,7 @@ export interface NitroCloudflareShape {
   }
   preset?: string
   plugins?: string[]
-  rollupConfig?: {
-    output?: {
-      banner?: string | (() => string | Promise<string>)
-    }
-  }
+  alias?: Record<string, string>
   sourceMap?: boolean
   storage?: Record<string, NitroStorageMount>
 }
@@ -70,34 +66,18 @@ const BUILD_SECRET_ENV_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENT
 // Nuxt Scripts must resolve this value during setup to register its signed proxy plugin.
 const REQUIRED_BUILD_SECRET_NAMES = new Set(['NUXT_SCRIPTS_PROXY_SECRET'])
 
-/**
- * workerd replaces the global `console` with its Node-compatible Console the
- * moment anything in the bundle imports `node:console`. Nitro's workerd unenv
- * preset re-exports every console method from `#workerd/node:console`, so that
- * import lands in the bundle whenever a dependency touches `console` as a
- * module (undici, via node-fetch-native, is one). That Console declares
- * `createTask` but throws ERR_METHOD_NOT_IMPLEMENTED when it is called.
- *
- * `hookable` reads `typeof console.createTask !== 'undefined'` once at module
- * scope and then calls it for every hook, so a Worker built this way returns
- * 500 from every route that runs Nitro hooks. Prerendered pages are served as
- * static assets and still look fine, which is what hides it.
- *
- * The swap happens at link time, so no import ordering avoids it and a Nitro
- * plugin runs long after `hookable` captured the method. A rollup banner is the
- * only code that runs before `hookable`'s module body. Probe the method once
- * and drop it when the probe throws, so the feature detection is honest and
- * `hookable` falls back to its own task runner.
- *
- * `disable_nodejs_console_module` does not help: Nitro's preset emits the
- * `node:console` import regardless of compatibility flags, so the flag only
- * stops workerd providing the module the bundle still imports, and the Worker
- * fails to start with `No such module "node:console"`.
- *
- * Wrapped in an IIFE because a bare `var` at chunk scope collides with Terser's
- * own bindings and fails the build.
- */
-export const WORKERD_CONSOLE_TASK_BANNER = ';(function(){try{var c=globalThis.console;if(c&&typeof c.createTask==="function"&&!c.__ctProbed){c.__ctProbed=1;try{c.createTask("probe")}catch(e){c.createTask=void 0}}}catch(e){}})();'
+// Nitro maps the hybrid `console` module to a shim that re-exports from
+// `#workerd/node:console`, which its rollup plugin rewrites to an external
+// `node:console`. Importing that module makes workerd replace the global
+// console with its Node-compatible Console, whose `createTask` is declared but
+// throws. `hookable` detects the property once at module scope and calls it for
+// every hook, so every route running Nitro hooks returns a 500. Point the
+// module at a shim backed by the global console instead: same export surface,
+// same object Cloudflare captures logs from, no swap. See the shim for detail.
+export const workerdConsolePath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts') ? 'runtime/workerd-console.mjs' : 'runtime/workerd-console.js',
+)
 
 function resolveModuleWorkersCachePolicy(options: ModuleOptions): WorkersCachePolicy {
   return options.workersCache ?? { _tag: 'enabled', crossVersion: false }
@@ -154,19 +134,9 @@ export function configureNitroCloudflare(
     workersCache: resolveModuleWorkersCachePolicy(options),
   })
 
-  nitro.rollupConfig ??= {}
-  nitro.rollupConfig.output ??= {}
-  const existingBanner = nitro.rollupConfig.output.banner
-  if (typeof existingBanner === 'string') {
-    if (!existingBanner.includes('__ctProbed')) {
-      nitro.rollupConfig.output.banner = existingBanner
-        ? `${existingBanner}\n${WORKERD_CONSOLE_TASK_BANNER}`
-        : WORKERD_CONSOLE_TASK_BANNER
-    }
-  }
-  else if (typeof existingBanner === 'undefined') {
-    nitro.rollupConfig.output.banner = WORKERD_CONSOLE_TASK_BANNER
-  }
+  nitro.alias ??= {}
+  nitro.alias.console ??= workerdConsolePath
+  nitro.alias['node:console'] ??= workerdConsolePath
 
   if (nitro.cloudflare.wrangler.cache?.enabled) {
     nitro.plugins ??= []
