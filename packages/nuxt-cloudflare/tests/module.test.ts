@@ -217,4 +217,15 @@ describe('workerd console.createTask repair', () => {
     expect(nitro.rollupConfig?.output?.banner).toContain('/* existing */')
     expect(nitro.rollupConfig?.output?.banner).toContain('createTask')
   })
+
+  it('leaves a function banner untouched', () => {
+    const existing = () => '/* dynamic */'
+    const nitro: NitroCloudflareShape = {
+      rollupConfig: { output: { banner: existing } },
+    }
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.rollupConfig?.output?.banner).toBe(existing)
+  })
 })

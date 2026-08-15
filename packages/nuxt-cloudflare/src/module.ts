@@ -50,7 +50,7 @@ export interface NitroCloudflareShape {
   plugins?: string[]
   rollupConfig?: {
     output?: {
-      banner?: string
+      banner?: string | (() => string | Promise<string>)
     }
   }
   sourceMap?: boolean
@@ -156,10 +156,15 @@ export function configureNitroCloudflare(
   nitro.rollupConfig ??= {}
   nitro.rollupConfig.output ??= {}
   const existingBanner = nitro.rollupConfig.output.banner
-  if (!existingBanner?.includes('__ctProbed')) {
-    nitro.rollupConfig.output.banner = existingBanner
-      ? `${existingBanner}\n${WORKERD_CONSOLE_TASK_BANNER}`
-      : WORKERD_CONSOLE_TASK_BANNER
+  if (typeof existingBanner === 'string') {
+    if (!existingBanner.includes('__ctProbed')) {
+      nitro.rollupConfig.output.banner = existingBanner
+        ? `${existingBanner}\n${WORKERD_CONSOLE_TASK_BANNER}`
+        : WORKERD_CONSOLE_TASK_BANNER
+    }
+  }
+  else if (typeof existingBanner === 'undefined') {
+    nitro.rollupConfig.output.banner = WORKERD_CONSOLE_TASK_BANNER
   }
 
   if (nitro.cloudflare.wrangler.cache?.enabled) {
