@@ -72,8 +72,10 @@ const REQUIRED_BUILD_SECRET_NAMES = new Set(['NUXT_SCRIPTS_PROXY_SECRET'])
 // console with its Node-compatible Console, whose `createTask` is declared but
 // throws. `hookable` detects the property once at module scope and calls it for
 // every hook, so every route running Nitro hooks returns a 500. Point the
-// module at a shim backed by the global console instead: same export surface,
-// same object Cloudflare captures logs from, no swap. See the shim for detail.
+// module at a shim backed by the global console instead. The swap never
+// happens, the global console declares no `createTask`, and hookable falls
+// back to its default task exactly as it did before the bug. Logging stays on
+// the same object Cloudflare captures. See the shim for detail.
 export const workerdConsolePath = resolve(
   import.meta.dirname,
   import.meta.url.endsWith('.ts') ? 'runtime/workerd-console.mjs' : 'runtime/workerd-console.js',

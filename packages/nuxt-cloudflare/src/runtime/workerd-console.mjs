@@ -11,9 +11,10 @@
 // returns a 500. The import only lands in the bundle when some dependency
 // touches `console` as a module, so it hits some Workers and not others.
 //
-// workerd's own global console has a working `createTask`, so sourcing from it
-// keeps the same export surface, keeps logging on the same object Cloudflare
-// captures, and never triggers the swap.
+// The native global console declares no `createTask` (only the Node-compat
+// Console declares one, and it throws), so hookable's `typeof console.createTask`
+// check falls back to its default task and hooks keep working. Logging stays on
+// the same object Cloudflare captures, and the swap never triggers.
 import {
   _ignoreErrors,
   _stderr,
