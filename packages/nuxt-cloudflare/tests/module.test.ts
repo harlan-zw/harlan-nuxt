@@ -1,7 +1,9 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { NitroCloudflareShape } from '../src/module'
+import { unenvWorkerdWithNodeCompat } from 'nitropack/presets/_unenv/preset-workerd'
+import { defineEnv } from 'unenv'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureNitroCloudflare, findPopulatedRuntimeSecretPaths, setupCloudflareModule } from '../src/module'
+import { configureNitroCloudflare, findPopulatedRuntimeSecretPaths, setupCloudflareModule, workerdConsolePath } from '../src/module'
 
 function nuxtWithCapturedHooks(dev: boolean, serverSourceMaps = false): {
   callbacks: Record<string, () => unknown>
@@ -196,5 +198,44 @@ describe('workerd console module', () => {
     configureNitroCloudflare(nitro, {})
 
     expect(nitro.alias?.sharp).toBe('unenv/mock/empty')
+  })
+
+  it('wins over Nitro\'s workerd console alias when unenv merges the presets', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    const { env } = defineEnv({
+      nodeCompat: true,
+      npmShims: true,
+      presets: [unenvWorkerdWithNodeCompat],
+      overrides: { alias: nitro.alias },
+    })
+
+    expect(env.alias['node:console']).toBe(nitro.alias?.['node:console'])
+    expect(env.alias.console).toBe(nitro.alias?.console)
+    expect(env.alias['node:console']).not.toBe(unenvWorkerdWithNodeCompat.alias?.['node:console'])
+  })
+
+  it('backs the console shim with the current global console', async () => {
+    const original = globalThis.console
+    const createTask = () => ({ run: () => {} })
+    const workerdConsole = { ...original, createTask } as unknown as Console
+    globalThis.console = workerdConsole
+    try {
+      const shim = (await import(`${workerdConsolePath}?t=${Date.now()}`)) as {
+        default: Record<string, unknown>
+        log: unknown
+        createTask: unknown
+      }
+
+      expect(shim.log).toBe(workerdConsole.log)
+      expect(shim.createTask).toBe(workerdConsole.createTask)
+      expect(shim.default.log).toBe(workerdConsole.log)
+      expect(() => (shim.default.log as (message: string) => void)('probe')).not.toThrow()
+    }
+    finally {
+      globalThis.console = original
+    }
   })
 })
