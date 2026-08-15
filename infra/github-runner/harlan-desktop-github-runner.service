@@ -1,0 +1,18 @@
+[Unit]
+Description=Harlan's desktop GitHub runner (ephemeral Actions runners for Harlan sites)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner/runners.conf
+ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

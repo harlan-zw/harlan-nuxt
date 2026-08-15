@@ -12,6 +12,8 @@ export default defineNuxtConfig({
       wrangler: {
         name: 'nuxt-cloudflare-fixture',
         assets: { run_worker_first: ['/pro/_nuxt/*'] },
+        d1_databases: [{ binding: 'DB', database_id: 'fixture-database' }],
+        queues: { producers: [{ binding: 'JOBS', queue: 'fixture-jobs' }] },
       },
     },
     storage: {

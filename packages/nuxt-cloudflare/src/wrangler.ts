@@ -1,5 +1,8 @@
 import { readFile } from 'node:fs/promises'
 
+export type { WranglerConfigFileResult } from './wrangler-file'
+export { findProjectWranglerConfig, readWranglerConfigFile } from './wrangler-file'
+
 export interface WranglerAssetsInput {
   directory?: string
   binding?: string
@@ -57,6 +60,10 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   env?: Record<string, WranglerConfigInput>
   images?: WranglerRemoteBindingInput
   keep_vars?: boolean
+  limits?: {
+    cpu_ms?: number
+    subrequests?: number
+  }
   mtls_certificates?: WranglerRemoteBindingInput[]
   observability?: WranglerObservabilityInput
   placement?: WranglerPlacementInput
@@ -97,6 +104,7 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'container-durable-object-binding-missing',
   'container-durable-object-not-sqlite',
   'container-instance-type-deprecated',
+  'cpu-limit-raised',
   'durable-object-binding-inactive',
   'durable-object-lifecycle-mixed',
   'durable-object-lifecycle-unmanaged',
@@ -108,8 +116,10 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'missing-nodejs-compat',
   'nodejs-compat-version-implicit',
   'observability-disabled',
+  'observability-log-sampling-high',
   'observability-sampling-implicit',
   'observability-sampling-out-of-range',
+  'observability-trace-sampling-high',
   'plaintext-secret-var',
   'preview-urls-public',
   'pipeline-binding-deprecated',
@@ -127,6 +137,7 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'workers-dev-enabled',
   'workers-dev-implicit',
   'workers-cache-cross-version-enabled',
+  'workers-cache-assets-billable',
   'workers-cache-policy-implicit',
   'wrangler-config-shadowed',
   'wrangler-config-missing',
@@ -425,7 +436,7 @@ function applyEnvironmentDefaults(
         ...inheritedLogs,
         ...logs,
         enabled: logs?.enabled ?? inheritedLogs?.enabled ?? true,
-        head_sampling_rate: logs?.head_sampling_rate ?? inheritedLogs?.head_sampling_rate ?? options.logsSampleRate ?? 0.1,
+        head_sampling_rate: logs?.head_sampling_rate ?? inheritedLogs?.head_sampling_rate ?? options.logsSampleRate ?? 0.01,
         invocation_logs: logs?.invocation_logs ?? inheritedLogs?.invocation_logs ?? true,
       },
       traces: {
@@ -716,7 +727,7 @@ function diagnoseEnvironment(
       diagnostics.push({
         _tag: 'warning',
         code: 'queue-retries-above-policy',
-        message: `Queue consumer retries ${retries} times, above Cloudflare's default of 3. Verify the work is replay-safe.`,
+        message: `Queue consumer retries ${retries} times, above Cloudflare's default of 3. Each retry adds a billed read operation.`,
         configPath: `${prefix}queues.consumers.${index}.max_retries`,
       })
     }
@@ -841,6 +852,24 @@ function diagnosePolicy(
         configPath: `${prefix}observability`,
       })
     }
+    const logsSampleRate = config.observability.logs?.head_sampling_rate
+    if (logsEnabled && logsSampleRate !== undefined && logsSampleRate > 0.01 && logsSampleRate <= 1) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'observability-log-sampling-high',
+        message: 'Log sampling exceeds the 1% routine budget and can create significant metered event volume.',
+        configPath: `${prefix}observability.logs.head_sampling_rate`,
+      })
+    }
+    const tracesSampleRate = config.observability.traces?.head_sampling_rate
+    if (tracesEnabled && tracesSampleRate !== undefined && tracesSampleRate > 0.01 && tracesSampleRate <= 1) {
+      diagnostics.push({
+        _tag: 'warning',
+        code: 'observability-trace-sampling-high',
+        message: 'Trace sampling exceeds the 1% routine budget; each captured span is a metered event.',
+        configPath: `${prefix}observability.traces.head_sampling_rate`,
+      })
+    }
   }
   if (config.upload_source_maps !== true) {
     diagnostics.push({
@@ -880,6 +909,22 @@ function diagnosePolicy(
       code: 'workers-cache-cross-version-enabled',
       message: 'Cross-version caching can serve responses from superseded deployments until expiry or purge.',
       configPath: `${prefix}cache.cross_version_cache`,
+    })
+  }
+  if (config.cache?.enabled && config.assets !== undefined) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'workers-cache-assets-billable',
+      message: 'Workers Caching makes cached static asset requests billable. Confirm CPU savings exceed request charges.',
+      configPath: `${prefix}cache.enabled`,
+    })
+  }
+  if (typeof config.limits?.cpu_ms === 'number' && config.limits.cpu_ms > 30_000) {
+    diagnostics.push({
+      _tag: 'warning',
+      code: 'cpu-limit-raised',
+      message: 'The CPU limit exceeds Cloudflare\'s 30-second default and increases runaway-cost exposure.',
+      configPath: `${prefix}limits.cpu_ms`,
     })
   }
   if (config.preview_urls === true) {

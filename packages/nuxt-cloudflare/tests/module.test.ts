@@ -135,7 +135,7 @@ describe('setupCloudflareModule', () => {
     Object.assign(nuxt.options.runtimeConfig, { oauth: { clientSecret: 'oauth-sentinel' } })
     vi.stubEnv('NUXT_OAUTH_CLIENT_SECRET', 'oauth-sentinel')
 
-    setupCloudflareModule({ enabled: true }, nuxt)
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
     expect(callbacks['modules:done']).toThrow('oauth.clientSecret')
     expect(callbacks['modules:done']).not.toThrow('oauth-sentinel')
@@ -144,7 +144,7 @@ describe('setupCloudflareModule', () => {
   it('does not register the production Wrangler audit during development', () => {
     const { hooks, nuxt } = nuxtWithCapturedHooks(true)
 
-    setupCloudflareModule({ enabled: true }, nuxt)
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
     expect(hooks).toEqual(['modules:done', 'nitro:config'])
   })
@@ -152,7 +152,7 @@ describe('setupCloudflareModule', () => {
   it('registers the production Wrangler audit for builds', () => {
     const { hooks, nuxt } = nuxtWithCapturedHooks(false)
 
-    setupCloudflareModule({ enabled: true }, nuxt)
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
     expect(hooks).toEqual(['modules:done', 'nitro:config', 'nitro:init'])
   })
@@ -161,8 +161,8 @@ describe('setupCloudflareModule', () => {
     const disabled = nuxtWithCapturedHooks(false, false)
     const enabled = nuxtWithCapturedHooks(false, true)
 
-    setupCloudflareModule({ enabled: true }, disabled.nuxt)
-    setupCloudflareModule({ enabled: true }, enabled.nuxt)
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, disabled.nuxt)
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, enabled.nuxt)
 
     expect(disabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(false)
     expect(enabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(true)

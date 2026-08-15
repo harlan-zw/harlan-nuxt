@@ -9,6 +9,8 @@ on:
       - 'nuxt-dx-v*'
       - 'nuxt-github-sponsors-v*'
       - 'nuxt-cloudflare-v*'
+      - 'nuxt-wide-events-v*'
+      - 'comark-content-v*'
 
 permissions:
   contents: read
@@ -65,3 +67,11 @@ jobs:
       - name: Publish nuxt-cloudflare
         if: startsWith(github.ref_name, 'nuxt-cloudflare-v')
         run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public
+
+      - name: Publish nuxt-wide-events
+        if: startsWith(github.ref_name, 'nuxt-wide-events-v')
+        run: npm publish packages/nuxt-wide-events/.pack/*.tgz --access public
+
+      - name: Publish comark-content
+        if: startsWith(github.ref_name, 'comark-content-v')
+        run: npm publish packages/comark-content/.pack/*.tgz --access public

@@ -1,0 +1,72 @@
+{
+  "name": "@harlan-zw/comark-content",
+  "type": "module",
+  "version": "0.0.17",
+  "description": "Markdown-only Nuxt content powered by Comark.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/comark-content#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/comark-content"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@11.2.1",
+  "sideEffects": false,
+  "main": "./dist/module.mjs",
+  "types": "./dist/module.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/module.d.mts",
+      "import": "./dist/module.mjs"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.0.0 <27"
+  },
+  "scripts": {
+    "bench": "node ./bench/run.mjs",
+    "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
+    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "test": "vitest run",
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz && node --input-type=module -e \"await import('./dist/runtime/core/navigation.js')\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "nuxt": ">=4.5.0 <5.0.0",
+    "vue": ">=3.5.0 <4.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:",
+    "comark": "catalog:",
+    "rangi": "^2.2.0"
+  },
+  "devDependencies": {
+    "@nuxt/module-builder": "catalog:",
+    "@types/node": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue": "catalog:"
+  }
+}

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+
+# Status for Harlan's desktop GitHub runner, and for whatever is currently in
+# flight across the sites it serves.
+#
+#   harlan-desktop-runner            both sections
+#   harlan-desktop-runner pool       the workstation only, no network calls
+#   harlan-desktop-runner sites      open pull requests and their checks
+#
+# Pool numbers come from the supervisor's own reservation files under
+# XDG_RUNTIME_DIR, which are the same files it sizes bursts from, so this reports
+# what the supervisor believes rather than a second guess at it.
+
+set -uo pipefail
+
+readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
+readonly unit='harlan-desktop-github-runner.service'
+readonly container_label='com.harlanzw.desktop-runner'
+
+# The site inventory, mirroring SITES.md. `path` is the main checkout, used to
+# find local branches that have no pull request yet.
+readonly -a sites=(
+  'harlan-zw/nuxtseo.com|/home/harlan/sites/nuxtseo.com'
+  'harlan-zw/gscdump.com|/home/harlan/sites/gscdump.com'
+  'harlan-zw/mdream.dev|/home/harlan/sites/mdream.dev'
+  'harlan-zw/zhead.dev|/home/harlan/sites/zhead.dev'
+  'harlan-zw/scripts.nuxt.com|/home/harlan/sites/scripts.nuxt.com'
+  'skilld-dev/skilld.dev|/home/harlan/sites/skilld.dev'
+  'harlan-zw/unhead.unjs.io|/home/harlan/sites/unhead.unjs.io'
+  'harlan-zw/request-indexing|/home/harlan/sites/request-indexing'
+  'harlan-zw/harlanzw.com|/home/harlan/sites/harlanzw.com'
+  'harlan-zw/unlighthouse.dev|/home/harlan/site/unlighthouse.dev'
+  'harlan-zw/harlan-nuxt|/home/harlan/pkg/harlan-nuxt'
+)
+
+if [[ -t 1 ]]; then
+  readonly dim=$'\033[2m' bold=$'\033[1m' green=$'\033[32m' red=$'\033[31m' yellow=$'\033[33m' reset=$'\033[0m'
+else
+  readonly dim='' bold='' green='' red='' yellow='' reset=''
+fi
+
+count_files() {
+  local directory="$1"
+  local total=0
+  local file
+
+  for file in "$directory"/*; do
+    [[ -f "$file" ]] && total=$(( total + 1 ))
+  done
+
+  printf '%s' "$total"
+}
+
+sum_files() {
+  local directory="$1"
+  local total=0
+  local file value
+
+  for file in "$directory"/*; do
+    [[ -f "$file" ]] || continue
+    read -r value <"$file" 2>/dev/null || continue
+    total=$(( total + value ))
+  done
+
+  printf '%s' "$total"
+}
+
+pool_section() {
+  local unit_state uptime
+  unit_state="$(systemctl --user is-active "$unit" 2>/dev/null)"
+
+  if [[ "$unit_state" != active ]]; then
+    printf '%sharlan-desktop-github-runner%s  %s%s%s\n' \
+      "$bold" "$reset" "$red" "${unit_state:-not installed}" "$reset"
+    printf '  %sstart it with: systemctl --user start %s%s\n' "$dim" "$unit" "$reset"
+    return
+  fi
+
+  uptime="$(systemctl --user show "$unit" --property=ActiveEnterTimestamp --value 2>/dev/null)"
+  if [[ -n "$uptime" ]]; then
+    local started_at now elapsed
+    started_at="$(date --date="$uptime" +%s 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    elapsed=$(( (now - started_at) / 60 ))
+    if (( started_at > 0 && elapsed < 60 )); then
+      uptime="up ${elapsed}m"
+    elif (( started_at > 0 )); then
+      uptime="up $(( elapsed / 60 ))h$(( elapsed % 60 ))m"
+    else
+      uptime=''
+    fi
+  fi
+
+  printf '%sharlan-desktop-github-runner%s  %s%s%s\n\n' \
+    "$bold" "$reset" "$green" "${uptime:-active}" "$reset"
+
+  if [[ ! -d "$state_root/burst" ]]; then
+    printf '  %sthe supervisor has not published state yet%s\n' "$dim" "$reset"
+    return
+  fi
+
+  printf '%-26s %5s %6s %5s  %s\n' 'POOL' 'WARM' 'BURST' 'BUSY' 'REPOSITORY'
+
+  local repository labels warm max cpus memory memory_swap
+  while IFS='|' read -r repository labels warm max cpus memory memory_swap; do
+    repository="${repository#"${repository%%[![:space:]]*}"}"
+    [[ -z "$repository" || "$repository" == \#* || -z "$memory_swap" ]] && continue
+
+    local slug burst busy
+    slug="$(printf '%s-%s' "${repository##*/}" "${labels%%,*}" \
+      | sed 's/^\(.*\)-harlan-desktop-/\1-/' \
+      | tr -cs '[:alnum:]-' '-' | tr '[:upper:]' '[:lower:]')"
+    burst="$(count_files "$state_root/burst/$slug")"
+    # Every reservation whose container belongs to this pool is a job in flight.
+    busy="$(find "$state_root/spend" -maxdepth 1 -type f -name "harlan-desktop-$slug-*" 2>/dev/null | grep --count '' || true)"
+
+    local marker="$dim"
+    (( busy > 0 )) && marker="$green"
+    printf '%s%-26s%s %5s %6s %5s  %s\n' \
+      "$marker" "$slug" "$reset" "$warm/$max" "$burst" "$busy" "$repository"
+  done <"$state_root/runners.conf"
+
+  local spent budget
+  spent="$(sum_files "$state_root/spend")"
+  budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
+  # Deliberately not "budget". This number can and does exceed the threshold: the
+  # threshold only holds back bursts, and a warm container's job arrives straight
+  # from GitHub with no say from the supervisor.
+  printf '\nCPU in flight  %s, burst threshold %s' "$spent" "$budget"
+  (( spent >= budget )) && printf '  %sbursts held%s' "$yellow" "$reset"
+  printf '\n'
+
+  local containers
+  containers="$(docker ps --quiet --filter "label=$container_label=true" 2>/dev/null | grep --count '' || true)"
+  printf '%s%s containers%s\n' "$dim" "$containers" "$reset"
+}
+
+# One line per open pull request, plus any local branch that has commits on it and
+# no pull request yet, which is the state most likely to be forgotten.
+sites_section() {
+  # Most recently committed branches only. Raise it when you want the long tail.
+  local local_branch_limit="${HARLAN_DESKTOP_RUNNER_BRANCH_LIMIT:-3}"
+
+  printf '%sSITES%s\n' "$bold" "$reset"
+
+  local entry repository path
+  for entry in "${sites[@]}"; do
+    repository="${entry%%|*}"
+    path="${entry##*|}"
+
+    local pull_requests
+    pull_requests="$(gh pr list --repo "$repository" --state open \
+      --json number,title,headRefName,statusCheckRollup 2>/dev/null)" || pull_requests=''
+
+    if [[ -n "$pull_requests" && "$pull_requests" != '[]' ]]; then
+      while IFS=$'\t' read -r number title checks; do
+        [[ -z "$number" ]] && continue
+        local mark colour
+        case "$checks" in
+          FAILURE) mark='x'; colour="$red" ;;
+          SUCCESS) mark='*'; colour="$green" ;;
+          PENDING) mark='.'; colour="$yellow" ;;
+          *)       mark='-'; colour="$dim" ;;
+        esac
+        printf '%s%s%s %-28s %s#%-5s %s\n' \
+          "$colour" "$mark" "$reset" "${repository##*/}" '' "$number" "$title"
+      done < <(jq -r '
+        .[] |
+        [ (.number|tostring),
+          .title,
+          ( if (.statusCheckRollup // []) | length == 0 then "NONE"
+            elif any(.statusCheckRollup[]; .conclusion == "FAILURE" or .conclusion == "TIMED_OUT" or .conclusion == "CANCELLED") then "FAILURE"
+            elif any(.statusCheckRollup[]; .status != "COMPLETED") then "PENDING"
+            else "SUCCESS" end )
+        ] | @tsv' <<<"$pull_requests")
+    fi
+
+    # Local branches carrying work that never became a pull request. Bounded to
+    # the last few days on purpose: nuxtseo.com alone keeps over a hundred old
+    # branches, and listing them all buries the two you are actually holding.
+    [[ -d "$path" ]] || continue
+    local branch shown=0
+    while read -r branch; do
+      (( shown >= local_branch_limit )) && break
+      [[ -z "$branch" || "$branch" == main ]] && continue
+      grep --quiet "\"$branch\"" <<<"$pull_requests" && continue
+      local ahead
+      ahead="$(git -C "$path" rev-list --count "origin/main..$branch" 2>/dev/null)" || continue
+      (( ahead == 0 )) && continue
+      printf '%so%s %-28s %sno PR, %s commit(s) on %s%s\n' \
+        "$dim" "$reset" "${repository##*/}" "$dim" "$ahead" "$branch" "$reset"
+      shown=$(( shown + 1 ))
+    # Newest first, then filtered by "actually ahead of main". Filtering has to
+    # happen after the sort, not through `--no-contains`, which selects branches
+    # that predate main rather than branches built on it.
+    done < <(git -C "$path" for-each-ref \
+      --format='%(refname:short)' \
+      --sort=-committerdate \
+      refs/heads 2>/dev/null | head -n 40)
+  done
+
+  return 0
+}
+
+main() {
+  case "${1:-all}" in
+    pool)  pool_section ;;
+    sites) sites_section ;;
+    all)   pool_section; printf '\n'; sites_section ;;
+    *)
+      printf 'usage: harlan-desktop-runner [pool|sites]\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+main "$@"

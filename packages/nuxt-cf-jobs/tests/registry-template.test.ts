@@ -98,13 +98,15 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).not.toContain('as const')
     expect(out).toContain('@type {import(\'@harlan-zw/nuxt-cf-jobs/server\').CfJobsApp<readonly [')
     expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*\{/)
-    // Every facade helper (incl. loadJobDefinition) is destructured straight off
-    // the runtime app — no hand-written typed wrapper.
+    // Registry-bound helpers keep the precise job tuple. getQueue accepts any
+    // valid job definition because callers may dispatch module-contributed jobs.
     expect(out).toContain('} = app')
     expect(out).toContain('loadJobDefinition,')
     expect(out).toContain('registerQueueConsumer,')
     expect(out).toContain('createDurableRuntime,')
     expect(out).toContain('jobRegistry,')
+    expect(out).toContain(`@type {ReturnType<typeof createGeneratedCfJobsApp>['getQueue']}`)
+    expect(out).toContain('export const getQueue = app.getQueue')
   })
 
   it('emits plain JavaScript only (no TypeScript syntax)', async () => {
@@ -149,14 +151,16 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
 })
 
 describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
-  it('augments the resolved module rather than re-declaring it', async () => {
+  it('declares runtime exports against the generated job types', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/^import type /m)
     expect(out).toMatch(/declare module ["']#cf-jobs\/app["'] \{/)
-    // Runtime values come from the plain JS template; precision is added with
-    // JSDoc on `app`, not value re-declarations in the augmentation.
-    expect(out).not.toContain('export declare const jobs')
-    expect(out).not.toContain('export declare const app')
+    expect(out).toContain(`type App = import('@harlan-zw/nuxt-cf-jobs/server').CfJobsApp<Jobs>`)
+    expect(out).toContain(`type GeneratedApp = ReturnType<(typeof import('@harlan-zw/nuxt-cf-jobs/server'))['createGeneratedCfJobsApp']>`)
+    expect(out).toContain('export const jobs: Jobs')
+    expect(out).toContain('export const app: App')
+    expect(out).toContain('export const getQueue: GeneratedApp["getQueue"]')
+    expect(out).toContain('export const buildJobPayload: App["buildJobPayload"]')
   })
 
   it('re-exports app helper option types from the augmentation', async () => {

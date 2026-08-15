@@ -1,5 +1,6 @@
 import type { SettleBatchMemberOptions } from '../batch'
 import type { ReconcileTerminalFailureContextFactory } from '../reconcile-terminal'
+import { resolveCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
 import { useRuntimeConfig } from 'nitropack/runtime'
 // @ts-expect-error - #cf-jobs/app is the generated registry alias, resolved by Nuxt
 import { jobRegistry } from '#cf-jobs/app'
@@ -11,7 +12,6 @@ import { findD1Binding } from '../dev-worker'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob } from '../outbox'
 import { runTerminalizedJobFailure } from '../reconcile-terminal'
 import { recoverDurableJobs } from '../recovery'
-import { resolveNitroTaskEnv } from '../runtime-env'
 import { defineScheduledTask } from '../scheduled'
 
 // cf-jobs recovery backstop (the "app's own reconcile cron" the durable-queue
@@ -63,7 +63,7 @@ export default defineScheduledTask({
   cron: '*/2 * * * *',
   description: 'cf-jobs recovery backstop: reclaim stale-reserved jobs + re-dispatch orphaned ready jobs',
   async run() {
-    const env = resolveNitroTaskEnv()
+    const env = resolveCloudflareBindings<Record<string, unknown>>()
     if (!env)
       return { result: { skipped: 'no-env' as const } }
 

@@ -2219,20 +2219,6 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(job.name).toBe('demo/no-queue')
     expect((job as { queue?: string }).queue).toBeUndefined()
   })
-
-  it('resolveNitroTaskEnv reads globalThis.__env__', async () => {
-    const { resolveNitroTaskEnv } = await import('#cf-jobs/server')
-    const prev = (globalThis as { __env__?: unknown }).__env__
-    ;(globalThis as { __env__?: unknown }).__env__ = { QUEUE_FOO: { send: () => {}, sendBatch: () => {} } }
-    try {
-      const env = resolveNitroTaskEnv()
-      expect(env).toBeDefined()
-      expect((env as { QUEUE_FOO: unknown }).QUEUE_FOO).toBeDefined()
-    }
-    finally {
-      ;(globalThis as { __env__?: unknown }).__env__ = prev
-    }
-  })
 })
 
 function createFakeD1() {

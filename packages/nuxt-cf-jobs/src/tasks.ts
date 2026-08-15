@@ -49,8 +49,8 @@ export async function resolveTaskFiles(options: ModuleOptions, rootDir: string):
  * outside the nitro graph). Both must be string literals; computed values are
  * not resolvable at build time and are reported by the caller.
  */
-export function parseTaskSource(source: string): { name?: string, crons: string[] } {
-  const arg = findStaticObjectCall(source, ['defineTask', 'defineScheduledTask'])
+export function parseTaskSource(source: string, filename = 'task.ts'): { name?: string, crons: string[] } {
+  const arg = findStaticObjectCall(source, ['defineTask', 'defineScheduledTask'], filename)
   if (!arg)
     return { crons: [] }
 
@@ -80,7 +80,7 @@ export async function collectTasks(options: ModuleOptions, rootDir: string): Pro
 
   for (const file of files) {
     const source = await readFile(file, 'utf8')
-    const { name, crons } = parseTaskSource(source)
+    const { name, crons } = parseTaskSource(source, file)
     if (!name) {
       // A cron with no parseable name is a real misconfiguration; a file with
       // neither is just not a task (helper, etc).

@@ -3,6 +3,7 @@ import type { RegistrySourcesContext } from './build/registry'
 import type { DiscoveredTask } from './tasks'
 import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
+import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import { addImportsDir, addServerHandler, addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
 import { installRegistryTemplates } from './build/registry'
 import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast-constants'
@@ -10,7 +11,6 @@ import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNam
 import {
   crossCheckCrons,
   enrichQueuesWithConsumerConfig,
-  findWranglerConfig,
   parseWranglerConfig,
   reconcileQueues,
   renderSuggestedCronsToml,
@@ -48,6 +48,7 @@ export default defineNuxtModule<ModuleOptions>().with({
   meta: {
     name: '@harlan-zw/nuxt-cf-jobs',
     configKey: 'cfJobs',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     queues: {},
@@ -60,7 +61,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     tasksIgnore: ['**/_*.ts', '**/*.d.ts', '**/*.test.ts', '**/*.spec.ts'],
     registryAlias: '#cf-jobs/app',
   },
-  async setup(options, nuxt) {
+  setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
     const queues = options.queues as ModuleOptions['queues']
     const hasQueues = Object.keys(queues).length > 0
@@ -94,7 +95,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     if (nuxt.options.dev && hasQueues) {
       const wranglerPath = options.wranglerPath
         ? resolve(nuxt.options.rootDir, options.wranglerPath)
-        : findWranglerConfig(nuxt.options.rootDir)
+        : findProjectWranglerConfig(nuxt.options.rootDir)
       const { expectations, merged } = reconcileQueues({
         queues,
         fileWrangler: wranglerPath ? parseWranglerConfig(wranglerPath) : undefined,
@@ -138,8 +139,10 @@ export default defineNuxtModule<ModuleOptions>().with({
     if (options.validateWrangler !== false && hasQueues)
       runWranglerCrossCheck(options, nuxt.options.rootDir, resolve(nuxt.options.buildDir, 'cf-jobs'), (nuxt.options as { nitro?: unknown }).nitro)
 
-    if (options.tasksDir || reconcile)
-      await wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs'))
+    if (options.tasksDir || reconcile) {
+      nuxt.hook('modules:done', () =>
+        wireScheduledTasks(options, nuxt, resolve(nuxt.options.buildDir, 'cf-jobs')))
+    }
   },
 })
 
@@ -296,7 +299,7 @@ async function wireScheduledTasks(options: ModuleOptions, nuxt: Nuxt, templateDi
       write: true,
       getContents: () => renderSuggestedCronsToml(cronUnion),
     })
-    const wranglerPath = options.wranglerPath ? resolve(rootDir, options.wranglerPath) : findWranglerConfig(rootDir)
+    const wranglerPath = options.wranglerPath ? resolve(rootDir, options.wranglerPath) : findProjectWranglerConfig(rootDir)
     if (wranglerPath) {
       const { crons } = parseWranglerConfig(wranglerPath)
       if (crons !== undefined) {
@@ -338,7 +341,7 @@ function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, template
   const logger = useLogger('nuxt-cf-jobs')
   const wranglerPath = options.wranglerPath
     ? resolve(rootDir, options.wranglerPath)
-    : findWranglerConfig(rootDir)
+    : findProjectWranglerConfig(rootDir)
 
   const { expectations, suggestedToml, merged, issues } = reconcileQueues({
     queues: options.queues,

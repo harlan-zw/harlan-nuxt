@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-dx",
   "type": "module",
-  "version": "0.0.6",
+  "version": "0.0.8",
   "description": "Experimental Nuxt diagnostics: dev error overlay and runtime JavaScript bundle size budgets.",
   "author": {
     "name": "Harlan Wilton",
@@ -52,15 +52,14 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=4.2.0 <5.0.0"
+    "nuxt": ">=4.5.0 <5.0.0"
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
     "@vueuse/core": "catalog:",
     "citty": "catalog:",
     "consola": "catalog:",
-    "oxc-parser": "catalog:",
-    "oxc-walker": "catalog:"
+    "vite": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

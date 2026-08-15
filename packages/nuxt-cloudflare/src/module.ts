@@ -3,7 +3,7 @@ import type { Nitro } from 'nitropack/types'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
 import process from 'node:process'
-import { defineNuxtModule, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, defineNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -19,6 +19,7 @@ import {
 } from './wrangler'
 
 export interface ModuleOptions {
+  bindingTypes?: boolean
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
@@ -190,7 +191,13 @@ export function configureNitroCloudflare(
   }
 }
 
-async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions, rootDir: string): Promise<void> {
+async function auditGeneratedWranglerConfig(
+  nitro: Nitro,
+  options: ModuleOptions,
+  buildDir: string,
+  rootDir: string,
+  bindingTypeSignature?: string,
+): Promise<void> {
   const path = resolve(nitro.options.output.serverDir, 'wrangler.json')
   const result = await readWranglerJsonFile(path)
   if (result._tag === 'missing')
@@ -202,6 +209,17 @@ async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions
   const validated = readProjectWranglerConfig({ config: path, cwd: rootDir })
   if (validated._tag === 'invalid')
     throw new Error('[nuxt-cloudflare] Generated Wrangler config fails Wrangler schema validation. Run Wrangler locally for validation details.')
+
+  if (bindingTypeSignature) {
+    const { assertCloudflareBindingTypesCurrent } = await import('./binding-types')
+    await assertCloudflareBindingTypesCurrent({
+      buildDir,
+      compatibilityDate: result.config.compatibility_date,
+      config: result.config,
+      expectedSignature: bindingTypeSignature,
+      nodeCompat: Boolean(nitro.options.cloudflare?.nodeCompat),
+    })
+  }
 
   const diagnostics = [
     ...diagnoseWranglerConfig(result.config, {
@@ -234,6 +252,32 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     Boolean(nuxt.options.sourcemap.server),
   )
 
+  let bindingTypeSignature: string | undefined
+
+  if (options.bindingTypes !== false) {
+    const bindingTypesTemplate = addTypeTemplate({
+      filename: 'types/cloudflare-bindings.d.ts',
+      getContents: async () => {
+        const { prepareCloudflareBindingTypes } = await import('./binding-types')
+        const compatibilityDate = nuxt.options.compatibilityDate
+        const artifact = await prepareCloudflareBindingTypes({
+          buildDir: nuxt.options.buildDir,
+          compatibilityDate: typeof compatibilityDate === 'string'
+            ? compatibilityDate || undefined
+            : compatibilityDate.cloudflare ?? compatibilityDate.default,
+          nodeCompat: Boolean((nuxt.options.nitro as NitroCloudflareShape).cloudflare?.nodeCompat),
+          rootDir: nuxt.options.rootDir,
+          wrangler: (nuxt.options.nitro as NitroCloudflareShape).cloudflare?.wrangler ?? {},
+        })
+        bindingTypeSignature = artifact.signature
+        return artifact.content
+      },
+    }, { nitro: true })
+    nuxt.hook('prepare:types', ({ references }) => {
+      references.push({ path: bindingTypesTemplate.dst })
+    })
+  }
+
   configure()
   nuxt.hook('modules:done', () => {
     configure()
@@ -260,7 +304,13 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
-      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options, nuxt.options.rootDir))
+      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(
+        nitro,
+        options,
+        nuxt.options.buildDir,
+        nuxt.options.rootDir,
+        bindingTypeSignature,
+      ))
     })
   }
 }
@@ -269,13 +319,14 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-cloudflare',
     configKey: 'nuxtCloudflare',
-    compatibility: { nuxt: '>=4.5.0' },
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
+    bindingTypes: true,
     enabled: true,
     compatibilityMaxAgeDays: 90,
     doctor: { _tag: 'advisory' },
-    logsSampleRate: 0.1,
+    logsSampleRate: 0.01,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
     workersCache: { _tag: 'enabled', crossVersion: false },

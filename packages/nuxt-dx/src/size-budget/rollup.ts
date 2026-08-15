@@ -1,4 +1,5 @@
-import type { OutputBundle, Plugin } from 'rollup'
+import type { OutputBundle, Plugin as RollupPlugin } from 'rollup'
+import type { Plugin as VitePlugin } from 'vite'
 import type { CostMeasurement, GraphModule } from './graph'
 import type { BudgetScope } from './scope'
 import type { BudgetTarget } from './targets'
@@ -23,9 +24,7 @@ export interface SizeBudgetPluginOptions {
   onMeasured: (measured: readonly MeasuredTarget[]) => void | Promise<void>
 }
 
-interface EnvironmentPlugin extends Plugin {
-  applyToEnvironment?: (environment: { name: string }) => boolean
-}
+type EnvironmentPlugin = RollupPlugin & Pick<VitePlugin, 'apply' | 'applyToEnvironment'>
 
 function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => readonly string[]) {
   const modules: GraphModule[] = []
@@ -48,6 +47,7 @@ function collectGraph(bundle: OutputBundle, importedIdsOf: (id: string) => reado
 export function sizeBudgetRollupPlugin(options: SizeBudgetPluginOptions): EnvironmentPlugin {
   return {
     name: `nuxt-dx:size-budget:${options.name}`,
+    apply: options.environment === undefined ? undefined : 'build',
     applyToEnvironment: options.environment === undefined
       ? undefined
       : environment => environment.name === options.environment,

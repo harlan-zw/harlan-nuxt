@@ -2,6 +2,7 @@ import type { WranglerConfigInput } from './wrangler'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'pathe'
 import { unstable_readConfig } from 'wrangler'
+import { findProjectWranglerConfig } from './wrangler-file'
 
 export interface ReadProjectWranglerOptions {
   config?: string
@@ -53,27 +54,12 @@ function findUpFile(cwd: string, relativePath: string): string | undefined {
   }
 }
 
-function findUpWranglerConfig(cwd: string): string | undefined {
-  let directory = resolve(cwd)
-  while (true) {
-    for (const name of ['wrangler.json', 'wrangler.jsonc', 'wrangler.toml']) {
-      const candidate = resolve(directory, name)
-      if (existsSync(candidate))
-        return candidate
-    }
-    const parent = dirname(directory)
-    if (parent === directory)
-      return undefined
-    directory = parent
-  }
-}
-
 function resolveNitroDeployConfig(cwd: string): string | undefined {
   const redirectPath = findUpFile(cwd, '.wrangler/deploy/config.json')
   if (!redirectPath)
     return undefined
   const redirectProjectDirectory = dirname(dirname(dirname(redirectPath)))
-  const authoredConfigPath = findUpWranglerConfig(cwd)
+  const authoredConfigPath = findProjectWranglerConfig(cwd)
   if (authoredConfigPath && dirname(authoredConfigPath) !== redirectProjectDirectory)
     return undefined
   const parsed: unknown = JSON.parse(readFileSync(redirectPath, 'utf8'))
