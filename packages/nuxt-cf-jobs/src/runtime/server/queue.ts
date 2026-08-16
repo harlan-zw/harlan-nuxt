@@ -691,6 +691,16 @@ export interface RegisterRegisteredQueueConsumerOptions<Env extends Record<strin
   unknownQueueRetryDelaySeconds?: number
   /** In-memory dedup cache size for the lightweight (non-durable) consumer path. Set to 0 to disable. */
   dedupCacheSize?: number
+  /**
+   * Write a `cfjob:<name>` line before each handler runs.
+   *
+   * A Cloudflare queue trace names the QUEUE, not the job, so a consumer that
+   * carries many job kinds reports every failure — including the memory kills
+   * that flush nothing else — against one bucket. This marker is what lets a
+   * Tail Worker recover the job name. Off by default; it costs one log line per
+   * message. See `trace-marker.ts`.
+   */
+  traceMarker?: boolean
   onMissingQueue?: (input: RegisteredQueueConsumerHookInput<Env>) => void | Promise<void>
   onInvalidPayload?: (input: RegisteredQueueConsumerHookInput<Env> & { error?: string, validationError?: unknown }) => void | Promise<void>
   onDispatchError?: (input: RegisteredQueueConsumerHookInput<Env> & { error: unknown }) => void | Promise<void>
@@ -820,6 +830,7 @@ async function processRegisteredQueueMessage<Env extends Record<string, unknown>
     const result = await dispatchRegisteredJob({
       registry: opts.registry,
       job,
+      traceMarker: opts.traceMarker,
       createContext: ({ control, payload }) => opts.createContext({
         ...input,
         taskName,
