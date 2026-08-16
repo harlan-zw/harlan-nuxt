@@ -172,7 +172,9 @@ describe('setupCloudflareModule', () => {
     setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
     const plugins = (nuxt.options.nitro as { plugins?: string[] }).plugins ?? []
-    expect(plugins.some(plugin => plugin.includes('wide-events'))).toBe(false)
+    // Match the file, not a substring of the absolute path — a checkout
+    // directory containing "wide-events" made this pass for the wrong reason.
+    expect(plugins.some(plugin => /plugins[/\\]wide-events\.[jt]s$/.test(plugin))).toBe(false)
   })
 
   it('does not register the production Wrangler audit during development', () => {
