@@ -21,9 +21,19 @@ import { readD1Stats } from '../../../d1-stats'
  * quietly makes twenty serial primary round trips looks identical to a fast one
  * in every other log line; these counters are what separate them.
  *
- * Registered by the module only when `@harlan-zw/nuxt-wide-events` is present,
- * and the fields are declared through `addWideEventFields` at build time, so
- * the consuming application never hand-lists them and cannot drift from them.
+ * ── The single object literal is load-bearing ──
+ *
+ * `@harlan-zw/nuxt-wide-events` parses every server file at build time and
+ * REJECTS an `addWideEventFields` call whose argument is not an object literal:
+ * no variables, no spreads, no computed keys. That is the guarantee the whole
+ * module rests on — a reviewer can read the allowlist and know nothing else can
+ * reach an event.
+ *
+ * So this cannot build its payload conditionally. Every key is present on every
+ * call, `null` where the value is unavailable, and the whole thing is one
+ * literal. An earlier version assembled a `Record` and passed the variable; it
+ * failed the CONSUMING application's build, which is the worst place for a
+ * module's mistake to surface.
  */
 export default (nitroApp: NitroApp): void => {
   nitroApp.hooks.hook('beforeResponse', (event: H3Event) => {
@@ -37,36 +47,32 @@ interface RequestCfProperties {
   httpProtocol?: unknown
 }
 
-export function recordCloudflareWideEventFields(event: H3Event): void {
-  const fields: Record<string, string | number | null> = {}
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
 
+export function recordCloudflareWideEventFields(event: H3Event): void {
+  // Only ever these three from `request.cf`. It also carries city, region,
+  // postal code and ASN — location data about a person, which has no place in a
+  // record written for every request.
   const cf = (event.context as { cloudflare?: { request?: { cf?: RequestCfProperties } } })
     .cloudflare
     ?.request
     ?.cf
-  if (cf) {
-    // Only ever these three. `request.cf` also carries city, region, postal code
-    // and ASN — location data about a person, which has no place in a record
-    // written for every request. The allowlist upstream would reject them
-    // anyway; naming the omission here so nobody adds them by reflex.
-    if (typeof cf.colo === 'string')
-      fields['cf.colo'] = cf.colo
-    if (typeof cf.country === 'string')
-      fields['cf.country'] = cf.country
-    if (typeof cf.httpProtocol === 'string')
-      fields['cf.httpProtocol'] = cf.httpProtocol
-  }
-
   const d1 = readD1Stats(event.context as unknown as Record<PropertyKey, unknown>)
-  if (d1) {
-    fields['d1.queries'] = d1.queries
-    fields['d1.primaryQueries'] = d1.primaryQueries
-    fields['d1.recoveries'] = d1.recoveries
-    fields['d1.unrecovered'] = d1.unrecovered
-    fields['d1.durationMs'] = Math.round(d1.durationMs)
-    fields['d1.region'] = d1.region
-  }
 
-  if (Object.keys(fields).length)
-    addWideEventFields(event, fields)
+  if (!cf && !d1)
+    return
+
+  addWideEventFields(event, {
+    'cf.colo': stringOrNull(cf?.colo),
+    'cf.country': stringOrNull(cf?.country),
+    'cf.httpProtocol': stringOrNull(cf?.httpProtocol),
+    'd1.queries': d1 ? d1.queries : null,
+    'd1.primaryQueries': d1 ? d1.primaryQueries : null,
+    'd1.recoveries': d1 ? d1.recoveries : null,
+    'd1.unrecovered': d1 ? d1.unrecovered : null,
+    'd1.durationMs': d1 ? Math.round(d1.durationMs) : null,
+    'd1.region': d1 ? d1.region : null,
+  })
 }
