@@ -1,6 +1,12 @@
 import type { D1RequestStats } from './d1-stats'
 import { recordD1Meta, recordD1Recovery, useD1Stats } from './d1-stats'
 
+// Re-exported from the `./d1` entry rather than given an export path of their
+// own: the counters are only meaningful alongside the session helpers that fill
+// them, and a caller reaching for `readD1Stats` already imports from here.
+export type { D1RequestStats } from './d1-stats'
+export { createD1Stats, readD1Stats, recordD1Meta, recordD1Recovery, REQUEST_D1_STATS, useD1Stats } from './d1-stats'
+
 export type D1WriteSafety
   = | { _tag: 'lock-only' }
     | { _tag: 'replay-safe' }
