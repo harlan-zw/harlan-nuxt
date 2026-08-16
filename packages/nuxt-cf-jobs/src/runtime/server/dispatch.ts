@@ -9,6 +9,7 @@ import type {
 } from './types'
 import { jobErrors } from './errors'
 import { parseJobInput } from './registry'
+import { writeJobTraceMarker } from './trace-marker'
 
 export interface JobRegistryLike<Env, Db, Logger> {
   /** May resolve asynchronously for lazily-loaded jobs; callers must await. */
@@ -41,6 +42,12 @@ export interface DispatchRegisteredJobOptions<Job extends DispatchableJob, Env, 
   onHandledThrow?: (input: DispatchContextInput<Job> & { error: unknown }) => void | Promise<void>
   onUnhandledThrow?: (input: DispatchContextInput<Job> & { error: unknown }) => void | Promise<void>
   onComplete?: (input: DispatchContextInput<Job>) => void | Promise<void>
+  /**
+   * Write a `cfjob:<name>` line before the handler runs, so a Tail Worker can
+   * name the job behind an invocation the runtime killed. See `trace-marker.ts`.
+   * Off by default: it costs one log line per message.
+   */
+  traceMarker?: boolean
 }
 
 export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db, Logger>(
@@ -78,6 +85,11 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
     control,
   }
   const ctx = await opts.createContext(input)
+
+  // Before the handler, not after: an invocation killed for memory never
+  // reaches a line written afterwards, and naming the job is the whole point.
+  if (opts.traceMarker)
+    writeJobTraceMarker(taskName)
 
   try {
     await runJobThroughMiddleware(
