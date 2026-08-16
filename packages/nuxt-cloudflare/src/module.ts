@@ -237,7 +237,17 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   //
   // A hook, so this module needs no import from and no dependency on that one.
   // When it is absent the hook never fires and this is inert.
-  nuxt.hook('wide-events:fields', (registry) => {
+  // The hook name and this registry shape are the contract with that module.
+  // Typed structurally and called through a narrow cast rather than importing
+  // its `@nuxt/schema` augmentation: that augmentation is the one place the
+  // hook may be declared — two packages declaring the same hook key must give
+  // it an identical type or TypeScript rejects the merge — and importing it
+  // would give this module the dependency the hook exists to avoid.
+  const registerWideEventFields = nuxt.hook as unknown as (
+    name: 'wide-events:fields',
+    callback: (registry: { add: (moduleName: string, fields: readonly string[]) => void }) => void,
+  ) => void
+  registerWideEventFields('wide-events:fields', (registry) => {
     registry.add('@harlan-zw/nuxt-cloudflare', [...WIDE_EVENT_FIELDS])
   })
 

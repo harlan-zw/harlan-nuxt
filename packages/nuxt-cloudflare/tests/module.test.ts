@@ -149,7 +149,11 @@ describe('setupCloudflareModule', () => {
     // Without this declaration the wide-events build plugin rejects the server
     // plugin's own `addWideEventFields` call and the application fails to build.
     const added: Array<[string, readonly string[]]> = []
-    callbacks['wide-events:fields']({ add: (m: string, f: readonly string[]) => added.push([m, f]) })
+    // The captured-hook map is typed from Nuxt's own hook keys, which do not
+    // include one declared by another package's augmentation.
+    const fire = callbacks['wide-events:fields'] as unknown as
+      (registry: { add: (moduleName: string, fields: readonly string[]) => void }) => void
+    fire({ add: (m, f) => void added.push([m, f]) })
 
     expect(added).toHaveLength(1)
     const [moduleName, fields] = added[0]!
