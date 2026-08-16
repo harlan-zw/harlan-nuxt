@@ -917,6 +917,8 @@ export interface RunDurableJobMessageOptions<
   Logger = unknown,
   CompleteResult = unknown,
 > {
+  /** Write a `cfjob:<name>` trace marker before the handler runs. See `trace-marker.ts`. */
+  traceMarker?: boolean
   message: Pick<QueueMessage<Message>, 'body' | 'ack' | 'retry'>
   // The runtime never has bespoke fail options — it settles a terminal failure with a
   // `cause` and nothing else. A repository's own `FailOptions` stays on
@@ -1133,6 +1135,7 @@ export async function runDurableJobMessage<
     const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
       registry: opts.registry,
       job,
+      traceMarker: opts.traceMarker,
       createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
     })
     const dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())

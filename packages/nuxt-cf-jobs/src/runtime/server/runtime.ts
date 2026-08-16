@@ -154,6 +154,8 @@ export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logge
   markDuplicate?: (id: string | undefined) => void
   /** Diagnostic sink for dropped/invalid messages (no throw). */
   onLog?: (event: CfJobsLogEvent) => void
+  /** Write a `cfjob:<name>` trace marker before the handler runs. See `trace-marker.ts`. */
+  traceMarker?: boolean
 }
 
 export type RunLightweightMessageResult
@@ -162,7 +164,7 @@ export type RunLightweightMessageResult
 export async function runLightweightMessage<Env, Db, Logger>(
   opts: RunLightweightMessageOptions<Env, Db, Logger>,
 ): Promise<RunLightweightMessageResult> {
-  const { message, registry, createJobContext } = opts
+  const { message, registry, createJobContext, traceMarker } = opts
   const body = (message.body ?? {}) as Record<string, unknown>
   const taskName = typeof body._task === 'string' ? body._task : ''
   const definition = taskName ? registry.getJobDefinition?.(taskName) : undefined
@@ -192,6 +194,7 @@ export async function runLightweightMessage<Env, Db, Logger>(
     const dispatch = await dispatchRegisteredJob({
       registry,
       job,
+      traceMarker,
       createContext: async ({ control }) => {
         const ctx = await createJobContext({ job, storedJob: job, taskName, payload: job.payload, control })
         return {
@@ -260,6 +263,12 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   isDuplicate?: (id: string | undefined) => boolean
   markDuplicate?: (id: string | undefined) => void
   onLog?: (event: CfJobsLogEvent) => void
+  /**
+   * Write a `cfjob:<name>` line before each handler runs, so a Tail Worker can
+   * name the job behind an invocation the runtime killed. Off by default; it
+   * costs one log line per message. See `trace-marker.ts`.
+   */
+  traceMarker?: boolean
   // ── per-job hooks (durable path) — forwarded to runDurableJobMessage ──
   createJobScope?: (storedJob: D1DurableJobRecord<Queue>) => DurableJobScope<D1DurableJobRecord<Queue>>
   isPermanentFailure?: (input: { error: unknown, storedJob: D1DurableJobRecord<Queue>, attempts: number, maxAttempts: number | undefined }) => boolean
@@ -460,6 +469,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         isDuplicate: opts.isDuplicate,
         markDuplicate: opts.markDuplicate,
         onLog: opts.onLog,
+        traceMarker: opts.traceMarker,
       })
     }
     else if (jobId) {
@@ -469,6 +479,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         registry: opts.registry,
         store: opts.store,
         toDispatchableJob: opts.repository.toDispatchableJob,
+        traceMarker: opts.traceMarker,
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds ?? createStoredJobRetryDelay(opts.onLog),
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
@@ -497,6 +508,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         isDuplicate: opts.isDuplicate,
         markDuplicate: opts.markDuplicate,
         onLog: opts.onLog,
+        traceMarker: opts.traceMarker,
       })
     }
   }
@@ -540,6 +552,12 @@ export interface CreateDurableJobsRuntimeOptions<
   reclaimAfterSeconds?: number
   /** Telemetry sink; wired into the repo's lifecycle hooks automatically. */
   metricsSink?: JobMetricsSink
+  /**
+   * Write a `cfjob:<name>` line before each handler runs, so a Tail Worker can
+   * name the job behind an invocation the runtime killed. Off by default; it
+   * costs one log line per message. See `trace-marker.ts`.
+   */
+  traceMarker?: boolean
   /**
    * Broadcast job lifecycle + batch progress over Nitro WebSockets via Nitro's
    * Cloudflare Durable Object publisher. Pass `true` for defaults.
@@ -759,6 +777,7 @@ export function createDurableJobsRuntime<
       isDuplicate: dedup?.has,
       markDuplicate: dedup?.mark,
       onLog: opts.onLog,
+      traceMarker: opts.traceMarker,
       createJobScope: opts.createJobScope,
       isPermanentFailure: opts.isPermanentFailure,
       dispatchContinuations: opts.dispatchContinuations,
