@@ -1,3 +1,6 @@
+import type { D1RequestStats } from './d1-stats'
+import { recordD1Meta, recordD1Recovery, useD1Stats } from './d1-stats'
+
 export type D1WriteSafety
   = | { _tag: 'lock-only' }
     | { _tag: 'replay-safe' }
@@ -74,6 +77,11 @@ export interface D1ResetRecoveryOptions {
   consistency?: D1Consistency
   maxAttempts?: number
   onRecovery?: (event: D1RecoveryEvent) => void
+  /**
+   * Fold this session's query and recovery counts into a request-scoped stats
+   * object. Omit it and nothing is recorded. See `d1-stats.ts`.
+   */
+  stats?: D1RequestStats
   random?: () => number
   sleep?: (milliseconds: number) => Promise<void>
 }
@@ -348,8 +356,13 @@ export function withD1ResetRecovery<Session extends D1SessionLike>(
         value => ({ _tag: 'ok' as const, value }),
         error => ({ _tag: 'error' as const, error }),
       )
-      if (outcome._tag === 'ok')
+      if (outcome._tag === 'ok') {
+        // Counted here rather than per statement: this is the one place every
+        // terminal execution and batch resolves, whichever attempt won.
+        if (options.stats)
+          recordD1Meta(options.stats, outcome.value)
         return outcome.value
+      }
 
       const failure = classifyD1RetryError(outcome.error)
       if (failure._tag !== 'session-reset' && failure._tag !== 'transient')
@@ -359,6 +372,8 @@ export function withD1ResetRecovery<Session extends D1SessionLike>(
       if (failure._tag === 'session-reset')
         renewSession()
       if (!replayable || exhausted) {
+        if (options.stats)
+          recordD1Recovery(options.stats, { _tag: 'stopped' })
         options.onRecovery?.({
           _tag: 'stopped',
           attempt,
@@ -369,6 +384,8 @@ export function withD1ResetRecovery<Session extends D1SessionLike>(
         throw outcome.error
       }
 
+      if (options.stats)
+        recordD1Recovery(options.stats, { _tag: 'retrying' })
       options.onRecovery?.({ _tag: 'retrying', attempt, failure, sql })
       await sleep(retryDelay(attempt, random))
     }
@@ -483,6 +500,10 @@ export function getRecoveringRequestD1Session<Session extends D1SessionLike>(
   const sessions = getD1SessionCache(requestContext, REQUEST_D1_RECOVERING_SESSIONS)
   if (!sessions.has(key)) {
     sessions.set(key, withD1ResetRecovery(database, {
+      // A request-scoped session gets request-scoped counters by default: the
+      // context to hang them on is the argument this function already takes,
+      // and a caller that wants none can pass its own `stats`.
+      stats: useD1Stats(requestContext),
       ...options,
       consistency,
     }))

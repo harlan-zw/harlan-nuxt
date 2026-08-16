@@ -3,7 +3,7 @@ import type { Nitro } from 'nitropack/types'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, defineNuxtModule, hasNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -61,6 +61,32 @@ const workersCachePluginPath = resolve(
     ? 'runtime/server/plugins/workers-cache.ts'
     : 'runtime/server/plugins/workers-cache.js',
 )
+const wideEventsPluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/wide-events.ts'
+    : 'runtime/server/plugins/wide-events.js',
+)
+
+/**
+ * Cloudflare context worth one flat record per request.
+ *
+ * Declared here so the consuming application never hand-lists them: this module
+ * knows what it populates, and `addWideEventFields` is what lets it say so.
+ * Deliberately excludes everything in `request.cf` that describes a PERSON —
+ * city, region, postal code, ASN — see the plugin.
+ */
+const WIDE_EVENT_FIELDS = [
+  'cf.colo',
+  'cf.country',
+  'cf.httpProtocol',
+  'd1.durationMs',
+  'd1.primaryQueries',
+  'd1.queries',
+  'd1.recoveries',
+  'd1.region',
+  'd1.unrecovered',
+] as const
 const BUILD_SECRET_ENV_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|ENCRYPTION_KEY|PASSWORD|PRIVATE_KEY|SECRET|SIGNING_KEY|TOKEN|SALT)(?:_|$)/i
 // Nuxt Scripts must resolve this value during setup to register its signed proxy plugin.
 const REQUIRED_BUILD_SECRET_NAMES = new Set(['NUXT_SCRIPTS_PROXY_SECRET'])
@@ -203,6 +229,29 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     options,
     Boolean(nuxt.options.sourcemap.server),
   )
+
+  // Optional integration with `@harlan-zw/nuxt-wide-events`. Declaring the
+  // fields is not optional decoration: that module's build plugin rejects any
+  // `addWideEventFields` call naming a field the allowlist does not carry, so
+  // without this the server plugin below would fail the application's build.
+  //
+  // A hook, so this module needs no import from and no dependency on that one.
+  // When it is absent the hook never fires and this is inert.
+  nuxt.hook('wide-events:fields', (registry) => {
+    registry.add('@harlan-zw/nuxt-cloudflare', [...WIDE_EVENT_FIELDS])
+  })
+
+  // The plugin itself only resolves `addWideEventFields` when that module is
+  // installed, so it is registered only then.
+  // `hasNuxtModule` reads `nuxt.options.modules` without checking it, so guard
+  // the array first: this function is exported and called directly with partial
+  // Nuxt objects, and a detection helper must not be the thing that throws.
+  if (Array.isArray(nuxt.options.modules) && hasNuxtModule('@harlan-zw/nuxt-wide-events', nuxt)) {
+    const wideEventsNitro = nuxt.options.nitro as NitroCloudflareShape
+    wideEventsNitro.plugins ??= []
+    if (!wideEventsNitro.plugins.includes(wideEventsPluginPath))
+      wideEventsNitro.plugins.push(wideEventsPluginPath)
+  }
 
   let bindingTypeSignature: string | undefined
 

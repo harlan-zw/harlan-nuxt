@@ -141,12 +141,44 @@ describe('setupCloudflareModule', () => {
     expect(callbacks['modules:done']).not.toThrow('oauth-sentinel')
   })
 
+  it('declares the fields its plugin populates, so a consuming build accepts them', () => {
+    const { callbacks, nuxt } = nuxtWithCapturedHooks(false)
+
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
+
+    // Without this declaration the wide-events build plugin rejects the server
+    // plugin's own `addWideEventFields` call and the application fails to build.
+    const added: Array<[string, readonly string[]]> = []
+    callbacks['wide-events:fields']({ add: (m: string, f: readonly string[]) => added.push([m, f]) })
+
+    expect(added).toHaveLength(1)
+    const [moduleName, fields] = added[0]!
+    expect(moduleName).toBe('@harlan-zw/nuxt-cloudflare')
+    expect(fields).toContain('cf.colo')
+    expect(fields).toContain('d1.primaryQueries')
+    // Location data about a person is never recorded; see the server plugin.
+    expect(fields).not.toContain('cf.city')
+    expect(fields).not.toContain('cf.asn')
+    expect(fields).not.toContain('cf.postalCode')
+  })
+
+  it('registers no wide-events plugin when the module is absent', () => {
+    const { nuxt } = nuxtWithCapturedHooks(false)
+
+    setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
+
+    const plugins = (nuxt.options.nitro as { plugins?: string[] }).plugins ?? []
+    expect(plugins.some(plugin => plugin.includes('wide-events'))).toBe(false)
+  })
+
   it('does not register the production Wrangler audit during development', () => {
     const { hooks, nuxt } = nuxtWithCapturedHooks(true)
 
     setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
-    expect(hooks).toEqual(['modules:done', 'nitro:config'])
+    // `wide-events:fields` is always registered; it is inert unless
+    // @harlan-zw/nuxt-wide-events is installed to fire it.
+    expect(hooks).toEqual(['wide-events:fields', 'modules:done', 'nitro:config'])
   })
 
   it('registers the production Wrangler audit for builds', () => {
@@ -154,7 +186,7 @@ describe('setupCloudflareModule', () => {
 
     setupCloudflareModule({ bindingTypes: false, enabled: true }, nuxt)
 
-    expect(hooks).toEqual(['modules:done', 'nitro:config', 'nitro:init'])
+    expect(hooks).toEqual(['wide-events:fields', 'modules:done', 'nitro:config', 'nitro:init'])
   })
 
   it('uses Nuxt server source maps as the upload policy', () => {

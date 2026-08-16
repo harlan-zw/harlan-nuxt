@@ -1,10 +1,26 @@
+import type { WideEventFieldRegistry } from './build/contributed-fields'
 import type { ModuleOptions } from './types'
 import { addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { createWideEventFieldRegistry } from './build/contributed-fields'
 import { formatWideEventFieldIssues, resolveWideEventFields } from './build/fields'
 import { resolveWideEventsRuntimeConfig, serializeWideEventsRuntimeConfig } from './build/runtime-config'
 import { createWideEventValidationPlugin } from './build/source-scan'
 
 export type { ModuleOptions } from './types'
+
+declare module '@nuxt/schema' {
+  interface NuxtHooks {
+    /**
+     * Declare Wide Event fields a module populates at runtime.
+     *
+     * Fired once at `modules:done`, so a listener registered from any module's
+     * `setup` is collected regardless of module order. Registering a listener
+     * when this module is absent is inert — the hook never fires — which is what
+     * lets a module integrate optionally and without a dependency.
+     */
+    'wide-events:fields': (registry: WideEventFieldRegistry) => void | Promise<void>
+  }
+}
 
 interface NitroConfigLike {
   alias?: Record<string, string>
@@ -32,12 +48,26 @@ export default defineNuxtModule<ModuleOptions>({
     if (!options.enabled)
       return
 
-    const resolvedFields = resolveWideEventFields(options.fields ?? [])
-    if (resolvedFields._tag === 'Err')
-      throw new Error(`[nuxt-wide-events]\n${formatWideEventFieldIssues(resolvedFields.issues)}`)
-
-    const fields = new Set(resolvedFields.fields)
+    // Resolved at `modules:done`, not here, so a module contributing fields
+    // through `addWideEventFields` is treated the same whether it sets up
+    // before or after this one. Both consumers of the resolved list — the
+    // rollup validation plugin and the generated types — are read later than
+    // this hook fires, so deferring costs nothing.
+    const fields = new Set<string>()
     const resolver = createResolver(import.meta.url)
+    nuxt.hook('modules:done', async () => {
+      const collected = createWideEventFieldRegistry()
+      await nuxt.callHook('wide-events:fields', collected.registry)
+      const resolvedFields = resolveWideEventFields([
+        ...(options.fields ?? []),
+        ...collected.fields,
+      ])
+      if (resolvedFields._tag === 'Err')
+        throw new Error(`[nuxt-wide-events]\n${formatWideEventFieldIssues(resolvedFields.issues)}`)
+      for (const field of resolvedFields.fields)
+        fields.add(field)
+      addWideEventTypes(resolvedFields.fields)
+    })
     const runtimeConfig = resolveWideEventsRuntimeConfig(options)
     const configTemplate = addTemplate({
       filename: 'wide-events/config.mjs',
@@ -71,7 +101,6 @@ export default defineNuxtModule<ModuleOptions>({
           ? './runtime/server/standalone-development'
           : './runtime/server/standalone-production'),
     })
-    addWideEventTypes(resolvedFields.fields)
   },
 })
 
