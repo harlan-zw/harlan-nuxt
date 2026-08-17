@@ -16,6 +16,7 @@ interface ActionStep {
   'uses'?: string
   'run'?: string
   'if'?: string
+  'env'?: Record<string, string>
   'continue-on-error'?: boolean
 }
 
@@ -92,9 +93,11 @@ describe('nuxt-dx-budget action', () => {
   it('replaces its own pull request comment instead of stacking them', () => {
     const comment = step('Comment the summary on the pull request')
     expect(comment.if).toContain('pull_request')
-    // Keyed by artifact name, so a matrix of apps gets one comment each.
     expect(comment.run).toContain('$ENV.MARKER')
-    expect(source).toContain('MARKER: <!-- nuxt-dx-size-budget:${{ inputs.artifact-name }} -->')
+    // An HTML comment, so readers never see it, keyed by artifact name so a matrix
+    // of apps gets one comment each rather than fighting over one.
+    expect(comment.env!.MARKER).toMatch(/^<!-- nuxt-dx-size-budget:/)
+    expect(comment.env!.MARKER).toContain('inputs.artifact-name')
     expect(comment.run).toContain('PATCH')
   })
 
