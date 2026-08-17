@@ -1,6 +1,6 @@
+import { defineNitroPlugin } from 'nitropack/runtime'
 import { createSitemapEntries } from '../../core/sitemap'
 import { loadCollectionIndex, loadCollectionNames } from '../storage'
-import { defineNitroPlugin } from 'nitropack/runtime'
 
 export default defineNitroPlugin((nitroApp) => {
   const hooks = nitroApp.hooks as typeof nitroApp.hooks & {

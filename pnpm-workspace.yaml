@@ -33,6 +33,7 @@ catalog:
   nuxt: ^4.5.2
   pathe: ^2.0.3
   pino: ^10.3.1
+  rangi: ^2.2.0
   rollup: ^4.62.4
   typescript: ^5.9.3
   unbuild: ^3.6.1

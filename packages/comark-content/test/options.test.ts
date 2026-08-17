@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { assertCloudflareCacheModule, assertSupportedOptions, defineCollection } from '../src/config'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, selectContentComponents } from '../src/components'
+import { assertCloudflareCacheModule, assertSupportedOptions, defineCollection } from '../src/config'
 
 describe('configuration boundary', () => {
   it('finds unprefixed content component directories in layer priority order', () => {

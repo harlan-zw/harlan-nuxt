@@ -1,8 +1,9 @@
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, relative, resolve } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import process from 'node:process'
 
@@ -20,7 +21,7 @@ const RESULTS_ROOT = resolve(import.meta.dirname, 'results')
 const BROWSER_SAMPLE_PATH = resolve(import.meta.dirname, 'browser-sample.js')
 const RESULT_MARKER = '__COMARK_SITE_BENCHMARK__'
 
-const parseArgs = (args) => {
+function parseArgs(args) {
   const variantIndex = args.indexOf('--variant')
   const variant = variantIndex === -1 ? 'both' : args[variantIndex + 1]
   if (!['baseline', 'candidate', 'both'].includes(variant))
@@ -32,35 +33,43 @@ const parseArgs = (args) => {
   return { samples, variants: variant === 'both' ? ['baseline', 'candidate'] : [variant] }
 }
 
+// ANSI escape sequences are defined by the ESC control character and these exact byte ranges.
+// eslint-disable-next-line no-control-regex, regexp/no-obscure-range
 const stripAnsi = value => value.replaceAll(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 
-const run = (command, args, options = {}) => new Promise((resolveRun, reject) => {
-  const startedAt = performance.now()
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    detached: options.detached,
-    env: options.env,
-    stdio: options.input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
+function run(command, args, options = {}) {
+  return new Promise((resolveRun, reject) => {
+    const startedAt = performance.now()
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      detached: options.detached,
+      env: options.env,
+      stdio: options.input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
+    })
+    let output = ''
+    child.stdout.on('data', (chunk) => {
+      output += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      output += chunk
+    })
+    if (options.input !== undefined)
+      child.stdin.end(options.input)
+    child.on('error', reject)
+    child.on('close', (code) => {
+      const result = { code, durationMs: performance.now() - startedAt, output: stripAnsi(output) }
+      if (code === 0 || options.allowFailure) {
+        resolveRun(result)
+        return
+      }
+      reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}.\n${result.output.slice(-30000)}`))
+    })
   })
-  let output = ''
-  child.stdout.on('data', (chunk) => { output += chunk })
-  child.stderr.on('data', (chunk) => { output += chunk })
-  if (options.input !== undefined)
-    child.stdin.end(options.input)
-  child.on('error', reject)
-  child.on('close', (code) => {
-    const result = { code, durationMs: performance.now() - startedAt, output: stripAnsi(output) }
-    if (code === 0 || options.allowFailure) {
-      resolveRun(result)
-      return
-    }
-    reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}.\n${result.output.slice(-30000)}`))
-  })
-})
+}
 
 const commandOutput = async (command, args, cwd) => (await run(command, args, { cwd, env: process.env })).output.trim()
 
-const assertEnvironment = async () => {
+async function assertEnvironment() {
   if (process.version !== NODE_VERSION)
     throw new Error(`Expected Node ${NODE_VERSION}, received ${process.version}.`)
   const pnpmVersion = await commandOutput('pnpm', ['--version'], process.cwd())
@@ -69,7 +78,7 @@ const assertEnvironment = async () => {
   await commandOutput('dev-browser', ['--help'], process.cwd())
 }
 
-const extractRevision = async (revision, destination) => {
+async function extractRevision(revision, destination) {
   await mkdir(destination, { recursive: true })
   await new Promise((resolveExtract, reject) => {
     const archive = spawn('git', ['archive', '--format=tar', revision], { cwd: SITE_REPOSITORY, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -80,11 +89,11 @@ const extractRevision = async (revision, destination) => {
     archive.stdout.pipe(extract.stdin)
     archive.on('error', reject)
     extract.on('error', reject)
-    extract.on('close', (code) => code === 0 ? resolveExtract() : reject(new Error(`Could not extract ${revision}.\n${errors}`)))
+    extract.on('close', code => code === 0 ? resolveExtract() : reject(new Error(`Could not extract ${revision}.\n${errors}`)))
   })
 }
 
-const walkFiles = async (root) => {
+async function walkFiles(root) {
   const files = []
   const visit = async (directory) => {
     const entries = await readdir(directory, { withFileTypes: true }).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))
@@ -102,7 +111,7 @@ const walkFiles = async (root) => {
 
 const directoryBytes = async root => (await Promise.all((await walkFiles(root)).map(async path => (await stat(path)).size))).reduce((sum, size) => sum + size, 0)
 
-const packageFingerprint = async () => {
+async function packageFingerprint() {
   const paths = [join(PACKAGE_ROOT, 'package.json'), ...await walkFiles(join(PACKAGE_ROOT, 'src'))].sort()
   const hash = createHash('sha256')
   for (const path of paths)
@@ -110,7 +119,7 @@ const packageFingerprint = async () => {
   return hash.digest('hex')
 }
 
-const prepareCandidate = async (siteRoot, temporaryRoot) => {
+async function prepareCandidate(siteRoot, temporaryRoot) {
   const packed = await run('pnpm', ['pack', '--pack-destination', temporaryRoot], { cwd: PACKAGE_ROOT, env: process.env })
   const tarball = (await readdir(temporaryRoot)).find(file => file.endsWith('.tgz'))
   if (!tarball)
@@ -123,13 +132,13 @@ const prepareCandidate = async (siteRoot, temporaryRoot) => {
   await writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
   const configPath = join(siteRoot, 'nuxt.config.ts')
   const config = await readFile(configPath, 'utf8')
-  if (!config.includes("'@harlan-zw/comark-content'"))
+  if (!config.includes('\'@harlan-zw/comark-content\''))
     throw new Error('Candidate revision does not use comark-content.')
   if (!config.includes('content: {'))
-    await writeFile(configPath, config.replace("\n  css: ['~/assets/css/main.css'],", "\n  content: { highlight: true },\n\n  css: ['~/assets/css/main.css'],"))
+    await writeFile(configPath, config.replace('\n  css: [\'~/assets/css/main.css\'],', '\n  content: { highlight: true },\n\n  css: [\'~/assets/css/main.css\'],'))
 }
 
-const prepareBaseline = async (siteRoot) => {
+async function prepareBaseline(siteRoot) {
   const packagePath = join(siteRoot, 'package.json')
   const packageJson = JSON.parse(await readFile(packagePath, 'utf8'))
   delete packageJson.devDependencies['@harlan-zw/comark-content']
@@ -141,14 +150,14 @@ const prepareBaseline = async (siteRoot) => {
 
   const workspacePath = join(siteRoot, 'pnpm-workspace.yaml')
   const workspace = await readFile(workspacePath, 'utf8')
-  await writeFile(workspacePath, workspace.replace("allowBuilds:\n", "allowBuilds:\n  better-sqlite3: true\n"))
+  await writeFile(workspacePath, workspace.replace('allowBuilds:\n', 'allowBuilds:\n  better-sqlite3: true\n'))
 
   const configPath = join(siteRoot, 'nuxt.config.ts')
   const config = (await readFile(configPath, 'utf8'))
-    .replace("'@harlan-zw/comark-content',", "'@nuxt/content',")
+    .replace('\'@harlan-zw/comark-content\',', '\'@nuxt/content\',')
     .replace('failOnError: true', 'failOnError: false')
     .replace(
-      "  content: {\n    highlight: true,\n  },",
+      '  content: {\n    highlight: true,\n  },',
       `  content: {
     database: {
       type: 'd1',
@@ -178,19 +187,19 @@ const prepareBaseline = async (siteRoot) => {
   await writeFile(configPath, config)
 
   const contentConfigPath = join(siteRoot, 'content.config.ts')
-  await writeFile(contentConfigPath, (await readFile(contentConfigPath, 'utf8')).replace("'@harlan-zw/comark-content'", "'@nuxt/content'"))
+  await writeFile(contentConfigPath, (await readFile(contentConfigPath, 'utf8')).replace('\'@harlan-zw/comark-content\'', '\'@nuxt/content\''))
 
   const contentUtilityPath = join(siteRoot, 'app/utils/content.ts')
   await writeFile(contentUtilityPath, (await readFile(contentUtilityPath, 'utf8'))
-    .replace("'@harlan-zw/comark-content'", "'@nuxt/content'")
+    .replace('\'@harlan-zw/comark-content\'', '\'@nuxt/content\'')
     .replace('body.nodes.flatMap', 'body.value.flatMap'))
 
   const rssPath = join(siteRoot, 'server/utils/rss.ts')
-  await writeFile(rssPath, (await readFile(rssPath, 'utf8')).replace("'@harlan-zw/comark-content/server'", "'@nuxt/content/server'"))
+  await writeFile(rssPath, (await readFile(rssPath, 'utf8')).replace('\'@harlan-zw/comark-content/server\'', '\'@nuxt/content/server\''))
 
   const typesPath = join(siteRoot, 'shared/types.ts')
   await writeFile(typesPath, (await readFile(typesPath, 'utf8'))
-    .replace("import type { PageCollectionItemBase } from '@harlan-zw/comark-content'", "import type { PagesCollectionItem } from '@nuxt/content'")
+    .replace('import type { PageCollectionItemBase } from \'@harlan-zw/comark-content\'', 'import type { PagesCollectionItem } from \'@nuxt/content\'')
     .replace('export interface SitePage extends PageCollectionItemBase', 'export interface SitePage extends PagesCollectionItem'))
 
   const historicalContentPage = await commandOutput('git', ['show', '403cdca^:app/utils/content-page.ts'], SITE_REPOSITORY)
@@ -202,7 +211,7 @@ const prepareBaseline = async (siteRoot) => {
     .replaceAll('ContentProse', 'Prose'))
 }
 
-const startWorker = async (siteRoot, port, env) => {
+async function startWorker(siteRoot, port, env) {
   const output = []
   const child = spawn('pnpm', [
     'exec',
@@ -232,7 +241,7 @@ const startWorker = async (siteRoot, port, env) => {
   throw new Error(`Worker did not start.\n${stripAnsi(Buffer.concat(output).toString()).slice(-4000)}`)
 }
 
-const stopWorker = async (worker) => {
+async function stopWorker(worker) {
   if (!worker.child.pid)
     return
   try {
@@ -248,7 +257,7 @@ const stopWorker = async (worker) => {
   ])
 }
 
-const startChrome = async (profileRoot, port) => {
+async function startChrome(profileRoot, port) {
   const child = spawn('/usr/bin/google-chrome', [
     '--headless=new',
     '--disable-background-networking',
@@ -280,7 +289,7 @@ const startChrome = async (profileRoot, port) => {
   throw new Error('Benchmark Chrome did not start.')
 }
 
-const stopChrome = async (chrome) => {
+async function stopChrome(chrome) {
   if (!chrome.child.pid)
     return
   try {
@@ -296,7 +305,7 @@ const stopChrome = async (chrome) => {
   ])
 }
 
-const browserSample = async ({ sample, temporaryRoot, url, variant }) => {
+async function browserSample({ sample, temporaryRoot, url, variant }) {
   const source = (await readFile(BROWSER_SAMPLE_PATH, 'utf8'))
     .replace('__TARGET_URL__', url)
     .replace('__VARIANT__', variant)
@@ -331,7 +340,7 @@ const browserSample = async ({ sample, temporaryRoot, url, variant }) => {
   }
 }
 
-const median = (values) => {
+function median(values) {
   const sorted = [...values].sort((left, right) => left - right)
   const middle = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]
@@ -353,7 +362,7 @@ const metricPaths = [
 const getPath = (value, path) => path.reduce((current, key) => current?.[key], value)
 const medians = samples => Object.fromEntries(metricPaths.map(path => [path.join('.'), median(samples.map(sample => getPath(sample, path)).filter(value => typeof value === 'number'))]))
 
-const benchmarkVariant = async (variant, requestedSamples) => {
+async function benchmarkVariant(variant, requestedSamples) {
   const revision = SITE_REVISIONS[variant]
   const temporaryRoot = await mkdtemp(join(tmpdir(), `comark-site-harlanzw-${variant}-`))
   const siteRoot = join(temporaryRoot, 'site')
@@ -445,7 +454,7 @@ const benchmarkVariant = async (variant, requestedSamples) => {
   }
 }
 
-const main = async () => {
+async function main() {
   const { samples, variants } = parseArgs(process.argv.slice(2))
   await assertEnvironment()
   await mkdir(RESULTS_ROOT, { recursive: true })
@@ -453,4 +462,7 @@ const main = async () => {
     await benchmarkVariant(variant, samples)
 }
 
-await main()
+main().catch((error) => {
+  process.stderr.write(`${error.stack ?? error}\n`)
+  process.exitCode = 1
+})

@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryCollectionItemSurroundings, queryCollectionNavigation, queryCollectionSearchSections } from '../src/runtime/client'
 import { createNavigation, createNavigationSource, createSearchSections, createSurroundings } from '../src/runtime/core/navigation'
 import { createSitemapEntries } from '../src/runtime/core/sitemap'

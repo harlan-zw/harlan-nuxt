@@ -1,15 +1,15 @@
+import type { MarkdownDocument } from 'comark'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { MarkdownDocument } from 'comark'
 import { defineCollection } from '../src/config'
 import { createContentParser, ingestCollections } from '../src/core/ingest'
 import { writeFixture } from './fixtures'
 
 const temporaryRoots: string[] = []
 
-const temporaryRoot = async () => {
+async function temporaryRoot() {
   const root = await mkdtemp(join(tmpdir(), 'comark-content-ingest-'))
   temporaryRoots.push(root)
   return root
@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
-describe('Markdown ingestion', () => {
+describe('markdown ingestion', () => {
   it('highlights fenced code when requested', async () => {
     const parse = await createContentParser({ highlight: true })
     const document = await parse('```ts{1} [app.ts]\nconst ready = true\n```')
@@ -54,13 +54,7 @@ describe('Markdown ingestion', () => {
     expect(document.nodes[0]).toMatchObject([
       'pre',
       expect.any(Object),
-      ['code', expect.any(Object), ['span', expect.any(Object),
-        ['span', { style: '--shiki-light:#cf222e;--shiki-default:#cf222e;color:#cf222e;--shiki-dark:#ff7b72' }, 'const'],
-        expect.any(String),
-        expect.any(Array),
-        expect.any(String),
-        expect.any(Array),
-      ]],
+      ['code', expect.any(Object), ['span', expect.any(Object), ['span', { style: '--shiki-light:#cf222e;--shiki-default:#cf222e;color:#cf222e;--shiki-dark:#ff7b72' }, 'const'], expect.any(String), expect.any(Array), expect.any(String), expect.any(Array)]],
     ])
   })
 
@@ -97,10 +91,12 @@ describe('Markdown ingestion', () => {
       'pre',
       { class: expect.stringContaining('shj-lang-dotenv') },
       ['code', expect.any(Object), [
-        'span', expect.any(Object),
+        'span',
+        expect.any(Object),
         ['span', { class: expect.stringContaining('shj-cmnt') }, '# Keep escaped newlines'],
       ], expect.any(String), [
-        'span', expect.any(Object),
+        'span',
+        expect.any(Object),
         ['span', { class: expect.stringContaining('shj-var') }, 'GOOGLE_PRIVATE_KEY'],
         ['span', { class: expect.stringContaining('shj-oper') }, '='],
         ['span', { class: expect.stringContaining('shj-str') }, '"-----BEGIN PRIVATE KEY-----\\nMIIEvQ...\\n-----END PRIVATE KEY-----\\n"'],
@@ -110,13 +106,15 @@ describe('Markdown ingestion', () => {
       'pre',
       { class: expect.stringContaining('shj-lang-robots.txt') },
       ['code', expect.any(Object), [
-        'span', expect.any(Object),
+        'span',
+        expect.any(Object),
         ['span', { class: expect.stringContaining('shj-kwd') }, 'User-agent'],
         ['span', { class: expect.stringContaining('shj-oper') }, ':'],
         ['span', { class: expect.stringContaining('shj-str') }, ' '],
         ['span', { class: expect.stringContaining('shj-oper') }, '*'],
       ], expect.any(String), [
-        'span', expect.any(Object),
+        'span',
+        expect.any(Object),
         ['span', { class: expect.stringContaining('shj-kwd') }, 'Disallow'],
         ['span', { class: expect.stringContaining('shj-oper') }, ':'],
         ['span', { class: expect.stringContaining('shj-str') }, ' /private/'],
@@ -138,14 +136,7 @@ describe('Markdown ingestion', () => {
     expect(result.value.collections.pages?.[0]?.body.nodes[0]).toMatchObject([
       'pre',
       { class: expect.stringContaining('rangi') },
-      ['code', { class: 'language-csharp' }, ['span', expect.any(Object),
-        ['span', { class: expect.stringContaining('shj-kwd') }, 'var'],
-        expect.any(String),
-        expect.any(Array),
-        expect.any(String),
-        expect.any(Array),
-        expect.any(String),
-      ]],
+      ['code', { class: 'language-csharp' }, ['span', expect.any(Object), ['span', { class: expect.stringContaining('shj-kwd') }, 'var'], expect.any(String), expect.any(Array), expect.any(String), expect.any(Array), expect.any(String)]],
     ])
   })
 

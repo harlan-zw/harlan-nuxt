@@ -3,15 +3,15 @@ import { decodeCollectionAsset } from './asset'
 
 export type ContentAssetReader = (path: string) => Promise<Uint8Array | null | undefined>
 
-const collectionName = /^[A-Za-z][A-Za-z0-9_]*$/
+const collectionName = /^[A-Z]\w*$/i
 const bodyAssetName = /^[a-f0-9]{32}\.json\.gz$/
 
-const assertCollectionName = (name: string) => {
+function assertCollectionName(name: string) {
   if (!collectionName.test(name))
     throw new TypeError(`<request>:1:1 Invalid collection name "${name}".`)
 }
 
-export const createContentStorage = (readAsset: ContentAssetReader) => {
+export function createContentStorage(readAsset: ContentAssetReader) {
   const loadAsset = async <T>(path: string, missingMessage: string): Promise<T> => {
     const value = await readAsset(`${path}.json.gz`)
     if (!value)

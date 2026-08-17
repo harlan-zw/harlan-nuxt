@@ -46,12 +46,12 @@ export interface ContentHookPage extends PageCollectionItemBase {
   rawbody: string
 }
 
-export type ContentHook = {
+export interface ContentHook {
   beforeParse?: (context: FileBeforeParseHook) => void | Promise<void>
   afterParse?: (context: FileAfterParseHook) => void | Promise<void>
 }
 
-const fieldType = (value: unknown): ContentHookCollection['fields'][string] => {
+function fieldType(value: unknown): ContentHookCollection['fields'][string] {
   if (typeof value === 'string')
     return 'string'
   if (typeof value === 'number')
@@ -61,40 +61,42 @@ const fieldType = (value: unknown): ContentHookCollection['fields'][string] => {
   return 'json'
 }
 
-export const contentHookCollection = (
-  name: string,
-  definition: CollectionDefinition,
-  content: Record<string, unknown> = {},
-): ContentHookCollection => ({
-  name,
-  type: 'page',
-  tableName: `_content_${name}`,
-  private: false,
-  source: definition.source,
-  fields: Object.fromEntries(Object.entries(content).map(([key, value]) => [key, fieldType(value)])),
-  indexes: definition.indexes,
-})
+export function contentHookCollection(name: string, definition: CollectionDefinition, content: Record<string, unknown> = {}): ContentHookCollection {
+  return {
+    name,
+    type: 'page',
+    tableName: `_content_${name}`,
+    private: false,
+    source: definition.source,
+    fields: Object.fromEntries(Object.entries(content).map(([key, value]) => [key, fieldType(value)])),
+    indexes: definition.indexes,
+  }
+}
 
-export const contentHookFile = (id: string, path: string, body: string): ContentHookFile => ({
-  id,
-  body,
-  path,
-  dirname: path.slice(0, Math.max(0, path.lastIndexOf('/'))),
-  extension: '.md',
-  collectionType: 'page',
-})
+export function contentHookFile(id: string, path: string, body: string): ContentHookFile {
+  return {
+    id,
+    body,
+    path,
+    dirname: path.slice(0, Math.max(0, path.lastIndexOf('/'))),
+    extension: '.md',
+    collectionType: 'page',
+  }
+}
 
-export const parserOptions = (): FileBeforeParseHook['parserOptions'] => ({
-  pathMeta: { forceLeadingSlash: true },
-  markdown: {
-    compress: false,
-    mdc: false,
-    toc: { depth: 3, searchDepth: 3 },
-    tags: {},
-    remarkPlugins: {},
-    rehypePlugins: {},
-  },
-})
+export function parserOptions(): FileBeforeParseHook['parserOptions'] {
+  return {
+    pathMeta: { forceLeadingSlash: true },
+    markdown: {
+      compress: false,
+      mdc: false,
+      toc: { depth: 3, searchDepth: 3 },
+      tags: {},
+      remarkPlugins: {},
+      rehypePlugins: {},
+    },
+  }
+}
 
 declare module '@nuxt/schema' {
   interface NuxtHooks {
