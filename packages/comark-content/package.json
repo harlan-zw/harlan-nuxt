@@ -2,6 +2,7 @@
   "name": "@harlan-zw/comark-content",
   "type": "module",
   "version": "0.0.17",
+  "packageManager": "pnpm@11.2.1",
   "description": "Markdown-only Nuxt content powered by Comark.",
   "author": {
     "name": "Harlan Wilton",
@@ -22,10 +23,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "packageManager": "pnpm@11.2.1",
   "sideEffects": false,
-  "main": "./dist/module.mjs",
-  "types": "./dist/module.d.mts",
   "exports": {
     ".": {
       "types": "./dist/module.d.mts",
@@ -36,6 +34,8 @@
       "import": "./dist/runtime/server/index.js"
     }
   },
+  "main": "./dist/module.mjs",
+  "types": "./dist/module.d.mts",
   "files": [
     "dist"
   ],
@@ -47,6 +47,8 @@
     "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
     "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "prepack": "pnpm run build",
     "test": "vitest run",
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz && node --input-type=module -e \"await import('./dist/runtime/core/navigation.js')\"",
@@ -59,11 +61,13 @@
   "dependencies": {
     "@nuxt/kit": "catalog:",
     "comark": "catalog:",
-    "rangi": "^2.2.0"
+    "rangi": "catalog:"
   },
   "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
     "@nuxt/module-builder": "catalog:",
     "@types/node": "catalog:",
+    "eslint": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
