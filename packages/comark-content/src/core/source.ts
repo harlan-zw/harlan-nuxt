@@ -2,7 +2,7 @@ import type { CollectionDefinition, CollectionSource } from '../config'
 import { readdir } from 'node:fs/promises'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 
-export type ResolvedSource = {
+export interface ResolvedSource {
   cwd: string
   include: string
   exclude: string[]
@@ -12,7 +12,7 @@ export type ResolvedSource = {
 
 const escapeRegex = (value: string) => value.replaceAll(/[|\\{}()[\]^$+?.]/g, '\\$&')
 
-export const globRegex = (glob: string) => {
+export function globRegex(glob: string) {
   let source = ''
   for (let index = 0; index < glob.length; index++) {
     const character = glob[index]
@@ -49,13 +49,13 @@ export const globRegex = (glob: string) => {
   return new RegExp(`^${source}$`)
 }
 
-const sourceBase = (include: string) => {
+function sourceBase(include: string) {
   const wildcard = include.search(/[*?{]/)
   const directory = wildcard === -1 ? posix.dirname(include) : include.slice(0, wildcard).replace(/[^/]*$/, '')
   return directory === '.' ? '' : directory.replace(/^\/+|\/+$/g, '')
 }
 
-export const resolveCollectionSource = (definition: CollectionDefinition, rootDir: string, remoteCwd?: string): ResolvedSource => {
+export function resolveCollectionSource(definition: CollectionDefinition, rootDir: string, remoteCwd?: string): ResolvedSource {
   const source = definition.source ?? '**/*.md'
   if (typeof source === 'string') {
     return {
@@ -77,7 +77,7 @@ export const resolveCollectionSource = (definition: CollectionDefinition, rootDi
   }
 }
 
-export const scanSource = async (source: ResolvedSource) => {
+export async function scanSource(source: ResolvedSource) {
   const include = globRegex(source.include)
   const excludes = source.exclude.map(globRegex)
   const base = sourceBase(source.include)

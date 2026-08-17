@@ -5,7 +5,7 @@ interface SitemapOptions {
 
 const NUXT_CONTENT_SOURCE = '@nuxt/content@v3:urls'
 
-export const excludeNuxtContentSitemapSource = (options: SitemapOptions | undefined): SitemapOptions => {
+export function excludeNuxtContentSitemapSource(options: SitemapOptions | undefined): SitemapOptions {
   if (options?.excludeAppSources === true)
     return options
   const excluded = options?.excludeAppSources ?? []

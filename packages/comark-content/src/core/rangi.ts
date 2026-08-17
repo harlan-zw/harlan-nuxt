@@ -4,7 +4,7 @@ import { githubDark, githubLight } from 'rangi/themes'
 
 const dotenvValue: ShjLanguageDefinition = [
   [/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, 'str'],
-  [/\$\{?[A-Za-z_]\w*(?:(?::-?|\?)[^}]*)?\}?/g, 'var'],
+  [/\$\{?[A-Z_]\w*(?:(?::|\?)[^}]*)?\}?/gi, 'var'],
   [/\b(?:true|false)\b/gi, 'bool'],
   [/\b-?\d+(?:\.\d+)?\b/g, 'num'],
 ]
@@ -12,7 +12,7 @@ const dotenvValue: ShjLanguageDefinition = [
 const dotenv: ShjLanguageDefinition = [
   [/#.*$/gm, 'cmnt'],
   [/^\s*export\b/gm, 'kwd'],
-  [/\b[A-Za-z_]\w*(?=\s*=)/g, 'var'],
+  [/\b[A-Z_]\w*(?=\s*=)/gi, 'var'],
   [/=/g, 'oper'],
   [/(?<==)[ \t]*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^#\r\n]+)/g, 'str', dotenvValue],
 ]
@@ -24,14 +24,14 @@ const robotsValue: ShjLanguageDefinition = [
 
 const robots: ShjLanguageDefinition = [
   [/#.*$/gm, 'cmnt'],
-  [/^[A-Za-z][\w-]*(?=\s*:)/gm, 'kwd'],
+  [/^[A-Z][\w-]*(?=\s*:)/gim, 'kwd'],
   [/:/g, 'oper'],
   [/(?<=:)[^#\r\n]+/g, 'str', robotsValue],
 ]
 
 export const contentRangiLanguages: ShjLanguages = {
   dotenv,
-  env: dotenv,
+  'env': dotenv,
   robots,
   'robots-txt': robots,
   'robots.txt': robots,
@@ -48,11 +48,11 @@ export const contentRangiTheme = {
   dark: githubDark,
 } satisfies ShjThemePair
 
-const addThemeVariables = (node: Node, inRangi = false): void => {
+function addThemeVariables(node: Node, inRangi = false): void {
   if (typeof node === 'string' || node[0] === null)
     return
   const [tag, attributes, ...children] = node
-  const rangi = inRangi || tag === 'pre' && typeof attributes.class === 'string' && attributes.class.split(/\s+/).includes('rangi')
+  const rangi = inRangi || (tag === 'pre' && typeof attributes.class === 'string' && attributes.class.split(/\s+/).includes('rangi'))
   if (rangi && tag === 'span' && typeof attributes.style === 'string' && !attributes.style.includes('--shiki-light:')) {
     const light = /(?:^|;)color:([^;]+)/.exec(attributes.style)?.[1]
     if (light)
@@ -62,7 +62,7 @@ const addThemeVariables = (node: Node, inRangi = false): void => {
     addThemeVariables(child as Node, rangi)
 }
 
-export const normalizeRangiThemeVariables = (document: MarkdownDocument): MarkdownDocument => {
+export function normalizeRangiThemeVariables(document: MarkdownDocument): MarkdownDocument {
   for (const node of document.nodes)
     addThemeVariables(node)
   return document

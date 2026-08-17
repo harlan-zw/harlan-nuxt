@@ -1,8 +1,8 @@
+import { defineEventHandler } from '#imports'
 import { createSurroundings } from '../../core/navigation'
 import { parseSurroundingsRequest } from '../../shared/protocol'
 import { sendCacheableContent } from '../cache'
 import { loadNavigationCollection } from '../storage'
-import { defineEventHandler } from '#imports'
 
 export default defineEventHandler(async (event) => {
   const node = event.node

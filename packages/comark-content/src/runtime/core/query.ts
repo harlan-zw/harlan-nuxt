@@ -3,16 +3,16 @@ import type { IndexedContentDocument, PageCollectionItemBase } from '../types'
 export type QueryOperator = '=' | '<>' | 'LIKE' | 'IS NULL'
 export type QueryDirection = 'ASC' | 'DESC'
 
-export type QueryOperation =
-  | { _tag: 'Path', value: string }
-  | { _tag: 'Where', field: string, operator: QueryOperator, value?: unknown }
-  | { _tag: 'Order', field: string, direction: QueryDirection }
-  | { _tag: 'Limit', value: number }
-  | { _tag: 'Select', fields: string[] }
+export type QueryOperation
+  = | { _tag: 'Path', value: string }
+    | { _tag: 'Where', field: string, operator: QueryOperator, value?: unknown }
+    | { _tag: 'Order', field: string, direction: QueryDirection }
+    | { _tag: 'Limit', value: number }
+    | { _tag: 'Select', fields: string[] }
 
-export type QueryPlan = { operations: QueryOperation[] }
+export interface QueryPlan { operations: QueryOperation[] }
 
-export type CollectionQuery<TItem extends Record<string, unknown>> = {
+export interface CollectionQuery<TItem extends Record<string, unknown>> {
   path: (path: string) => CollectionQuery<TItem>
   where: (field: string, operator: QueryOperator, value?: unknown) => CollectionQuery<TItem>
   order: (field: string, direction?: QueryDirection) => CollectionQuery<TItem>
@@ -26,7 +26,7 @@ const fieldValue = (item: Record<string, unknown>, field: string) => field.split
 
 const likePattern = (value: unknown) => new RegExp(`^${String(value).replaceAll(/[|\\{}()[\]^$+?.]/g, '\\$&').replaceAll('%', '.*').replaceAll('_', '.')}$`, 'i')
 
-const matches = (item: Record<string, unknown>, operation: Extract<QueryOperation, { _tag: 'Where' }>) => {
+function matches(item: Record<string, unknown>, operation: Extract<QueryOperation, { _tag: 'Where' }>) {
   const value = fieldValue(item, operation.field)
   if (operation.operator === '=')
     return value === operation.value
@@ -37,7 +37,7 @@ const matches = (item: Record<string, unknown>, operation: Extract<QueryOperatio
   return likePattern(operation.value).test(String(value ?? ''))
 }
 
-const compare = (left: unknown, right: unknown) => {
+function compare(left: unknown, right: unknown) {
   if (left === right)
     return 0
   if (left === null || left === undefined)
@@ -49,7 +49,7 @@ const compare = (left: unknown, right: unknown) => {
     : String(left).localeCompare(String(right))
 }
 
-export const executeQueryPlan = <TItem extends Record<string, unknown>>(items: TItem[], plan: QueryPlan): TItem[] => {
+export function executeQueryPlan<TItem extends Record<string, unknown>>(items: TItem[], plan: QueryPlan): TItem[] {
   let result = [...items]
   const filters = plan.operations.filter((operation): operation is Extract<QueryOperation, { _tag: 'Where' | 'Path' }> => operation._tag === 'Where' || operation._tag === 'Path')
   for (const filter of filters) {
@@ -77,9 +77,7 @@ export const executeQueryPlan = <TItem extends Record<string, unknown>>(items: T
   return result
 }
 
-export const createQueryBuilder = <TItem extends Record<string, unknown>>(
-  execute: (plan: QueryPlan) => Promise<TItem[]>,
-): CollectionQuery<TItem> => {
+export function createQueryBuilder<TItem extends Record<string, unknown>>(execute: (plan: QueryPlan) => Promise<TItem[]>): CollectionQuery<TItem> {
   const operations: QueryOperation[] = []
   const builder: CollectionQuery<TItem> = {
     path(value) {
@@ -110,14 +108,12 @@ export const createQueryBuilder = <TItem extends Record<string, unknown>>(
 
 export const createCollectionQuery = <TItem extends Record<string, unknown>>(items: TItem[]) => createQueryBuilder<TItem>(async plan => executeQueryPlan(items, plan))
 
-const usesBodyForPlanning = (operation: QueryOperation) => (operation._tag === 'Where' || operation._tag === 'Order')
-  && (operation.field === 'body' || operation.field.startsWith('body.'))
+function usesBodyForPlanning(operation: QueryOperation) {
+  return (operation._tag === 'Where' || operation._tag === 'Order')
+    && (operation.field === 'body' || operation.field.startsWith('body.'))
+}
 
-export const executeIndexedQueryPlan = async <TItem extends PageCollectionItemBase>(
-  index: IndexedContentDocument<TItem>[],
-  plan: QueryPlan,
-  loadBody: (bodyAsset: string) => Promise<TItem['body']>,
-): Promise<TItem[]> => {
+export async function executeIndexedQueryPlan<TItem extends PageCollectionItemBase>(index: IndexedContentDocument<TItem>[], plan: QueryPlan, loadBody: (bodyAsset: string) => Promise<TItem['body']>): Promise<TItem[]> {
   if (plan.operations.some(usesBodyForPlanning))
     throw new TypeError('<request>:1:1 Markdown body fields cannot filter or order a collection query.')
   const select = plan.operations.findLast((operation): operation is Extract<QueryOperation, { _tag: 'Select' }> => operation._tag === 'Select')
@@ -139,7 +135,6 @@ export const executeIndexedQueryPlan = async <TItem extends PageCollectionItemBa
     : hydrated
 }
 
-export const createIndexedCollectionQuery = <TItem extends PageCollectionItemBase>(
-  index: IndexedContentDocument<TItem>[],
-  loadBody: (bodyAsset: string) => Promise<TItem['body']>,
-) => createQueryBuilder<TItem>(plan => executeIndexedQueryPlan(index, plan, loadBody))
+export function createIndexedCollectionQuery<TItem extends PageCollectionItemBase>(index: IndexedContentDocument<TItem>[], loadBody: (bodyAsset: string) => Promise<TItem['body']>) {
+  return createQueryBuilder<TItem>(plan => executeIndexedQueryPlan(index, plan, loadBody))
+}

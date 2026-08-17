@@ -1,21 +1,21 @@
-import type { Component, VNode, VNodeChild } from 'vue'
 import type { Node } from 'comark'
+import type { Component, VNode, VNodeChild } from 'vue'
 import { createCommentVNode, h } from 'vue'
 import { htmlTags } from './names'
 
-type RenderOptions = {
+interface RenderOptions {
   source: string
   unwrap?: string[]
   resolveTag?: (tag: string) => string | Component
 }
 
-const scalarProperty = (value: unknown) => {
+function scalarProperty(value: unknown) {
   if (typeof value !== 'string' || !/^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(value))
     return value
   return JSON.parse(value)
 }
 
-const componentProps = (node: Exclude<Node, string>, attributes: Record<string, unknown>, options: RenderOptions, nativeTag: boolean) => {
+function componentProps(node: Exclude<Node, string>, attributes: Record<string, unknown>, options: RenderOptions, nativeTag: boolean) {
   const props: Record<string, unknown> = { __node: node }
   for (const [name, value] of Object.entries(attributes)) {
     if (!name.startsWith(':')) {
@@ -37,7 +37,7 @@ const componentProps = (node: Exclude<Node, string>, attributes: Record<string, 
   return props
 }
 
-const renderNode = (node: Node, options: RenderOptions, key: string, parentTag?: string): VNodeChild => {
+function renderNode(node: Node, options: RenderOptions, key: string, parentTag?: string): VNodeChild {
   if (typeof node === 'string')
     return node
   if (node[0] === null)
@@ -74,7 +74,7 @@ const renderNode = (node: Node, options: RenderOptions, key: string, parentTag?:
   return h(resolved, { ...componentProps(node, props, options, htmlTags.has(tag)), key }, slots)
 }
 
-export const renderNodes = (nodes: readonly Node[], options: RenderOptions): VNodeChild[] => {
+export function renderNodes(nodes: readonly Node[], options: RenderOptions): VNodeChild[] {
   const unwrap = new Set(options.unwrap)
   return nodes.flatMap((node, index) => {
     if (typeof node !== 'string' && node[0] && unwrap.has(node[0]))
@@ -83,6 +83,8 @@ export const renderNodes = (nodes: readonly Node[], options: RenderOptions): VNo
   })
 }
 
-export const renderContentRoot = (nodes: VNodeChild[], attributes: Record<string, unknown>): VNode | VNodeChild[] => Object.keys(attributes).length
-  ? h('div', attributes, nodes)
-  : nodes
+export function renderContentRoot(nodes: VNodeChild[], attributes: Record<string, unknown>): VNode | VNodeChild[] {
+  return Object.keys(attributes).length
+    ? h('div', attributes, nodes)
+    : nodes
+}

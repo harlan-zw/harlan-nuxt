@@ -10,7 +10,7 @@ import { writeFixture } from './fixtures'
 const exec = promisify(execFile)
 const temporaryRoots: string[] = []
 
-const temporaryRoot = async () => {
+async function temporaryRoot() {
   const root = await mkdtemp(join(tmpdir(), 'comark-content-remote-'))
   temporaryRoots.push(root)
   return root

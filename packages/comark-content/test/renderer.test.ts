@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
 import type { Node } from 'comark'
 import type { VNode } from 'vue'
+import { describe, expect, it } from 'vitest'
 import { componentCandidates, componentMatchesTag } from '../src/runtime/components/names'
 import { renderContentRoot, renderNodes } from '../src/runtime/components/render'
 
-describe('Comark rendering', () => {
+describe('comark rendering', () => {
   it('renders direct nodes and removes internal source attributes', () => {
     const nodes: Node[] = [['p', { class: 'lead', $: { line: 4 } }, 'Hello ', ['strong', {}, 'world']]]
     const rendered = renderNodes(nodes, { source: '/content/page.md' })
@@ -82,7 +82,7 @@ describe('Comark rendering', () => {
 
   it('preserves static HTML attributes when Comark marks them as bound', () => {
     const proseLink = { name: 'ProseA' }
-    const node: Node = ['a', { href: 'https://example.com', ':target': '_blank' }, 'Example']
+    const node: Node = ['a', { 'href': 'https://example.com', ':target': '_blank' }, 'Example']
     const [rendered] = renderNodes([node], { source: '/content/page.md', resolveTag: () => proseLink }) as VNode[]
 
     expect(rendered?.props).toMatchObject({ href: 'https://example.com', target: '_blank' })
@@ -93,7 +93,7 @@ describe('Comark rendering', () => {
     const node: Node = ['study-iceberg', { 'ui-rows': '1000', 'hidden-pct': '27.5', 'compact': 'true', 'label': 'Rows' }]
     const [rendered] = renderNodes([node], { source: '/content/page.md', resolveTag: () => widget }) as VNode[]
 
-    expect(rendered?.props).toMatchObject({ 'ui-rows': 1000, 'hidden-pct': 27.5, compact: true, label: 'Rows' })
+    expect(rendered?.props).toMatchObject({ 'ui-rows': 1000, 'hidden-pct': 27.5, 'compact': true, 'label': 'Rows' })
   })
 
   it('renders an inline head reference as text', () => {

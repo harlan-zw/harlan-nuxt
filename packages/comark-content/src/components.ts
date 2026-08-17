@@ -1,53 +1,56 @@
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { componentCandidates, componentMatchesTag } from './runtime/components/names'
 
-type NuxtLayer = { config?: { srcDir?: string, dir?: { app?: string } } }
+interface NuxtLayer { config?: { srcDir?: string, dir?: { app?: string } } }
 
-export const contentComponentDirectories = (layers: ReadonlyArray<NuxtLayer>) => [...layers]
-  .reverse()
-  .flatMap((layer) => {
-    const srcDir = layer.config?.srcDir
-    if (!srcDir)
-      return []
-    const appDir = layer.config?.dir?.app ?? 'app'
-    return [
-      join(srcDir, appDir, 'components/content'),
-      join(srcDir, 'components/content'),
-    ]
-  })
+export function contentComponentDirectories(layers: ReadonlyArray<NuxtLayer>) {
+  return [...layers]
+    .reverse()
+    .flatMap((layer) => {
+      const srcDir = layer.config?.srcDir
+      if (!srcDir)
+        return []
+      const appDir = layer.config?.dir?.app ?? 'app'
+      return [
+        join(srcDir, appDir, 'components/content'),
+        join(srcDir, 'components/content'),
+      ]
+    })
+}
 
-export type ScannedComponent = {
+export interface ScannedComponent {
   pascalName: string
   filePath: string
   export?: string
   global?: boolean | 'sync'
 }
 
-const kebabCase = (value: string) => value
-  .replaceAll(/([a-z\d])([A-Z])/g, '$1-$2')
-  .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
-  .toLowerCase()
+function kebabCase(value: string) {
+  return value
+    .replaceAll(/([a-z\d])([A-Z])/g, '$1-$2')
+    .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase()
+}
 
-const isWithin = (directory: string, filePath: string) => {
+function isWithin(directory: string, filePath: string) {
   const path = relative(directory, filePath)
   return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path)
 }
 
-export const localizeNuxtUiProseComponents = <T extends ScannedComponent>(components: ReadonlyArray<T>): T[] => components.map(component => component.filePath
-  .replaceAll('\\', '/')
-  .includes('/@nuxt/ui/dist/runtime/components/prose/')
-  ? { ...component, global: false }
-  : component)
+export function localizeNuxtUiProseComponents<T extends ScannedComponent>(components: ReadonlyArray<T>): T[] {
+  return components.map(component => component.filePath
+    .replaceAll('\\', '/')
+    .includes('/@nuxt/ui/dist/runtime/components/prose/')
+    ? { ...component, global: false }
+    : component)
+}
 
-export type SelectedContentComponent = {
+export interface SelectedContentComponent {
   tag: string
   component: ScannedComponent
 }
 
-export const selectContentComponents = (
-  tags: ReadonlySet<string>,
-  scannedComponents: ReadonlyArray<ScannedComponent>,
-): SelectedContentComponent[] => {
+export function selectContentComponents(tags: ReadonlySet<string>, scannedComponents: ReadonlyArray<ScannedComponent>): SelectedContentComponent[] {
   const components = new Map(scannedComponents.map(component => [component.pascalName, component]))
   return [...tags].sort().flatMap((tag) => {
     const component = componentCandidates(tag).map(name => components.get(name)).find(Boolean)
@@ -56,10 +59,7 @@ export const selectContentComponents = (
   })
 }
 
-export const addUnprefixedContentAliases = <T extends ScannedComponent & { kebabName: string }>(
-  components: ReadonlyArray<T>,
-  directories: ReadonlyArray<string>,
-): T[] => {
+export function addUnprefixedContentAliases<T extends ScannedComponent & { kebabName: string }>(components: ReadonlyArray<T>, directories: ReadonlyArray<string>): T[] {
   const names = new Set(components.map(component => component.pascalName))
   return components.flatMap((component) => {
     if (!component.pascalName.startsWith('Content') || !directories.some(directory => isWithin(directory, component.filePath)))
@@ -72,11 +72,7 @@ export const addUnprefixedContentAliases = <T extends ScannedComponent & { kebab
   })
 }
 
-export const renderComponentManifest = (
-  tags: ReadonlySet<string>,
-  scannedComponents: ReadonlyArray<ScannedComponent>,
-  templateDir: string,
-) => {
+export function renderComponentManifest(tags: ReadonlySet<string>, scannedComponents: ReadonlyArray<ScannedComponent>, templateDir: string) {
   const selected = selectContentComponents(tags, scannedComponents)
   const imports = selected.map(({ component }, index) => {
     const importPath = isAbsolute(component.filePath)
