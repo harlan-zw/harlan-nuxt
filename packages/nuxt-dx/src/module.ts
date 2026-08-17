@@ -111,6 +111,17 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
   }
 }
 
+/**
+ * What paths in the report are relative to. The workspace root rather than the app root,
+ * because a monorepo app registers plugins and middleware from sibling layers and workspace
+ * packages that sit above it: relative to the app those stay absolute, and a report full of
+ * absolute paths only ever compares against a build on the same machine at the same prefix.
+ * Nuxt falls `workspaceDir` back to `rootDir` for a standalone app, where the two agree.
+ */
+function reportBaseDir(nuxt: Nuxt): string {
+  return nuxt.options.workspaceDir || nuxt.options.rootDir
+}
+
 async function readPluginName(src: string, nuxt: Nuxt): Promise<string | undefined> {
   const virtual = nuxt.vfs[src]
   if (virtual !== undefined)
@@ -143,7 +154,7 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
     if (!over.length)
       return
 
-    const report = formatBudgetReport(scope, over, nuxt.options.rootDir)
+    const report = formatBudgetReport(scope, over, reportBaseDir(nuxt))
     if (budgets.fail)
       throw new Error(`[nuxt-dx] ${report}`)
     logger.warn(report)
@@ -200,7 +211,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
 
   const writeSnapshot = reportPath === undefined
     ? undefined
-    : createSnapshotWriter(resolve(nuxt.options.rootDir, reportPath), nuxt.options.rootDir)
+    : createSnapshotWriter(resolve(nuxt.options.rootDir, reportPath), reportBaseDir(nuxt))
   /**
    * Every measurement is recorded, then judged. The report covers the whole build so
    * a later run can diff it, and it is written before the verdict so a failing budget

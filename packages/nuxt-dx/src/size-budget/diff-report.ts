@@ -45,14 +45,17 @@ function verdict(diff: SnapshotDiff): string {
 }
 
 /**
- * Nothing to compare against, which is the normal state of the first run on a branch and
- * of a branch whose baseline artifact has expired. Said out loud rather than passed over.
+ * Nothing to compare against, which is the normal state of the first run on a branch,
+ * of a branch whose baseline artifact has expired, and of the first run after the report
+ * format changed. Said out loud rather than passed over.
  */
-export function formatMissingBaselineMarkdown(path: string): string {
+export function formatMissingBaselineMarkdown(path: string, reason?: string): string {
   return [
     '### Bundle size budget',
     '',
-    `No baseline report was found at \`${path}\`, so there is nothing to compare this build against.`,
+    reason === undefined
+      ? `No baseline report was found at \`${path}\`, so there is nothing to compare this build against.`
+      : `The baseline report at \`${path}\` cannot be read, so there is nothing to compare this build against. ${reason}`,
     '',
     'This run leaves its own report behind, which the next one can measure against.',
   ].join('\n')

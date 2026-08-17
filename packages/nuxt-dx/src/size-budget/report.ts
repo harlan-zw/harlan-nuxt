@@ -5,37 +5,47 @@ import { colors, formatTree } from 'consola/utils'
 import { SCOPE } from './scope'
 import { formatBytes } from './size'
 
-/** Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a warning. */
-export function displayId(id: string, rootDir: string): string {
+/**
+ * Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a
+ * warning, and an absolute path pins a report to the machine that wrote it.
+ *
+ * `baseDir` is the workspace root, not the app root, because a monorepo app registers
+ * runtime entries from sibling layers and workspace packages that sit above it. Stripping
+ * only the app root leaves those entries absolute, and two checkouts at different prefixes
+ * then pair with nothing: every entry reads as added, every baseline entry as removed.
+ * Anything outside the workspace keeps its absolute path, which is honest about being
+ * machine-specific and stays a substring of the path an override fragment matches against.
+ */
+export function displayId(id: string, baseDir: string): string {
   const normalized = id.replace(/\\/g, '/').replace(/^\0/, '').split('?')[0]!
-  const root = `${rootDir.replace(/\\/g, '/').replace(/\/$/, '')}/`
-  const relative = normalized.startsWith(root) ? normalized.slice(root.length) : normalized
+  const base = `${baseDir.replace(/\\/g, '/').replace(/\/$/, '')}/`
+  const relative = normalized.startsWith(base) ? normalized.slice(base.length) : normalized
   const fromPackages = relative.lastIndexOf('node_modules/')
   return fromPackages === -1 ? relative : relative.slice(fromPackages + 'node_modules/'.length)
 }
 
 /** The key that would widen this budget: the name when there is one, otherwise the file. */
-function overrideKey(verdict: BudgetVerdict, rootDir: string): string {
-  return verdict.name ?? displayId(verdict.path, rootDir)
+function overrideKey(verdict: BudgetVerdict, baseDir: string): string {
+  return verdict.name ?? displayId(verdict.path, baseDir)
 }
 
-function overrideSnippet(over: readonly BudgetVerdict[], rootDir: string): string {
+function overrideSnippet(over: readonly BudgetVerdict[], baseDir: string): string {
   const entries = over.map((verdict) => {
     // Round up to the next whole kB so the suggested budget actually clears the current size.
     const kilobytes = Math.ceil(verdict.measurement.totalBytes / 1024)
-    return `'${overrideKey(verdict, rootDir)}': ${kilobytes}`
+    return `'${overrideKey(verdict, baseDir)}': ${kilobytes}`
   })
   return `nuxtDx.sizeBudget.overridesKb = { ${entries.join(', ')} }`
 }
 
 /** Every byte charged to the target, so the listed sizes always sum to the reported total. */
-function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string): TreeItem[] {
+function breakdown(scope: BudgetScope, verdict: BudgetVerdict, baseDir: string): TreeItem[] {
   const { ownBytes, exclusiveBytes, exclusiveCount, heaviestDependencies } = verdict.measurement
   const rows: { bytes: number, label: string, muted: boolean }[] = [
     { bytes: ownBytes, label: SCOPE[scope].own, muted: true },
     ...heaviestDependencies.map(dependency => ({
       bytes: dependency.bytes,
-      label: displayId(dependency.id, rootDir),
+      label: displayId(dependency.id, baseDir),
       muted: false,
     })),
   ]
@@ -53,27 +63,27 @@ function breakdown(scope: BudgetScope, verdict: BudgetVerdict, rootDir: string):
   }))
 }
 
-export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerdict[], rootDir: string): string {
+export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerdict[], baseDir: string): string {
   const { noun, plural, bundle } = SCOPE[scope]
   const lines = [`${over.length} ${over.length === 1 ? noun : plural} over budget in the ${bundle} bundle`]
 
   for (const verdict of over) {
     const { name, owner, path, budgetBytes, measurement } = verdict
-    const file = displayId(path, rootDir)
+    const file = displayId(path, baseDir)
     const overshoot = formatBytes(measurement.totalBytes - budgetBytes)
     const label = name && name !== file ? `${colors.bold(name)}  ${colors.dim(file)}` : colors.bold(name ?? file)
     lines.push(
       '',
       `  ${label}${owner === undefined ? '' : colors.dim(`  Nuxt module: ${owner}`)}`,
       `  ${formatBytes(measurement.totalBytes)} bundled, ${colors.red(`${overshoot} over`)} the ${formatBytes(budgetBytes)} budget`,
-      formatTree(breakdown(scope, verdict, rootDir), { prefix: '    ' }).trimEnd(),
+      formatTree(breakdown(scope, verdict, baseDir), { prefix: '    ' }).trimEnd(),
     )
   }
 
   lines.push(
     '',
     colors.dim('  Defer heavy imports with `await import()`, or allow the size:'),
-    `    ${colors.cyan(overrideSnippet(over, rootDir))}`,
+    `    ${colors.cyan(overrideSnippet(over, baseDir))}`,
   )
   return lines.join('\n')
 }
