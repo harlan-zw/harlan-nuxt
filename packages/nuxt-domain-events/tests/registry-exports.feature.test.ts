@@ -12,9 +12,10 @@ describe('generated registry exports', () => {
   it('re-exports every function the runtime provides', () => {
     const registry = createGeneratedEventRegistry({ manifestHash: 'hash', events: [], listeners: [] })
     const runtime = createGeneratedEventRuntime(registry, { observe: () => {}, observerFallback: () => {} })
-    const provided = Object.keys(runtime).filter(key => typeof (runtime as Record<string, unknown>)[key] === 'function')
+    const entries = runtime as unknown as Record<string, unknown>
+    const provided = Object.keys(entries).filter(key => typeof entries[key] === 'function')
 
-    const rendered = renderEventRegistry({ manifestHash: 'hash', events: [], listeners: [] })
+    const rendered = renderEventRegistry({ manifestHash: 'hash', events: [], listeners: [], allowExternalEvents: false })
     const exported = [...rendered.matchAll(/export const (\w+) = runtime\.\w+/g)].map(match => match[1])
 
     expect(exported.toSorted()).toEqual(provided.toSorted())
