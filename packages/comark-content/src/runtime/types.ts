@@ -15,16 +15,12 @@ export interface PageCollectionItemBase {
   layout?: string
   prose?: boolean
   breadcrumbs?: boolean
-  h1?: boolean
-  wide?: boolean
   icon?: string
   image?: string
-  status?: string
   publishedAt?: string
   updatedAt?: string
   keywords?: string[]
   relatedPages?: Array<{ path: string, title: string }>
-  newsletter?: boolean
   tags?: string[]
   new?: boolean
   deprecated?: boolean
@@ -34,6 +30,11 @@ export interface PageCollectionItemBase {
   seo?: Record<string, unknown>
   _source: string
   [key: string]: unknown
+}
+
+export interface ContentCollectionManifestEntry {
+  name: string
+  sitemap: boolean
 }
 
 export interface ContentDocumentMetadata {

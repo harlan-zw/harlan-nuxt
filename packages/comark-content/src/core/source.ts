@@ -102,3 +102,13 @@ export async function scanSource(source: ResolvedSource) {
   await visit(source.cwd)
   return files.sort((left, right) => left.key.localeCompare(right.key))
 }
+
+const markdownWatchEvents = new Set(['add', 'change', 'unlink'])
+
+/**
+ * Reports whether a watcher event changed a Markdown file.
+ * Added and deleted files count, so a rebuild needs no restart.
+ */
+export function isMarkdownWatchEvent(event: string, path: string): boolean {
+  return markdownWatchEvents.has(event) && path.endsWith('.md')
+}

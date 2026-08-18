@@ -5,7 +5,7 @@ const storage = createContentStorage(path => useStorage('assets:comark-content')
 
 export const loadCollection = storage.loadCollection
 export const loadCollectionIndex = storage.loadCollectionIndex
-export const loadCollectionNames = storage.loadCollectionNames
+export const loadCollectionManifest = storage.loadCollectionManifest
 export const loadDocumentBody = storage.loadDocumentBody
 export const loadNavigationCollection = storage.loadNavigationCollection
 export const loadSearchSections = storage.loadSearchSections

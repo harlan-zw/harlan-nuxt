@@ -1,4 +1,4 @@
-import type { ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../types'
+import type { ContentCollectionManifestEntry, ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../types'
 import { decodeCollectionAsset } from './asset'
 
 export type ContentAssetReader = (path: string) => Promise<Uint8Array | null | undefined>
@@ -43,6 +43,6 @@ export function createContentStorage(readAsset: ContentAssetReader) {
       items.push({ ...item.metadata, body: await loadDocumentBody(name, item.bodyAsset) })
     return items
   }
-  const loadCollectionNames = () => loadAsset<string[]>('collections', '<request>:1:1 Missing generated collection metadata.')
-  return { loadCollection, loadCollectionIndex, loadCollectionNames, loadDocumentBody, loadNavigationCollection, loadSearchSections }
+  const loadCollectionManifest = () => loadAsset<ContentCollectionManifestEntry[]>('collections', '<request>:1:1 Missing generated collection metadata.')
+  return { loadCollection, loadCollectionIndex, loadCollectionManifest, loadDocumentBody, loadNavigationCollection, loadSearchSections }
 }
