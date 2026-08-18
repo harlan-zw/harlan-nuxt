@@ -202,6 +202,7 @@ export function renderEventRegistry(plan: EventRegistryBuildPlan): string {
     'const runtime = createGeneratedEventRuntime(registry, { observe: observeEventListener, observerFallback: observeEventListenerFallback })',
     'export { runtime }',
     'export const dispatchEvent = runtime.dispatchEvent',
+    'export const dispatchEventAndDrain = runtime.dispatchEventAndDrain',
     'export const planEvent = runtime.planEvent',
     'export const commitEventPlan = runtime.commitEventPlan',
     'export const deliverQueuedListener = runtime.deliverQueuedListener',
