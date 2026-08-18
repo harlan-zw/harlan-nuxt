@@ -1,4 +1,4 @@
-import type { PublicGitHubSponsor, SponsorCollection, SponsorOverride, SponsorTier } from '../shared/types'
+import type { GitHubSponsorsErrorTag, GitHubSponsorsResponse, PublicGitHubSponsor, SponsorCollection, SponsorOverride, SponsorTier, SponsorTierKey } from '../shared/types'
 import { z } from 'zod'
 
 const GitHubSponsorsResponseSchema = z.object({
@@ -52,7 +52,7 @@ const SPONSORS_QUERY = `
   }
 `
 
-interface SourceSponsorship {
+export interface SourceSponsorship {
   monthlyDollars: number
   privacyLevel: string
   sponsor: {
@@ -65,7 +65,7 @@ interface SourceSponsorship {
 }
 
 export interface GitHubSponsorsFetchError extends Error {
-  _tag: 'NetworkError' | 'HttpError' | 'InvalidResponse' | 'GraphQLError' | 'UserNotFound' | 'PaginationError'
+  _tag: GitHubSponsorsErrorTag
   status?: number
 }
 
@@ -73,9 +73,37 @@ type GitHubSponsorsFetchResult
   = | { _tag: 'ok', value: SourceSponsorship[] }
     | { _tag: 'err', error: GitHubSponsorsFetchError }
 
+export interface PreparedSponsors {
+  collection: SponsorCollection
+  /** Override keys that matched no sponsor. Each one is a silent no-op. */
+  unmatchedOverrides: string[]
+}
+
 export type SponsorFeedResult
-  = | { _tag: 'available', collection: SponsorCollection }
-    | { _tag: 'unavailable', reason: 'not-configured' | 'upstream-error', errorTag?: GitHubSponsorsFetchError['_tag'] }
+  = | { _tag: 'available', collection: SponsorCollection, unmatchedOverrides: string[] }
+    | { _tag: 'unavailable', reason: 'not-configured' }
+    | { _tag: 'unavailable', reason: 'upstream-error', errorTag: GitHubSponsorsErrorTag }
+
+export type SponsorshipsResult
+  = { _tag: 'ok', sponsorships: SourceSponsorship[] }
+    | { _tag: 'err', errorTag: GitHubSponsorsErrorTag }
+
+/**
+ * The upstream call on its own. Tier grouping and overrides stay out, so a
+ * cached result survives a tier rename.
+ */
+export async function fetchGitHubSponsorships(input: {
+  token: string
+  login: string
+  fetch?: typeof fetch
+  timeoutMs?: number
+  userAgent?: string
+}): Promise<SponsorshipsResult> {
+  const result = await fetchActiveGitHubSponsors(input)
+  return result._tag === 'ok'
+    ? { _tag: 'ok', sponsorships: result.value }
+    : { _tag: 'err', errorTag: result.error._tag }
+}
 
 export async function fetchGitHubSponsorFeed(input: {
   token?: string
@@ -89,10 +117,27 @@ export async function fetchGitHubSponsorFeed(input: {
   const token = input.token?.trim()
   if (!token)
     return { _tag: 'unavailable', reason: 'not-configured' }
-  const result = await fetchActiveGitHubSponsors({ ...input, token })
-  return result._tag === 'ok'
-    ? { _tag: 'available', collection: preparePublicSponsors(result.value, input.tiers, input.overrides) }
-    : { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.error._tag }
+  const result = await fetchGitHubSponsorships({ ...input, token })
+  if (result._tag === 'err')
+    return { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag }
+  const prepared = preparePublicSponsors(result.sponsorships, input.tiers, input.overrides)
+  return { _tag: 'available', collection: prepared.collection, unmatchedOverrides: prepared.unmatchedOverrides }
+}
+
+/**
+ * An upstream failure is a state, never a thrown 502. A prerender with
+ * failOnError then keeps building, and every consumer branches once.
+ */
+export function toGitHubSponsorsResponse(
+  result: SponsorFeedResult,
+  fallback: SponsorCollection,
+  fetchedAt: string,
+): GitHubSponsorsResponse {
+  if (result._tag === 'available')
+    return { _tag: 'available', fetchedAt, ...result.collection }
+  if (result.reason === 'upstream-error')
+    return { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag, ...fallback }
+  return { _tag: 'unavailable', reason: 'not-configured', ...fallback }
 }
 
 async function fetchActiveGitHubSponsors(input: {
@@ -174,13 +219,19 @@ export function preparePublicSponsors(
   sponsorships: readonly SourceSponsorship[],
   tiers: readonly SponsorTier[],
   overrides: Readonly<Record<string, SponsorOverride>> = {},
-): SponsorCollection {
+): PreparedSponsors {
   const sortedTiers = [...tiers].toSorted((a, b) => b.minimumMonthlyDollars - a.minimumMonthlyDollars)
-  const groups = Object.fromEntries(sortedTiers.map(tier => [tier.key, [] as PublicGitHubSponsor[]]))
+  const groups = Object.fromEntries(sortedTiers.map(tier => [tier.key, [] as PublicGitHubSponsor[]])) as SponsorCollection['tiers']
+  const matchedOverrides = new Set<string>()
   const sponsors = sponsorships
     .filter(sponsorship => sponsorship.privacyLevel === 'PUBLIC')
     .map((sponsorship) => {
-      const override = overrides[sponsorship.sponsor.login] ?? overrides[sponsorship.sponsor.name]
+      const overrideKey = sponsorship.sponsor.login in overrides
+        ? sponsorship.sponsor.login
+        : sponsorship.sponsor.name in overrides ? sponsorship.sponsor.name : undefined
+      if (overrideKey !== undefined)
+        matchedOverrides.add(overrideKey)
+      const override = overrideKey === undefined ? undefined : overrides[overrideKey]
       const websiteUrl = override && 'websiteUrl' in override
         ? normalizeWebsiteUrl(override.websiteUrl ?? null)
         : normalizeWebsiteUrl(sponsorship.sponsor.websiteUrl)
@@ -197,11 +248,14 @@ export function preparePublicSponsors(
   for (const sponsorship of sponsors) {
     const tier = sortedTiers.find(candidate => sponsorship.monthlyDollars >= candidate.minimumMonthlyDollars)
     if (tier)
-      groups[tier.key]!.push(sponsorship)
+      groups[tier.key as SponsorTierKey]!.push(sponsorship)
     else
       ungrouped.push(sponsorship)
   }
-  return { sponsors, tiers: groups, ungrouped }
+  return {
+    collection: { sponsors, tiers: groups, ungrouped },
+    unmatchedOverrides: Object.keys(overrides).filter(key => !matchedOverrides.has(key)),
+  }
 }
 
 function normalizeWebsiteUrl(value: string | null): string | null {
