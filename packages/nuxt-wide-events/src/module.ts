@@ -22,10 +22,19 @@ declare module '@nuxt/schema' {
   }
 }
 
+const STANDALONE_EXPORT = '@harlan-zw/nuxt-wide-events/standalone'
+
 interface NitroConfigLike {
   alias?: Record<string, string>
   rollupConfig?: {
     plugins?: ReturnType<typeof createWideEventValidationPlugin>[]
+  }
+  typescript?: {
+    tsConfig?: {
+      compilerOptions?: {
+        paths?: Record<string, string[]>
+      }
+    }
   }
 }
 
@@ -41,12 +50,12 @@ export default defineNuxtModule<ModuleOptions>({
     enabled: true,
     request: true,
     fields: [],
-    console: true,
     drain: false,
   },
   setup(options, nuxt) {
-    if (!options.enabled)
-      return
+    // A disabled module keeps every server import, so `addWideEventFields` and
+    // `createWideEvent` still resolve. It stops output instead.
+    const enabled = options.enabled ?? true
 
     // Resolved at `modules:done`, not here, so a module contributing fields
     // through `addWideEventFields` is treated the same whether it sets up
@@ -68,7 +77,9 @@ export default defineNuxtModule<ModuleOptions>({
         fields.add(field)
       addWideEventTypes(resolvedFields.fields)
     })
-    const runtimeConfig = resolveWideEventsRuntimeConfig(options)
+    const runtimeConfig = resolveWideEventsRuntimeConfig(enabled
+      ? options
+      : { ...options, console: false, drain: false })
     const configTemplate = addTemplate({
       filename: 'wide-events/config.mjs',
       write: true,
@@ -82,25 +93,30 @@ export default defineNuxtModule<ModuleOptions>({
     nitro.rollupConfig.plugins ||= []
     nitro.rollupConfig.plugins.push(createWideEventValidationPlugin(nuxt.options.rootDir, fields))
 
-    if (options.request ?? true) {
+    if (enabled && (options.request ?? true)) {
       addServerPlugin(resolver.resolve(nuxt.options.dev
         ? './runtime/server/development-plugin'
         : runtimeConfig.exclude || runtimeConfig.sampling
           ? './runtime/server/production-policy-plugin'
           : './runtime/server/production-plugin'))
     }
-    addServerImports({
-      name: 'addWideEventFields',
-      from: resolver.resolve('./runtime/server/index'),
-    })
-    addServerImports({
-      name: 'createWideEvent',
-      from: resolver.resolve(runtimeConfig.drain
-        ? './runtime/server/standalone-drain'
-        : nuxt.options.dev
-          ? './runtime/server/standalone-development'
-          : './runtime/server/standalone-production'),
-    })
+    addServerImports([
+      { name: 'addWideEventFields', from: resolver.resolve('./runtime/server/index') },
+      { name: 'setWideEventLevel', from: resolver.resolve('./runtime/server/index') },
+    ])
+
+    // One implementation inside Nitro. A deep import of `/standalone` would
+    // otherwise drop `service`, `console`, `sampling`, and `drain`.
+    const standalone = resolver.resolve(runtimeConfig.drain
+      ? './runtime/server/standalone-drain'
+      : nuxt.options.dev
+        ? './runtime/server/standalone-development'
+        : './runtime/server/standalone-production')
+    addServerImports({ name: 'createWideEvent', from: standalone })
+    nitro.alias[STANDALONE_EXPORT] = standalone
+    const tsConfig = (nitro.typescript ??= {}).tsConfig ??= {}
+    const compilerOptions = tsConfig.compilerOptions ??= {}
+    ;(compilerOptions.paths ??= {})[STANDALONE_EXPORT] = [standalone]
   },
 })
 
@@ -122,12 +138,11 @@ export {}
   addTypeTemplate({
     filename: 'wide-events/hooks.d.ts',
     getContents: () => `
-import type { WideEventRecord } from '@harlan-zw/nuxt-wide-events/server'
-import type { StandaloneWideEventRecord } from '@harlan-zw/nuxt-wide-events/standalone'
+import type { BackgroundWideEventRecord, WideEventRecord } from '@harlan-zw/nuxt-wide-events/server'
 
 declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
-    'wide-events:emit': (record: StandaloneWideEventRecord | WideEventRecord) => void | Promise<void>
+    'wide-events:emit': (record: BackgroundWideEventRecord | WideEventRecord) => void | Promise<void>
   }
 }
 

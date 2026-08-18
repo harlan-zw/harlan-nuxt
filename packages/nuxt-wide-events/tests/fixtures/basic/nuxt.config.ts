@@ -4,6 +4,7 @@ const measureSize = process.env.NUXT_WIDE_EVENTS_MEASURE === 'true'
 const testPolicy = process.env.NUXT_WIDE_EVENTS_POLICY === 'true'
 const testDrain = process.env.NUXT_WIDE_EVENTS_DRAIN === 'true'
 const standaloneOnly = process.env.NUXT_WIDE_EVENTS_STANDALONE === 'true'
+const disabled = process.env.NUXT_WIDE_EVENTS_DISABLED === 'true'
 
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-13',
@@ -16,6 +17,7 @@ export default defineNuxtConfig({
   ],
   wideEvents: {
     console: !testDrain,
+    enabled: !disabled,
     drain: testDrain,
     fields: ['cache.hit', 'user.id'],
     request: !standaloneOnly,

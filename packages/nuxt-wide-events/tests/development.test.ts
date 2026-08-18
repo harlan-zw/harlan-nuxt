@@ -5,6 +5,7 @@ describe('enrichDevelopmentWideEvent', () => {
   it('adds error details only to a development record', () => {
     const record = {
       'timestamp': 'now',
+      'kind': 'request' as const,
       'level': 'error' as const,
       'method': 'GET',
       'path': '/',
@@ -33,6 +34,7 @@ describe('formatDevelopmentWideEvent', () => {
       try {
         return formatDevelopmentWideEvent({
           timestamp: '2026-08-14T08:28:15.225Z',
+          kind: 'request',
           level: 'info',
           method: 'GET',
           path: '/api/cart',
@@ -59,14 +61,13 @@ describe('formatDevelopmentWideEvent', () => {
     ].join('\n'))
   })
 
-  it('renders developer messages as compact terminal blocks', () => {
+  it('renders a background developer message as a compact terminal block', () => {
     expect(formatDevelopmentWideEvent({
       scope: 'ssr',
       devMessage: 'server fetch completed\n  fetch   : GET /api/_auth/session\n  duration: 16ms\n  request : GET /',
       timestamp: '2026-08-14T08:28:15.225Z',
+      kind: 'background',
       level: 'debug',
-      method: 'UNKNOWN',
-      status: 200,
       durationMs: 0.155,
       requestId: 'req_1',
     }, { colors: false })).toBe([
@@ -81,6 +82,7 @@ describe('formatDevelopmentWideEvent', () => {
   it('renders request metadata and Fields without object inspection noise', () => {
     expect(formatDevelopmentWideEvent({
       'timestamp': '2026-08-14T08:28:15.225Z',
+      'kind': 'request',
       'level': 'warn',
       'service': 'shop',
       'method': 'GET',
@@ -99,6 +101,7 @@ describe('formatDevelopmentWideEvent', () => {
   it('keeps request metadata for unsupported HTTP methods', () => {
     expect(formatDevelopmentWideEvent({
       timestamp: '2026-08-14T08:28:15.225Z',
+      kind: 'request',
       level: 'info',
       method: 'UNKNOWN',
       path: '/webdav/files',

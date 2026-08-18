@@ -5,10 +5,9 @@ declare module '#wide-events/config' {
     exclude?: RegExp
     sampling?: {
       debug?: number
-      duration?: number
       error?: number
       info?: number
-      status?: number
+      keep?: { duration?: number, status?: number }[]
       warn?: number
     }
     service?: string

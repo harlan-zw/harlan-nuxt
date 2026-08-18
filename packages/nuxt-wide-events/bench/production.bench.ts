@@ -160,6 +160,7 @@ function buildRuntimeEvlogEvent() {
 function buildRawEvent(fields: BenchFields) {
   return {
     ...metadata,
+    kind: 'request',
     level: 'info',
     ...fields,
   }
@@ -171,6 +172,7 @@ function buildRuntimeRawEvent() {
   const endedAt = performance.now()
   return {
     timestamp: new Date().toISOString(),
+    kind: 'request',
     level: 'info',
     service: metadata.service,
     method: metadata.method,
@@ -185,6 +187,7 @@ function buildRuntimeRawEvent() {
 function writePinoEvent(fields: BenchFields): void {
   pinoLogger.info({
     ...metadata,
+    kind: 'request',
     ...fields,
   })
 }
@@ -195,6 +198,7 @@ function writeRuntimePinoEvent(): void {
   const endedAt = performance.now()
   pinoLogger.info({
     timestamp: new Date().toISOString(),
+    kind: 'request',
     service: metadata.service,
     method: metadata.method,
     path: metadata.path,
@@ -227,6 +231,7 @@ function buildEvlogErrorEvent() {
 function buildRawErrorEvent() {
   return {
     ...metadata,
+    kind: 'request',
     level: 'error',
     status: ERROR.statusCode,
     ...fields5,
@@ -236,6 +241,7 @@ function buildRawErrorEvent() {
 function writePinoErrorEvent(): void {
   pinoLogger.error({
     ...metadata,
+    kind: 'request',
     status: ERROR.statusCode,
     ...fields5,
   })
