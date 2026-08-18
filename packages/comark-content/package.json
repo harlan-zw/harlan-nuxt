@@ -52,6 +52,7 @@
   "scripts": {
     "bench": "node ./bench/run.mjs",
     "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
+    "bench:warm-ingest": "node ./bench/warm-ingest/run.mjs",
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
     "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
     "lint": "eslint .",
@@ -77,6 +78,7 @@
     "@nuxt/module-builder": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
+    "jiti": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

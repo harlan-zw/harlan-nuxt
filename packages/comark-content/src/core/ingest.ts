@@ -125,6 +125,7 @@ function contentHighlightFingerprint(highlight: ContentHighlight | undefined) {
 
 export async function ingestCollections(loadedCollections: LoadedCollection[], options: IngestionOptions): Promise<Result<IngestionResult>> {
   const cache = await readCache(options.cacheFile)
+  const cachedEntryCount = Object.keys(cache.entries).length
   const nextCache = { version: CACHE_VERSION, entries: {} as typeof cache.entries }
   const collections: Record<string, PageCollectionItemBase[]> = {}
   const sitemapCollections: string[] = []
@@ -224,6 +225,9 @@ export async function ingestCollections(loadedCollections: LoadedCollection[], o
     if (collection.definition.sitemap !== false)
       sitemapCollections.push(collection.name)
   }
-  await writeCache(options.cacheFile, nextCache)
+  // Every entry came back from the cache and none was dropped, so the file on
+  // disk already holds this exact content. Serialising it again writes nothing new.
+  if (parsedFiles > 0 || cachedFiles !== cachedEntryCount)
+    await writeCache(options.cacheFile, nextCache)
   return ok({ collections, sitemapCollections, parsedFiles, cachedFiles, componentTags: [...componentTags].sort() })
 }
