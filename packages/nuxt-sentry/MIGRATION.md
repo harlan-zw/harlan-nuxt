@@ -6,7 +6,19 @@ Every site does the same three things first.
 
 1. `pnpm add @harlan-zw/nuxt-sentry`.
 2. Add `'@harlan-zw/nuxt-sentry'` to `modules`, after `'@sentry/nuxt/module'`.
-3. Delete the `sentry` build option block, the `sourcemap` block and the `runtimeConfig.sentry` block from `nuxt.config.ts`. The module writes all three.
+3. Delete the `sentry` build option block and the `runtimeConfig.sentry` block from `nuxt.config.ts`. The module writes both.
+4. In the `sourcemap` block, delete `client` only. **Keep `sourcemap: { server: false }`.**
+
+The module sets `sourcemap.client` itself when a Sentry auth token is present. It never touches `sourcemap.server`, because `@harlan-zw/nuxt-cloudflare` derives `upload_source_maps` from that key.
+
+Deleting the whole `sourcemap` block restores the Nuxt default, which emits server source maps into the deployed bundle. That is a large upload on every deploy and it ships the server source into the artifact.
+
+```ts
+export default defineNuxtConfig({
+  // Keep this. The module writes `client`; `server` stays yours.
+  sourcemap: { server: false },
+})
+```
 
 ## Deploy workflow fix, four sites
 
@@ -100,6 +112,30 @@ Delete: `sentry.client.config.ts` (16), `shared/sentry.ts` (27), `test/unit/sent
 Keep `sentry.server.config.ts` (13) and rebuild its `beforeSend` from the shared policy. This is the only non Cloudflare site, so the module registers no server plugin for it.
 Edit `nuxt.config.ts`: remove lines 7, 14-15 and 407-429. Keep `autoInjectServerSentry: 'top-level-import'` on the root `sentry` key.
 
+**Read the policy from `#nuxt-sentry/policy`, not from runtime config.** `useRuntimeConfig()` in this file makes the emitted `sentry.server.config.mjs` import the Nitro chunk, so the whole application and `node:http` evaluate before `Sentry.init` and `top-level-import` buys nothing. Measured on this site: 35 imports in the emitted file before, 3 after.
+
+```ts
+import { createBeforeSend, createSentryDataCollection, resolveTracesSampleRate } from '@harlan-zw/nuxt-sentry/server'
+import * as Sentry from '@sentry/nuxt'
+import { nuxtSentry } from '#nuxt-sentry/policy'
+
+if (nuxtSentry.target._tag === 'enabled') {
+  const { target, server: policy } = nuxtSentry
+  // A Node server has no hostname at init, so the host prefix map the browser
+  // uses cannot resolve here. Vercel names the deployment instead.
+  const environment = process.env.VERCEL_ENV === 'production' ? 'production' : 'preview'
+
+  Sentry.init({
+    dsn: target.dsn,
+    environment,
+    ...target.release ? { release: target.release } : {},
+    tracesSampleRate: resolveTracesSampleRate(target.tracesSampleRate, environment),
+    ...policy.dataCollection === 'none' ? { dataCollection: createSentryDataCollection() } : { sendDefaultPii: true },
+    beforeSend: createBeforeSend(policy),
+  })
+}
+```
+
 ```ts
 export default defineNuxtConfig({
   nuxtSentry: {
@@ -117,7 +153,9 @@ Removed: 56 file lines plus about 26 config lines. **82 lines, 3 files.**
 
 Delete: `sentry.client.config.ts` (18), `server/plugins/sentry.ts` (17), `tests/sentry-redaction.test.ts` (40), `tests/sentry-config.test.ts` (53).
 Shrink `shared/sentry.ts` to the `EXPECTED_UPSTREAM_FAILURE` marker and its predicate, about 40 lines. Trim `tests/sentry-filter.test.ts` to that half.
-The redaction becomes `dataCollection: 'scrubbed'`. The `iabjs://` deny entry is now a module default. The stackless manifest filter is covered by the built in stale chunk rules.
+The redaction becomes `dataCollection: 'scrubbed'`. The `iabjs://` deny entry is now a module default.
+
+**The stackless manifest filter is not covered by the built in stale chunk rules.** Those rules match "dynamically imported module"; this failure is `TypeError: Failed to fetch` with an empty frame list. Declare it:
 Edit `nuxt.config.ts`: remove lines 7, 9-10, 159-164 and 506-527.
 
 ```ts
@@ -125,6 +163,12 @@ export default defineNuxtConfig({
   nuxtSentry: {
     dsn: SENTRY_DSN,
     project: 'unlighthouse',
+    policy: {
+      // A manifest fetch that fails offline reaches the global handler with no
+      // stack, so no frame names this site. The same message with a stack is
+      // still a defect and still reports.
+      dropStacklessErrors: [/^TypeError: Failed to fetch$/],
+    },
   },
 })
 ```
@@ -187,8 +231,10 @@ Removed: 168 file lines across 4 files, plus 52 plugin lines and about 50 config
 Delete: `apps/site/sentry.client.config.ts` (42), `apps/pro/sentry.client.config.ts` (47), `layers/core/shared/logging/sentry-environment.ts` (55), `layers/site-shell/app/utils/client-error-policy.ts` (75), `layers/core/server/plugins/sentry.ts` (37).
 Keep `layers/core/shared/logging/redact.ts`, because the D1 logging chokepoint uses it. Only the Sentry half moves.
 Keep: `layers/saas/server/utils/sentry-cron.ts`, `sentry-queue.ts`, `sentry-job-sink.ts`, `layers/core/app/plugins/sentry-rpc.client.ts`, both `sentry-use-query` bridges.
-`layers/core/server/plugins/wide-event-sentry.ts` (11) becomes `wideEvents: true`.
+`layers/core/server/plugins/wide-event-sentry.ts` (11) becomes `wideEvents: true`, which forwards errors only, as that plugin did.
 `layers/core/shared/logging/expected-server-error.ts` (27) can go, or stay as `policy.dropServerStatus: [[400, 499]]`.
+
+`hasStaleChunkBreadcrumb` in `layers/site-shell/app/utils/client-error-policy.ts` becomes `policy.dropBreadcrumbMessages`. The built in stale chunk rules read the message; this site's reports carry the stale chunk in a breadcrumb and a component error in the exception, so the message rules never see it.
 
 ```ts
 export default defineNuxtConfig({
@@ -199,8 +245,18 @@ export default defineNuxtConfig({
     environment: { 'staging.': 'staging' },
     tracesSampleRate: { production: 0.05, staging: 1 },
     logs: true,
+    // Errors only, which is what `wide-event-sentry.ts` forwarded. Pass
+    // `{ levels: ['warn', 'error'] }` to widen it, at the cost of Sentry Logs
+    // bytes on every matching request.
     wideEvents: true,
-    policy: { denyUrls: [/carbon\.js/, /carbonads\.(?:com|net)/] },
+    policy: {
+      denyUrls: [/carbon\.js/, /carbonads\.(?:com|net)/],
+      dropBreadcrumbMessages: [
+        /Failed to fetch dynamically imported module/,
+        /error loading dynamically imported module/,
+        /Importing a module script failed/,
+      ],
+    },
   },
   // apps/site/nuxt.config.ts
   nuxtSentry: { app: 'site', project: 'nuxtseo-site', dsn: '...' },

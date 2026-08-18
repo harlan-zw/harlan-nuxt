@@ -14,6 +14,8 @@ export {
   errorStatusCode,
   isTransientError,
   matchesStatus,
+  reportBreadcrumbMessages,
+  reportFrameCount,
 } from '../shared/drop'
 export {
   applyReportPolicy,
@@ -49,6 +51,8 @@ export type {
   SentryRuntimeConfig,
   SerializedPattern,
   StatusRange,
+  WideEventDrainPolicy,
+  WideEventLogLevel,
 } from '../shared/types'
 export type { WorkerAttribution } from './attribution'
 export { resolveWorkerAttribution } from './attribution'
@@ -56,6 +60,5 @@ export type {
   DrainedWideEvent,
   SentryCorrelation,
   WideEventLogDecision,
-  WideEventLogLevel,
 } from './wide-events'
 export { decideWideEventLog, parseSentryCorrelation } from './wide-events'

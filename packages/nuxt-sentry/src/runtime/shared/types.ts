@@ -53,6 +53,14 @@ export interface ReportPolicy {
   dropTransient: boolean
   /** Messages that never produce an Error Report. */
   ignoreErrors: MessagePattern[]
+  /**
+   * Messages that never produce an Error Report when the report carries no
+   * stack frame. A stackless report names no site code, so the same message
+   * with a stack is still a defect and still reports.
+   */
+  dropStacklessErrors: MessagePattern[]
+  /** Breadcrumb messages that never produce an Error Report. */
+  dropBreadcrumbMessages: MessagePattern[]
   /** Source URLs that never produce an Error Report. */
   denyUrls: SerializedPattern[]
   /** Extra key names every Redaction Rule treats as secret. */
@@ -104,11 +112,26 @@ export type ReportTarget
       workerVersionBinding: string | null
     }
 
+/** The level of a Wide Event this module may forward to Sentry Logs. */
+export type WideEventLogLevel = 'warn' | 'error'
+
+/**
+ * Which failing Wide Events reach Sentry Logs.
+ *
+ * Sentry meters Logs as its own byte quota, so the level list is the cost
+ * control. `null` in the runtime config means the drain is off.
+ */
+export interface WideEventDrainPolicy {
+  levels: WideEventLogLevel[]
+}
+
 /** The whole resolved module state, as it sits in `runtimeConfig.nuxtSentry`. */
 export interface SentryRuntimeConfig {
   target: ReportTarget
   client: ReportPolicy
   server: ReportPolicy
+  /** The Wide Events drain, or `null` when no Wide Event is forwarded. */
+  wideEvents: WideEventDrainPolicy | null
 }
 
 /**
@@ -159,4 +182,6 @@ export type DropRuleName
   = | 'status'
     | 'transient'
     | 'ignore-message'
+    | 'stackless-message'
+    | 'breadcrumb-message'
     | 'deny-url'

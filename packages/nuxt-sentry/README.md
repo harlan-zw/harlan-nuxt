@@ -25,7 +25,7 @@ Status: experimental. APIs may change before the first release.
 
 - 🚦 **One enable gate:** a release identity proves a deploy produced the build, so `wrangler dev` and `nuxt preview` cannot report as production.
 - 🧹 **Redaction Rules:** credentials are removed by key name and by value shape, on every report, on both sides.
-- 🎯 **Drop Rules:** status codes, transient upstream failures, browser noise and extension frames, decided by one pure function.
+- 🎯 **Drop Rules:** status codes, transient upstream failures, browser noise, stackless failures, breadcrumb matches and extension frames, decided by one pure function.
 - 🏷️ **Release and environment naming:** resolved once at build time, then shared by the client and the server.
 - 📦 **Registered from the module:** `@harlan-zw/nuxt-dx` attributes the bundle entry to this package instead of to an anonymous site plugin.
 - ☁️ **Cloudflare Worker version tags:** read from the `CF_VERSION_METADATA` binding, so a report names the exact Worker version.
@@ -76,7 +76,7 @@ Set `SENTRY_AUTH_TOKEN` in CI to upload source maps. Set `SENTRY_RELEASE` in the
 | `sourceMaps` | `true` | Emit and upload client source maps when a token is present. |
 | `logs` | `false` | Forward `console.warn` and `console.error` to Sentry Logs. |
 | `workerVersionBinding` | `'CF_VERSION_METADATA'` | Cloudflare binding holding the Worker version. |
-| `wideEvents` | `false` | Forward failing Wide Events to Sentry Logs. |
+| `wideEvents` | `false` | Forward failing Wide Events to Sentry Logs. See Wide Events. |
 
 ### Gates
 
@@ -119,6 +119,10 @@ export default defineNuxtConfig({
       dropTransient: true,
       // Extra message patterns, on top of the built-in browser noise list.
       ignoreErrors: [/^Failed to fetch https?:\/\/\S+$/],
+      // Messages that drop only when the report carries no stack frame.
+      dropStacklessErrors: [/^TypeError: Failed to fetch$/],
+      // Messages that drop when any breadcrumb matches.
+      dropBreadcrumbMessages: [/Failed to fetch dynamically imported module/],
       // Extra source URL patterns, on top of the built-in extension list.
       denyUrls: [/carbonads\.(?:com|net)/],
       // Use the built-in browser noise lists. Default `true`.
@@ -131,6 +135,14 @@ export default defineNuxtConfig({
 ```
 
 The server default is 404 only. 401, 403 and 429 keep reporting, because an auth regression or a rate limit spike must stay visible. The client default adds 401 and 403, where the same status is an expired session racing a redirect to the login page.
+
+`dropStacklessErrors` and `dropBreadcrumbMessages` are both empty by default, so neither changes a site until it asks.
+
+Use `dropStacklessErrors` when the same message is a defect with a stack and noise without one. A browser that rejects a fetch on the global handler produces `TypeError: Failed to fetch` with an empty frame list, and no frame names site code. The same message with a stack still reports.
+
+Use `dropBreadcrumbMessages` when the breadcrumb names the cause and the exception does not. A stale chunk load after a deploy often throws inside a component, so only the console breadcrumb says the chunk was gone.
+
+Every Drop Rule runs in a fixed order and the decision names the rule that fired: `status`, `transient`, `ignore-message`, `stackless-message`, `breadcrumb-message`, `deny-url`.
 
 ### Environment and sampling
 
@@ -157,19 +169,30 @@ The browser resolves the environment from its hostname. The server has no hostna
 
 ## Non Cloudflare presets
 
-The server plugin is registered only on a Cloudflare Nitro preset, because `@sentry/cloudflare` is the only SDK that runs on Workers and it cannot be bundled into a Node build. On any other preset the module logs a warning and registers no server plugin. Keep the site's own `sentry.server.config.ts` and build its `beforeSend` from the shared policy:
+The server plugin is registered only on a Cloudflare Nitro preset, because `@sentry/cloudflare` is the only SDK that runs on Workers and it cannot be bundled into a Node build. On any other preset the module logs a warning and registers no server plugin. Keep the site's own `sentry.server.config.ts` and build its `beforeSend` from the shared policy.
+
+Import the policy from `#nuxt-sentry/policy`, never from runtime config:
 
 ```ts
 import { createBeforeSend } from '@harlan-zw/nuxt-sentry/server'
 import * as Sentry from '@sentry/nuxt'
+import { nuxtSentry } from '#nuxt-sentry/policy'
 
-const { nuxtSentry } = useRuntimeConfig().public
-
-Sentry.init({
-  dsn: nuxtSentry.target.dsn,
-  beforeSend: createBeforeSend(nuxtSentry.server),
-})
+if (nuxtSentry.target._tag === 'enabled') {
+  Sentry.init({
+    dsn: nuxtSentry.target.dsn,
+    beforeSend: createBeforeSend(nuxtSentry.server),
+  })
+}
 ```
+
+### Why not runtime config
+
+`#nuxt-sentry/policy` is the resolved Report Policy written as a build time constant. It holds one object literal and imports nothing.
+
+`useRuntimeConfig()` in the same file makes the emitted `sentry.server.config.mjs` import the Nitro chunk. The whole application and `node:http` then evaluate before `Sentry.init` runs, which defeats `autoInjectServerSentry: 'top-level-import'` and loses the instrumentation that setting exists to install. On one Vercel site the emitted file carried 35 imports; reading the constant instead brings it to 3.
+
+The same constant is still written to `runtimeConfig.public.nuxtSentry`, so code that already reads it keeps working.
 
 ## Wide Events
 
@@ -178,6 +201,19 @@ With `@harlan-zw/nuxt-wide-events` installed, two bridges are wired and neither 
 The Sentry trace identity is written into every request's Wide Event as `sentry.traceId` and `sentry.spanId`, so the two sinks can be joined. The fields are declared through the `wide-events:fields` build hook, so the allowlist stays exhaustive.
 
 With `wideEvents: true` and the Wide Events `drain` option on, a failing Wide Event is forwarded to Sentry Logs. A log, never an error: a Wide Event carries no stack in production, and Sentry already captured the same failure from the same request.
+
+`true` forwards a Wide Event whose level is `error`. Nothing else. Widen it only when the extra records are worth their bytes:
+
+```ts
+export default defineNuxtConfig({
+  nuxtSentry: {
+    logs: true,
+    wideEvents: { levels: ['warn', 'error'] },
+  },
+})
+```
+
+Sentry meters Logs as their own byte quota, separate from the error quota. Every level added here spends that quota on every matching request, so the default stays at `error`. A level outside `warn` and `error` throws at build time.
 
 ## Development
 

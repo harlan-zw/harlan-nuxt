@@ -126,6 +126,37 @@ export function reportMessages(report: ErrorReport, error: unknown): string[] {
   return texts
 }
 
+/**
+ * Every stack frame the report carries, across every exception value.
+ *
+ * A report with none of them names no site code. `unlighthouse.dev` lost a
+ * manifest fetch failure that arrives this way: the browser rejects the fetch
+ * on the global handler, so the report is one `TypeError: Failed to fetch` with
+ * an empty frame list.
+ */
+export function reportFrameCount(report: ErrorReport): number {
+  let count = 0
+  for (const value of report.exception?.values ?? [])
+    count += value.stacktrace?.frames?.length ?? 0
+  return count
+}
+
+/**
+ * Every breadcrumb message a breadcrumb rule is matched against.
+ *
+ * The breadcrumb often names the cause the exception does not. `nuxtseo.com`
+ * lost its stale chunk filter this way: the thrown error names a component, and
+ * only the console breadcrumb says the chunk was gone.
+ */
+export function reportBreadcrumbMessages(report: ErrorReport): string[] {
+  const messages: string[] = []
+  for (const breadcrumb of report.breadcrumbs ?? []) {
+    if (typeof breadcrumb.message === 'string')
+      messages.push(breadcrumb.message)
+  }
+  return messages
+}
+
 /** Every stack frame file name a deny rule is matched against. */
 export function reportSourceUrls(report: ErrorReport): string[] {
   const urls: string[] = []
@@ -156,6 +187,18 @@ export function decideReport(report: ErrorReport, error: unknown, policy: Report
     const texts = reportMessages(report, error)
     if (texts.some(text => matchesMessage(text, policy.ignoreErrors)))
       return { _tag: 'drop', rule: 'ignore-message' }
+  }
+
+  if (policy.dropStacklessErrors.length > 0 && reportFrameCount(report) === 0) {
+    const texts = reportMessages(report, error)
+    if (texts.some(text => matchesMessage(text, policy.dropStacklessErrors)))
+      return { _tag: 'drop', rule: 'stackless-message' }
+  }
+
+  if (policy.dropBreadcrumbMessages.length > 0) {
+    const messages = reportBreadcrumbMessages(report)
+    if (messages.some(text => matchesMessage(text, policy.dropBreadcrumbMessages)))
+      return { _tag: 'drop', rule: 'breadcrumb-message' }
   }
 
   if (policy.denyUrls.length > 0) {

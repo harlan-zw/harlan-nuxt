@@ -10,6 +10,7 @@ import {
   hasSentryAuthToken,
   resolveSentryBuildOptions,
 } from '../src/build/sentry-build'
+import { resolveWideEventDrain } from '../src/build/wide-events'
 import { resolveWorkerAttribution } from '../src/runtime/server/attribution'
 import { decideWideEventLog, parseSentryCorrelation } from '../src/runtime/server/wide-events'
 import {
@@ -224,9 +225,35 @@ describe('resolveWorkerAttribution', () => {
   })
 })
 
+describe('resolveWideEventDrain', () => {
+  it('returns null when the drain is off', () => {
+    expect(resolveWideEventDrain(undefined)).toBeNull()
+    expect(resolveWideEventDrain(false)).toBeNull()
+  })
+
+  it('forwards errors only by default, because Sentry meters Logs separately', () => {
+    expect(resolveWideEventDrain(true)).toEqual({ levels: ['error'] })
+  })
+
+  it('widens the drain only when a site asks for it', () => {
+    expect(resolveWideEventDrain({ levels: ['warn', 'error'] })).toEqual({ levels: ['warn', 'error'] })
+  })
+
+  it('removes a repeated level', () => {
+    expect(resolveWideEventDrain({ levels: ['error', 'error'] })).toEqual({ levels: ['error'] })
+  })
+
+  it('rejects a level the drain cannot forward', () => {
+    expect(() => resolveWideEventDrain({ levels: ['info'] as never })).toThrow(/"warn" or "error"/)
+  })
+})
+
 describe('decideWideEventLog', () => {
+  const errorsOnly = { levels: ['error' as const] }
+  const bothLevels = { levels: ['warn' as const, 'error' as const] }
+
   it('forwards a failing record as a log', () => {
-    expect(decideWideEventLog({ 'level': 'error', 'name': 'http.request', 'http.status': 500 })).toEqual({
+    expect(decideWideEventLog({ 'level': 'error', 'name': 'http.request', 'http.status': 500 }, errorsOnly)).toEqual({
       _tag: 'log',
       level: 'error',
       message: 'http.request',
@@ -235,11 +262,24 @@ describe('decideWideEventLog', () => {
   })
 
   it('skips a successful record, so the log quota is spent on failures', () => {
-    expect(decideWideEventLog({ level: 'info', name: 'http.request' })).toEqual({ _tag: 'skip' })
+    expect(decideWideEventLog({ level: 'info', name: 'http.request' }, errorsOnly)).toEqual({ _tag: 'skip' })
+  })
+
+  it('skips a warning under the default level list', () => {
+    expect(decideWideEventLog({ level: 'warn', name: 'http.request' }, errorsOnly)).toEqual({ _tag: 'skip' })
+  })
+
+  it('forwards a warning once the site widens the level list', () => {
+    expect(decideWideEventLog({ level: 'warn', name: 'http.request' }, bothLevels)).toEqual({
+      _tag: 'log',
+      level: 'warn',
+      message: 'http.request',
+      attributes: {},
+    })
   })
 
   it('drops a non primitive attribute the log transport cannot carry', () => {
-    const decision = decideWideEventLog({ level: 'warn', name: 'x', nested: { a: 1 }, ok: true })
+    const decision = decideWideEventLog({ level: 'warn', name: 'x', nested: { a: 1 }, ok: true }, bothLevels)
     expect(decision).toEqual({ _tag: 'log', level: 'warn', message: 'x', attributes: { ok: true } })
   })
 })

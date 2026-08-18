@@ -11,6 +11,8 @@
  * Wide Event and a Sentry report can be joined.
  */
 
+import type { WideEventDrainPolicy, WideEventLogLevel } from '../shared/types'
+
 /** The Wide Event record shape this module reads. Structural, so no import is needed. */
 export interface DrainedWideEvent {
   level?: string
@@ -19,8 +21,6 @@ export interface DrainedWideEvent {
   [key: string]: unknown
 }
 
-export type WideEventLogLevel = 'warn' | 'error'
-
 export type WideEventLogDecision
   = | { _tag: 'skip' }
     | { _tag: 'log', level: WideEventLogLevel, message: string, attributes: Record<string, unknown> }
@@ -28,13 +28,19 @@ export type WideEventLogDecision
 /**
  * Whether a drained Wide Event becomes a Sentry log.
  *
- * Only a failing record. A successful request is already a Wide Event in the
- * site's own sink, and mirroring every one of them into Sentry Logs would spend
- * the byte quota on records nobody reads.
+ * Only a failing record, and only at a level the site opted into. A successful
+ * request is already a Wide Event in the site's own sink, and mirroring every
+ * one of them into Sentry Logs would spend the byte quota on records nobody
+ * reads.
  */
-export function decideWideEventLog(record: DrainedWideEvent): WideEventLogDecision {
+export function decideWideEventLog(
+  record: DrainedWideEvent,
+  policy: WideEventDrainPolicy,
+): WideEventLogDecision {
   const level = record.level
   if (level !== 'error' && level !== 'warn')
+    return { _tag: 'skip' }
+  if (!policy.levels.includes(level))
     return { _tag: 'skip' }
 
   const name = typeof record.name === 'string' && record.name ? record.name : 'wide-event'

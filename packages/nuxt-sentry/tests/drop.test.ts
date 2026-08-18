@@ -195,3 +195,89 @@ describe('decideReport, site rules', () => {
     expect(decideReport({ message: 'zeroRuntime is off' }, undefined, site)).toEqual({ _tag: 'drop', rule: 'ignore-message' })
   })
 })
+
+/**
+ * The two filters the rollout lost.
+ *
+ * Both shapes are copied from the site that wrote them, so a change that breaks
+ * either one fails here instead of in production.
+ */
+describe('decideReport, stackless message rule', () => {
+  // unlighthouse.dev. A manifest fetch fails while the browser is offline. The
+  // rejection reaches the global handler with no stack, so no frame names the
+  // site, and the message is not a "dynamically imported module" one.
+  const manifestFetchFailure: ErrorReport = {
+    exception: {
+      values: [{
+        type: 'TypeError',
+        value: 'Failed to fetch',
+        stacktrace: { frames: [] },
+      }],
+    },
+    breadcrumbs: [
+      { category: 'fetch', data: { url: '/_nuxt/builds/meta/abc123.json' } },
+      { category: 'console', message: '[NUXT_E5002]' },
+    ],
+  }
+
+  it('drops a stackless fetch failure', () => {
+    const site = policy('client', { dropStacklessErrors: [/^TypeError: Failed to fetch$/] })
+    expect(decideReport(manifestFetchFailure, undefined, site))
+      .toEqual({ _tag: 'drop', rule: 'stackless-message' })
+  })
+
+  it('keeps the same message when the report names a site frame', () => {
+    const site = policy('client', { dropStacklessErrors: [/^TypeError: Failed to fetch$/] })
+    const withStack: ErrorReport = {
+      exception: {
+        values: [{
+          type: 'TypeError',
+          value: 'Failed to fetch',
+          stacktrace: { frames: [{ filename: 'https://unlighthouse.dev/_nuxt/app.js' }] },
+        }],
+      },
+    }
+    expect(decideReport(withStack, undefined, site)).toEqual({ _tag: 'send' })
+  })
+
+  it('sends the stackless report when no site pattern is declared', () => {
+    expect(decideReport(manifestFetchFailure, undefined, policy('client'))).toEqual({ _tag: 'send' })
+  })
+})
+
+describe('decideReport, breadcrumb message rule', () => {
+  // nuxtseo.com. A visitor on the previous deploy asks for a hashed chunk that
+  // is gone. The thrown error names the component, so only the breadcrumb says
+  // the chunk was stale.
+  const staleChunkBreadcrumb: ErrorReport = {
+    exception: { values: [{ type: 'Error', value: 'Cannot read properties of undefined (reading mount)' }] },
+    breadcrumbs: [
+      { category: 'navigation', message: '/pro/sites' },
+      { category: 'console', message: 'Failed to fetch dynamically imported module: https://nuxtseo.com/_nuxt/D2f8a1.js' },
+    ],
+  }
+
+  it('drops a report whose breadcrumb names a stale chunk', () => {
+    const site = policy('client', { dropBreadcrumbMessages: [/Failed to fetch dynamically imported module/] })
+    expect(decideReport(staleChunkBreadcrumb, undefined, site))
+      .toEqual({ _tag: 'drop', rule: 'breadcrumb-message' })
+  })
+
+  it('keeps the report when no breadcrumb matches', () => {
+    const site = policy('client', { dropBreadcrumbMessages: [/Failed to fetch dynamically imported module/] })
+    const report: ErrorReport = {
+      exception: { values: [{ type: 'Error', value: 'boom' }] },
+      breadcrumbs: [{ category: 'navigation', message: '/pro/sites' }],
+    }
+    expect(decideReport(report, undefined, site)).toEqual({ _tag: 'send' })
+  })
+
+  it('sends the same report when no site pattern is declared', () => {
+    expect(decideReport(staleChunkBreadcrumb, undefined, policy('client'))).toEqual({ _tag: 'send' })
+  })
+
+  it('tolerates a report whose breadcrumbs Sentry set to null', () => {
+    const site = policy('client', { dropBreadcrumbMessages: ['stale'] })
+    expect(decideReport({ message: 'boom', breadcrumbs: null }, undefined, site)).toEqual({ _tag: 'send' })
+  })
+})

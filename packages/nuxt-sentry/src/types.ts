@@ -1,5 +1,6 @@
 import type { PolicyOptions } from './build/policy'
 import type { ReportGate } from './build/target'
+import type { WideEventsOption } from './build/wide-events'
 import type { DataCollection } from './runtime/shared/types'
 
 export interface ModuleOptions {
@@ -102,10 +103,14 @@ export interface ModuleOptions {
   /**
    * Forward failing Wide Events to Sentry Logs.
    *
+   * `true` forwards a Wide Event whose level is `error`. Pass
+   * `{ levels: ['warn', 'error'] }` to widen it. Sentry meters Logs as their own
+   * byte quota, so every added level costs money a site must choose to spend.
+   *
    * Inert when `@harlan-zw/nuxt-wide-events` is absent or its `drain` option is
    * off. Requires `logs` to be on, because a Wide Event is sent as a log.
    *
    * @default false
    */
-  wideEvents?: boolean
+  wideEvents?: WideEventsOption
 }

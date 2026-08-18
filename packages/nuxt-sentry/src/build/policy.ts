@@ -22,6 +22,20 @@ export interface PolicyOptions {
   dropClientStatus?: StatusInput[] | false
   dropTransient?: boolean
   ignoreErrors?: Array<string | RegExp>
+  /**
+   * Messages that never report when the Error Report carries no stack frame.
+   *
+   * Use it for a failure the browser raises outside site code, where the same
+   * message with a stack is still a defect. Default empty.
+   */
+  dropStacklessErrors?: Array<string | RegExp>
+  /**
+   * Breadcrumb messages that never report.
+   *
+   * Use it when the breadcrumb names the cause and the exception does not.
+   * Default empty.
+   */
+  dropBreadcrumbMessages?: Array<string | RegExp>
   denyUrls?: RegExp[]
   browserNoise?: boolean
   secretKeys?: string[]
@@ -104,6 +118,8 @@ export function resolveReportPolicy(input: ResolvePolicyInput): ReportPolicy {
       ...(browserNoise ? BROWSER_NOISE_MESSAGES : []),
       ...parseMessagePatterns(options.ignoreErrors ?? []),
     ],
+    dropStacklessErrors: parseMessagePatterns(options.dropStacklessErrors ?? []),
+    dropBreadcrumbMessages: parseMessagePatterns(options.dropBreadcrumbMessages ?? []),
     denyUrls: [
       ...(browserNoise ? BROWSER_EXTENSION_DENY_URLS : []),
       ...(options.denyUrls ?? []).map(serializePattern),
