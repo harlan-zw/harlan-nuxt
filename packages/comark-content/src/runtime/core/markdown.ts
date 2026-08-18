@@ -39,6 +39,9 @@ function stripHighlight(node: Node): Node {
  * Build-time consumers (llms.txt indexers, search extractors) want the Markdown
  * a page was authored from without an SSR render. This is the inverse of the
  * ingestion parser, so it runs in process against the generated body asset.
+ *
+ * Output is semantically equal to the source file, not byte equal. The renderer
+ * normalizes whitespace, so table columns come back padded to the widest cell.
  */
 export function renderPageMarkdown(body: PageCollectionItemBase['body'], options: RenderPageMarkdownOptions = {}): Promise<string> {
   return renderMarkdown(

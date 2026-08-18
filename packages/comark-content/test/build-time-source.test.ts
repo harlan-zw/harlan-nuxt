@@ -3,8 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import packageJson from '../package.json' with { type: 'json' }
 import { createContentAssetPlan } from '../src/core/asset'
 import { ingestCollections } from '../src/core/ingest'
+import contentModule from '../src/module'
 import queryRoute from '../src/runtime/server/api/query.post'
 import { queryCollection, queryCollectionManifest, renderPageMarkdown } from '../src/runtime/server/index'
 import { writeFixture } from './fixtures'
@@ -71,6 +73,12 @@ afterEach(async () => {
 })
 
 describe('build time page source', () => {
+  it('reports its own version so a consumer can fence on it', async () => {
+    // getNuxtModuleVersion() returns false without this, so every
+    // hasNuxtModuleCompatibility() check fails closed and silently.
+    await expect(contentModule.getMeta?.()).resolves.toMatchObject({ version: packageJson.version })
+  })
+
   it('reads every route in process and matches the query endpoint payload', async () => {
     const routes = await generatedSite()
     const manifest = await queryCollectionManifest()
