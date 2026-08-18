@@ -27,6 +27,14 @@ export const KNOWN_BUDGETS = [
     kilobytes: 400,
     reason: 'The Sentry Nitro plugin bundles the Node SDK and its OpenTelemetry instrumentation.',
   },
+  {
+    scope: 'nitro',
+    module: '@harlan-zw/nuxt-sentry',
+    // The same plugin, registered by the shared module instead of by the app. Measured at
+    // 346 kB, above the 326 kB the apps carried, because the module also bundles its policy.
+    kilobytes: 400,
+    reason: 'The shared Sentry module registers the same Nitro plugin, so it carries the same SDK weight.',
+  },
 ] as const satisfies readonly KnownBudget[]
 
 function normalize(path: string): string {

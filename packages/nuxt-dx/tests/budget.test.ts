@@ -54,6 +54,11 @@ describe('budgetFor', () => {
 describe('budgetFor with a known heavy module', () => {
   const sentryBudget = kilobytesToBytes(400)
 
+  it('covers the shared Sentry module, which registers the same plugin under its own name', () => {
+    expect(budgetFor('nitro', { path: '/app/node_modules/@harlan-zw/nuxt-sentry/dist/runtime/server/plugins/sentry-cloudflare.js', owner: '@harlan-zw/nuxt-sentry' }, kilobytesToBytes(75), []))
+      .toBe(sentryBudget)
+  })
+
   it('raises the Nitro plugin budget for the Sentry Nitro plugin, by owner', () => {
     expect(budgetFor('nitro', { path: '/app/.nuxt/sentry-nitro.mjs', owner: '@sentry/nuxt' }, kilobytesToBytes(75), []))
       .toBe(sentryBudget)

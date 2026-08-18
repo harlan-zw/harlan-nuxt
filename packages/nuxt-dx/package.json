@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-dx",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Experimental Nuxt diagnostics: dev error overlay and runtime JavaScript bundle size budgets.",
   "author": {
     "name": "Harlan Wilton",
