@@ -28,6 +28,10 @@
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
+    },
+    "./types": {
+      "types": "./dist/runtime/shared/types.d.ts",
+      "import": "./dist/runtime/shared/types.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -36,6 +40,9 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
+      ],
+      "types": [
+        "dist/runtime/shared/types.d.ts"
       ]
     }
   },
