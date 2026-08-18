@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
@@ -134,5 +137,37 @@ describe('nuxt-dx-budget action', () => {
     const upload = step('Keep this report as the next baseline')
     expect(upload.uses).toContain('actions/upload-artifact')
     expect(upload.if).toContain('!cancelled()')
+  })
+})
+
+/**
+ * GitHub runs `shell: bash` as `bash -e`, which a `set -uo pipefail` inside the script
+ * does not undo. A breach used to end the step on the failing command, so the named
+ * status was never written and `fail-on-breach: false` could not hold.
+ */
+describe('compare step under a -e shell', () => {
+  it('reaches its named status when the CLI reports a breach', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nuxt-dx-action-'))
+    const cli = join(directory, 'fake-cli')
+    writeFileSync(cli, '#!/usr/bin/env bash\necho "### breach"\nexit 1\n', { mode: 0o755 })
+    const script = join(directory, 'compare.sh')
+    writeFileSync(script, step('Compare against the baseline').run!)
+
+    const output = join(directory, 'output')
+    writeFileSync(output, '')
+    execFileSync('bash', ['-e', script], {
+      env: {
+        ...process.env,
+        CLI: cli,
+        BASE_REPORT: 'base.json',
+        HEAD_REPORT: 'head.json',
+        THRESHOLD_KB: '10',
+        SUMMARY_FILE: join(directory, 'summary.md'),
+        GITHUB_STEP_SUMMARY: join(directory, 'step-summary.md'),
+        GITHUB_OUTPUT: output,
+      },
+    })
+
+    expect(readFileSync(output, 'utf-8')).toContain('status=breach')
   })
 })

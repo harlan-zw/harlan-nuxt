@@ -132,9 +132,15 @@ runs:
         SUMMARY_FILE: ${{ runner.temp }}/nuxt-dx-summary.md
       run: |
         set -uo pipefail
-        "$CLI" compare "$BASE_REPORT" "$HEAD_REPORT" \
-          --threshold-kb "$THRESHOLD_KB" --allow-missing-base > "$SUMMARY_FILE"
-        code="$?"
+        # GitHub runs `shell: bash` with `-e`, which `set` above does not undo. Without
+        # the `if`, a breach exits the step here and the named status below never runs,
+        # so `fail-on-breach: false` could not hold.
+        if "$CLI" compare "$BASE_REPORT" "$HEAD_REPORT" \
+          --threshold-kb "$THRESHOLD_KB" --allow-missing-base > "$SUMMARY_FILE"; then
+          code=0
+        else
+          code="$?"
+        fi
         cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
         cat "$SUMMARY_FILE"
         # Named, so the verdict step never has to read an exit code as growth.
