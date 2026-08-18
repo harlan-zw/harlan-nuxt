@@ -58,7 +58,7 @@ describe('nuxt integration', () => {
     expect(nitro.cloudflare?.nodeCompat).toBe(true)
     expect(nitro.cloudflare?.wrangler).toMatchObject({
       cache: { enabled: true, cross_version_cache: false },
-      compatibility_flags: ['nodejs_compat'],
+      compatibility_flags: ['nodejs_compat', 'no_nodejs_compat_v2'],
       secrets: { required: ['SESSION_PASSWORD'] },
       upload_source_maps: false,
       version_metadata: { binding: 'CF_VERSION_METADATA' },

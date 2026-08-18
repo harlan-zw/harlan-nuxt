@@ -1,7 +1,28 @@
 import type { Nuxt } from '@nuxt/schema'
 import type { NitroCloudflareShape } from '../src/module'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureNitroCloudflare, findPopulatedRuntimeSecretPaths, setupCloudflareModule } from '../src/module'
+import {
+  configureNitroCloudflare,
+  findPopulatedRuntimeSecretPaths,
+  resolveBindingTypeAudit,
+  setupCloudflareModule,
+} from '../src/module'
+
+const directories: string[] = []
+
+function projectWithWranglerConfig(source: string): string {
+  const directory = mkdtempSync(join(tmpdir(), 'nuxt-cloudflare-module-'))
+  directories.push(directory)
+  writeFileSync(join(directory, 'wrangler.jsonc'), source)
+  return directory
+}
+
+afterEach(() => {
+  directories.splice(0).forEach(directory => rmSync(directory, { force: true, recursive: true }))
+})
 
 function nuxtWithCapturedHooks(dev: boolean, serverSourceMaps = false): {
   callbacks: Record<string, () => unknown>
@@ -58,9 +79,7 @@ describe('configureNitroCloudflare', () => {
       enabled: true,
       cross_version_cache: false,
     })
-    expect(nitro.plugins).toEqual([
-      expect.stringMatching(/\/runtime\/server\/plugins\/workers-cache\.ts$/),
-    ])
+    expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/workers-cache\.ts$/))
   })
 
   it('enables Smart Placement by default', () => {
@@ -95,7 +114,50 @@ describe('configureNitroCloudflare', () => {
       enabled: false,
       cross_version_cache: false,
     })
-    expect(nitro.plugins).toBeUndefined()
+    expect(nitro.plugins?.some(plugin => /workers-cache\.[jt]s$/.test(plugin))).toBeFalsy()
+  })
+
+  it('provides Nitro runtime config to eventless Cloudflare handlers', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/runtime-config\.ts$/))
+  })
+})
+
+describe('authored Wrangler config', () => {
+  it('keeps authored observability and source maps over module defaults', () => {
+    const rootDir = projectWithWranglerConfig(JSON.stringify({
+      observability: { logs: { head_sampling_rate: 1 } },
+      upload_source_maps: true,
+    }))
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, { logsSampleRate: 0.01 }, { rootDir, serverSourceMaps: false })
+
+    expect(nitro.cloudflare?.wrangler?.observability?.logs?.head_sampling_rate).toBe(1)
+    expect(nitro.cloudflare?.wrangler?.upload_source_maps).toBe(true)
+  })
+
+  it('fails loudly when the authored Wrangler config cannot be parsed', () => {
+    const rootDir = projectWithWranglerConfig('{ "observability": {')
+
+    expect(() => configureNitroCloudflare({}, {}, { rootDir })).toThrow('wrangler.jsonc')
+  })
+})
+
+describe('resolveBindingTypeAudit', () => {
+  it('compares the signature generated during the build', () => {
+    expect(resolveBindingTypeAudit(true, 'signature')).toEqual({ _tag: 'compare', signature: 'signature' })
+  })
+
+  it('reports a missing signature instead of skipping the drift check', () => {
+    expect(resolveBindingTypeAudit(true, undefined)).toEqual({ _tag: 'missing' })
+  })
+
+  it('skips the drift check only when another tool owns the declaration', () => {
+    expect(resolveBindingTypeAudit(false, undefined)).toEqual({ _tag: 'skipped' })
   })
 })
 

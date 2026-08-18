@@ -6,6 +6,8 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 
 ## Defaults
 
+Every default below yields to a value you wrote. The root `wrangler.jsonc`, `wrangler.json`, or `wrangler.toml` is authored config, and so is `nitro.cloudflare.wrangler`. A module default applies only where neither names the key. Workers Caching is the one exception: the module owns that policy because it also registers the caching plugin.
+
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
 - Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
 - Workers Logs sampled at 1%, traces at 1%, both overridable
@@ -15,7 +17,8 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 - Smart Placement enabled unless the project chooses a placement
 - Workers Caching enabled with version isolation
 - Rendered HTML forced to `private, no-store`; explicit non-HTML cache policies remain intact
-- Source-map upload when the Nitro build emits maps; explicit `false` is preserved
+- Source-map upload when the Nitro build emits maps; an authored value is preserved
+- `nodejs_compat` added unless the config chooses `nodejs_compat_v2`, which Cloudflare rejects alongside it
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
 - Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
 - Raw `cloudflare-kv-binding` on Nitro's `cache` mount upgraded to a 30-day physical expiry
@@ -184,7 +187,8 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 ### Bindings
 
 ```ts
-import { createCloudflareBindings, resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
+import type { H3Event } from 'h3'
+import { createCloudflareBindings, useCloudflareRuntimeConfig } from '@harlan-zw/nuxt-cloudflare/bindings'
 
 const cloudflare = createCloudflareBindings()
 
@@ -192,13 +196,17 @@ function requireDatabase(source?: unknown) {
   return cloudflare.require('DB', source)
 }
 
-const env = resolveCloudflareBindings(event)
-const config = useRuntimeConfig(runtimeConfigSource(env ?? {}))
+// `event` on the request path, nothing in a queue, scheduled, email, or task handler.
+function apiToken(event?: H3Event) {
+  return useCloudflareRuntimeConfig(event).apiToken
+}
 ```
 
 `nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
 
 The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
+
+`useCloudflareRuntimeConfig` reads runtime config from both contexts. On Cloudflare, `NUXT_*` Worker vars and secrets bind onto runtime config only through an event, so a bare `useRuntimeConfig()` off the request path returns build-time defaults. Without an event this reads the Cloudflare entry environment and wraps it as the source Nitro requires. The module's Nitro plugin supplies the reader; use `runtimeConfigSource` directly only when you own the `useRuntimeConfig` call.
 
 ### Scoped secrets file
 

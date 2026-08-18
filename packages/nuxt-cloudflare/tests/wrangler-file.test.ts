@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findProjectWranglerConfig, readWranglerConfigFile } from '../src/wrangler-file'
+import { findProjectWranglerConfig, readAuthoredWranglerConfig, readWranglerConfigFile } from '../src/wrangler-file'
 
 const directories: string[] = []
 
@@ -54,5 +54,35 @@ describe('findProjectWranglerConfig', () => {
     writeFileSync(path, '{}')
 
     expect(findProjectWranglerConfig(nestedDirectory)).toBe(path)
+  })
+})
+
+describe('readAuthoredWranglerConfig', () => {
+  it('reads the root config Wrangler and Nitro both treat as the source of truth', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nuxt-cloudflare-wrangler-'))
+    directories.push(directory)
+    const path = join(directory, 'wrangler.jsonc')
+    writeFileSync(path, '{ "observability": { "logs": { "head_sampling_rate": 1 } } }')
+
+    expect(readAuthoredWranglerConfig(directory)).toEqual({
+      _tag: 'authored',
+      config: { observability: { logs: { head_sampling_rate: 1 } } },
+      path,
+    })
+  })
+
+  it('reports an absent root config without a project directory', () => {
+    expect(readAuthoredWranglerConfig(undefined)).toEqual({ _tag: 'absent' })
+  })
+
+  it('returns an unparsable root config as a value', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nuxt-cloudflare-wrangler-'))
+    directories.push(directory)
+    writeFileSync(join(directory, 'wrangler.jsonc'), '{ "observability": {')
+
+    expect(readAuthoredWranglerConfig(directory)).toMatchObject({
+      _tag: 'invalid',
+      path: join(directory, 'wrangler.jsonc'),
+    })
   })
 })

@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 
-export type { WranglerConfigFileResult } from './wrangler-file'
-export { findProjectWranglerConfig, readWranglerConfigFile } from './wrangler-file'
+export type { AuthoredWranglerConfigResult, WranglerConfigFileResult } from './wrangler-file'
+export { findProjectWranglerConfig, readAuthoredWranglerConfig, readWranglerConfigFile } from './wrangler-file'
 
 export interface WranglerAssetsInput {
   directory?: string
@@ -377,47 +377,111 @@ function configuredRemoteBindings(config: WranglerConfigInput): Array<{ path: st
   return bindings
 }
 
+/**
+ * Applies module policy to the Wrangler config Nitro generates.
+ *
+ * Three layers decide every value. `config` is `nitro.cloudflare.wrangler`,
+ * which the application and its modules write. `authored` is the root
+ * `wrangler.jsonc` or `wrangler.toml`. Module options are last, because a
+ * default must never overrule a value the consumer wrote in either place.
+ *
+ * Nitro merges the generated config with `defu`, where `nitro.cloudflare.wrangler`
+ * outranks the authored file. So this function resolves the effective value and
+ * writes it back: without the authored layer the module default silently wins.
+ */
 export function applyCloudflareDefaults(
   config: WranglerConfigInput,
   options: CloudflareDefaultOptions = {},
+  authored: WranglerConfigInput = {},
 ): WranglerConfigInput {
-  const root = applyEnvironmentDefaults(config, options)
+  const root = applyEnvironmentDefaults(config, options, { authored })
   const environments = config.env && Object.fromEntries(
-    Object.entries(config.env).map(([name, environment]) => [name, applyEnvironmentDefaults(environment, {
-      ...options,
-      requiredSecrets: options.requiredSecrets,
-    }, root)]),
+    Object.entries(config.env).map(([name, environment]) => [name, applyEnvironmentDefaults(environment, options, {
+      // Named Wrangler environments inherit the authored root for the keys
+      // Wrangler itself inherits, and nothing else.
+      authored: resolveEnvironmentPolicy(authored, authored.env?.[name] ?? {}),
+      inherited: root,
+    })]),
   )
   return environments ? { ...root, env: environments } : root
+}
+
+/**
+ * Resolves the Node compatibility flags Workers accepts.
+ *
+ * Cloudflare rejects `nodejs_compat` together with `nodejs_compat_v2`, and
+ * `no_nodejs_compat_v2` is how a config opts out of v2. This is the resolution
+ * Nitro's config writer and the binding type generator both use.
+ */
+function withNodeCompatibilityFlags(flags: readonly string[]): string[] {
+  const resolved = new Set(flags)
+  if (resolved.has('nodejs_compat_v2') && resolved.has('no_nodejs_compat_v2'))
+    resolved.delete('nodejs_compat_v2')
+  if (!resolved.has('nodejs_compat_v2')) {
+    resolved.add('nodejs_compat')
+    resolved.add('no_nodejs_compat_v2')
+  }
+  return [...resolved]
+}
+
+interface CloudflareEnvironmentLayers {
+  /** The root Wrangler file. Outranks every module default. */
+  authored?: WranglerConfigInput
+  /** The resolved root environment, for named Wrangler environments. */
+  inherited?: WranglerConfigInput
 }
 
 function applyEnvironmentDefaults(
   config: WranglerConfigInput,
   options: CloudflareDefaultOptions,
-  inherited: WranglerConfigInput = {},
+  layers: CloudflareEnvironmentLayers = {},
 ): WranglerConfigInput {
-  const compatibilityDate = config.compatibility_date ?? inherited.compatibility_date ?? options.compatibilityDate
-  const compatibilityFlags = unique([...(config.compatibility_flags ?? inherited.compatibility_flags ?? []), 'nodejs_compat'])
-  const authoredCache = config.cache ?? inherited.cache
+  const authored = layers.authored ?? {}
+  const inherited = layers.inherited ?? {}
+  const compatibilityDate = config.compatibility_date
+    ?? authored.compatibility_date
+    ?? inherited.compatibility_date
+    ?? options.compatibilityDate
+  const declaredFlags = unique([...(config.compatibility_flags ?? []), ...(authored.compatibility_flags ?? [])])
+  const compatibilityFlags = withNodeCompatibilityFlags(
+    declaredFlags.length > 0 ? declaredFlags : (inherited.compatibility_flags ?? []),
+  )
+  // Workers Caching is the one policy the module keeps: it also decides whether
+  // the caching Nitro plugin is registered, so both must follow one option.
+  const authoredCache = config.cache ?? authored.cache ?? inherited.cache
   const cache = options.workersCache
     ? resolveWorkersCachePolicy(options.workersCache)
     : authoredCache
       ? { ...authoredCache, cross_version_cache: authoredCache.cross_version_cache ?? false }
       : resolveWorkersCachePolicy({ _tag: 'disabled' })
+  // Names the authored config already requires stay in the authored config.
+  // Restating them here would append a duplicate through Nitro's `defu` merge.
+  const authoredSecrets = new Set(authored.secrets?.required ?? [])
   const requiredSecrets = unique([...(config.secrets?.required ?? []), ...(options.requiredSecrets ?? [])])
+    .filter(name => !authoredSecrets.has(name))
   const logs = config.observability?.logs
+  const authoredLogs = authored.observability?.logs
   const inheritedLogs = inherited.observability?.logs
   const traces = config.observability?.traces
+  const authoredTraces = authored.observability?.traces
   const inheritedTraces = inherited.observability?.traces
-  const uploadSourceMaps = config.upload_source_maps ?? inherited.upload_source_maps ?? options.uploadSourceMaps ?? true
-  const previewUrls = config.preview_urls ?? inherited.preview_urls ?? false
-  const placement = config.placement ?? inherited.placement ?? { mode: 'smart' }
+  const uploadSourceMaps = config.upload_source_maps
+    ?? authored.upload_source_maps
+    ?? inherited.upload_source_maps
+    ?? options.uploadSourceMaps
+    ?? true
+  const previewUrls = config.preview_urls ?? authored.preview_urls ?? inherited.preview_urls ?? false
+  const placement = config.placement ?? authored.placement ?? inherited.placement ?? { mode: 'smart' }
+  const route = config.route ?? authored.route ?? inherited.route
+  const routes = config.routes ?? authored.routes ?? inherited.routes
   const workersDev = config.workers_dev
+    ?? authored.workers_dev
     ?? inherited.workers_dev
-    ?? ((config.route !== undefined || (config.routes?.length ?? 0) > 0) ? false : undefined)
+    ?? ((route !== undefined || (routes?.length ?? 0) > 0) ? false : undefined)
   const versionMetadataBinding = options.versionMetadataBinding ?? 'CF_VERSION_METADATA'
-  const localBindingNames = collectBindingNames(config)
+  const localBindingNames = new Set([...collectBindingNames(config), ...collectBindingNames(authored)])
   const versionMetadata = config.version_metadata
+    ?? authored.version_metadata
     ?? (inherited.version_metadata && !localBindingNames.has(inherited.version_metadata.binding)
       ? inherited.version_metadata
       : undefined)
@@ -430,20 +494,37 @@ function applyEnvironmentDefaults(
     compatibility_flags: compatibilityFlags,
     observability: {
       ...inherited.observability,
+      ...authored.observability,
       ...config.observability,
-      enabled: config.observability?.enabled ?? inherited.observability?.enabled ?? true,
+      enabled: config.observability?.enabled
+        ?? authored.observability?.enabled
+        ?? inherited.observability?.enabled
+        ?? true,
       logs: {
         ...inheritedLogs,
+        ...authoredLogs,
         ...logs,
-        enabled: logs?.enabled ?? inheritedLogs?.enabled ?? true,
-        head_sampling_rate: logs?.head_sampling_rate ?? inheritedLogs?.head_sampling_rate ?? options.logsSampleRate ?? 0.01,
-        invocation_logs: logs?.invocation_logs ?? inheritedLogs?.invocation_logs ?? true,
+        enabled: logs?.enabled ?? authoredLogs?.enabled ?? inheritedLogs?.enabled ?? true,
+        head_sampling_rate: logs?.head_sampling_rate
+          ?? authoredLogs?.head_sampling_rate
+          ?? inheritedLogs?.head_sampling_rate
+          ?? options.logsSampleRate
+          ?? 0.01,
+        invocation_logs: logs?.invocation_logs
+          ?? authoredLogs?.invocation_logs
+          ?? inheritedLogs?.invocation_logs
+          ?? true,
       },
       traces: {
         ...inheritedTraces,
+        ...authoredTraces,
         ...traces,
-        enabled: traces?.enabled ?? inheritedTraces?.enabled ?? true,
-        head_sampling_rate: traces?.head_sampling_rate ?? inheritedTraces?.head_sampling_rate ?? options.tracesSampleRate ?? 0.01,
+        enabled: traces?.enabled ?? authoredTraces?.enabled ?? inheritedTraces?.enabled ?? true,
+        head_sampling_rate: traces?.head_sampling_rate
+          ?? authoredTraces?.head_sampling_rate
+          ?? inheritedTraces?.head_sampling_rate
+          ?? options.tracesSampleRate
+          ?? 0.01,
       },
     },
     placement,
@@ -789,7 +870,10 @@ function diagnosePolicy(
     }
   }
 
-  if (options.requireNodeCompat && !config.compatibility_flags?.includes('nodejs_compat')) {
+  // `nodejs_compat_v2` is the other accepted mode. Cloudflare rejects both flags
+  // together, so a config carrying v2 already has Node compatibility.
+  const nodeCompatFlags = new Set(config.compatibility_flags ?? [])
+  if (options.requireNodeCompat && !nodeCompatFlags.has('nodejs_compat') && !nodeCompatFlags.has('nodejs_compat_v2')) {
     diagnostics.push({
       _tag: 'error',
       code: 'missing-nodejs-compat',
