@@ -47,6 +47,15 @@ export function normalizeRoute(value = '/api/github-sponsors'): string {
   return route.replace(/\/$/, '') || '/'
 }
 
+/**
+ * The tiers a build runs with. The fallback lives here rather than in the module
+ * `defaults`, because Nuxt merges those with `defu`, which joins arrays instead of
+ * replacing them. See the note on `defaults` in module.ts.
+ */
+export function resolveSponsorTiers(input: SponsorTier[] | undefined): SponsorTier[] {
+  return parseSponsorTiers(input ?? DEFAULT_TIERS)
+}
+
 export function parseSponsorTiers(input: SponsorTier[]): SponsorTier[] {
   const keys = new Set<string>()
   return input.map((tier) => {

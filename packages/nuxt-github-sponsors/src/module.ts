@@ -3,12 +3,11 @@ import type { SponsorOverride, SponsorTier } from './runtime/shared/types'
 import process from 'node:process'
 import { addImports, addServerHandler, addTypeTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
 import {
-  DEFAULT_TIERS,
   DEFAULT_TOKEN_ENV,
   normalizeRoute,
-  parseSponsorTiers,
   planSponsorDelivery,
   renderSponsorTierAugmentation,
+  resolveSponsorTiers,
   resolveSponsorToken,
 } from './options'
 
@@ -32,10 +31,15 @@ export default defineNuxtModule<ModuleOptions>({
     configKey: 'githubSponsors',
     compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
+  /**
+   * `tiers` is absent on purpose. Nuxt merges these defaults with `defu`, which
+   * concatenates arrays, so a declared default would append the shipped tiers to the
+   * authored ones. A site that names its own `top` tier then fails on a duplicate key.
+   * `setup` falls back to `DEFAULT_TIERS` instead, where a list replaces rather than joins.
+   */
   defaults: {
     mode: 'prerender',
     route: '/api/github-sponsors',
-    tiers: DEFAULT_TIERS,
     overrides: {},
     tokenEnv: DEFAULT_TOKEN_ENV,
   },
@@ -45,7 +49,7 @@ export default defineNuxtModule<ModuleOptions>({
     if (!login)
       throw new TypeError('githubSponsors.login must be a non-empty GitHub login')
     const route = normalizeRoute(options.route)
-    const tiers = parseSponsorTiers(options.tiers ?? DEFAULT_TIERS)
+    const tiers = resolveSponsorTiers(options.tiers)
     const tokenEnv = options.tokenEnv?.trim() || DEFAULT_TOKEN_ENV
     const mode = options.mode ?? 'prerender'
     const resolver = createResolver(import.meta.url)
