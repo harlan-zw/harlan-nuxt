@@ -1,12 +1,14 @@
 import type { H3Event } from 'h3'
-import type { TaskContext, TaskEvent } from 'nitropack/types'
+import type { NitroRuntimeConfig, TaskContext, TaskEvent } from 'nitropack/types'
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import {
   createCloudflareBindings,
   mergeCloudflareBindings,
+  provideCloudflareRuntimeConfig,
   resolveCloudflareBindings,
   runtimeConfigSource,
   setCloudflareBindings,
+  useCloudflareRuntimeConfig,
 } from '../src/bindings'
 
 interface TestEnvironment {
@@ -19,6 +21,68 @@ const taskEnvHost = globalThis as typeof globalThis & { __env__?: unknown }
 
 afterEach(() => {
   delete taskEnvHost.__env__
+})
+
+function runtimeConfig(apiToken: string): NitroRuntimeConfig {
+  return {
+    app: { baseURL: '/', buildAssetsDir: '_nuxt', buildId: 'test', cdnURL: '' },
+    nitro: {},
+    public: {},
+    apiToken,
+  }
+}
+
+describe('useCloudflareRuntimeConfig', () => {
+  afterEach(() => {
+    provideCloudflareRuntimeConfig(undefined)
+    delete taskEnvHost.__env__
+  })
+
+  it('reads the request event when one is available', () => {
+    const sources: unknown[] = []
+    provideCloudflareRuntimeConfig((event) => {
+      sources.push(event)
+      return runtimeConfig('from-event')
+    })
+    const event = { context: { nitro: {}, cloudflare: { env: { NUXT_API_TOKEN: 'secret' } } } } as unknown as H3Event
+
+    expect(useCloudflareRuntimeConfig(event).apiToken).toBe('from-event')
+    expect(sources).toEqual([event])
+  })
+
+  it('reads an eventless source that Nitro can initialize', () => {
+    const sources: unknown[] = []
+    provideCloudflareRuntimeConfig((event) => {
+      sources.push(event)
+      // Nitro writes the resolved config onto `context.nitro`. A source without
+      // it threw for every eventless read and returned a 500.
+      return runtimeConfig('from-env')
+    })
+    taskEnvHost.__env__ = { NUXT_API_TOKEN: 'secret' }
+
+    expect(useCloudflareRuntimeConfig().apiToken).toBe('from-env')
+    expect(sources).toEqual([{
+      context: {
+        nitro: {},
+        cloudflare: { env: { NUXT_API_TOKEN: 'secret' } },
+      },
+    }])
+  })
+
+  it('reads the shared config when no Cloudflare environment exists', () => {
+    const sources: unknown[] = []
+    provideCloudflareRuntimeConfig((event) => {
+      sources.push(event)
+      return runtimeConfig('')
+    })
+
+    expect(useCloudflareRuntimeConfig().apiToken).toBe('')
+    expect(sources).toEqual([undefined])
+  })
+
+  it('fails loudly when no Nitro runtime config reader was provided', () => {
+    expect(() => useCloudflareRuntimeConfig()).toThrow('nuxt-cloudflare')
+  })
 })
 
 describe('cloudflare bindings', () => {

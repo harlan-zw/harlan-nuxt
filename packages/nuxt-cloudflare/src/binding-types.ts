@@ -2,8 +2,7 @@ import type { WranglerConfigInput } from './wrangler'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'pathe'
 import { experimental_generateTypes } from 'wrangler'
-import { discoverWranglerSourceConfigs } from './diagnostics'
-import { readWranglerConfigFile } from './wrangler-file'
+import { readAuthoredWranglerConfig } from './wrangler-file'
 
 interface BindingTypeGenerationOptions {
   buildDir: string
@@ -100,16 +99,11 @@ function createBindingTypeSignature(environment: string, runtime: string): strin
   return `${canonicalizeBindingEnvironment(environment)}\0${runtime.replaceAll('\r\n', '\n')}`
 }
 
-async function readAuthoredConfig(rootDir: string): Promise<WranglerConfigInput> {
-  const [path] = discoverWranglerSourceConfigs(rootDir)
-  if (!path)
-    return {}
-  const loaded = readWranglerConfigFile(path)
-  if (loaded._tag === 'loaded')
-    return loaded.config
-  if (loaded._tag === 'missing')
-    return {}
-  throw new SyntaxError(`Invalid Wrangler config "${path}": ${loaded.reason}`)
+function readAuthoredConfig(rootDir: string): WranglerConfigInput {
+  const authored = readAuthoredWranglerConfig(rootDir)
+  if (authored._tag === 'invalid')
+    throw new SyntaxError(`Invalid Wrangler config "${authored.path}": ${authored.reason}`)
+  return authored._tag === 'authored' ? authored.config : {}
 }
 
 async function generateCloudflareBindingTypes(
@@ -140,7 +134,7 @@ async function generateCloudflareBindingTypes(
 export async function prepareCloudflareBindingTypes(
   options: PreparedBindingTypeGenerationOptions,
 ): Promise<CloudflareBindingTypeArtifact> {
-  const authored = await readAuthoredConfig(options.rootDir)
+  const authored = readAuthoredConfig(options.rootDir)
   const config = mergeDefaults(options.wrangler, authored) as WranglerConfigInput
   return generateCloudflareBindingTypes({ ...options, config })
 }
