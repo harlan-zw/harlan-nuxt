@@ -16,10 +16,16 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 | Field | `@harlan-zw/nuxt-wide-events/server` | planned | Nuxt server code | "field" |
 | Wrangler Diagnostic | `@harlan-zw/nuxt-cloudflare` | published | developers and CI | "warning" |
 | Collection | `@harlan-zw/comark-content/server` | published | Nuxt server code | "collection" |
+| Error Report | `@harlan-zw/nuxt-sentry` | planned | Nuxt app and server code | "error" |
+| Report Policy | `@harlan-zw/nuxt-sentry` | planned | developers | "reporting rules" |
+| Drop Rule | `@harlan-zw/nuxt-sentry/server` | planned | developers | "filter" |
+| Redaction Rule | `@harlan-zw/nuxt-sentry/server` | planned | developers | "redaction" |
 
 Collisions
 
 `Diagnostic` belongs to `nuxt-dx`. `nuxt-cloudflare` always qualifies its findings as `Wrangler Diagnostic`.
+
+`Event` belongs to `Wide Event` and `Domain Event`. Sentry's own word for a captured error is "event", so `nuxt-sentry` never carries that word into its API. It says `Error Report`.
 
 ## Terms
 
@@ -86,6 +92,34 @@ Collisions
 **Never:** Diagnostic on its own, wrangler warning, lint error.
 **Casing:** `Wrangler Diagnostic` in headings and `Wrangler diagnostic` elsewhere.
 
+### Error Report
+
+**Is:** one captured exception sent to the error tracker.
+**Use for:** `nuxt-sentry` APIs, configuration, docs, and developer messages.
+**Never:** event, Sentry event, issue, exception report.
+**Casing:** `Error Report` in headings, `error report` in prose, and `errorReport` in identifiers.
+
+### Report Policy
+
+**Is:** the rules that decide whether an Error Report is sent and what it carries.
+**Use for:** `nuxt-sentry` options, docs, and developer messages.
+**Never:** filter config, beforeSend config, scrubbing rules, event policy, client error policy, query policy.
+**Casing:** `Report Policy` in headings, `report policy` in prose, and `reportPolicy` in identifiers.
+
+### Drop Rule
+
+**Is:** one predicate that stops an Error Report before it is sent.
+**Use for:** `nuxt-sentry` options, docs, and developer messages.
+**Never:** filter, ignore rule, exclusion.
+**Casing:** `Drop Rule` in headings, `drop rule` in prose, and `dropRule` in identifiers.
+
+### Redaction Rule
+
+**Is:** one transform that removes a secret or personal value from an Error Report.
+**Use for:** `nuxt-sentry` options, docs, and developer messages.
+**Never:** scrub, sanitiser, masker.
+**Casing:** `Redaction Rule` in headings, `redaction rule` in prose, and `redactionRule` in identifiers.
+
 ### Collection
 
 **Is:** a named set of markdown files that `comark-content` ingests, queries, and serves.
@@ -99,6 +133,8 @@ Collisions
 | --- | --- | --- |
 | canonical log | Wide Event | The industry also uses this for unrelated aggregation patterns. |
 | event log | Wide Event or Domain Event | It collapses two distinct concepts. |
+| Sentry event | Error Report | `Event` already names two other concepts here. |
+| scrub, sanitise, mask | Redaction Rule | Three words for one transform. |
 | powerful, seamless, robust | (cut) | These words do not describe behaviour. |
 
 ## Open questions
