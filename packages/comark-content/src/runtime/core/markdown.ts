@@ -17,7 +17,7 @@ const highlightClasses = new Set(['rangi', 'shiki'])
  * build added. Markdown has no place for them, so a plain render would emit an
  * MDC container around the fence. Rebuild the fence from the code text instead.
  */
-const stripHighlight = (node: Node): Node => {
+function stripHighlight(node: Node): Node {
   if (!isElement(node))
     return node
   const [tag, attributes, ...children] = node
@@ -40,11 +40,10 @@ const stripHighlight = (node: Node): Node => {
  * a page was authored from without an SSR render. This is the inverse of the
  * ingestion parser, so it runs in process against the generated body asset.
  */
-export const renderPageMarkdown = (
-  body: PageCollectionItemBase['body'],
-  options: RenderPageMarkdownOptions = {},
-): Promise<string> => renderMarkdown(
-  options.frontmatter
-    ? { ...body, nodes: body.nodes.map(stripHighlight) }
-    : { nodes: body.nodes.map(stripHighlight) },
-)
+export function renderPageMarkdown(body: PageCollectionItemBase['body'], options: RenderPageMarkdownOptions = {}): Promise<string> {
+  return renderMarkdown(
+    options.frontmatter
+      ? { ...body, nodes: body.nodes.map(stripHighlight) }
+      : { nodes: body.nodes.map(stripHighlight) },
+  )
+}
