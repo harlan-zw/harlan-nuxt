@@ -172,9 +172,9 @@ walkNodes(page.body.nodes, (node) => {
 
 ## Sitemap
 
-If `@nuxtjs/sitemap` is installed, the module pushes one entry per document into `sitemap:input`. The Nuxt Content v3 sitemap source is excluded, so URLs are never listed twice.
+`@nuxtjs/sitemap` 8.4.0 or later owns this integration. It reads collections through `queryCollectionManifest()` and lists them under its own data source, `@harlan-zw/comark-content:urls`. An older `@nuxtjs/sitemap` is rejected at build time, because this module used to add the URLs itself and the pair would list every page twice.
 
-A page is skipped when its frontmatter sets `sitemap: false` or `robots: false`. Frontmatter `sitemap` object fields are merged into the entry. The entry `lastmod` comes from `updatedAt`, or from `publishedAt`.
+A page is skipped when its frontmatter sets `sitemap: false` or `robots: false`. Frontmatter `sitemap` object fields are merged into the entry. The entry `lastmod` comes from `seo.articleModifiedTime`, or from `updatedAt`.
 
 To keep a whole collection out of the sitemap, set `sitemap: false` on the collection:
 

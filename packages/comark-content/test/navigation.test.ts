@@ -2,9 +2,7 @@ import type { PageCollectionItemBase } from '../src/runtime/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryCollectionItemSurroundings, queryCollectionNavigation, queryCollectionSearchSections } from '../src/runtime/client'
 import { createNavigation, createNavigationSource, createSearchSections, createSurroundings } from '../src/runtime/core/navigation'
-import { createSitemapEntries } from '../src/runtime/core/sitemap'
 import { createCacheableContentResponse, parseNavigationRequest, parseSearchRequest, parseSurroundingsRequest } from '../src/runtime/shared/protocol'
-import { excludeNuxtContentSitemapSource } from '../src/sitemap'
 
 const body: PageCollectionItemBase['body'] = {
   frontmatter: {},
@@ -26,18 +24,6 @@ const pages: PageCollectionItemBase[] = [
 
 describe('derived collection data', () => {
   afterEach(() => vi.unstubAllGlobals())
-
-  it('disables the sitemap source inferred from a transitive Nuxt Content dependency', () => {
-    expect(excludeNuxtContentSitemapSource(undefined)).toEqual({
-      excludeAppSources: ['@nuxt/content@v3:urls'],
-    })
-    expect(excludeNuxtContentSitemapSource({ excludeAppSources: ['nuxt:prerender'] })).toEqual({
-      excludeAppSources: ['nuxt:prerender', '@nuxt/content@v3:urls'],
-    })
-    expect(excludeNuxtContentSitemapSource({ excludeAppSources: true })).toEqual({
-      excludeAppSources: true,
-    })
-  })
 
   it('creates nested navigation and carries requested fields', () => {
     expect(createNavigation(pages, ['new'])).toEqual([{
@@ -209,13 +195,5 @@ describe('derived collection data', () => {
     }])
 
     expect(sections[0]?.content).toBe('Preface. Opening text.')
-  })
-
-  it('projects collection pages into sitemap entries', () => {
-    expect(createSitemapEntries([
-      { ...pages[0]!, updatedAt: '2026-08-14', sitemap: { changefreq: 'weekly' } },
-      { ...pages[1]!, robots: false },
-      { ...pages[2]!, navigation: true, sitemap: false },
-    ])).toEqual([{ loc: '/guide', lastmod: '2026-08-14', changefreq: 'weekly' }])
   })
 })
