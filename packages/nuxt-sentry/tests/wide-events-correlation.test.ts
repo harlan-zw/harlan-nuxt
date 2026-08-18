@@ -17,7 +17,10 @@ vi.mock('nitropack/runtime', () => ({
 describe('wide events correlation plugin', () => {
   it('passes the request event before the fields', async () => {
     const plugin = (await import('../src/runtime/server/plugins/wide-events-correlation')).default
-    plugin({ hooks: { hook: (name: string, handler: (event: unknown) => void) => { hooks[name] = handler } } } as never)
+    const hook = (name: string, handler: (event: unknown) => void): void => {
+      hooks[name] = handler
+    }
+    plugin({ hooks: { hook } } as never)
 
     const event = { path: '/api/thing' }
     hooks.request!(event)
