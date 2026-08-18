@@ -1,5 +1,8 @@
 import type { ContentCollectionManifestEntry, ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../runtime/types'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { createNavigationSource, createSearchSections } from '../runtime/core/navigation'
 
@@ -21,7 +24,18 @@ export interface ContentAssetPlanInput {
   sitemapCollections: readonly string[]
 }
 
+/** The asset every generated directory holds, whatever the collections are. */
+const CONTENT_MANIFEST_ASSET = 'collections.json.gz'
+
 const bodyAssetName = (id: string) => `${createHash('sha256').update(id).digest('hex').slice(0, 32)}.json.gz`
+
+function isSorted(keys: string[]) {
+  for (let index = 1; index < keys.length; index++) {
+    if (keys[index - 1]! > keys[index]!)
+      return false
+  }
+  return true
+}
 
 function canonicalContent(collections: Record<string, PageCollectionItemBase[]>) {
   return JSON.stringify(collections, (key, value) => {
@@ -29,7 +43,13 @@ function canonicalContent(collections: Record<string, PageCollectionItemBase[]>)
       return undefined
     if (!value || typeof value !== 'object' || Array.isArray(value))
       return value
-    return Object.fromEntries(Object.keys(value).sort().map(name => [name, value[name]]))
+    const keys = Object.keys(value)
+    // Most parsed nodes already carry sorted keys. Reordering them allocates a
+    // replacement object for every node in the tree, so only pay for it when the
+    // order actually differs.
+    if (isSorted(keys))
+      return value
+    return Object.fromEntries(keys.sort().map(name => [name, value[name]]))
   })
 }
 
@@ -70,8 +90,54 @@ export function createContentAssetPlan(input: ContentAssetPlanInput): ContentAss
   return {
     manifest,
     assets: [
-      { path: 'collections.json.gz', data: encodeCollectionAsset(manifest) },
+      { path: CONTENT_MANIFEST_ASSET, data: encodeCollectionAsset(manifest) },
       ...Object.entries(input.collections).flatMap(([name, items]) => projectCollectionAssets(name, items)),
     ],
   }
+}
+
+/** Names the file that records which revision the generated directory holds. */
+export const contentAssetStampPath = (outputDir: string): string => `${outputDir}.revision`
+
+/**
+ * The generated directory already held this revision, so no asset was rewritten.
+ * A `Written` result means the directory was cleared and rebuilt.
+ */
+export type ContentAssetSync
+  = | { _tag: 'Reused' }
+    | { _tag: 'Written', assets: number }
+
+export interface SyncContentAssetsOptions {
+  outputDir: string
+  /** Identifies the content the generated directory must hold. */
+  revision: string
+  /** Set to false to always rewrite, whatever the stamp says. */
+  reuseUnchanged: boolean
+  createPlan: () => ContentAssetPlan
+}
+
+/**
+ * Writes the generated assets unless the directory already holds this revision.
+ * The stamp is written last, so an interrupted write always rebuilds.
+ */
+export async function syncContentAssets(options: SyncContentAssetsOptions): Promise<ContentAssetSync> {
+  const stampFile = contentAssetStampPath(options.outputDir)
+  if (options.reuseUnchanged) {
+    const stamp = await readFile(stampFile, 'utf8').catch(error => error.code === 'ENOENT' ? undefined : Promise.reject(error))
+    // The stamp sits outside the generated directory, so it survives a wipe of
+    // that directory. Check the manifest as well before trusting it.
+    if (stamp === options.revision && existsSync(join(options.outputDir, CONTENT_MANIFEST_ASSET)))
+      return { _tag: 'Reused' }
+  }
+  await rm(stampFile, { force: true })
+  const plan = options.createPlan()
+  await rm(options.outputDir, { recursive: true, force: true })
+  await mkdir(options.outputDir, { recursive: true })
+  await Promise.all(plan.assets.map(async (asset) => {
+    const path = join(options.outputDir, asset.path)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, asset.data)
+  }))
+  await writeFile(stampFile, options.revision)
+  return { _tag: 'Written', assets: plan.assets.length }
 }

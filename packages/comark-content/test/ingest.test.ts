@@ -1,5 +1,5 @@
 import type { MarkdownDocument } from 'comark'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -384,6 +384,50 @@ describe('markdown ingestion', () => {
     expect(parse).toHaveBeenCalledTimes(2)
     expect(cached).toMatchObject({ _tag: 'Ok', value: { parsedFiles: 0, cachedFiles: 1 } })
     expect(changed).toMatchObject({ _tag: 'Ok', value: { parsedFiles: 1, cachedFiles: 0 } })
+  })
+
+  it('leaves the cache file untouched when every file came back from it', async () => {
+    const root = await temporaryRoot()
+    const sourcePath = await writeFixture(root, 'content/page.md', '# Page')
+    const parse = vi.fn(async (): Promise<MarkdownDocument> => ({ nodes: [['h1', { id: 'page' }, 'Page']], frontmatter: {}, meta: {} }))
+    const collections = [
+      { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md' }) },
+    ]
+    const cacheFile = join(root, 'cache.json')
+    const options = { cacheFile, parse }
+
+    await ingestCollections(collections, options)
+    const written = await stat(cacheFile)
+    await ingestCollections(collections, options)
+    const reused = await stat(cacheFile)
+    await writeFixture(root, 'content/second.md', '# Second')
+    await ingestCollections(collections, options)
+    const grown = await stat(cacheFile)
+
+    expect(reused.mtimeMs).toBe(written.mtimeMs)
+    expect(grown.mtimeMs).not.toBe(written.mtimeMs)
+    expect(Object.keys(JSON.parse(await readFile(cacheFile, 'utf8')).entries)).toEqual([
+      `pages:${sourcePath}`,
+      `pages:${join(root, 'content/second.md')}`,
+    ])
+  })
+
+  it('drops a removed file from the cache file', async () => {
+    const root = await temporaryRoot()
+    const sourcePath = await writeFixture(root, 'content/page.md', '# Page')
+    await writeFixture(root, 'content/second.md', '# Second')
+    const parse = vi.fn(async (): Promise<MarkdownDocument> => ({ nodes: [], frontmatter: {}, meta: {} }))
+    const collections = [
+      { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md' }) },
+    ]
+    const cacheFile = join(root, 'cache.json')
+    const options = { cacheFile, parse }
+
+    await ingestCollections(collections, options)
+    await rm(join(root, 'content/second.md'))
+    await ingestCollections(collections, options)
+
+    expect(Object.keys(JSON.parse(await readFile(cacheFile, 'utf8')).entries)).toEqual([`pages:${sourcePath}`])
   })
 
   it('rejects the previous Rangi cache version', async () => {

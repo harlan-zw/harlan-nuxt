@@ -1,6 +1,9 @@
 import type { PageCollectionItemBase } from '../src/runtime/types'
-import { describe, expect, it } from 'vitest'
-import { createContentAssetPlan, createContentRevision, encodeCollectionAsset } from '../src/core/asset'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { contentAssetStampPath, createContentAssetPlan, createContentRevision, encodeCollectionAsset, syncContentAssets } from '../src/core/asset'
 import { createIndexedCollectionQuery } from '../src/runtime/core/query'
 import { decodeCollectionAsset } from '../src/runtime/server/asset'
 import { createContentStorage } from '../src/runtime/server/storage-core'
@@ -142,5 +145,96 @@ describe('generated collection storage', () => {
     await expect(storage.loadNavigationCollection('pages')).resolves.toHaveLength(2)
     await expect(storage.loadSearchSections('pages')).resolves.toHaveLength(2)
     expect(reads).toEqual(['pages/navigation.json.gz', 'pages/search.json.gz'])
+  })
+})
+
+describe('generated asset synchronisation', () => {
+  const temporaryRoots: string[] = []
+
+  const temporaryOutputDir = async () => {
+    const root = await mkdtemp(join(tmpdir(), 'comark-content-assets-'))
+    temporaryRoots.push(root)
+    return join(root, 'generated')
+  }
+
+  afterEach(async () => {
+    await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  })
+
+  const planFor = (items: PageCollectionItemBase[]) => () => createContentAssetPlan({ collections: { pages: items }, sitemapCollections: ['pages'] })
+
+  it('writes every asset when the generated directory holds another revision', async () => {
+    const outputDir = await temporaryOutputDir()
+    const createPlan = vi.fn(planFor(pages))
+
+    const first = await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+    const second = await syncContentAssets({ outputDir, revision: 'two', reuseUnchanged: true, createPlan })
+
+    expect(first).toEqual({ _tag: 'Written', assets: 6 })
+    expect(second).toEqual({ _tag: 'Written', assets: 6 })
+    expect(createPlan).toHaveBeenCalledTimes(2)
+    await expect(readFile(contentAssetStampPath(outputDir), 'utf8')).resolves.toBe('two')
+  })
+
+  it('skips the plan when the generated directory already holds the revision', async () => {
+    const outputDir = await temporaryOutputDir()
+    const createPlan = vi.fn(planFor(pages))
+
+    await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+    const reused = await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+
+    expect(reused).toEqual({ _tag: 'Reused' })
+    expect(createPlan).toHaveBeenCalledTimes(1)
+  })
+
+  it('rewrites when the generated directory is gone but the stamp survives', async () => {
+    const outputDir = await temporaryOutputDir()
+    const createPlan = vi.fn(planFor(pages))
+
+    await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+    await rm(outputDir, { recursive: true, force: true })
+    const rebuilt = await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+
+    expect(rebuilt).toEqual({ _tag: 'Written', assets: 6 })
+    await expect(readdir(outputDir)).resolves.toContain('collections.json.gz')
+  })
+
+  it('rewrites when the caller opts out of reuse', async () => {
+    const outputDir = await temporaryOutputDir()
+    const createPlan = vi.fn(planFor(pages))
+
+    await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan })
+    const rewritten = await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: false, createPlan })
+
+    expect(rewritten).toEqual({ _tag: 'Written', assets: 6 })
+    expect(createPlan).toHaveBeenCalledTimes(2)
+  })
+
+  it('leaves no stamp behind when the write fails part way', async () => {
+    const outputDir = await temporaryOutputDir()
+
+    await syncContentAssets({ outputDir, revision: 'one', reuseUnchanged: true, createPlan: planFor(pages) })
+    await expect(syncContentAssets({
+      outputDir,
+      revision: 'two',
+      reuseUnchanged: true,
+      createPlan: () => { throw new Error('plan failed') },
+    })).rejects.toThrow('plan failed')
+
+    await expect(readFile(contentAssetStampPath(outputDir), 'utf8')).rejects.toThrow('ENOENT')
+  })
+
+  it('drops assets of a collection the build no longer produces', async () => {
+    const outputDir = await temporaryOutputDir()
+
+    await syncContentAssets({
+      outputDir,
+      revision: 'one',
+      reuseUnchanged: true,
+      createPlan: () => createContentAssetPlan({ collections: { pages, notes: pages }, sitemapCollections: ['pages'] }),
+    })
+    await syncContentAssets({ outputDir, revision: 'two', reuseUnchanged: true, createPlan: planFor(pages) })
+
+    await expect(readdir(outputDir)).resolves.toEqual(['collections.json.gz', 'pages'])
   })
 })

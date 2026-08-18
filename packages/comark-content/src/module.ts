@@ -3,7 +3,7 @@ import type { ContentConfig } from './config'
 import type { LoadedCollection } from './core/ingest'
 import type { ContentHighlight } from './highlight'
 import { existsSync } from 'node:fs'
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import process from 'node:process'
@@ -22,7 +22,7 @@ import {
 } from '@nuxt/kit'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
 import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSources } from './config'
-import { createContentAssetPlan, createContentRevision } from './core/asset'
+import { createContentAssetPlan, createContentRevision, syncContentAssets } from './core/asset'
 import { ingestCollections } from './core/ingest'
 import { isMarkdownWatchEvent } from './core/source'
 import { excludeNuxtContentSitemapSource } from './sitemap'
@@ -174,20 +174,22 @@ export default defineNuxtModule<ModuleOptions>({
       if (initializedCollections)
         await updateTemplates({ filter: template => template.dst === componentsTemplate.dst })
       initializedCollections = true
-      await rm(outputDir, { recursive: true, force: true })
-      await mkdir(outputDir, { recursive: true })
-      const assetPlan = createContentAssetPlan({
-        collections: result.value.collections,
-        sitemapCollections: result.value.sitemapCollections,
+      // Dev rebuilds always carry a change, so they skip the revision hash and
+      // rewrite the assets outright.
+      const revision = nuxt.options.dev ? 'dev' : createContentRevision(result.value.collections)
+      const sync = await syncContentAssets({
+        outputDir,
+        revision,
+        reuseUnchanged: !nuxt.options.dev,
+        createPlan: () => createContentAssetPlan({
+          collections: result.value.collections,
+          sitemapCollections: result.value.sitemapCollections,
+        }),
       })
-      await Promise.all(assetPlan.assets.map(async (asset) => {
-        const path = join(outputDir, asset.path)
-        await mkdir(dirname(path), { recursive: true })
-        await writeFile(path, asset.data)
-      }))
       const files = Object.values(result.value.collections).reduce((sum, items) => sum + items.length, 0)
-      logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
-      return nuxt.options.dev ? 'dev' : createContentRevision(result.value.collections)
+      const assets = sync._tag === 'Reused' ? 'assets reused' : `${sync.assets} assets written`
+      logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed, ${assets})`)
+      return revision
     }
 
     nuxt.hook('modules:done', async () => {
