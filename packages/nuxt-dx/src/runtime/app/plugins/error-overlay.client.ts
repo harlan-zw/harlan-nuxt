@@ -3,8 +3,17 @@ import type { DiagnosticIssue } from '../report'
 import { useEventListener, useStorage } from '@vueuse/core'
 import { effectScope } from 'vue'
 import { defineNuxtPlugin, useRoute, useRuntimeConfig } from '#app'
+import { chainHandler } from '../handler-chain'
 import { HYDRATION_SUMMARY_ERROR, parseComponentTrace, parseHydrationWarning } from '../hydration'
 import { formatDiagnosticReport, formatIssueLine, issueSignature, relativeSourcePath } from '../report'
+
+type VueWarnHandler = (message: string, instance: ComponentPublicInstance | null, trace: string) => void
+type VueErrorHandler = (error: unknown, instance: ComponentPublicInstance | null, info: string) => void
+
+/** Nuxt marks the `errorHandler` it installs before plugins run, so it can drop it again. */
+interface NuxtDefaultErrorHandler extends VueErrorHandler {
+  __nuxt_default?: boolean
+}
 
 interface DebugComponent extends ComponentPublicInstance {
   $: ComponentPublicInstance['$'] & {
@@ -583,30 +592,68 @@ export default defineNuxtPlugin({
     }
 
     const originalConsoleError = console.error
-    const previousWarnHandler = nuxtApp.vueApp.config.warnHandler
-    const previousErrorHandler = nuxtApp.vueApp.config.errorHandler
+    const vueConfig = nuxtApp.vueApp.config
 
-    const warnHandler: typeof previousWarnHandler = (message, instance, trace) => {
-      const mismatch = parseHydrationWarning(message.trim())
-      if (mismatch) {
-        const chain = parseComponentTrace(trace)
-        const issue: DiagnosticIssue = { kind: 'hydration', mismatch, component: chain[0], componentFile: sourceFile(instance), trace: chain }
-        addIssue(issue)
-        console.warn(`[nuxt-dx] ${formatIssueLine(issue)}`)
-        return
-      }
-      const formatted = `${message.trim()}${sourceDetails(instance)}`
-      addIssue({ kind: 'warning', message: formatted })
-      console.warn(`[Vue warn]: ${formatted}`)
-    }
-    const errorHandler: typeof previousErrorHandler = (error, instance, info) => {
-      const message = error instanceof Error ? error.stack ?? error.message : String(error)
-      const formatted = `${info}: ${message}${sourceDetails(instance)}`
-      addIssue({ kind: 'error', message: formatted })
-      originalConsoleError(`[Vue error]: ${formatted}`)
-    }
-    nuxtApp.vueApp.config.warnHandler = warnHandler
-    nuxtApp.vueApp.config.errorHandler = errorHandler
+    /**
+     * Both handlers record the issue and then hand it on. Whoever held the slot decides what
+     * reaches the console, and Vue logs the warning itself when nobody does, so this logs only
+     * when there is nothing behind it. An app that suppresses a warning keeps a quiet console
+     * and still sees the issue in the overlay.
+     */
+    const warnChain = chainHandler<VueWarnHandler>(
+      { read: () => vueConfig.warnHandler, write: (handler) => { vueConfig.warnHandler = handler } },
+      (next, message, instance, trace) => {
+        const mismatch = parseHydrationWarning(message.trim())
+        if (mismatch) {
+          const chain = parseComponentTrace(trace)
+          const issue: DiagnosticIssue = { kind: 'hydration', mismatch, component: chain[0], componentFile: sourceFile(instance), trace: chain }
+          addIssue(issue)
+          if (next)
+            next(message, instance, trace)
+          else
+            console.warn(`[nuxt-dx] ${formatIssueLine(issue)}`)
+          return
+        }
+        const formatted = `${message.trim()}${sourceDetails(instance)}`
+        addIssue({ kind: 'warning', message: formatted })
+        if (next)
+          next(message, instance, trace)
+        else
+          console.warn(`[Vue warn]: ${formatted}`)
+      },
+    )
+    const errorChain = chainHandler<VueErrorHandler>(
+      { read: () => vueConfig.errorHandler, write: (handler) => { vueConfig.errorHandler = handler } },
+      (next, error, instance, info) => {
+        const message = error instanceof Error ? error.stack ?? error.message : String(error)
+        const formatted = `${info}: ${message}${sourceDetails(instance)}`
+        addIssue({ kind: 'error', message: formatted })
+        if (next)
+          next(error, instance, info)
+        else
+          originalConsoleError(`[Vue error]: ${formatted}`)
+      },
+    )
+
+    /**
+     * This plugin runs first, so every plugin after it can take the slot and leave the overlay
+     * blind. `app:created` fires once every plugin has run, which is the first moment where
+     * taking the slot back cannot be undone by another plugin.
+     */
+    const removeCreatedHook = nuxtApp.hook('app:created', () => {
+      warnChain.reinstall()
+      errorChain.reinstall()
+    })
+    /**
+     * Nuxt installs its own `errorHandler` before any plugin, and drops it once the app has
+     * resolved, but only while it still holds the slot. This chain holds the slot instead, so
+     * it drops that handler on Nuxt's behalf. Without this, every error after hydration would
+     * reach Nuxt's startup handler and turn into the error page.
+     */
+    const removeSuspenseHook = nuxtApp.hook('app:suspense:resolve', () => {
+      if ((errorChain.next() as NuxtDefaultErrorHandler | undefined)?.__nuxt_default)
+        errorChain.setNext(undefined)
+    })
 
     const patchedConsoleError = (...args: unknown[]) => {
       const message = args.map(value => value instanceof Error ? value.stack ?? value.message : String(value)).join(' ').trim()
@@ -724,10 +771,10 @@ export default defineNuxtPlugin({
         clearTimeout(copyResetTimer)
       if (console.error === patchedConsoleError)
         console.error = originalConsoleError
-      if (nuxtApp.vueApp.config.warnHandler === warnHandler)
-        nuxtApp.vueApp.config.warnHandler = previousWarnHandler
-      if (nuxtApp.vueApp.config.errorHandler === errorHandler)
-        nuxtApp.vueApp.config.errorHandler = previousErrorHandler
+      removeCreatedHook()
+      removeSuspenseHook()
+      warnChain.restore()
+      errorChain.restore()
       host.remove()
     }
     import.meta.hot?.dispose(cleanup)

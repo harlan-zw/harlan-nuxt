@@ -144,7 +144,7 @@ export default defineNuxtConfig({
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "entries": [
     {
       "scope": "client",
@@ -294,7 +294,7 @@ export default defineNuxtConfig({
       nitroPluginsKb: 75,
       // kB budget per Nitro middleware in the server bundle
       nitroMiddlewareKb: 20,
-      // keyed by plugin name or any fragment of an entry path
+      // keyed by plugin name, Nuxt module name, or any fragment of an entry path
       overridesKb: {
         'analytics': 60,
         'server/plugins/queue': 120,
@@ -310,6 +310,15 @@ export default defineNuxtConfig({
 ```
 
 Set `sizeBudget: false` to turn the check off entirely.
+
+A key in `overridesKb` must match a plugin name, a Nuxt module name, or a fragment of an entry path. A key that matches nothing changes no budget, so the build lists every key that matched no runtime entry:
+
+```
+[nuxt-dx]  WARN  1 `sizeBudget.overridesKb` key matched no runtime entry: `server/plugins/sentry.ts`.
+                 Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.
+```
+
+Some modules ship a runtime entry that no app can make smaller. Those carry their own budget, so you do not write the same override in every app that installs them. `@sentry/nuxt` gets 400 kB for its Nitro plugin. A known budget only raises the budget for the scope, so a lower `nitroPluginsKb`, or an override you write yourself, still wins.
 
 Budgets are measured whenever a bundle is produced. Nitro entries report during development and builds. Client entries only report during builds.
 

@@ -11,9 +11,11 @@ inputs:
     required: false
     default: '10'
   artifact-name:
+    # Kept in step with `SNAPSHOT_ARTIFACT_NAME`, so a report format bump starts a clean
+    # artifact rather than pairing a new report with a baseline `compare` refuses to read.
     description: Artifact this uploads the report to, and reads the baseline back from.
     required: false
-    default: nuxt-dx-size-budget-v2
+    default: nuxt-dx-size-budget-v3
   base-branch:
     description: Branch whose last successful run of this workflow holds the baseline. Defaults to the pull request base, then the repository default branch.
     required: false
@@ -38,8 +40,13 @@ inputs:
 runs:
   using: composite
   steps:
-    # The baseline is the report the last green run on the base branch left behind, so
-    # nothing is rebuilt here and no baseline file is committed to the repository.
+    # The baseline is the report an earlier run on the base branch left behind, so nothing is
+    # rebuilt here and no baseline file is committed to the repository.
+    #
+    # The newest run holding the artifact wins, not the newest green run. This action drops
+    # into a job beside jobs it knows nothing about, so a green workflow would mean every job
+    # in it passed. One red lint job on the base branch would then leave every later pull
+    # request with no baseline, for as long as that job stays red.
     - name: Find the baseline run
       id: baseline
       shell: bash
@@ -49,17 +56,53 @@ runs:
         WORKFLOW: ${{ github.workflow }}
         BASE_BRANCH: ${{ inputs.base-branch || github.event.pull_request.base.ref || github.event.repository.default_branch }}
         REPORT_PATH: ${{ inputs.report-path }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
         echo "report-file=$(basename "$REPORT_PATH")" >> "$GITHUB_OUTPUT"
-        run_id=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BASE_BRANCH" \
-          --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+        run_ids=$(gh run list --repo "$REPO" --workflow "$WORKFLOW" --branch "$BASE_BRANCH" \
+          --status completed --limit 20 --json databaseId --jq '.[].databaseId' || true)
+        run_id=""
+        for candidate in $run_ids; do
+          # `$ENV.ARTIFACT_NAME` keeps the name out of the jq program text, where a quote in
+          # it would need escaping through two layers.
+          held=$(gh api "repos/$REPO/actions/runs/$candidate/artifacts?per_page=100" \
+            --jq '[.artifacts[] | select(.name == $ENV.ARTIFACT_NAME and .expired == false)] | length' 2>/dev/null || true)
+          if [ -n "$held" ] && [ "$held" != "0" ]; then
+            run_id="$candidate"
+            break
+          fi
+        done
         echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
         if [ -z "$run_id" ]; then
-          echo "No successful run of \"$WORKFLOW\" on $BASE_BRANCH yet, so this build has no baseline."
+          echo "No run of \"$WORKFLOW\" on $BASE_BRANCH still holds a \"$ARTIFACT_NAME\" artifact, so this build has no baseline."
         else
           echo "Taking the baseline from run $run_id on $BASE_BRANCH."
         fi
+
+    # `npx --no-install` exits 1 when the bin is absent, which is the code a breached budget
+    # also uses. Resolving the bin here keeps a missing install from reading as growth, and
+    # from passing the job green with an empty summary.
+    - name: Find the size budget CLI
+      id: cli
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -uo pipefail
+        dir="$PWD"
+        while [ "$dir" != "/" ]; do
+          if [ -x "$dir/node_modules/.bin/nuxt-dx" ]; then
+            echo "path=$dir/node_modules/.bin/nuxt-dx" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dir="$(dirname "$dir")"
+        done
+        if command -v nuxt-dx > /dev/null 2>&1; then
+          echo "path=$(command -v nuxt-dx)" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # Reported by the verdict step, so this build still uploads its own report.
+        echo "path=" >> "$GITHUB_OUTPUT"
 
     # Missing or expired artifacts are normal on a first run, so a failed download is
     # reported as no baseline rather than as a broken pull request.
@@ -78,27 +121,35 @@ runs:
     # leaves a summary, a comment, and a new baseline behind.
     - name: Compare against the baseline
       id: compare
+      if: steps.cli.outputs.path != ''
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
+        CLI: ${{ steps.cli.outputs.path }}
         BASE_REPORT: ${{ runner.temp }}/nuxt-dx-baseline/${{ steps.baseline.outputs.report-file }}
         HEAD_REPORT: ${{ inputs.report-path }}
         THRESHOLD_KB: ${{ inputs.threshold-kb }}
         SUMMARY_FILE: ${{ runner.temp }}/nuxt-dx-summary.md
       run: |
         set -uo pipefail
-        npx --no-install nuxt-dx compare "$BASE_REPORT" "$HEAD_REPORT" \
+        "$CLI" compare "$BASE_REPORT" "$HEAD_REPORT" \
           --threshold-kb "$THRESHOLD_KB" --allow-missing-base > "$SUMMARY_FILE"
         code="$?"
         cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
         cat "$SUMMARY_FILE"
-        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        # Named, so the verdict step never has to read an exit code as growth.
+        case "$code" in
+          0) status=ok ;;
+          2) status=broken ;;
+          *) status=breach ;;
+        esac
+        echo "status=$status" >> "$GITHUB_OUTPUT"
         echo "summary-file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
     # One comment per app, replaced in place, so a ten-push pull request carries the
     # current numbers rather than ten stale copies of them.
     - name: Comment the summary on the pull request
-      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && steps.compare.outputs.exit-code != '2' }}
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && (steps.compare.outputs.status == 'ok' || steps.compare.outputs.status == 'breach') }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -138,23 +189,29 @@ runs:
         retention-days: 30
 
     # Last, so a failure here never costs the summary, the comment, or the baseline.
-    # Exit code 2 means nothing was compared, which is a broken step rather than a breach
-    # and fails regardless of what this action was asked to do about growth.
+    # A missing CLI and a broken comparison both mean nothing was measured. Neither is growth,
+    # so both fail regardless of what this action was asked to do about growth.
     - name: Apply the verdict
       shell: bash
       env:
-        CODE: ${{ steps.compare.outputs.exit-code }}
+        CLI: ${{ steps.cli.outputs.path }}
+        STATUS: ${{ steps.compare.outputs.status }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
         FAIL_ON_BREACH: ${{ inputs.fail-on-breach }}
       run: |
         set -uo pipefail
-        if [ "$CODE" = "2" ]; then
+        if [ -z "$CLI" ]; then
+          echo "::error::The nuxt-dx CLI is not installed in \"$WORKING_DIRECTORY\" or any directory above it. Add \`@harlan-zw/nuxt-dx\` to the app and install it before this step."
+          exit 1
+        fi
+        if [ "$STATUS" = "broken" ]; then
           echo "::error::nuxt-dx compare could not compare the two reports. See the log above."
           exit 1
         fi
-        if [ "$CODE" != "0" ] && [ "$FAIL_ON_BREACH" = "true" ]; then
+        if [ "$STATUS" = "breach" ] && [ "$FAIL_ON_BREACH" = "true" ]; then
           echo "::error::A target grew past the threshold. See the size budget summary."
           exit 1
         fi
-        if [ "$CODE" != "0" ]; then
+        if [ "$STATUS" = "breach" ]; then
           echo "::warning::A target grew past the threshold. Reporting only, since \`fail-on-breach\` is off."
         fi
