@@ -1,5 +1,5 @@
 name: Nuxt DX size budget
-description: Diff this build's size budget report against the base branch, summarise what moved, and fail when a runtime entry grows past the threshold.
+description: Diff this build's size budget report against the base branch and report what moved, as a step summary and a pull request comment.
 
 inputs:
   report-path:
@@ -7,7 +7,7 @@ inputs:
     required: false
     default: .nuxt/dx/size-budget.json
   threshold-kb:
-    description: Growth allowed for a single target, never cumulative, before this fails.
+    description: Growth a single target may take, never cumulative, before the summary calls it out.
     required: false
     default: '10'
   artifact-name:
@@ -22,8 +22,16 @@ inputs:
     description: Directory the app was built in.
     required: false
     default: .
+  comment:
+    description: 'Post the summary as a pull request comment, replacing this action''s previous one. Needs `pull-requests: write`; skipped with a notice when the token cannot write.'
+    required: false
+    default: 'true'
+  fail-on-breach:
+    description: Fail the job when a target grew past the threshold. Off by default, so growth is reported rather than blocking.
+    required: false
+    default: 'false'
   github-token:
-    description: 'Token used to list workflow runs and download the baseline artifact. Needs `actions: read`.'
+    description: 'Token used to list workflow runs, download the baseline artifact, and comment. Needs `actions: read`, plus `pull-requests: write` to comment.'
     required: false
     default: ${{ github.token }}
 
@@ -65,20 +73,60 @@ runs:
         run-id: ${{ steps.baseline.outputs.run-id }}
         github-token: ${{ inputs.github-token }}
 
+    # The comparison always runs to completion and always publishes. Whether a breach is
+    # allowed to fail the job is decided in the step after this one, so a breach still
+    # leaves a summary, a comment, and a new baseline behind.
     - name: Compare against the baseline
+      id: compare
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         BASE_REPORT: ${{ runner.temp }}/nuxt-dx-baseline/${{ steps.baseline.outputs.report-file }}
         HEAD_REPORT: ${{ inputs.report-path }}
         THRESHOLD_KB: ${{ inputs.threshold-kb }}
+        SUMMARY_FILE: ${{ runner.temp }}/nuxt-dx-summary.md
       run: |
         set -uo pipefail
         npx --no-install nuxt-dx compare "$BASE_REPORT" "$HEAD_REPORT" \
-          --threshold-kb "$THRESHOLD_KB" --allow-missing-base | tee -a "$GITHUB_STEP_SUMMARY"
-        exit "${PIPESTATUS[0]}"
+          --threshold-kb "$THRESHOLD_KB" --allow-missing-base > "$SUMMARY_FILE"
+        code="$?"
+        cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+        cat "$SUMMARY_FILE"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "summary-file=$SUMMARY_FILE" >> "$GITHUB_OUTPUT"
 
-    # Uploaded even when the comparison failed, so the next run on this branch still has
+    # One comment per app, replaced in place, so a ten-push pull request carries the
+    # current numbers rather than ten stale copies of them.
+    - name: Comment the summary on the pull request
+      if: ${{ inputs.comment == 'true' && github.event_name == 'pull_request' && steps.compare.outputs.exit-code != '2' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        MARKER: <!-- nuxt-dx-size-budget:${{ inputs.artifact-name }} -->
+        SUMMARY_FILE: ${{ steps.compare.outputs.summary-file }}
+      run: |
+        set -uo pipefail
+        body="$(printf '%s\n\n%s\n' "$MARKER" "$(cat "$SUMMARY_FILE")")"
+        # `$ENV.MARKER` keeps the marker out of the jq program text, where its `<!-- -->`
+        # and quotes would need escaping through two layers.
+        existing=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq 'map(select(.body | startswith($ENV.MARKER))) | .[0].id // empty' 2>/dev/null || true)
+        if [ -n "$existing" ]; then
+          method=PATCH
+          target="repos/$REPO/issues/comments/$existing"
+        else
+          method=POST
+          target="repos/$REPO/issues/$PR/comments"
+        fi
+        if ! gh api -X "$method" "$target" -f body="$body" > /dev/null 2>&1; then
+          # A fork pull request gets a read-only token, and not every caller grants
+          # `pull-requests: write`. The summary is already published either way.
+          echo "::notice::Could not comment on #$PR, so the size budget is in the step summary only. Grant \`pull-requests: write\` to comment."
+        fi
+
+    # Uploaded even when the comparison broke, so the next run on this branch still has
     # something to measure against.
     - name: Keep this report as the next baseline
       if: ${{ !cancelled() }}
@@ -88,3 +136,25 @@ runs:
         path: ${{ inputs.working-directory }}/${{ inputs.report-path }}
         if-no-files-found: error
         retention-days: 30
+
+    # Last, so a failure here never costs the summary, the comment, or the baseline.
+    # Exit code 2 means nothing was compared, which is a broken step rather than a breach
+    # and fails regardless of what this action was asked to do about growth.
+    - name: Apply the verdict
+      shell: bash
+      env:
+        CODE: ${{ steps.compare.outputs.exit-code }}
+        FAIL_ON_BREACH: ${{ inputs.fail-on-breach }}
+      run: |
+        set -uo pipefail
+        if [ "$CODE" = "2" ]; then
+          echo "::error::nuxt-dx compare could not compare the two reports. See the log above."
+          exit 1
+        fi
+        if [ "$CODE" != "0" ] && [ "$FAIL_ON_BREACH" = "true" ]; then
+          echo "::error::A target grew past the threshold. See the size budget summary."
+          exit 1
+        fi
+        if [ "$CODE" != "0" ]; then
+          echo "::warning::A target grew past the threshold. Reporting only, since \`fail-on-breach\` is off."
+        fi

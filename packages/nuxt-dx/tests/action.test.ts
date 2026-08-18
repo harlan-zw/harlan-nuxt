@@ -16,6 +16,7 @@ interface ActionStep {
   'uses'?: string
   'run'?: string
   'if'?: string
+  'env'?: Record<string, string>
   'continue-on-error'?: boolean
 }
 
@@ -65,10 +66,43 @@ describe('nuxt-dx-budget action', () => {
     expect(step('Compare against the baseline').run).toContain('--allow-missing-base')
   })
 
-  it('writes the diff to the step summary and fails on the comparison, not on tee', () => {
-    const run = step('Compare against the baseline').run!
-    expect(run).toContain('"$GITHUB_STEP_SUMMARY"')
-    expect(run).toMatch(/exit "\$\{PIPESTATUS\[0\]\}"/)
+  it('writes the diff to the step summary', () => {
+    expect(step('Compare against the baseline').run).toContain('"$GITHUB_STEP_SUMMARY"')
+  })
+
+  it('reports growth without failing the job unless asked to', () => {
+    expect(action.inputs['fail-on-breach']!.default).toBe('false')
+    // The comparison itself never decides the job's fate, so a breach still leaves a
+    // summary, a comment and a new baseline behind.
+    expect(step('Compare against the baseline').run).not.toMatch(/^\s*exit\b/m)
+    const verdict = step('Apply the verdict').run!
+    expect(verdict).toContain('FAIL_ON_BREACH')
+    expect(verdict).toContain('::warning::')
+  })
+
+  it('still fails when the two reports could not be compared at all', () => {
+    // Exit code 2 is a broken step, not growth, so no input makes it passable.
+    expect(step('Apply the verdict').run).toMatch(/CODE" = "2"[\s\S]*?exit 1/)
+  })
+
+  it('decides the verdict after the baseline is uploaded, so a failure keeps it', () => {
+    const names = action.runs.steps.map(candidate => candidate.name)
+    expect(names.indexOf('Apply the verdict')).toBeGreaterThan(names.indexOf('Keep this report as the next baseline'))
+  })
+
+  it('replaces its own pull request comment instead of stacking them', () => {
+    const comment = step('Comment the summary on the pull request')
+    expect(comment.if).toContain('pull_request')
+    expect(comment.run).toContain('$ENV.MARKER')
+    // An HTML comment, so readers never see it, keyed by artifact name so a matrix
+    // of apps gets one comment each rather than fighting over one.
+    expect(comment.env!.MARKER).toMatch(/^<!-- nuxt-dx-size-budget:/)
+    expect(comment.env!.MARKER).toContain('inputs.artifact-name')
+    expect(comment.run).toContain('PATCH')
+  })
+
+  it('leaves the summary alone when it cannot comment, rather than failing', () => {
+    expect(step('Comment the summary on the pull request').run).toContain('::notice::')
   })
 
   it('leaves this build\'s report behind even when the comparison failed', () => {
