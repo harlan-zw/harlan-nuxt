@@ -1,5 +1,6 @@
 import type { GitHubSponsorsResponse, SponsorOverride, SponsorTier } from '../../shared/types'
-import { defineCachedFunction } from 'nitropack/runtime'
+import { defineEventHandler } from 'h3'
+import { defineCachedFunction, useRuntimeConfig } from 'nitropack/runtime'
 import { fetchGitHubSponsorships, preparePublicSponsors, toGitHubSponsorsResponse } from '../github'
 
 interface SponsorsRuntimeConfig {
