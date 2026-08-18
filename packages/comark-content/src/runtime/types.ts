@@ -51,12 +51,12 @@ export interface ContentDocumentMetadata {
   [key: string]: unknown
 }
 
-export type IndexedContentDocument<TItem extends PageCollectionItemBase = PageCollectionItemBase> = {
+export interface IndexedContentDocument<TItem extends PageCollectionItemBase = PageCollectionItemBase> {
   metadata: ContentDocumentMetadata & Omit<TItem, 'body'>
   bodyAsset: string
 }
 
-export type NavigationCollectionItem = {
+export interface NavigationCollectionItem {
   path: string
   stem: string
   title: string
@@ -88,7 +88,7 @@ export interface ContentSearchSection {
   level: number
 }
 
-export type SourceLocation = {
+export interface SourceLocation {
   source: string
   line: number
   column: number
@@ -100,6 +100,6 @@ export type ContentError = SourceLocation & {
   cause?: unknown
 }
 
-export type Result<T, E = ContentError> =
-  | { _tag: 'Ok', value: T }
-  | { _tag: 'Err', error: E }
+export type Result<T, E = ContentError>
+  = | { _tag: 'Ok', value: T }
+    | { _tag: 'Err', error: E }

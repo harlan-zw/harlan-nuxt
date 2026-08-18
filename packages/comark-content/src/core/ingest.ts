@@ -9,6 +9,7 @@ import { createMarkdownParser } from 'comark'
 import headings from 'comark/plugins/headings'
 import rangi from 'comark/plugins/rangi'
 import toc from 'comark/plugins/toc'
+import { contentHookCollection, contentHookFile, parserOptions } from '../hooks'
 import { collectComponentTags } from '../runtime/components/names'
 import { generatedTitle } from '../runtime/core/path'
 import { CACHE_VERSION, readCache, writeCache } from './cache'
@@ -17,15 +18,14 @@ import { contentRangiLanguages, contentRangiTheme, normalizeRangiThemeVariables 
 import { prepareRemoteSource } from './remote'
 import { err, ok, sourceError } from './result'
 import { resolveCollectionSource, scanSource } from './source'
-import { contentHookCollection, contentHookFile, parserOptions } from '../hooks'
 
-export type LoadedCollection = {
+export interface LoadedCollection {
   name: string
   rootDir: string
   definition: CollectionDefinition
 }
 
-export type IngestionResult = {
+export interface IngestionResult {
   collections: Record<string, PageCollectionItemBase[]>
   parsedFiles: number
   cachedFiles: number
@@ -46,9 +46,7 @@ const plainParser = createMarkdownParser({
   ],
 })
 
-export const createContentParser = async (
-  options: Pick<IngestionOptions, 'highlight'> = {},
-) => {
+export async function createContentParser(options: Pick<IngestionOptions, 'highlight'> = {}) {
   if (!options.highlight)
     return plainParser
   const highlight = typeof options.highlight === 'object' ? options.highlight : {}
@@ -67,7 +65,7 @@ export const createContentParser = async (
   return async (source: string) => normalizeRangiThemeVariables(await parse(source))
 }
 
-const errorLocation = (cause: unknown, markdown: string) => {
+function errorLocation(cause: unknown, markdown: string) {
   if (!cause || typeof cause !== 'object')
     return { line: 1, column: 1 }
   const value = cause as Record<string, unknown>
@@ -80,14 +78,14 @@ const errorLocation = (cause: unknown, markdown: string) => {
   }
 }
 
-const issueKey = (issue: StandardSchemaIssue) => {
+function issueKey(issue: StandardSchemaIssue) {
   const part = issue.path?.[0]
   if (typeof part === 'object' && part && 'key' in part)
     return String(part.key)
   return part === undefined ? undefined : String(part)
 }
 
-const frontmatterLocation = (source: string, issue: StandardSchemaIssue) => {
+function frontmatterLocation(source: string, issue: StandardSchemaIssue) {
   const key = issueKey(issue)
   if (!key)
     return { line: 1, column: 1 }
@@ -95,7 +93,7 @@ const frontmatterLocation = (source: string, issue: StandardSchemaIssue) => {
   return { line: line === -1 ? 1 : line + 1, column: 1 }
 }
 
-const parseSchemaResult = (result: unknown) => {
+function parseSchemaResult(result: unknown) {
   if (!result || typeof result !== 'object')
     return { value: result as Record<string, unknown> }
   const record = result as Record<string, unknown>
@@ -105,24 +103,23 @@ const parseSchemaResult = (result: unknown) => {
   }
 }
 
-const applySchema = async (definition: CollectionDefinition, frontmatter: Record<string, unknown>) => {
+async function applySchema(definition: CollectionDefinition, frontmatter: Record<string, unknown>) {
   const validate = definition.schema?.['~standard']?.validate
   return validate ? parseSchemaResult(await validate(frontmatter)) : { value: frontmatter }
 }
 
 const digest = (source: string, parser: string) => createHash('sha256').update(CACHE_VERSION).update('\0').update(parser).update('\0').update(source).digest('hex')
 
-const contentHighlightFingerprint = (highlight: ContentHighlight | undefined) => JSON.stringify(
-  highlight ?? false,
-  (_key, value) => value instanceof RegExp
-    ? { _tag: 'RegExp', source: value.source, flags: value.flags }
-    : value,
-)
+function contentHighlightFingerprint(highlight: ContentHighlight | undefined) {
+  return JSON.stringify(
+    highlight ?? false,
+    (_key, value) => value instanceof RegExp
+      ? { _tag: 'RegExp', source: value.source, flags: value.flags }
+      : value,
+  )
+}
 
-export const ingestCollections = async (
-  loadedCollections: LoadedCollection[],
-  options: IngestionOptions,
-): Promise<Result<IngestionResult>> => {
+export async function ingestCollections(loadedCollections: LoadedCollection[], options: IngestionOptions): Promise<Result<IngestionResult>> {
   const cache = await readCache(options.cacheFile)
   const nextCache = { version: CACHE_VERSION, entries: {} as typeof cache.entries }
   const collections: Record<string, PageCollectionItemBase[]> = {}

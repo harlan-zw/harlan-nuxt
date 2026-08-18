@@ -2,11 +2,13 @@ import type { Node } from 'comark'
 import type { ContentNavigationItem, ContentSearchSection, NavigationCollectionItem, PageCollectionItemBase } from '../types'
 import { generatedTitle } from './path'
 
-const text = (node: Node): string => typeof node === 'string'
-  ? node
-  : node.slice(2).map(child => text(child as Node)).join('')
+function text(node: Node): string {
+  return typeof node === 'string'
+    ? node
+    : node.slice(2).map(child => text(child as Node)).join('')
+}
 
-const navigationItem = (page: NavigationCollectionItem, fields: string[]): ContentNavigationItem => {
+function navigationItem(page: NavigationCollectionItem, fields: string[]): ContentNavigationItem {
   const navigation = page.navigation
   const metadata = typeof navigation === 'object' && navigation ? navigation : {}
   return {
@@ -17,11 +19,13 @@ const navigationItem = (page: NavigationCollectionItem, fields: string[]): Conte
   }
 }
 
-export const createNavigationSource = (page: PageCollectionItemBase): NavigationCollectionItem => Object.fromEntries(
-  Object.entries(page).filter(([key]) => !['body', 'id', 'extension', '_source', 'seo', 'sitemap', 'robots'].includes(key)),
-) as NavigationCollectionItem
+export function createNavigationSource(page: PageCollectionItemBase): NavigationCollectionItem {
+  return Object.fromEntries(
+    Object.entries(page).filter(([key]) => !['body', 'id', 'extension', '_source', 'seo', 'sitemap', 'robots'].includes(key)),
+  ) as NavigationCollectionItem
+}
 
-export const createNavigation = (pages: NavigationCollectionItem[], fields: string[] = []): ContentNavigationItem[] => {
+export function createNavigation(pages: NavigationCollectionItem[], fields: string[] = []): ContentNavigationItem[] {
   const included = pages.filter(page => page.navigation !== false).sort((left, right) => left.stem.localeCompare(right.stem))
   type TreeItem = ContentNavigationItem & { _sort: string, children?: TreeItem[] }
   const byPath = new Map<string, TreeItem>()
@@ -73,7 +77,7 @@ export const createNavigation = (pages: NavigationCollectionItem[], fields: stri
   return project(roots)
 }
 
-export const createSurroundings = (pages: NavigationCollectionItem[], path: string, fields: string[] = []): [ContentNavigationItem | null, ContentNavigationItem | null] => {
+export function createSurroundings(pages: NavigationCollectionItem[], path: string, fields: string[] = []): [ContentNavigationItem | null, ContentNavigationItem | null] {
   const ordered = pages.filter(page => page.navigation !== false).sort((left, right) => left.stem.localeCompare(right.stem))
   const index = ordered.findIndex(page => page.path === path)
   const project = (page?: NavigationCollectionItem) => page
@@ -82,39 +86,41 @@ export const createSurroundings = (pages: NavigationCollectionItem[], path: stri
   return index === -1 ? [null, null] : [project(ordered[index - 1]), project(ordered[index + 1])]
 }
 
-const appendText = (section: ContentSearchSection, value: string) => {
+function appendText(section: ContentSearchSection, value: string) {
   const next = value.trim()
   if (next)
     section.content = `${section.content} ${next}`.trim()
 }
 
-export const createSearchSections = (pages: PageCollectionItemBase[]): ContentSearchSection[] => pages.flatMap((page) => {
-  const sections: ContentSearchSection[] = []
-  const titles: string[] = []
-  let current: ContentSearchSection | undefined
-  let preface = ''
-  for (const node of page.body.nodes) {
-    if (typeof node !== 'string' && typeof node[0] === 'string' && /^h[1-6]$/.test(node[0])) {
-      const level = Number(node[0].slice(1))
-      const title = text(node)
-      titles.splice(level - 1)
-      current = {
-        id: `${page.path}#${String(node[1].id ?? '')}`,
-        title,
-        titles: [...titles],
-        content: '',
-        level,
+export function createSearchSections(pages: PageCollectionItemBase[]): ContentSearchSection[] {
+  return pages.flatMap((page) => {
+    const sections: ContentSearchSection[] = []
+    const titles: string[] = []
+    let current: ContentSearchSection | undefined
+    let preface = ''
+    for (const node of page.body.nodes) {
+      if (typeof node !== 'string' && typeof node[0] === 'string' && /^h[1-6]$/.test(node[0])) {
+        const level = Number(node[0].slice(1))
+        const title = text(node)
+        titles.splice(level - 1)
+        current = {
+          id: `${page.path}#${String(node[1].id ?? '')}`,
+          title,
+          titles: [...titles],
+          content: '',
+          level,
+        }
+        sections.push(current)
+        if (sections.length === 1)
+          appendText(current, preface)
+        titles[level - 1] = title
+        continue
       }
-      sections.push(current)
-      if (sections.length === 1)
-        appendText(current, preface)
-      titles[level - 1] = title
-      continue
+      if (current)
+        appendText(current, text(node))
+      else
+        preface = `${preface} ${text(node)}`.trim()
     }
-    if (current)
-      appendText(current, text(node))
-    else
-      preface = `${preface} ${text(node)}`.trim()
-  }
-  return sections
-})
+    return sections
+  })
+}

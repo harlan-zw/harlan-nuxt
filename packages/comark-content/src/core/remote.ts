@@ -4,9 +4,10 @@ import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import process from 'node:process'
 import { err, ok, sourceError } from './result'
 
-export type RemoteSource = {
+export interface RemoteSource {
   repository: GitRepository
   include: string
   exclude?: string | string[]
@@ -23,15 +24,13 @@ const runCommand: Command = (command, args, options) => new Promise((resolve, re
   child.on('close', code => code === 0 ? resolve() : reject(new Error(error.trim() || `${command} exited with ${code}.`)))
 })
 
-const repositoryDetails = (repository: GitRepository) => typeof repository === 'string'
-  ? { url: repository, reference: undefined, token: undefined }
-  : { url: repository.url, reference: repository.tag ?? repository.branch, token: repository.auth?.token }
+function repositoryDetails(repository: GitRepository) {
+  return typeof repository === 'string'
+    ? { url: repository, reference: undefined, token: undefined }
+    : { url: repository.url, reference: repository.tag ?? repository.branch, token: repository.auth?.token }
+}
 
-export const prepareRemoteSource = async (
-  source: RemoteSource,
-  cacheRoot: string,
-  command: Command = runCommand,
-): Promise<Result<string>> => {
+export async function prepareRemoteSource(source: RemoteSource, cacheRoot: string, command: Command = runCommand): Promise<Result<string>> {
   const repository = repositoryDetails(source.repository)
   const key = createHash('sha256').update(repository.url).update('\0').update(repository.reference ?? 'HEAD').digest('hex').slice(0, 20)
   const target = join(cacheRoot, key)
@@ -48,7 +47,7 @@ export const prepareRemoteSource = async (
         GIT_CONFIG_COUNT: '1',
         GIT_CONFIG_KEY_0: 'http.extraHeader',
         GIT_CONFIG_VALUE_0: `Authorization: Bearer ${repository.token}`,
-    }
+      }
     : process.env
   const clone = (cloneEnv: NodeJS.ProcessEnv) => command('git', args, { env: cloneEnv })
     .then(() => ok(undefined), cause => err(cause))

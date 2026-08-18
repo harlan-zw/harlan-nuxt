@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cloudflare",
   "type": "module",
-  "version": "0.0.14",
+  "version": "0.0.18",
   "description": "Opinionated Cloudflare deployment defaults and diagnostics for Nuxt.",
   "author": {
     "name": "Harlan Wilton",
@@ -109,6 +109,7 @@
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@harlan-zw/nuxt-wide-events": "workspace:*",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",
     "@types/node": "catalog:",

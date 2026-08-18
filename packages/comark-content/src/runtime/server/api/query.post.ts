@@ -1,7 +1,7 @@
+import { defineEventHandler, readBody } from '#imports'
 import { executeIndexedQueryPlan } from '../../core/query'
 import { parseQueryRequest } from '../../shared/protocol'
 import { loadCollectionIndex, loadDocumentBody } from '../storage'
-import { defineEventHandler, readBody } from '#imports'
 
 export default defineEventHandler(async (event) => {
   const request = parseQueryRequest(await readBody(event))

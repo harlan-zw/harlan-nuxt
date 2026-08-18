@@ -1,6 +1,7 @@
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, relative, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
@@ -32,7 +33,7 @@ const CONTENT_MARKERS = {
   ],
 }
 
-const parseArgs = (args) => {
+function parseArgs(args) {
   const variantIndex = args.indexOf('--variant')
   const variant = variantIndex === -1 ? 'candidate' : args[variantIndex + 1]
   if (variant !== 'baseline' && variant !== 'candidate')
@@ -40,35 +41,43 @@ const parseArgs = (args) => {
   return { variant }
 }
 
+// ANSI escape sequences are defined by the ESC control character and these exact byte ranges.
+// eslint-disable-next-line no-control-regex, regexp/no-obscure-range
 const stripAnsi = value => value.replaceAll(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 
-const run = (command, args, options = {}) => new Promise((resolveRun, reject) => {
-  const startedAt = performance.now()
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+function run(command, args, options = {}) {
+  return new Promise((resolveRun, reject) => {
+    const startedAt = performance.now()
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let output = ''
+    child.stdout.on('data', (chunk) => {
+      output += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      output += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      const durationMs = performance.now() - startedAt
+      if (code === 0) {
+        resolveRun({ durationMs, output: stripAnsi(output) })
+        return
+      }
+      reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}.\n${stripAnsi(output).slice(-8000)}`))
+    })
   })
-  let output = ''
-  child.stdout.on('data', (chunk) => { output += chunk })
-  child.stderr.on('data', (chunk) => { output += chunk })
-  child.on('error', reject)
-  child.on('close', (code) => {
-    const durationMs = performance.now() - startedAt
-    if (code === 0) {
-      resolveRun({ durationMs, output: stripAnsi(output) })
-      return
-    }
-    reject(new Error(`${command} ${args.join(' ')} failed with exit code ${code}.\n${stripAnsi(output).slice(-8000)}`))
-  })
-})
+}
 
-const commandOutput = async (command, args, cwd) => {
+async function commandOutput(command, args, cwd) {
   const result = await run(command, args, { cwd, env: process.env })
   return result.output.trim()
 }
 
-const assertEnvironment = async () => {
+async function assertEnvironment() {
   if (process.version !== NODE_VERSION)
     throw new Error(`Expected Node ${NODE_VERSION}, received ${process.version}.`)
   const pnpmVersion = await commandOutput('pnpm', ['--version'], process.cwd())
@@ -76,7 +85,7 @@ const assertEnvironment = async () => {
     throw new Error(`Expected pnpm ${PNPM_VERSION}, received ${pnpmVersion}.`)
 }
 
-const shouldCopy = (source) => {
+function shouldCopy(source) {
   const name = basename(source)
   if (['.git', '.nuxt', '.output', '.data', '.wrangler', '.cache', 'coverage', 'dist', 'node_modules'].includes(name))
     return false
@@ -85,7 +94,7 @@ const shouldCopy = (source) => {
   return true
 }
 
-const resetBuildState = async (siteRoot, sampleRoot, fontCacheRoot) => {
+async function resetBuildState(siteRoot, sampleRoot, fontCacheRoot) {
   await Promise.all([
     '.nuxt',
     '.output',
@@ -101,16 +110,18 @@ const resetBuildState = async (siteRoot, sampleRoot, fontCacheRoot) => {
   await cp(fontCacheRoot, join(siteRoot, FONT_CACHE_PATH), { recursive: true })
 }
 
-const benchmarkEnvironment = (sampleRoot) => ({
-  ...process.env,
-  CI: '1',
-  NUXT_TELEMETRY_DISABLED: '1',
-  XDG_CACHE_HOME: join(sampleRoot, 'cache'),
-  TMPDIR: join(sampleRoot, 'tmp'),
-  SENTRY_AUTH_TOKEN: '',
-})
+function benchmarkEnvironment(sampleRoot) {
+  return {
+    ...process.env,
+    CI: '1',
+    NUXT_TELEMETRY_DISABLED: '1',
+    XDG_CACHE_HOME: join(sampleRoot, 'cache'),
+    TMPDIR: join(sampleRoot, 'tmp'),
+    SENTRY_AUTH_TOKEN: '',
+  }
+}
 
-const parseContentResult = (output, phase) => {
+function parseContentResult(output, phase) {
   const matches = [...output.matchAll(/Processed (\d+) collections and (\d+) files in ([\d.]+)ms \((\d+) cached, (\d+) parsed\)/g)]
   const match = matches.at(-1)
   if (!match)
@@ -125,7 +136,7 @@ const parseContentResult = (output, phase) => {
   }
 }
 
-const walkFiles = async (root) => {
+async function walkFiles(root) {
   const files = []
   const visit = async (directory) => {
     const entries = await readdir(directory, { withFileTypes: true }).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))
@@ -141,13 +152,13 @@ const walkFiles = async (root) => {
   return files
 }
 
-const directoryBytes = async (root) => {
+async function directoryBytes(root) {
   const files = await walkFiles(root)
   const sizes = await Promise.all(files.map(async path => (await stat(path)).size))
   return sizes.reduce((sum, size) => sum + size, 0)
 }
 
-const candidateFingerprint = async () => {
+async function candidateFingerprint() {
   const files = [join(PACKAGE_ROOT, 'package.json'), ...await walkFiles(join(PACKAGE_ROOT, 'src'))].sort()
   const hash = createHash('sha256')
   for (const path of files)
@@ -155,7 +166,7 @@ const candidateFingerprint = async () => {
   return hash.digest('hex')
 }
 
-const clientJavaScript = async (siteRoot, variant) => {
+async function clientJavaScript(siteRoot, variant) {
   const root = join(siteRoot, '.output/public')
   const files = (await walkFiles(root)).filter(path => path.endsWith('.js'))
   const markers = CONTENT_MARKERS[variant]
@@ -184,7 +195,7 @@ const clientJavaScript = async (siteRoot, variant) => {
   return { totalBytes, totalGzipBytes, contentBytes, contentGzipBytes, contentFiles }
 }
 
-const measureSsr = async (siteRoot, env, sample) => {
+async function measureSsr(siteRoot, env, sample) {
   const port = 19100 + sample
   const output = []
   const child = spawn('pnpm', [
@@ -234,7 +245,10 @@ const measureSsr = async (siteRoot, env, sample) => {
         process.kill(-child.pid, 'SIGTERM')
       }
       catch (error) {
+        // Throwing here discards any error raised by the try block, and skips the
+        // close wait below. Left as is because changing it changes bench behaviour.
         if (error.code !== 'ESRCH')
+          // eslint-disable-next-line no-unsafe-finally
           throw error
       }
     }
@@ -242,7 +256,7 @@ const measureSsr = async (siteRoot, env, sample) => {
   }
 }
 
-const median = (values) => {
+function median(values) {
   const sorted = [...values].sort((left, right) => left - right)
   const middle = Math.floor(sorted.length / 2)
   return sorted.length % 2 === 0
@@ -269,7 +283,7 @@ const getPath = (value, path) => path.reduce((current, key) => current[key], val
 
 const medians = samples => Object.fromEntries(metricPaths.map(path => [path.join('.'), median(samples.map(sample => getPath(sample, path)))]))
 
-const main = async () => {
+async function main() {
   const { variant } = parseArgs(process.argv.slice(2))
   await assertEnvironment()
   await mkdir(RESULTS_ROOT, { recursive: true })
@@ -385,4 +399,7 @@ const main = async () => {
   }
 }
 
-await main()
+main().catch((error) => {
+  process.stderr.write(`${error.stack ?? error}\n`)
+  process.exitCode = 1
+})

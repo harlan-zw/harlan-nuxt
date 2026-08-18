@@ -363,3 +363,33 @@ describe('retryIdempotentD1Write', () => {
     expect(run).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('request-scoped D1 stats', () => {
+  it('is reachable from the package entry, not just from inside the module', async () => {
+    // 0.0.15 collected these counters and exposed no way to read them, which
+    // left every consumer with no choice but to keep its own copy.
+    const entry = await import('../src/d1')
+    expect(typeof entry.readD1Stats).toBe('function')
+    expect(typeof entry.useD1Stats).toBe('function')
+    expect(typeof entry.createD1Stats).toBe('function')
+  })
+
+  it('counts queries and primary hops from what D1 reports', async () => {
+    const { createD1Stats, recordD1Meta, recordD1Recovery } = await import('../src/d1')
+    const stats = createD1Stats()
+
+    recordD1Meta(stats, { meta: { served_by_primary: true, served_by_region: 'OC', duration: 1.5 } })
+    recordD1Meta(stats, { meta: { served_by_primary: false, served_by_region: 'OC', duration: 0.5 } })
+    // Local D1 and `wrangler dev` send no `meta` at all; still a query.
+    recordD1Meta(stats, {})
+    recordD1Recovery(stats, { _tag: 'retrying' })
+    recordD1Recovery(stats, { _tag: 'stopped' })
+
+    expect(stats.queries).toBe(3)
+    expect(stats.primaryQueries).toBe(1)
+    expect(stats.region).toBe('OC')
+    expect(stats.durationMs).toBe(2)
+    expect(stats.recoveries).toBe(2)
+    expect(stats.unrecovered).toBe(1)
+  })
+})

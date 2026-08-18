@@ -1,7 +1,7 @@
+import { defineEventHandler } from '#imports'
 import { parseSearchRequest } from '../../shared/protocol'
 import { sendCacheableContent } from '../cache'
 import { loadSearchSections } from '../storage'
-import { defineEventHandler } from '#imports'
 
 export default defineEventHandler(async (event) => {
   const request = parseSearchRequest(event.context.params?.collection)

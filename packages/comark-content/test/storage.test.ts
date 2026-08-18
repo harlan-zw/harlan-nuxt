@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
 import type { PageCollectionItemBase } from '../src/runtime/types'
+import { describe, expect, it } from 'vitest'
 import { createContentAssetPlan, createContentRevision, encodeCollectionAsset } from '../src/core/asset'
 import { createIndexedCollectionQuery } from '../src/runtime/core/query'
 import { decodeCollectionAsset } from '../src/runtime/server/asset'

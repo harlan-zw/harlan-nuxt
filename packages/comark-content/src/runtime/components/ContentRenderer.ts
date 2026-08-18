@@ -1,8 +1,8 @@
-import type { Component } from 'vue'
 import type { MarkdownDocument } from 'comark'
+import type { Component } from 'vue'
 import type { PageCollectionItemBase } from '../types'
-import contentComponents from '#comark-content/components'
 import { defineComponent, useAttrs } from 'vue'
+import contentComponents from '#comark-content/components'
 import { renderContentRoot, renderNodes } from './render'
 
 const resolveTag = (tag: string): string | Component => contentComponents[tag]?.component ?? tag

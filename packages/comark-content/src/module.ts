@@ -1,12 +1,12 @@
+import type { NitroConfig } from 'nitropack/types'
 import type { ContentConfig } from './config'
 import type { LoadedCollection } from './core/ingest'
 import type { ContentHighlight } from './highlight'
-import type { NitroConfig } from 'nitropack/types'
-import process from 'node:process'
 import { existsSync } from 'node:fs'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import process from 'node:process'
 import {
   addComponent,
   addImports,
@@ -20,8 +20,8 @@ import {
   updateTemplates,
   useLogger,
 } from '@nuxt/kit'
-import { assertCloudflareCacheModule, assertSupportedOptions } from './config'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
+import { assertCloudflareCacheModule, assertSupportedOptions } from './config'
 import { createContentAssetPlan, createContentRevision } from './core/asset'
 import { ingestCollections } from './core/ingest'
 import { excludeNuxtContentSitemapSource, NUXT_CONTENT_SITEMAP_ROUTE } from './sitemap'
@@ -48,12 +48,12 @@ declare module '@nuxt/schema' {
 
 const contentConfigNames = ['content.config.ts', 'content.config.mts', 'content.config.js', 'content.config.mjs']
 
-const layerRoot = (layer: Record<string, unknown>) => {
+function layerRoot(layer: Record<string, unknown>) {
   const config = layer.config as Record<string, unknown> | undefined
   return String(config?.rootDir ?? layer.cwd ?? '')
 }
 
-const loadCollections = async (layers: ReadonlyArray<Record<string, unknown>>): Promise<LoadedCollection[]> => {
+async function loadCollections(layers: ReadonlyArray<Record<string, unknown>>): Promise<LoadedCollection[]> {
   const collections = new Map<string, LoadedCollection>()
   for (const layer of [...layers].reverse()) {
     const rootDir = layerRoot(layer)

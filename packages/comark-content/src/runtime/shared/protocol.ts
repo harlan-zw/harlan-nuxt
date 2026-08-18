@@ -1,14 +1,13 @@
-import type { QueryPlan, QueryOperation } from '../core/query'
+import type { QueryOperation, QueryPlan } from '../core/query'
 
-export type QueryRequest =
-  { _tag: 'Query', collection: string, plan: QueryPlan }
+export interface QueryRequest { _tag: 'Query', collection: string, plan: QueryPlan }
 
-export type NavigationRequest = {
+export interface NavigationRequest {
   collection: string
   fields: string[]
 }
 
-export type SearchRequest = {
+export interface SearchRequest {
   collection: string
 }
 
@@ -16,27 +15,27 @@ export type SurroundingsRequest = NavigationRequest & {
   path: string
 }
 
-export type CacheableContentResponse<T> =
-  | { _tag: 'Fresh', status: 200, body: T, headers: Record<string, string> }
-  | { _tag: 'NotModified', status: 304, body: null, headers: Record<'cache-control' | 'cloudflare-cdn-cache-control' | 'etag', string> }
+export type CacheableContentResponse<T>
+  = | { _tag: 'Fresh', status: 200, body: T, headers: Record<string, string> }
+    | { _tag: 'NotModified', status: 304, body: null, headers: Record<'cache-control' | 'cloudflare-cdn-cache-control' | 'etag', string> }
 
-export type ContentCachePolicy =
-  | { _tag: 'Immutable' }
-  | { _tag: 'NoStore' }
+export type ContentCachePolicy
+  = | { _tag: 'Immutable' }
+    | { _tag: 'NoStore' }
 
 const operators = new Set(['=', '<>', 'LIKE', 'IS NULL'])
 const directions = new Set(['ASC', 'DESC'])
-const collectionName = /^[A-Za-z][A-Za-z0-9_]*$/
-const fieldName = /^[A-Za-z_][A-Za-z0-9_]*$/
+const collectionName = /^[A-Z]\w*$/i
+const fieldName = /^[A-Z_]\w*$/i
 const forbiddenFields = new Set(['__proto__', 'constructor', 'prototype'])
 
-const parseCollection = (collection: unknown): string => {
+function parseCollection(collection: unknown): string {
   if (typeof collection !== 'string' || collection.length > 128 || !collectionName.test(collection))
     throw new TypeError('<request>:1:1 Expected a valid collection name.')
   return collection
 }
 
-const parseFields = (fields: unknown, subject: string): string[] => {
+function parseFields(fields: unknown, subject: string): string[] {
   if (fields !== undefined && typeof fields !== 'string')
     throw new TypeError(`<request>:1:1 Expected comma-separated ${subject} fields.`)
   const requestedFields = fields ? fields.split(',') : []
@@ -45,19 +44,19 @@ const parseFields = (fields: unknown, subject: string): string[] => {
   return [...new Set(requestedFields)]
 }
 
-export const parseNavigationRequest = (collection: unknown, fields: unknown): NavigationRequest => {
+export function parseNavigationRequest(collection: unknown, fields: unknown): NavigationRequest {
   return { collection: parseCollection(collection), fields: parseFields(fields, 'navigation') }
 }
 
 export const parseSearchRequest = (collection: unknown): SearchRequest => ({ collection: parseCollection(collection) })
 
-export const parseSurroundingsRequest = (collection: unknown, path: unknown, fields: unknown): SurroundingsRequest => {
+export function parseSurroundingsRequest(collection: unknown, path: unknown, fields: unknown): SurroundingsRequest {
   if (typeof path !== 'string' || path.length > 2048 || !path.startsWith('/'))
     throw new TypeError('<request>:1:1 Expected an absolute content path.')
   return { collection: parseCollection(collection), path, fields: parseFields(fields, 'surroundings') }
 }
 
-const createContentEtag = (value: unknown): string => {
+function createContentEtag(value: unknown): string {
   const source = JSON.stringify(value)
   let hash = 0x811C9DC5
   for (let index = 0; index < source.length; index++) {
@@ -67,15 +66,13 @@ const createContentEtag = (value: unknown): string => {
   return `W/"${source.length.toString(36)}-${(hash >>> 0).toString(36)}"`
 }
 
-const matchesContentEtag = (header: string | undefined, etag: string): boolean => header
-  ?.split(',')
-  .some(candidate => candidate.trim() === etag || candidate.trim() === '*') ?? false
+function matchesContentEtag(header: string | undefined, etag: string): boolean {
+  return header
+    ?.split(',')
+    .some(candidate => candidate.trim() === etag || candidate.trim() === '*') ?? false
+}
 
-export const createCacheableContentResponse = <T>(
-  value: T,
-  ifNoneMatch?: string,
-  policy: ContentCachePolicy = { _tag: 'Immutable' },
-): CacheableContentResponse<T> => {
+export function createCacheableContentResponse<T>(value: T, ifNoneMatch?: string, policy: ContentCachePolicy = { _tag: 'Immutable' }): CacheableContentResponse<T> {
   if (policy._tag === 'NoStore') {
     return {
       _tag: 'Fresh',
@@ -98,7 +95,7 @@ export const createCacheableContentResponse = <T>(
     : { _tag: 'Fresh', status: 200, body: value, headers }
 }
 
-const isOperation = (value: unknown): value is QueryOperation => {
+function isOperation(value: unknown): value is QueryOperation {
   if (!value || typeof value !== 'object')
     return false
   const operation = value as Record<string, unknown>
@@ -113,16 +110,17 @@ const isOperation = (value: unknown): value is QueryOperation => {
   return operation._tag === 'Select' && Array.isArray(operation.fields) && operation.fields.every(field => typeof field === 'string')
 }
 
-export const parseQueryRequest = (value: unknown): QueryRequest => {
+export function parseQueryRequest(value: unknown): QueryRequest {
   if (!value || typeof value !== 'object')
     throw new TypeError('<request>:1:1 Expected a comark-content query object.')
   const request = value as Record<string, unknown>
   const collection = parseCollection(request.collection)
   if (request._tag === 'Query') {
     const plan = request.plan as Record<string, unknown> | undefined
-    if (!Array.isArray(plan?.operations) || !plan.operations.every(isOperation))
+    const operations = plan?.operations
+    if (!Array.isArray(operations) || !operations.every(isOperation))
       throw new TypeError('<request>:1:1 Expected valid query operations.')
-    return { _tag: 'Query', collection, plan: plan as QueryPlan }
+    return { _tag: 'Query', collection, plan: { operations } }
   }
   throw new TypeError('<request>:1:1 Unsupported comark-content query.')
 }

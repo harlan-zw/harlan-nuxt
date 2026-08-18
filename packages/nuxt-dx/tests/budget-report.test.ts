@@ -16,6 +16,31 @@ describe('displayId', () => {
   it('strips rollup virtual prefixes and queries', () => {
     expect(displayId('\0/app/plugins/a.ts?v=1', '/app')).toBe('plugins/a.ts')
   })
+
+  it('shortens a sibling layer file, which sits above the app but inside the workspace', () => {
+    expect(displayId('/repo/layers/saas/app/plugins/a.ts', '/repo')).toBe('layers/saas/app/plugins/a.ts')
+    expect(displayId('/repo/apps/pro/plugins/a.ts', '/repo')).toBe('apps/pro/plugins/a.ts')
+  })
+
+  it('gives two checkouts of the same workspace the same path for every entry', () => {
+    const entries = ['layers/saas/app/plugins/a.ts', 'modules/features/src/runtime/b.ts', 'apps/pro/plugins/c.ts']
+    const hosted = entries.map(entry => displayId(`/home/runner/work/repo/${entry}`, '/home/runner/work/repo'))
+    const selfHosted = entries.map(entry => displayId(`/opt/ci/_work/repo/${entry}`, '/opt/ci/_work/repo'))
+    expect(hosted).toEqual(selfHosted)
+    expect(hosted.every(path => !path.startsWith('/'))).toBe(true)
+  })
+
+  it('keeps a hoisted dependency at its package path', () => {
+    expect(displayId('/repo/node_modules/.pnpm/chart@1/node_modules/chart/dist/index.mjs', '/repo')).toBe('chart/dist/index.mjs')
+  })
+
+  it('leaves a path outside the workspace absolute rather than guessing a way up to it', () => {
+    expect(displayId('/elsewhere/a.ts', '/repo')).toBe('/elsewhere/a.ts')
+  })
+
+  it('leaves a bare specifier alone', () => {
+    expect(displayId('virtual:nuxt/plugins', '/repo')).toBe('virtual:nuxt/plugins')
+  })
 })
 
 const verdict: BudgetVerdict = {
