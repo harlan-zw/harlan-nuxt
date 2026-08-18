@@ -1,9 +1,10 @@
-import type { MaybeRefOrGetter } from 'vue'
+import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { z } from 'zod'
 import type {
   NuxtRpcClientOptions,
   NuxtRpcError,
   NuxtRpcKey,
+  NuxtRpcOperationContext,
   NuxtRpcQueryOperation,
 } from '../rpc/core'
 import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
@@ -35,13 +36,31 @@ export function invalidateNuxtRpc(operationOrKey: NuxtRpcKey | { key: NuxtRpcKey
   return invalidateNuxtQueries(serializeNuxtRpcKey(key))
 }
 
+export interface NuxtRpcQueryErrorEvent {
+  operation: NuxtRpcOperationContext
+  error: NuxtRpcError
+  /**
+   * How long the failing request was in flight. Undefined when the failure
+   * arrived with the server-rendered payload, because the request ran in the
+   * previous runtime.
+   */
+  durationMs?: number
+}
+
 // `DefaultT` must stay a generic so the `default` factory drives its own
 // inference. Without it `DefaultT` pins to `undefined` and `default` collapses
 // to `() => Ref<undefined, undefined> | undefined`, rejecting every real value.
 export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
   UseNuxtQueryOptions<TData, TData, KeysOf<TData>, DefaultT>,
   'body' | 'key' | 'method' | 'query' | 'transform'
->
+> & {
+  /**
+   * Called once for each failure of this query. The imperative client hook of
+   * the same name covers `rpc.query` / `rpc.execute` only, so without this a
+   * reactive query failure reaches no handler.
+   */
+  onError?: (event: NuxtRpcQueryErrorEvent) => void
+}
 
 export function useNuxtRpcQuery<
   TResponseSchema extends z.ZodTypeAny,
@@ -54,8 +73,11 @@ export function useNuxtRpcQuery<
   const resolved = () => toValue(operation)
   const request = computed(() => resolveQueryRequestState(resolved()))
   const userOnRequest = options.onRequest
+  // `onError` belongs to this composable, not to `useFetch`. Strip it so it
+  // never reaches the fetch options.
+  const { onError, ...queryOptions } = options
   const query = (useNuxtQuery as any)(() => resolved().path, {
-    ...options,
+    ...queryOptions,
     key: () => request.value._tag === 'ok' ? request.value.request.key : request.value.key,
     method: computed(() => request.value._tag === 'ok' ? request.value.request.method : request.value.method),
     query: computed(() => resolved().query),
@@ -99,7 +121,64 @@ export function useNuxtRpcQuery<
     get: () => (rawError.value == null ? undefined : normalizeNuxtRpcQueryError(rawError.value, request.value)),
     set: value => void (rawError.value = value),
   }) as typeof query.error
+
+  if (onError)
+    useQueryErrorReporter(query, rawError, resolved, request, onError)
+
   return query
+}
+
+/**
+ * Report each failure of a reactive query once.
+ *
+ * The hook runs outside server rendering. A failure raised during SSR is
+ * transferred in the payload and reported on hydration, so a hook that ran in
+ * both runtimes would report the same failure twice.
+ */
+function useQueryErrorReporter(
+  query: { status?: { value: string } },
+  rawError: { value: unknown },
+  resolved: () => NuxtRpcQueryOperation<z.ZodTypeAny, unknown>,
+  request: ComputedRef<ReturnType<typeof resolveQueryRequestState>>,
+  onError: (event: NuxtRpcQueryErrorEvent) => void,
+): void {
+  if (import.meta.server)
+    return
+
+  let startedAt: number | undefined
+  if (query.status) {
+    watch(() => query.status!.value, (status) => {
+      if (status === 'pending')
+        startedAt = Date.now()
+    })
+  }
+
+  // A normalized error keeps its identity across reads, so object identity is
+  // what separates a new failure from a re-read of the same one.
+  const reported = new WeakSet<object>()
+  watch(rawError, (value) => {
+    if (value == null || typeof value !== 'object')
+      return
+    if (reported.has(value))
+      return
+    reported.add(value)
+    const durationMs = startedAt == null ? undefined : Date.now() - startedAt
+    startedAt = undefined
+    onError({
+      durationMs,
+      error: normalizeNuxtRpcQueryError(value, request.value),
+      operation: describeQueryOperation(resolved()),
+    })
+  }, { immediate: true })
+}
+
+function describeQueryOperation(operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown>): NuxtRpcOperationContext {
+  return {
+    kind: 'query',
+    key: operation.key,
+    method: operation.method === 'POST' ? 'POST' : 'GET',
+    path: operation.path,
+  }
 }
 
 function normalizeNuxtRpcQueryError(

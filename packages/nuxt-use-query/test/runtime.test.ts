@@ -43,10 +43,11 @@ interface Probe {
   rpcPostQuery: { limit: number, term: string } | null
   rpcKey: string
   rpcQuery: { value: string, call: number } | null
+  rpcQueryError: { isError: boolean, name: string, status?: number, type: string } | null
 }
 
 interface TelemetryStore {
-  duplicates: Array<{ count?: number, threshold?: number, url?: string }>
+  duplicates: Array<{ count?: number, path?: string, threshold?: number, variants?: string[] }>
   fetches: Array<{ request?: string, url?: string }>
   nested: Array<{ depth?: number, stack?: string[], threshold?: number, url?: string }>
   recursive: Array<{ depth?: number, stack?: string[], url?: string }>
@@ -102,6 +103,16 @@ describe('nuxt-use-query · e2e', () => {
     expect(probe.cachedManualWrite).toEqual({ ok: true })
   })
 
+  it('keeps a failing SSR query tagged and still serializes the payload', async () => {
+    const probe = await readProbe()
+    expect(probe.rpcQueryError).toEqual({
+      isError: true,
+      name: 'NuxtRpcError',
+      status: 503,
+      type: 'fetch',
+    })
+  })
+
   it('registers fetch telemetry through the module option and Nitro plugin', async () => {
     await $fetch('/api/telemetry', { query: { reset: '1' } })
 
@@ -141,7 +152,7 @@ describe('nuxt-use-query · e2e', () => {
 
     const telemetry = await $fetch<TelemetryStore>('/api/telemetry')
     expect(telemetry.duplicates.some(event =>
-      event.url === '/api/echo'
+      event.path === '/api/echo'
       && event.count === 2
       && event.threshold === 2,
     )).toBe(true)

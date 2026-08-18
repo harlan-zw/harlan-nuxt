@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  analyseFetchChain,
+  collectFetchTelemetryOptionWarnings,
   createFetchTelemetryState,
   endFetchTelemetry,
   formatDuplicateFetchTelemetryEvent,
@@ -16,6 +18,7 @@ import {
   normalizeFetchTelemetryOptions,
   normalizeLargePayloadThreshold,
   normalizeSlowFetchThreshold,
+  recordDuplicateFetch,
   recordFetchTelemetry,
   resolveLargePayloadThreshold,
   resolveSlowFetchThreshold,
@@ -60,7 +63,10 @@ describe('fetch telemetry', () => {
       { durationMs: 1_500, offsetMs: 0, url: '/api/a' },
       { durationMs: 1_700, offsetMs: 1_500, url: '/api/b' },
     ])
-    expect(isFetchWaterfall(summary, {
+    expect(isFetchWaterfall(summary, analyseFetchChain(summary.timeline), {
+      waterfallMinChainBeyondSlowestMs: 1_000,
+      waterfallMinChainDepth: 2,
+      waterfallMinCriticalPathShare: 0.75,
       waterfallMinFetches: 2,
       waterfallThreshold: 3_000,
     })).toBe(true)
@@ -77,7 +83,10 @@ describe('fetch telemetry', () => {
     const summary = summarizeFetchTelemetry(state)!
     expect(summary.maxParallel).toBe(2)
     expect(summary.upstreamMs).toBeGreaterThan(summary.wallMs)
-    expect(isFetchWaterfall(summary, {
+    expect(isFetchWaterfall(summary, analyseFetchChain(summary.timeline), {
+      waterfallMinChainBeyondSlowestMs: 1_000,
+      waterfallMinChainDepth: 2,
+      waterfallMinCriticalPathShare: 0.75,
       waterfallMinFetches: 2,
       waterfallThreshold: 1_000,
     })).toBe(false)
@@ -255,14 +264,16 @@ describe('fetch telemetry', () => {
     expect(formatDuplicateFetchTelemetryEvent({
       count: 2,
       method: 'GET',
+      path: '/api/sites',
       request: 'GET /dashboard',
       server: true,
       threshold: 2,
-      url: '/api/sites',
+      variants: ['?page=1', '?page=2'],
     })).toBe(`duplicate server fetch
-  fetch  : GET /api/sites
-  count  : 2 (threshold 2)
-  request: GET /dashboard`)
+  fetch   : GET /api/sites
+  count   : 2 (threshold 2)
+  variants: ?page=1, ?page=2
+  request : GET /dashboard`)
 
     expect(formatNestedFetchTelemetryEvent({
       depth: 3,
@@ -300,6 +311,9 @@ describe('fetch telemetry', () => {
 
   it('formats waterfall events with a readable timeline', () => {
     const output = formatFetchWaterfallTelemetryEvent({
+      chainDepth: 2,
+      criticalPath: ['/api/a', '/api/b'],
+      criticalPathMs: 310,
       fetches: 2,
       maxParallel: 1,
       minFetches: 2,
@@ -334,7 +348,8 @@ describe('fetch telemetry', () => {
 
     expect(output).toContain('likely server fetch waterfall')
     expect(output).toContain('request      : GET /dashboard')
-    expect(output).toContain('reason       : tracked fetches ran one at a time')
+    expect(output).toContain('reason       : 2 serial levels cost 310ms of 310ms wall time')
+    expect(output).toContain('critical path:')
     expect(output).toContain('upstream time: 310ms (1.00x wall)')
     expect(output).toContain('timeline (0ms -> 310ms):')
     expect(output).toContain('[###################-------------] GET /api/a')
@@ -360,5 +375,151 @@ describe('fetch telemetry', () => {
       startedAt: 1_000,
       status: 'success',
     })).toBe('query hello -> /api/hello succeeded in 24ms on client')
+  })
+})
+
+describe('fetch telemetry option warnings', () => {
+  it('reports a slow-fetch threshold that the timeout can never reach', () => {
+    const warnings = collectFetchTelemetryOptionWarnings(normalizeFetchTelemetryOptions({
+      slowFetchThreshold: 30_000,
+      timeout: 20_000,
+    }))
+
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toMatchObject({
+      _tag: 'slow-fetch-threshold-above-timeout',
+      thresholdMs: 30_000,
+      timeoutMs: 20_000,
+    })
+    expect(warnings[0]?.message).toContain('below the timeout')
+  })
+
+  it('reports each host threshold that the timeout can never reach', () => {
+    const warnings = collectFetchTelemetryOptionWarnings(normalizeFetchTelemetryOptions({
+      slowFetchThreshold: {
+        default: 3_000,
+        hosts: { 'gscdump.com': 30_000, 'ok.com': 5_000 },
+      },
+      timeout: 20_000,
+    }))
+
+    expect(warnings.map(warning => warning.host)).toEqual(['gscdump.com'])
+  })
+
+  it('stays silent when every threshold sits below the timeout', () => {
+    const warnings = collectFetchTelemetryOptionWarnings(normalizeFetchTelemetryOptions({
+      slowFetchThreshold: { default: 3_000, hosts: { 'gscdump.com': 15_000 } },
+      timeout: 20_000,
+    }))
+
+    expect(warnings).toEqual([])
+  })
+
+  it('stays silent when the timeout is disabled', () => {
+    const warnings = collectFetchTelemetryOptionWarnings(normalizeFetchTelemetryOptions({
+      slowFetchThreshold: 30_000,
+      timeout: false,
+    }))
+
+    expect(warnings).toEqual([])
+  })
+})
+
+describe('fetch chain analysis', () => {
+  function timelineOf(entries: Array<[url: string, startedAt: number, endedAt: number]>) {
+    const state = createFetchTelemetryState()
+    for (const [, startedAt] of entries)
+      startFetchTelemetry(state, startedAt)
+    for (const [url, startedAt, endedAt] of entries) {
+      endFetchTelemetry(state, startedAt, endedAt)
+      recordFetchTelemetry(state, {
+        durationMs: endedAt - startedAt,
+        endedAt,
+        method: 'GET',
+        ok: true,
+        startedAt,
+        url,
+      })
+    }
+    return summarizeFetchTelemetry(state)!
+  }
+
+  const waterfallOptions = {
+    waterfallMinChainBeyondSlowestMs: 1_000,
+    waterfallMinChainDepth: 2,
+    waterfallMinCriticalPathShare: 0.75,
+    waterfallMinFetches: 2,
+    waterfallThreshold: 3_000,
+  }
+
+  it('measures the longest dependency chain, not the parallelism ratio', () => {
+    const summary = timelineOf([
+      ['/api/a1', 0, 2_000],
+      ['/api/a2', 0, 1_900],
+      ['/api/a3', 0, 1_800],
+      ['/api/b1', 2_000, 4_000],
+      ['/api/b2', 2_000, 3_900],
+      ['/api/c1', 4_000, 6_000],
+    ])
+
+    const analysis = analyseFetchChain(summary.timeline)
+
+    expect(analysis).toMatchObject({
+      chainDepth: 3,
+      criticalPathMs: 6_000,
+      slowestMs: 2_000,
+      wallMs: 6_000,
+    })
+    expect(analysis.criticalPath).toEqual(['/api/a1', '/api/b1', '/api/c1'])
+    expect(isFetchWaterfall(summary, analysis, waterfallOptions)).toBe(true)
+  })
+
+  it('leaves one slow upstream with parallel siblings alone', () => {
+    const summary = timelineOf([
+      ['/api/slow', 0, 10_000],
+      ['/api/fast', 0, 500],
+    ])
+
+    const analysis = analyseFetchChain(summary.timeline)
+
+    expect(analysis.chainDepth).toBe(1)
+    expect(isFetchWaterfall(summary, analysis, waterfallOptions)).toBe(false)
+  })
+
+  it('leaves a short chain of cheap follow-ups alone', () => {
+    const summary = timelineOf([
+      ['/api/slow', 0, 3_500],
+      ['/api/cheap', 3_500, 3_600],
+    ])
+
+    const analysis = analyseFetchChain(summary.timeline)
+
+    expect(analysis.chainDepth).toBe(2)
+    expect(isFetchWaterfall(summary, analysis, waterfallOptions)).toBe(false)
+  })
+})
+
+describe('duplicate fetch grouping', () => {
+  it('groups repeats of one path across differing query strings', () => {
+    const state = createFetchTelemetryState()
+
+    recordDuplicateFetch(state, 'GET', '/api/pro/audit/pages', '?slice=a')
+    const group = recordDuplicateFetch(state, 'GET', '/api/pro/audit/pages', '?slice=b')
+
+    expect(group).toMatchObject({
+      count: 2,
+      method: 'GET',
+      path: '/api/pro/audit/pages',
+    })
+    expect(group.variants).toEqual(['?slice=a', '?slice=b'])
+  })
+
+  it('keeps different paths apart', () => {
+    const state = createFetchTelemetryState()
+
+    recordDuplicateFetch(state, 'GET', '/api/a', '')
+    const group = recordDuplicateFetch(state, 'GET', '/api/b', '')
+
+    expect(group.count).toBe(1)
   })
 })

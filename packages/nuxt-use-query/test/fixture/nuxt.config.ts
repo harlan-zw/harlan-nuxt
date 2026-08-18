@@ -12,7 +12,9 @@ export default defineNuxtConfig({
   nuxtUseQuery: {
     telemetry: {
       console: false,
-      slowFetchThreshold: 60_000,
+      // The fixture drives timeouts, not slow fetches. `false` mutes slow
+      // detection; a threshold above the timeout would only be dead config.
+      slowFetchThreshold: false,
       timeout: 100,
       waterfallThreshold: 60_000,
     },

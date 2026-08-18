@@ -59,13 +59,35 @@ export interface FetchTelemetryRuntimeOptions {
   recursiveFetchWarning: boolean
   slowFetchThreshold: SlowFetchThreshold
   timeout: number | false
+  /**
+   * How much more the whole chain must cost than its slowest single link, in
+   * ms. Keeps "one slow upstream plus a cheap follow-up" a slow-fetch story.
+   */
+  waterfallMinChainBeyondSlowestMs: number
+  /** How many serial levels a chain needs before it is reported. */
+  waterfallMinChainDepth: number
+  /** Share of the wall time the chain must explain, from 0 to 1. */
+  waterfallMinCriticalPathShare: number
   waterfallMinFetches: number
   waterfallThreshold: number
 }
 
+/** Repeats of one request path inside a single server render. */
+export interface DuplicateFetchGroup {
+  count: number
+  method: string
+  /** Query-stripped path, e.g. `/api/pro/sites/1/audit/pages`. */
+  path: string
+  /**
+   * The distinct query strings seen for this path. Identical entries mean the
+   * cache missed. Differing entries mean one handler ran once per variant.
+   */
+  variants: string[]
+}
+
 export interface FetchTelemetryState {
   active: number
-  duplicateFetchCounts: Record<string, number>
+  duplicateFetchGroups: Record<string, DuplicateFetchGroup>
   fetches: number
   firstStartedAt: number | undefined
   internalFetchStack: string[]
@@ -135,10 +157,12 @@ export interface NestedFetchTelemetryEvent {
 export interface DuplicateFetchTelemetryEvent {
   count: number
   method: string
+  /** Query-stripped path. Repeats differing only by query still group here. */
+  path: string
   request?: string
   server: true
   threshold: number
-  url: string
+  variants: string[]
 }
 
 export interface RecursiveFetchTelemetryEvent {
@@ -155,7 +179,7 @@ export interface FetchSummaryTelemetryEvent extends FetchTelemetrySummary {
   server: true
 }
 
-export interface FetchWaterfallTelemetryEvent extends FetchSummaryTelemetryEvent {
+export interface FetchWaterfallTelemetryEvent extends FetchSummaryTelemetryEvent, FetchChainAnalysis {
   minFetches: number
   thresholdMs: number
 }
@@ -213,6 +237,13 @@ export const DEFAULT_FETCH_TELEMETRY_OPTIONS: FetchTelemetryRuntimeOptions = {
   recursiveFetchWarning: true,
   slowFetchThreshold: 3_000,
   timeout: 20_000,
+  // Validated against reconstructed production chains: depth 1 means every
+  // fetch overlapped, so the render is slow because an upstream is slow. A
+  // chain has to hold at least two real levels, explain most of the wall
+  // time, and cost a second more than its slowest single link.
+  waterfallMinChainBeyondSlowestMs: 1_000,
+  waterfallMinChainDepth: 2,
+  waterfallMinCriticalPathShare: 0.75,
   waterfallMinFetches: 2,
   waterfallThreshold: 3_000,
 }
@@ -231,14 +262,13 @@ export const NUXT_USE_QUERY_TELEMETRY_HOOKS = {
   queryStart: 'nuxt-use-query:telemetry:query:start',
 } as const
 
-const MOSTLY_SEQUENTIAL_RATIO = 1.25
 const TIMELINE_LIMIT = 12
 const TIMELINE_WIDTH = 32
 
 export function createFetchTelemetryState(): FetchTelemetryState {
   return {
     active: 0,
-    duplicateFetchCounts: {},
+    duplicateFetchGroups: {},
     fetches: 0,
     firstStartedAt: undefined,
     internalFetchStack: [],
@@ -264,9 +294,66 @@ export function normalizeFetchTelemetryOptions(input: Partial<FetchTelemetryRunt
     recursiveFetchWarning: booleanOption(input.recursiveFetchWarning, DEFAULT_FETCH_TELEMETRY_OPTIONS.recursiveFetchWarning),
     slowFetchThreshold: normalizeSlowFetchThreshold(input.slowFetchThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.slowFetchThreshold),
     timeout: timeoutOption(input.timeout, DEFAULT_FETCH_TELEMETRY_OPTIONS.timeout),
+    waterfallMinChainBeyondSlowestMs: numberOption(input.waterfallMinChainBeyondSlowestMs, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallMinChainBeyondSlowestMs),
+    waterfallMinChainDepth: numberOption(input.waterfallMinChainDepth, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallMinChainDepth),
+    waterfallMinCriticalPathShare: numberOption(input.waterfallMinCriticalPathShare, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallMinCriticalPathShare),
     waterfallMinFetches: numberOption(input.waterfallMinFetches, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallMinFetches),
     waterfallThreshold: numberOption(input.waterfallThreshold, DEFAULT_FETCH_TELEMETRY_OPTIONS.waterfallThreshold),
   }
+}
+
+/**
+ * A configuration fault that makes a telemetry signal unreachable.
+ * Discriminate on `_tag`.
+ */
+export interface FetchTelemetryOptionWarning {
+  _tag: 'slow-fetch-threshold-above-timeout'
+  /** The host the threshold applies to, absent for the default threshold. */
+  host?: string
+  message: string
+  thresholdMs: number
+  timeoutMs: number
+}
+
+/**
+ * Report configuration that can never produce a signal. A slow-fetch
+ * threshold at or above the fetch timeout is the known case: the request is
+ * aborted before it can be reported slow, so the bar collects no rows while
+ * the timeout collects every one of them.
+ */
+export function collectFetchTelemetryOptionWarnings(options: FetchTelemetryRuntimeOptions): FetchTelemetryOptionWarning[] {
+  const timeoutMs = options.timeout
+  if (timeoutMs === false)
+    return []
+
+  const warnings: FetchTelemetryOptionWarning[] = []
+  const threshold = options.slowFetchThreshold
+  const entries: Array<[host: string | undefined, value: number | false]> = typeof threshold === 'object'
+    ? [[undefined, threshold.default], ...Object.entries(threshold.hosts).map(([host, value]) => [host, value] as [string, number | false])]
+    : [[undefined, threshold]]
+
+  for (const [host, value] of entries) {
+    if (value === false || value < timeoutMs)
+      continue
+    warnings.push({
+      _tag: 'slow-fetch-threshold-above-timeout',
+      host,
+      message: formatSlowFetchThresholdWarning(host, value, timeoutMs),
+      thresholdMs: value,
+      timeoutMs,
+    })
+  }
+  return warnings
+}
+
+function formatSlowFetchThresholdWarning(host: string | undefined, thresholdMs: number, timeoutMs: number): string {
+  const target = host ? `for ${host}` : 'default'
+  return [
+    `The ${target} slowFetchThreshold is ${formatDuration(thresholdMs)}.`,
+    `The fetch timeout is ${formatDuration(timeoutMs)}.`,
+    'A fetch aborts before it can be reported slow.',
+    'Set the threshold below the timeout.',
+  ].join(' ')
 }
 
 export function startFetchTelemetry(state: FetchTelemetryState, startedAt: number): void {
@@ -313,10 +400,109 @@ export function summarizeFetchTelemetry(state: FetchTelemetryState): FetchTeleme
   }
 }
 
-export function isFetchWaterfall(summary: FetchTelemetrySummary, options: Pick<FetchTelemetryRuntimeOptions, 'waterfallMinFetches' | 'waterfallThreshold'>): boolean {
+/** A fetch depends on an earlier one when it could not start until that one ended. */
+export interface FetchChainAnalysis {
+  /** Links on the longest dependency chain. 1 means everything overlapped. */
+  chainDepth: number
+  /** Short urls along that chain, in order. This is the thing to go and fix. */
+  criticalPath: string[]
+  /** Summed duration of the fetches on that chain. */
+  criticalPathMs: number
+  /** Longest single fetch anywhere in the request. */
+  slowestMs: number
+  /** First start to last end across every fetch. */
+  wallMs: number
+}
+
+/**
+ * Longest chain of fetches where each link started at or after the previous
+ * one ended.
+ *
+ * Depth is the measure, not parallelism. A render can be 6 levels deep and 7
+ * fetches wide at every level: it is highly parallel and still a waterfall,
+ * because the levels run one after another. A ratio of total time to wall time
+ * cannot see that, so it reports nothing on exactly the renders that hurt.
+ *
+ * No slack is applied. An overlap of even 1ms means two fetches were in flight
+ * together, so neither waited for the other.
+ */
+export function analyseFetchChain(timeline: readonly FetchTelemetryTimelineEntry[]): FetchChainAnalysis {
+  if (timeline.length === 0)
+    return { chainDepth: 0, criticalPath: [], criticalPathMs: 0, slowestMs: 0, wallMs: 0 }
+
+  const sorted = timeline.slice().sort(sortTimelineEntries)
+  const bestMs = sorted.map(entry => entry.durationMs)
+  const bestDepth = sorted.map(() => 1)
+  const previous = sorted.map(() => -1)
+
+  for (let index = 0; index < sorted.length; index++) {
+    for (let earlier = 0; earlier < index; earlier++) {
+      if (sorted[index]!.startedAt < sorted[earlier]!.endedAt)
+        continue
+      const candidate = bestMs[earlier]! + sorted[index]!.durationMs
+      if (candidate > bestMs[index]!) {
+        bestMs[index] = candidate
+        bestDepth[index] = bestDepth[earlier]! + 1
+        previous[index] = earlier
+      }
+    }
+  }
+
+  let end = 0
+  for (let index = 1; index < sorted.length; index++) {
+    if (bestMs[index]! > bestMs[end]!)
+      end = index
+  }
+
+  const criticalPath: string[] = []
+  for (let index = end; index !== -1; index = previous[index]!)
+    criticalPath.unshift(sorted[index]!.url)
+
+  return {
+    chainDepth: bestDepth[end]!,
+    criticalPath,
+    criticalPathMs: bestMs[end]!,
+    slowestMs: Math.max(...sorted.map(entry => entry.durationMs)),
+    wallMs: Math.max(...sorted.map(entry => entry.endedAt)) - Math.min(...sorted.map(entry => entry.startedAt)),
+  }
+}
+
+export function isFetchWaterfall(
+  summary: FetchTelemetrySummary,
+  analysis: FetchChainAnalysis,
+  options: Pick<
+    FetchTelemetryRuntimeOptions,
+    'waterfallMinChainBeyondSlowestMs' | 'waterfallMinChainDepth' | 'waterfallMinCriticalPathShare' | 'waterfallMinFetches' | 'waterfallThreshold'
+  >,
+): boolean {
   if (summary.fetches < options.waterfallMinFetches || summary.wallMs < options.waterfallThreshold)
     return false
-  return summary.maxParallel <= 1 || summary.parallelismRatio <= MOSTLY_SEQUENTIAL_RATIO
+  if (analysis.chainDepth < options.waterfallMinChainDepth)
+    return false
+  if (analysis.criticalPathMs < options.waterfallMinCriticalPathShare * analysis.wallMs)
+    return false
+  return analysis.criticalPathMs - analysis.slowestMs >= options.waterfallMinChainBeyondSlowestMs
+}
+
+/**
+ * Count one GET against its path and return the group it joined.
+ *
+ * The key drops the query string. What a render repeats is a handler, called
+ * once per filtered slice, so an exact repeat of a full url is close to
+ * unreachable: the query cache already coalesces those.
+ */
+export function recordDuplicateFetch(
+  state: FetchTelemetryState,
+  method: string,
+  path: string,
+  query: string,
+): DuplicateFetchGroup {
+  const key = `${method} ${path}`
+  const group = state.duplicateFetchGroups[key] ?? { count: 0, method, path, variants: [] }
+  group.count++
+  group.variants.push(query)
+  state.duplicateFetchGroups[key] = group
+  return group
 }
 
 export function callTelemetryHook(
@@ -384,10 +570,17 @@ export function formatNestedFetchTelemetryEvent(event: NestedFetchTelemetryEvent
 
 export function formatDuplicateFetchTelemetryEvent(event: DuplicateFetchTelemetryEvent): string {
   return formatTelemetryBlock('duplicate server fetch', [
-    ['fetch', `${event.method} ${event.url}`],
+    ['fetch', `${event.method} ${event.path}`],
     ['count', `${event.count} (threshold ${event.threshold})`],
+    ['variants', formatDuplicateVariants(event.variants)],
     event.request ? ['request', event.request] : undefined,
   ])
+}
+
+function formatDuplicateVariants(variants: string[]): string {
+  const shown = variants.slice(0, 4).map(variant => variant || '(none)')
+  const hidden = variants.length - shown.length
+  return hidden > 0 ? `${shown.join(', ')}, ... ${hidden} more` : shown.join(', ')
 }
 
 export function formatRecursiveFetchTelemetryEvent(event: RecursiveFetchTelemetryEvent): string {
@@ -412,7 +605,7 @@ export function formatFetchWaterfallTelemetryEvent(event: FetchWaterfallTelemetr
     ...formatFetchMetricRows(event),
     ['threshold', `${formatDuration(event.thresholdMs)} wall, ${formatCount(event.minFetches, 'fetch', 'fetches')}`],
     ['next step', 'Start independent fetches together with Promise.all, or combine shared data in one server endpoint.'],
-  ], [formatFetchTimeline(event.timeline, event.wallMs)])
+  ], [formatWaterfallChain(event.criticalPath), formatFetchTimeline(event.timeline, event.wallMs)])
 }
 
 export function formatQueryTelemetryStartEvent(event: QueryTelemetryStartEvent): string {
@@ -455,9 +648,16 @@ function formatFetchMetricRows(event: FetchTelemetrySummary): TelemetryRow[] {
 }
 
 function formatWaterfallReason(event: FetchWaterfallTelemetryEvent): string {
-  if (event.maxParallel <= 1)
-    return 'tracked fetches ran one at a time'
-  return `mostly sequential; parallelism only reached ${formatParallelismRatio(event.parallelismRatio)}x`
+  return `${formatCount(event.chainDepth, 'serial level', 'serial levels')} cost ${formatDuration(event.criticalPathMs)} of ${formatDuration(event.wallMs)} wall time`
+}
+
+function formatWaterfallChain(criticalPath: string[]): string | undefined {
+  if (criticalPath.length === 0)
+    return undefined
+  return [
+    'critical path:',
+    ...criticalPath.map((url, index) => `  ${index + 1}. ${url}`),
+  ].join('\n')
 }
 
 function formatFetchTimeline(timeline: FetchTelemetryTimelineEntry[] | undefined, wallMs: number): string | undefined {

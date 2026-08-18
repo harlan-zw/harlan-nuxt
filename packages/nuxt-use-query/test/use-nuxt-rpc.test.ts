@@ -735,3 +735,97 @@ describe('rpc error helpers', () => {
       .toBe('We could not find that resource.')
   })
 })
+
+describe('nuxtRpcError shape', () => {
+  it('is a real Error that keeps its tag', () => {
+    const error = normalizeNuxtRpcError(Object.assign(new Error('boom'), {
+      status: 500,
+      response: { status: 500, statusText: 'Server Error' },
+    }))
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error.name).toBe('NuxtRpcError')
+    expect(error.type).toBe('fetch')
+    expect(error.message).toBe('boom')
+    expect(typeof error.stack).toBe('string')
+  })
+
+  it('rebuilds a tagged plain object into an Error', () => {
+    const error = normalizeNuxtRpcError({
+      type: 'timeout',
+      message: 'took too long',
+      cause: new Error('TimeoutError'),
+    })
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error.type).toBe('timeout')
+    expect(error.message).toBe('took too long')
+  })
+
+  it('makes a validation failure an Error with its issues', () => {
+    const schema = z.object({ id: z.string() })
+    let error: any
+    try {
+      schema.parse({ id: 1 })
+    }
+    catch (thrown) {
+      error = normalizeNuxtRpcError(thrown, 'response-validation')
+    }
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error.type).toBe('response-validation')
+    expect(error.issues).toHaveLength(1)
+  })
+})
+
+describe('useNuxtRpcQuery onError', () => {
+  const operation = () => defineNuxtRpcQuery({
+    key: 'site:1',
+    path: '/api/sites/1',
+    response: z.object({ id: z.string() }),
+  })
+
+  async function tick() {
+    const { nextTick } = await import('vue')
+    await nextTick()
+  }
+
+  it('reports a query failure through onError', async () => {
+    const onError = vi.fn()
+    useNuxtRpcQuery(operation(), { onError })
+
+    mocks.queryError!.value = Object.assign(new Error('[GET] "/api/sites/1": 404'), {
+      status: 404,
+      response: { status: 404, statusText: 'Not Found' },
+    })
+    await tick()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0]![0]).toMatchObject({
+      error: { status: 404, type: 'fetch' },
+      operation: { kind: 'query', method: 'GET', path: '/api/sites/1' },
+    })
+  })
+
+  it('reports one failure once, however often the error is read', async () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(operation(), { onError }) as any
+
+    mocks.queryError!.value = Object.assign(new Error('[GET] "/api/sites/1": 500'), {
+      status: 500,
+      response: { status: 500, statusText: 'Server Error' },
+    })
+    await tick()
+    void result.error.value
+    void result.error.value
+    await tick()
+
+    expect(onError).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps onError out of the underlying query options', async () => {
+    const result = useNuxtRpcQuery(operation(), { onError: vi.fn() }) as any
+
+    expect(result.opts.onError).toBeUndefined()
+  })
+})

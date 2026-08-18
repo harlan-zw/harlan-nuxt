@@ -1,7 +1,8 @@
 import type { ContractQuerySourceFile, ResolvedContractQueryEnforcementOptions } from './types'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { normalize } from 'pathe'
+import { createDirectoryMatcher, normalizePattern, segmentPatternToRegExp } from './options'
 
 const SOURCE_READ_CONCURRENCY = 32
 
@@ -12,7 +13,9 @@ interface DiscoveredSourceFile {
 
 export async function readSourceFilesFromDisk(rootDir: string, options: ResolvedContractQueryEnforcementOptions): Promise<ContractQuerySourceFile[]> {
   const discovered: DiscoveredSourceFile[] = []
-  const isIgnored = createIgnoreMatcher(options.ignore)
+  // `ignore` shares the matcher used by `queryDirs` and `contractDirs`, so one
+  // pattern means the same thing in every option.
+  const isIgnored = createDirectoryMatcher(options.ignore)
   const seen = new Set<string>()
 
   async function walk(dir: string) {
@@ -45,7 +48,7 @@ export async function readSourceFilesFromDisk(rootDir: string, options: Resolved
     }
   }
 
-  for (const dir of await expandScanDirs(rootDir, options.scanDirs))
+  for (const dir of await expandScanDirs(rootDir, options.scanDirs, isIgnored))
     await walk(dir)
 
   return mapConcurrent(discovered, SOURCE_READ_CONCURRENCY, async ({ file, path }) => ({
@@ -54,95 +57,85 @@ export async function readSourceFilesFromDisk(rootDir: string, options: Resolved
   }))
 }
 
-function createIgnoreMatcher(patterns: string[]): (path: string) => boolean {
-  const matchers = patterns.map((pattern) => {
-    const normalized = normalize(pattern).replace(/^\.\//, '').replace(/^\/+|\/+$/g, '')
-    const hasDirectory = normalized.includes('/')
-    const hasGlob = /[*?]/.test(normalized)
-
-    if (!hasGlob) {
-      return hasDirectory
-        ? (path: string) => path === normalized || path.startsWith(`${normalized}/`)
-        : (path: string) => normalize(path).split('/').includes(normalized)
-    }
-
-    const expression = globPatternToRegExp(normalized)
-    return hasDirectory
-      ? (path: string) => expression.test(normalize(path))
-      : (path: string) => expression.test(basename(path))
-  })
-
-  return path => matchers.some(matches => matches(path))
-}
-
-function globPatternToRegExp(pattern: string): RegExp {
-  let source = ''
-  for (let index = 0; index < pattern.length; index++) {
-    const character = pattern[index]!
-    if (character === '*') {
-      if (pattern[index + 1] === '*') {
-        index++
-        if (pattern[index + 1] === '/') {
-          index++
-          source += '(?:.*/)?'
-        }
-        else {
-          source += '.*'
-        }
-      }
-      else {
-        source += '[^/]*'
-      }
-      continue
-    }
-    if (character === '?') {
-      source += '[^/]'
-      continue
-    }
-    source += character.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  }
-  return new RegExp(`^${source}$`)
-}
-
 /**
- * Expand `scanDirs` entries into absolute directory paths. Supports a single
- * `*` segment per pattern (e.g. `layers/*\/app`) by listing the parent dir and
- * appending the tail.
+ * Expand `scanDirs` entries into absolute directory paths. Every segment may
+ * hold a wildcard: `*` matches one directory name, `**` matches any depth. A
+ * layered site keeps its code under `layers/<layer>/<site>/app`, so a pattern
+ * has to survive more than one wildcard to reach it.
  */
-async function expandScanDirs(rootDir: string, patterns: string[]): Promise<string[]> {
-  const out: string[] = []
+async function expandScanDirs(
+  rootDir: string,
+  patterns: string[],
+  isIgnored: (path: string) => boolean,
+): Promise<string[]> {
+  const expanded = new Set<string>()
   for (const pattern of patterns) {
-    const parts = pattern.split('/')
-    const starIndex = parts.indexOf('*')
-    if (starIndex === -1) {
-      out.push(join(rootDir, ...parts))
-      continue
-    }
-    const head = parts.slice(0, starIndex)
-    const tail = parts.slice(starIndex + 1)
-    const parent = join(rootDir, ...head)
-    let entries
-    try {
-      entries = await readdir(parent, { withFileTypes: true })
-    }
-    catch {
-      // Wildcard scan roots are optional and commonly absent.
-      continue
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory())
-        continue
-      const candidate = join(parent, entry.name, ...tail)
-      if (tail.length === 0) {
-        out.push(candidate)
-        continue
-      }
-      const exists = await stat(candidate).then(s => s.isDirectory(), () => false)
-      if (exists)
-        out.push(candidate)
-    }
+    const segments = normalizePattern(pattern).split('/').filter(segment => segment && segment !== '.')
+    for (const dir of await expandSegments(rootDir, segments, rootDir, isIgnored))
+      expanded.add(dir)
   }
-  return out
+  return [...expanded]
+}
+
+async function expandSegments(
+  dir: string,
+  segments: string[],
+  rootDir: string,
+  isIgnored: (path: string) => boolean,
+): Promise<string[]> {
+  const [head, ...rest] = segments
+  // `walk` tolerates a scan root that does not exist, so a literal tail needs
+  // no existence check here.
+  if (head == null)
+    return [dir]
+
+  if (head === '**') {
+    // `**` matches this directory plus every descendant.
+    const matched = await expandSegments(dir, rest, rootDir, isIgnored)
+    for (const child of await listChildDirectories(dir, rootDir, isIgnored))
+      matched.push(...await expandSegments(child, segments, rootDir, isIgnored))
+    return matched
+  }
+
+  if (head.includes('*') || head.includes('?')) {
+    const matchesSegment = segmentPatternToRegExp(head)
+    const matched: string[] = []
+    for (const child of await listChildDirectories(dir, rootDir, isIgnored)) {
+      if (matchesSegment.test(basename(child)))
+        matched.push(...await expandSegments(child, rest, rootDir, isIgnored))
+    }
+    return matched
+  }
+
+  const next = join(dir, head)
+  if (isIgnored(normalize(relative(rootDir, next))))
+    return []
+  return expandSegments(next, rest, rootDir, isIgnored)
+}
+
+async function listChildDirectories(
+  dir: string,
+  rootDir: string,
+  isIgnored: (path: string) => boolean,
+): Promise<string[]> {
+  let entries
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  }
+  catch {
+    // Wildcard scan roots are optional and commonly absent.
+    return []
+  }
+  const directories: string[] = []
+  for (const entry of entries) {
+    if (!entry.isDirectory())
+      continue
+    const path = join(dir, entry.name)
+    if (isIgnored(normalize(relative(rootDir, path))))
+      continue
+    directories.push(path)
+  }
+  return directories
 }
 
 async function mapConcurrent<T, U>(
