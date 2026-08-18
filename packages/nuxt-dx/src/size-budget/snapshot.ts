@@ -13,6 +13,13 @@ import { isBudgetScope } from './scope'
 export const SNAPSHOT_VERSION = 3
 
 /**
+ * Artifact the CI action stores the report in, and reads the baseline back from. Keyed by
+ * format, so a format bump starts a clean artifact instead of pairing a new report with a
+ * baseline that `compare` refuses to read.
+ */
+export const SNAPSHOT_ARTIFACT_NAME = `nuxt-dx-size-budget-v${SNAPSHOT_VERSION}`
+
+/**
  * Where the report lands, relative to the app root. Not `nuxt.options.buildDir`: that
  * moved into `node_modules/.cache` in Nuxt 4.5, which is no place to point a CI step at.
  */

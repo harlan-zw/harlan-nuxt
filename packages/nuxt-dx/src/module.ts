@@ -11,6 +11,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
+import { createOverrideUsage } from './size-budget/override-usage'
 import { extractPluginName } from './size-budget/plugin-name'
 import { formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
@@ -32,6 +33,7 @@ export interface SizeBudgetOptions {
   middlewareKb?: number | false
   /**
    * Kilobyte budget for each Nitro plugin in the server bundle. `false` disables the check.
+   * Modules with a known heavy Nitro plugin, such as `@sentry/nuxt`, carry their own budget.
    * @default 75
    */
   nitroPluginsKb?: number | false
@@ -40,7 +42,10 @@ export interface SizeBudgetOptions {
    * @default 20
    */
   nitroMiddlewareKb?: number | false
-  /** Per-target kilobyte budgets, keyed by plugin name or any fragment of the path. */
+  /**
+   * Per-target kilobyte budgets, keyed by plugin name, Nuxt module name, or any fragment of
+   * the path. A key that matches no measured entry is reported at the end of the build.
+   */
   overridesKb?: Record<string, number>
   /**
    * Fail the build instead of warning.
@@ -156,7 +161,7 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
     const verdicts: BudgetVerdict[] = await Promise.all(candidates.map(async (target) => {
       const { path, owner, measurement } = target
       const name = target.name ?? (named ? await readPluginName(path, nuxt) : undefined)
-      return { path, name, owner, budgetBytes: budgetFor(path, name, defaultBytes, budgets.overrides), measurement }
+      return { path, name, owner, budgetBytes: budgetFor(scope, { path, name, owner }, defaultBytes, budgets.overrides), measurement }
     }))
 
     const over = verdicts
@@ -223,6 +228,38 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
   const writeSnapshot = reportPath === undefined
     ? undefined
     : createSnapshotWriter(resolve(nuxt.options.rootDir, reportPath), reportBaseDir(nuxt))
+
+  const clientScopes = enabledScopes.filter(scope => scope === 'client' || scope === 'client-middleware')
+  const nitroScopes = enabledScopes.filter(scope => scope === 'nitro' || scope === 'nitro-middleware')
+
+  const overrideUsage = createOverrideUsage(budgets.overrides)
+  /**
+   * The client bundle and the Nitro bundle are measured in separate passes, so an override
+   * keyed to a Nitro plugin has matched nothing while the client pass runs. The verdict waits
+   * for the last pass. A bundle with no runtime entries at all never reports, and then nothing
+   * is claimed either way.
+   */
+  let pendingPasses = (clientScopes.length ? 1 : 0) + (nitroScopes.length ? 1 : 0)
+  const trackOverrides = async (measured: readonly MeasuredTarget[]) => {
+    overrideUsage.use(measured)
+    if (overrideUsage.unused().length) {
+      // A fragment can name a plugin whose size never put it at risk, and those names are
+      // never read. Read them now, so a working override is not reported as a dead one.
+      const named = await Promise.all(measured
+        .filter(target => target.scope === 'client' && target.name === undefined)
+        .map(async target => ({ ...target, name: await readPluginName(target.path, nuxt) })))
+      overrideUsage.use(named)
+    }
+    pendingPasses -= 1
+    if (pendingPasses !== 0)
+      return
+    const unused = overrideUsage.unused()
+    if (!unused.length)
+      return
+    const keys = unused.map(fragment => `\`${fragment}\``).join(', ')
+    logger.warn(`${unused.length} \`sizeBudget.overridesKb\` key${unused.length === 1 ? '' : 's'} matched no runtime entry: ${keys}. Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.`)
+  }
+
   /**
    * Every measurement is recorded, then judged. The report covers the whole build so
    * a later run can diff it, and it is written before the verdict so a failing budget
@@ -239,10 +276,10 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
         await writeSnapshot?.(scope, entries)
         await reports.get(scope)!(entries)
       }
+      await trackOverrides(measured)
     }
   }
 
-  const clientScopes = enabledScopes.filter(scope => scope === 'client' || scope === 'client-middleware')
   // `app:resolve` holds app and module registrations before the client build starts.
   let resolvedApp: NuxtApp | undefined
   if (clientScopes.length) {
@@ -276,7 +313,6 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
     })
   }
 
-  const nitroScopes = enabledScopes.filter(scope => scope === 'nitro' || scope === 'nitro-middleware')
   if (nitroScopes.length) {
     nuxt.hook('nitro:init', (nitro) => {
       nitro.hooks.hook('rollup:before', (_nitro, config) => {

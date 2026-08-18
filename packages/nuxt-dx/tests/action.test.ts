@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
+import { SNAPSHOT_ARTIFACT_NAME } from '../src/size-budget/snapshot'
 
 /**
  * The composite action consumers paste into their own workflow. It cannot be executed
@@ -55,10 +56,33 @@ describe('nuxt-dx-budget action', () => {
       expect(source).toMatch(new RegExp(`${uses.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} # v\\d+\\.\\d+\\.\\d+`))
   })
 
-  it('reads the baseline from the last green run on the base branch', () => {
-    expect(step('Find the baseline run').run).toContain('gh run list')
-    expect(step('Find the baseline run').run).toContain('--status success')
+  it('reads the baseline from the newest run on the base branch that still holds the artifact', () => {
+    const find = step('Find the baseline run').run!
+    expect(find).toContain('gh run list')
+    // A green workflow is the wrong test: the action drops into a job beside jobs it knows
+    // nothing about, so one red lint job on the base branch would leave every later pull
+    // request with no baseline. What matters is that the run left the artifact behind.
+    expect(find).not.toContain('--status success')
+    expect(find).toContain('actions/runs/')
+    expect(find).toContain('artifacts')
+    expect(find).toContain('ARTIFACT_NAME')
     expect(step('Download the baseline report').uses).toContain('actions/download-artifact')
+  })
+
+  it('names the baseline artifact after the report format, so a format bump starts clean', () => {
+    // A report the CLI refuses to read is a stuck branch: every run fails on the baseline
+    // that broke it, and never replaces it.
+    expect(action.inputs['artifact-name']!.default).toBe(SNAPSHOT_ARTIFACT_NAME)
+  })
+
+  it('fails loudly when the size budget CLI is not installed', () => {
+    // `npx --no-install` exits 1 for a missing bin, the same code a breach uses, so the
+    // job would otherwise pass green with an empty summary.
+    const find = step('Find the size budget CLI').run!
+    expect(find).toContain('node_modules/.bin/nuxt-dx')
+    expect(step('Compare against the baseline').if).toContain('steps.cli.outputs.path')
+    const verdict = step('Apply the verdict').run!
+    expect(verdict).toMatch(/-z "\$CLI"[\s\S]*?::error::[\s\S]*?exit 1/)
   })
 
   it('treats a missing or expired baseline as a pass', () => {
@@ -81,8 +105,9 @@ describe('nuxt-dx-budget action', () => {
   })
 
   it('still fails when the two reports could not be compared at all', () => {
-    // Exit code 2 is a broken step, not growth, so no input makes it passable.
-    expect(step('Apply the verdict').run).toMatch(/CODE" = "2"[\s\S]*?exit 1/)
+    // A broken comparison is not growth, so no input makes it passable.
+    expect(step('Compare against the baseline').run).toContain('status=broken')
+    expect(step('Apply the verdict').run).toMatch(/STATUS" = "broken"[\s\S]*?exit 1/)
   })
 
   it('decides the verdict after the baseline is uploaded, so a failure keeps it', () => {
