@@ -185,21 +185,36 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 ```
 
 ```md
-### Bundle size budget
+### 📦 Runtime size budget
 
-- **Client runtime entries** 47.2 kB to 65.7 kB, **+18.5 kB**
-  - Nuxt plugins: 34.7 kB to 61.8 kB, +27.1 kB
-  - Nuxt middleware: 12.5 kB to 3.9 kB, -8.6 kB
-- **Server runtime entries** 6.4 kB to 6.4 kB, **+0 B**
-  - Nitro plugins: 6.4 kB to 6.4 kB, +0 B
+⚠️ **1 target past the 10 kB threshold** · net +27.2 kB · 🆕 1 new target
 
-**1 target grew past the 10 kB threshold:** `app/plugins/analytics.client.ts` +35.7 kB.
+| Target | Scope | Size | Δ |
+| --- | --- | --- | --- |
+| `app/plugins/analytics.client.ts` | Nuxt plugin | 7.6 kB → 43.3 kB | 🔴 +35.6 kB (+467.9%) |
+| `runtime/consent.client.ts`<br><sub>fixture-consent</sub> | Nuxt plugin | 0 B → 170 B | 🆕 new |
+| `app/middleware/legacy.global.ts` | Nuxt middleware | 12.5 kB → 3.9 kB | 🟢 -8.6 kB (-68.8%) |
 
-| Target | Module | Scope | Base | Head | Change |
-| --- | --- | --- | --- | --- | --- |
-| `app/plugins/analytics.client.ts` |  | Nuxt plugin | 7.6 kB | 43.3 kB | +35.7 kB |
-| `runtime/consent.client.ts` | `fixture-consent` | Nuxt plugin | 0 B | 170 B | +170 B (new) |
-| `app/middleware/legacy.global.ts` |  | Nuxt middleware | 12.5 kB | 3.9 kB | -8.6 kB |
+<details><summary>Bundle totals</summary>
+
+| Bundle | Size | Δ |
+| --- | --- | --- |
+| **Client** | 23.1 kB → 50.4 kB | +27.2 kB |
+| <sub>Nuxt plugins</sub> | <sub>10.6 kB → 46.5 kB</sub> | <sub>+35.8 kB</sub> |
+| <sub>Nuxt middleware</sub> | <sub>12.5 kB → 3.9 kB</sub> | <sub>-8.6 kB</sub> |
+| **Server** | 6.4 kB → 6.4 kB | +0 B |
+| <sub>Nitro plugins</sub> | <sub>6.4 kB → 6.4 kB</sub> | <sub>+0 B</sub> |
+</details>
+
+<details><summary>2 unchanged targets</summary>
+
+| Target | Scope | Size | Δ |
+| --- | --- | --- | --- |
+| `app/plugins/theme.client.ts` | Nuxt plugin | 3 kB → 3 kB | — |
+| `server/plugins/audit.ts` | Nitro plugin | 6.4 kB → 6.4 kB | — |
+</details>
+
+<sub>Each target is charged its own bundled bytes plus every module it alone pulls in. The threshold applies to each target on its own, not to the total.</sub>
 ```
 
 Markdown goes to stdout for job summaries. The local verdict goes to stderr. Client and server totals combine their disjoint runtime entries.

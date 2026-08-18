@@ -3,9 +3,14 @@ import { colors } from 'consola/utils'
 import { SCOPE } from './scope'
 import { formatBytes, formatDelta } from './size'
 
-const SUFFIX: Partial<Record<EntryChange['kind'], string>> = {
-  added: ' (new)',
-  removed: ' (gone)',
+/** Heading on every report, so a reader finds the same block in a long summary. */
+const HEADING = '### 📦 Runtime size budget'
+
+const MARKER: Partial<Record<EntryChange['kind'], string>> = {
+  added: '🆕',
+  removed: '⚪',
+  grown: '🔴',
+  shrunk: '🟢',
 }
 
 /** A label is a file path or a package name; either can hold the character that ends a cell. */
@@ -13,35 +18,86 @@ function cell(text: string): string {
   return text.replaceAll('|', '\\|')
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
+/** Growth reads differently at 200 B and at 200 kB, so the share of the base goes beside it. */
+function percent(deltaBytes: number, baseBytes: number): string {
+  if (baseBytes <= 0)
+    return ''
+  const share = (deltaBytes / baseBytes) * 100
+  return ` (${share > 0 ? '+' : '-'}${Math.abs(share).toFixed(1)}%)`
+}
+
+function deltaCell(change: EntryChange): string {
+  if (change.kind === 'added')
+    return '🆕 new'
+  if (change.kind === 'removed')
+    return '⚪ gone'
+  if (change.kind === 'unchanged')
+    return '—'
+  return `${MARKER[change.kind]} ${formatDelta(change.deltaBytes)}${percent(change.deltaBytes, change.baseBytes)}`
+}
+
+/** The owner rides under the target rather than in its own column, to keep the table narrow. */
+function targetCell(change: EntryChange): string {
+  const target = `\`${cell(change.label)}\``
+  return change.owner === undefined ? target : `${target}<br><sub>${cell(change.owner)}</sub>`
+}
+
 function row(change: EntryChange): string {
   const columns = [
-    `\`${cell(change.label)}\``,
-    change.owner === undefined ? '' : `\`${cell(change.owner)}\``,
+    targetCell(change),
     SCOPE[change.scope].noun,
-    formatBytes(change.baseBytes),
-    formatBytes(change.headBytes),
-    `${formatDelta(change.deltaBytes)}${SUFFIX[change.kind] ?? ''}`,
+    `${formatBytes(change.baseBytes)} → ${formatBytes(change.headBytes)}`,
+    deltaCell(change),
   ]
   return `| ${columns.join(' | ')} |`
 }
 
-function summary(diff: SnapshotDiff): string[] {
-  const lines: string[] = []
-  for (const { bundle, baseBytes, headBytes, deltaBytes } of diff.bundleTotals) {
-    lines.push(`- **${bundle === 'client' ? 'Client' : 'Server'} runtime entries** ${formatBytes(baseBytes)} to ${formatBytes(headBytes)}, **${formatDelta(deltaBytes)}**`)
-    for (const total of diff.scopeTotals.filter(total => SCOPE[total.scope].bundle === bundle))
-      lines.push(`  - ${SCOPE[total.scope].plural}: ${formatBytes(total.baseBytes)} to ${formatBytes(total.headBytes)}, ${formatDelta(total.deltaBytes)}`)
-  }
-  return lines
+function table(changes: EntryChange[]): string[] {
+  return [
+    '| Target | Scope | Size | Δ |',
+    '| --- | --- | --- | --- |',
+    ...changes.map(row),
+  ]
 }
 
+/**
+ * One line that answers the only question a reviewer opens the comment with: did this
+ * pull request add JavaScript, and does anything need a decision.
+ */
 function verdict(diff: SnapshotDiff): string {
-  const { breaches, thresholdBytes } = diff
-  const limit = formatBytes(thresholdBytes)
-  if (!breaches.length)
-    return `No single target grew past the ${limit} threshold.`
-  const named = breaches.map(change => `\`${cell(change.label)}\` ${formatDelta(change.deltaBytes)}`).join(', ')
-  return `**${breaches.length} target${breaches.length === 1 ? '' : 's'} grew past the ${limit} threshold:** ${named}.`
+  const moved = diff.changes.filter(change => change.kind !== 'unchanged')
+  const added = moved.filter(change => change.kind === 'added')
+  const net = moved.reduce((total, change) => total + change.deltaBytes, 0)
+  const limit = formatBytes(diff.thresholdBytes)
+
+  const parts: string[] = []
+  if (diff.breaches.length)
+    parts.push(`⚠️ **${plural(diff.breaches.length, 'target')} past the ${limit} threshold** · net ${formatDelta(net)}`)
+  else if (!moved.length)
+    parts.push('✅ **No runtime entry changed size**')
+  else if (net > 0)
+    parts.push(`🟡 **${plural(moved.length, 'target')} changed** · net ${formatDelta(net)}`)
+  else
+    parts.push(`🟢 **${plural(moved.length, 'target')} changed** · net ${formatDelta(net)}`)
+
+  if (added.length)
+    parts.push(`🆕 ${plural(added.length, 'new target')}`)
+  return parts.join(' · ')
+}
+
+/** Bundle and scope totals, folded away: they answer a follow-up question, not the first one. */
+function totals(diff: SnapshotDiff): string[] {
+  const rows: string[] = ['| Bundle | Size | Δ |', '| --- | --- | --- |']
+  for (const { bundle, baseBytes, headBytes, deltaBytes } of diff.bundleTotals) {
+    rows.push(`| **${bundle === 'client' ? 'Client' : 'Server'}** | ${formatBytes(baseBytes)} → ${formatBytes(headBytes)} | ${formatDelta(deltaBytes)} |`)
+    for (const total of diff.scopeTotals.filter(total => SCOPE[total.scope].bundle === bundle))
+      rows.push(`| <sub>${SCOPE[total.scope].plural}</sub> | <sub>${formatBytes(total.baseBytes)} → ${formatBytes(total.headBytes)}</sub> | <sub>${formatDelta(total.deltaBytes)}</sub> |`)
+  }
+  return ['<details><summary>Bundle totals</summary>', '', ...rows, '</details>']
 }
 
 /**
@@ -51,39 +107,47 @@ function verdict(diff: SnapshotDiff): string {
  */
 export function formatMissingBaselineMarkdown(path: string, reason?: string): string {
   return [
-    '### Bundle size budget',
+    HEADING,
+    '',
+    'ℹ️ **No baseline to compare against**',
     '',
     reason === undefined
-      ? `No baseline report was found at \`${path}\`, so there is nothing to compare this build against.`
-      : `The baseline report at \`${path}\` cannot be read, so there is nothing to compare this build against. ${reason}`,
+      ? `No baseline report was found at \`${path}\`.`
+      : `The baseline report at \`${path}\` cannot be read. ${reason}`,
     '',
     'This run leaves its own report behind, which the next one can measure against.',
   ].join('\n')
 }
 
 /**
- * The diff as GitHub-flavoured markdown, ready to append to a step summary. Unchanged
- * targets are counted rather than listed: a report of forty plugins that all held still
- * is noise around the one that did not.
+ * The diff as GitHub-flavoured markdown, for a step summary and a pull request comment.
+ * The verdict and the targets that moved carry the whole story; every unchanged target
+ * sits behind a fold, because a report of forty plugins that all held still is noise
+ * around the one that did not.
  */
 export function formatDiffMarkdown(diff: SnapshotDiff): string {
-  const lines = ['### Bundle size budget', '']
+  const lines = [HEADING, '']
   if (!diff.changes.length)
     return [...lines, 'Neither build measured a runtime entry.'].join('\n')
 
   const moved = diff.changes.filter(change => change.kind !== 'unchanged')
-  lines.push(...summary(diff), '', verdict(diff), '')
-  if (moved.length) {
+  lines.push(verdict(diff), '')
+  if (moved.length)
+    lines.push(...table(moved), '')
+  lines.push(...totals(diff), '')
+
+  const unchanged = diff.changes.filter(change => change.kind === 'unchanged')
+  if (unchanged.length) {
     lines.push(
-      '| Target | Module | Scope | Base | Head | Change |',
-      '| --- | --- | --- | --- | --- | --- |',
-      ...moved.map(row),
+      `<details><summary>${plural(unchanged.length, 'unchanged target')}</summary>`,
+      '',
+      ...table(unchanged),
+      '</details>',
       '',
     )
   }
 
-  const unchanged = diff.changes.length - moved.length
-  lines.push(`<sub>${unchanged} target${unchanged === 1 ? '' : 's'} unchanged. Each target is charged its own bundled bytes plus every module it alone pulls in, and the threshold applies to each target on its own rather than to the total.</sub>`)
+  lines.push('<sub>Each target is charged its own bundled bytes plus every module it alone pulls in. The threshold applies to each target on its own, not to the total.</sub>')
   return lines.join('\n')
 }
 
@@ -92,8 +156,8 @@ export function formatDiffVerdict(diff: SnapshotDiff): string {
   const limit = formatBytes(diff.thresholdBytes)
   if (!diff.breaches.length) {
     const moved = diff.changes.filter(change => change.kind !== 'unchanged').length
-    return colors.green(`✔ no target grew past the ${limit} threshold`) + colors.dim(` (${moved} target${moved === 1 ? '' : 's'} changed size)`)
+    return colors.green(`✔ no target grew past the ${limit} threshold`) + colors.dim(` (${plural(moved, 'target')} changed size)`)
   }
   const named = diff.breaches.map(change => `${change.label} ${formatDelta(change.deltaBytes)}`).join(', ')
-  return colors.red(`✖ ${diff.breaches.length} target${diff.breaches.length === 1 ? '' : 's'} grew past the ${limit} threshold: `) + named
+  return colors.red(`✖ ${plural(diff.breaches.length, 'target')} grew past the ${limit} threshold: `) + named
 }
