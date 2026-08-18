@@ -34,13 +34,13 @@ describe('generated collection storage', () => {
   })
 
   it('projects metadata, navigation, search, and one body asset per document', async () => {
-    const plan = createContentAssetPlan({ pages })
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
     const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
     const index = await decodeCollectionAsset<Array<{ metadata: Record<string, unknown>, bodyAsset: string }>>(assets.get('pages/index.json.gz')!, 'pages/index')
     const navigation = await decodeCollectionAsset<Array<Record<string, unknown>>>(assets.get('pages/navigation.json.gz')!, 'pages/navigation')
     const search = await decodeCollectionAsset<Array<Record<string, unknown>>>(assets.get('pages/search.json.gz')!, 'pages/search')
 
-    expect(plan.collectionNames).toEqual(['pages'])
+    expect(plan.manifest).toEqual([{ name: 'pages', sitemap: true }])
     expect(index.map(item => item.metadata)).toEqual(pages.map(({ body: _body, ...metadata }) => metadata))
     expect(index.every(item => assets.has(`pages/body/${item.bodyAsset}`))).toBe(true)
     expect(navigation).toEqual([
@@ -53,7 +53,7 @@ describe('generated collection storage', () => {
     ])
   })
 
-  it('changes the content revision when either the application build or one document changes', () => {
+  it('changes the content revision only when a document changes', () => {
     const original = { pages }
     const changed = {
       pages: pages.map(page => page.path === '/draft'
@@ -61,16 +61,26 @@ describe('generated collection storage', () => {
         : page),
     }
 
-    expect(createContentRevision('app-build', original)).toMatch(/^[a-f0-9]{64}$/)
-    expect(createContentRevision('app-build', { pages })).toBe(createContentRevision('app-build', original))
-    expect(createContentRevision('app-build', { empty: [], pages })).toBe(createContentRevision('app-build', { pages, empty: [] }))
-    expect(createContentRevision('app-build', { pages: pages.map(page => ({ ...page, _source: `/other${page._source}` })) })).toBe(createContentRevision('app-build', original))
-    expect(createContentRevision('app-build', changed)).not.toBe(createContentRevision('app-build', original))
-    expect(createContentRevision('next-app-build', original)).not.toBe(createContentRevision('app-build', original))
+    expect(createContentRevision(original)).toMatch(/^[a-f0-9]{64}$/)
+    expect(createContentRevision({ pages })).toBe(createContentRevision(original))
+    expect(createContentRevision({ empty: [], pages })).toBe(createContentRevision({ pages, empty: [] }))
+    expect(createContentRevision({ pages: pages.map(page => ({ ...page, _source: `/other${page._source}` })) })).toBe(createContentRevision(original))
+    expect(createContentRevision(changed)).not.toBe(createContentRevision(original))
+  })
+
+  it('keeps an opted out collection out of the sitemap manifest', async () => {
+    const plan = createContentAssetPlan({ collections: { pages, snippets: [] }, sitemapCollections: ['pages'] })
+    const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
+    const storage = createContentStorage(async path => assets.get(path) ?? null)
+
+    await expect(storage.loadCollectionManifest()).resolves.toEqual([
+      { name: 'pages', sitemap: true },
+      { name: 'snippets', sitemap: false },
+    ])
   })
 
   it('filters metadata before loading only matched document bodies', async () => {
-    const plan = createContentAssetPlan({ pages })
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
     const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
     const storage = createContentStorage(async path => assets.get(path) ?? null)
     const index = await storage.loadCollectionIndex('pages')
@@ -86,7 +96,7 @@ describe('generated collection storage', () => {
   })
 
   it('returns selected metadata without loading a document body', async () => {
-    const plan = createContentAssetPlan({ pages })
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
     const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
     const storage = createContentStorage(async path => assets.get(path) ?? null)
     const index = await storage.loadCollectionIndex('pages')
@@ -101,7 +111,7 @@ describe('generated collection storage', () => {
   })
 
   it('decompresses matched document bodies one at a time', async () => {
-    const plan = createContentAssetPlan({ pages })
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
     const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
     const storage = createContentStorage(async path => assets.get(path) ?? null)
     const index = await storage.loadCollectionIndex('pages')
@@ -121,7 +131,7 @@ describe('generated collection storage', () => {
   })
 
   it('loads compact navigation and precomputed search without document bodies', async () => {
-    const plan = createContentAssetPlan({ pages })
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
     const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
     const reads: string[] = []
     const storage = createContentStorage(async (path) => {

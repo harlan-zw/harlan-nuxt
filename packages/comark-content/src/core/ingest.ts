@@ -3,6 +3,7 @@ import type { CollectionDefinition, StandardSchemaIssue } from '../config'
 import type { ContentHighlight } from '../highlight'
 import type { ContentHook, ContentHookPage } from '../hooks'
 import type { PageCollectionItemBase, Result } from '../runtime/types'
+import type { RemoteCheckoutPolicy } from './remote'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createMarkdownParser } from 'comark'
@@ -27,6 +28,8 @@ export interface LoadedCollection {
 
 export interface IngestionResult {
   collections: Record<string, PageCollectionItemBase[]>
+  /** Names of the collections the sitemap includes. */
+  sitemapCollections: string[]
   parsedFiles: number
   cachedFiles: number
   componentTags: string[]
@@ -35,6 +38,7 @@ export interface IngestionResult {
 type IngestionOptions = ContentHook & {
   cacheFile: string
   remoteCacheDir?: string
+  remoteCheckout?: RemoteCheckoutPolicy
   parse?: (source: string) => Promise<MarkdownDocument>
   highlight?: ContentHighlight
 }
@@ -123,6 +127,7 @@ export async function ingestCollections(loadedCollections: LoadedCollection[], o
   const cache = await readCache(options.cacheFile)
   const nextCache = { version: CACHE_VERSION, entries: {} as typeof cache.entries }
   const collections: Record<string, PageCollectionItemBase[]> = {}
+  const sitemapCollections: string[] = []
   let parsedFiles = 0
   let cachedFiles = 0
   const componentTags = new Set<string>()
@@ -134,6 +139,7 @@ export async function ingestCollections(loadedCollections: LoadedCollection[], o
       const remote = await prepareRemoteSource(
         { ...declaredSource, repository: declaredSource.repository },
         options.remoteCacheDir ?? `${options.cacheFile}.remote`,
+        { policy: options.remoteCheckout },
       )
       if (remote._tag === 'Err')
         return remote
@@ -215,7 +221,9 @@ export async function ingestCollections(loadedCollections: LoadedCollection[], o
       items.push(afterParse.content)
     }
     collections[collection.name] = items
+    if (collection.definition.sitemap !== false)
+      sitemapCollections.push(collection.name)
   }
   await writeCache(options.cacheFile, nextCache)
-  return ok({ collections, parsedFiles, cachedFiles, componentTags: [...componentTags].sort() })
+  return ok({ collections, sitemapCollections, parsedFiles, cachedFiles, componentTags: [...componentTags].sort() })
 }

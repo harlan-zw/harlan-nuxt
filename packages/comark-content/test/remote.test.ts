@@ -34,7 +34,7 @@ describe('remote Markdown sources', () => {
     const result = await prepareRemoteSource({
       repository: { url: 'https://github.com/nuxt-modules/og-image', auth: { token: 'expired' } },
       include: 'docs/content/**/*.md',
-    }, join(root, 'cache'), command)
+    }, join(root, 'cache'), { command })
 
     expect(result._tag).toBe('Ok')
     expect(calls).toHaveLength(2)
@@ -61,5 +61,67 @@ describe('remote Markdown sources', () => {
       _tag: 'Err',
       error: { _tag: 'SourceError', source: repository, line: 1, column: 1 },
     })
+  })
+
+  it('clones an immutable tag once and reuses the checkout', async () => {
+    const root = await temporaryRoot()
+    const clones: string[] = []
+    const command = async (_command: string, args: string[]) => {
+      clones.push(args.at(-1)!)
+      await mkdir(args.at(-1)!, { recursive: true })
+    }
+    const source = { repository: { url: 'https://example.com/docs.git', tag: 'v1.2.3' }, include: '**/*.md' }
+
+    const first = await prepareRemoteSource(source, join(root, 'cache'), { command })
+    const second = await prepareRemoteSource(source, join(root, 'cache'), { command })
+
+    expect(first).toEqual(second)
+    expect(clones).toHaveLength(1)
+  })
+
+  it('reclones a mutable branch under the refresh policy', async () => {
+    const root = await temporaryRoot()
+    const clones: string[] = []
+    const command = async (_command: string, args: string[]) => {
+      clones.push(args.at(-1)!)
+      await mkdir(args.at(-1)!, { recursive: true })
+    }
+    const source = { repository: { url: 'https://example.com/docs.git', branch: 'main' }, include: '**/*.md' }
+
+    await prepareRemoteSource(source, join(root, 'cache'), { command })
+    await prepareRemoteSource(source, join(root, 'cache'), { command })
+
+    expect(clones).toHaveLength(2)
+  })
+
+  it('reuses any existing checkout under the reuse policy', async () => {
+    const root = await temporaryRoot()
+    const clones: string[] = []
+    const command = async (_command: string, args: string[]) => {
+      clones.push(args.at(-1)!)
+      await mkdir(args.at(-1)!, { recursive: true })
+    }
+    const source = { repository: { url: 'https://example.com/docs.git', branch: 'main' }, include: '**/*.md' }
+    const options = { command, policy: { _tag: 'ReuseExisting' } as const }
+
+    const first = await prepareRemoteSource(source, join(root, 'cache'), { command })
+    const second = await prepareRemoteSource(source, join(root, 'cache'), options)
+
+    expect(first).toEqual(second)
+    expect(clones).toHaveLength(1)
+  })
+
+  it('separates checkouts of the same repository by reference', async () => {
+    const root = await temporaryRoot()
+    const command = async (_command: string, args: string[]) => {
+      await mkdir(args.at(-1)!, { recursive: true })
+    }
+    const url = 'https://example.com/docs.git'
+
+    const stable = await prepareRemoteSource({ repository: { url, tag: 'v1' }, include: '**/*.md' }, join(root, 'cache'), { command })
+    const next = await prepareRemoteSource({ repository: { url, tag: 'v2' }, include: '**/*.md' }, join(root, 'cache'), { command })
+
+    expect(stable._tag).toBe('Ok')
+    expect(next).not.toEqual(stable)
   })
 })

@@ -21,14 +21,18 @@ import {
   useLogger,
 } from '@nuxt/kit'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
-import { assertCloudflareCacheModule, assertSupportedOptions } from './config'
+import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSources } from './config'
 import { createContentAssetPlan, createContentRevision } from './core/asset'
 import { ingestCollections } from './core/ingest'
+import { isMarkdownWatchEvent } from './core/source'
 import { excludeNuxtContentSitemapSource } from './sitemap'
 
 export * from './config'
+export { contentRangiLanguages, contentRangiTheme } from './core/rangi'
 export type * from './highlight'
 export type * from './hooks'
+export { nodeToText, walkNodes } from './runtime/core/ast'
+export type { NodeVisitor } from './runtime/core/ast'
 export type * from './runtime/types'
 
 export interface ModuleOptions {
@@ -54,7 +58,7 @@ function layerRoot(layer: Record<string, unknown>) {
 }
 
 async function loadCollections(layers: ReadonlyArray<Record<string, unknown>>): Promise<LoadedCollection[]> {
-  const collections = new Map<string, LoadedCollection>()
+  const declared = []
   for (const layer of [...layers].reverse()) {
     const rootDir = layerRoot(layer)
     if (!rootDir)
@@ -63,11 +67,9 @@ async function loadCollections(layers: ReadonlyArray<Record<string, unknown>>): 
     if (!configPath)
       continue
     const config = await importModule<ContentConfig>(configPath, { interopDefault: true })
-    for (const [name, definition] of Object.entries(config.collections)) {
-      collections.set(name, { name, definition, rootDir: dirname(configPath) })
-    }
+    declared.push({ configPath, collections: config.collections })
   }
-  return [...collections.values()]
+  return mergeCollectionSources(declared).map(({ name, definition, rootDir }) => ({ name, definition, rootDir }))
 }
 
 export default defineNuxtModule<ModuleOptions>({
@@ -92,13 +94,14 @@ export default defineNuxtModule<ModuleOptions>({
       optional: true,
     },
   },
-  defaults: {},
+  defaults: { highlight: true },
   async setup(options, nuxt) {
     assertSupportedOptions(options as Record<string, unknown>, join(nuxt.options.rootDir, 'nuxt.config.ts'))
     const nuxtOptions = nuxt.options as typeof nuxt.options & { sitemap?: Parameters<typeof excludeNuxtContentSitemapSource>[0] }
     nuxtOptions.sitemap = excludeNuxtContentSitemapSource(nuxtOptions.sitemap)
     const resolver = createResolver(import.meta.url)
-    nuxt.options.css.push(resolver.resolve('./runtime/rangi.css'))
+    if (options.highlight)
+      nuxt.options.css.push(resolver.resolve('./runtime/rangi.css'))
     const outputDir = join(nuxt.options.rootDir, 'node_modules/.cache/comark-content/generated')
     const cacheFile = join(nuxt.options.rootDir, '.data/comark-content/cache.json')
     const remoteCacheDir = join(nuxt.options.rootDir, 'node_modules/.cache/comark-content/git')
@@ -152,12 +155,13 @@ export default defineNuxtModule<ModuleOptions>({
     if (nuxt.options._prepare)
       return
 
-    const buildCollections = async () => {
+    const buildCollections = async (remoteCheckout: Parameters<typeof ingestCollections>[1]['remoteCheckout']) => {
       const loaded = await loadCollections(nuxt.options._layers as unknown as ReadonlyArray<Record<string, unknown>>)
       const startedAt = performance.now()
       const result = await ingestCollections(loaded, {
         cacheFile,
         remoteCacheDir,
+        remoteCheckout,
         highlight: options.highlight,
         beforeParse: context => nuxt.callHook('content:file:beforeParse', context),
         afterParse: context => nuxt.callHook('content:file:afterParse', context),
@@ -172,7 +176,10 @@ export default defineNuxtModule<ModuleOptions>({
       initializedCollections = true
       await rm(outputDir, { recursive: true, force: true })
       await mkdir(outputDir, { recursive: true })
-      const assetPlan = createContentAssetPlan(result.value.collections)
+      const assetPlan = createContentAssetPlan({
+        collections: result.value.collections,
+        sitemapCollections: result.value.sitemapCollections,
+      })
       await Promise.all(assetPlan.assets.map(async (asset) => {
         const path = join(outputDir, asset.path)
         await mkdir(dirname(path), { recursive: true })
@@ -180,11 +187,11 @@ export default defineNuxtModule<ModuleOptions>({
       }))
       const files = Object.values(result.value.collections).reduce((sum, items) => sum + items.length, 0)
       logger.success(`Processed ${loaded.length} collections and ${files} files in ${(performance.now() - startedAt).toFixed(2)}ms (${result.value.cachedFiles} cached, ${result.value.parsedFiles} parsed)`)
-      return nuxt.options.dev ? 'dev' : createContentRevision(nuxt.options.buildId, result.value.collections)
+      return nuxt.options.dev ? 'dev' : createContentRevision(result.value.collections)
     }
 
     nuxt.hook('modules:done', async () => {
-      const contentRevision = await buildCollections()
+      const contentRevision = await buildCollections({ _tag: 'Refresh' })
       nuxt.options.runtimeConfig.public.comarkContentRevision = contentRevision
       const contentRouteBase = `/__comark_content/${encodeURIComponent(contentRevision)}`
       addServerHandler({ route: `${contentRouteBase}/navigation/:collection`, method: 'get', handler: resolver.resolve('./runtime/server/api/navigation.get') })
@@ -193,10 +200,11 @@ export default defineNuxtModule<ModuleOptions>({
     })
     let rebuild = Promise.resolve()
     nuxt.hook('builder:watch', (event, path) => {
-      if (event !== 'change' || !path.endsWith('.md'))
+      if (!isMarkdownWatchEvent(event, path))
         return
       rebuild = rebuild.then(async () => {
-        await buildCollections()
+        // A local edit never changes a remote checkout, so no repository is cloned again.
+        await buildCollections({ _tag: 'ReuseExisting' })
       })
       return rebuild
     })

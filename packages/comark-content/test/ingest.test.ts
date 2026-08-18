@@ -184,7 +184,19 @@ describe('markdown ingestion', () => {
       { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md' }) },
     ], { cacheFile: join(root, 'cache.json') })
 
-    expect(result).toEqual({ _tag: 'Ok', value: { collections: { pages: [] }, parsedFiles: 0, cachedFiles: 0, componentTags: [] } })
+    expect(result).toEqual({ _tag: 'Ok', value: { collections: { pages: [] }, sitemapCollections: ['pages'], parsedFiles: 0, cachedFiles: 0, componentTags: [] } })
+  })
+
+  it('reports the collections that opted out of the sitemap', async () => {
+    const root = await temporaryRoot()
+    await writeFixture(root, 'content/page.md', '# Page')
+
+    const result = await ingestCollections([
+      { name: 'pages', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md' }) },
+      { name: 'snippets', rootDir: root, definition: defineCollection({ type: 'page', source: '**/*.md', sitemap: false }) },
+    ], { cacheFile: join(root, 'cache.json') })
+
+    expect(result).toMatchObject({ _tag: 'Ok', value: { sitemapCollections: ['pages'] } })
   })
 
   it('parses frontmatter and exposes the direct Comark document', async () => {

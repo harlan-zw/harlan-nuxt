@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, selectContentComponents } from '../src/components'
-import { assertCloudflareCacheModule, assertSupportedOptions, defineCollection } from '../src/config'
+import { assertCloudflareCacheModule, assertSupportedOptions, defineCollection, mergeCollectionSources } from '../src/config'
+import { isMarkdownWatchEvent } from '../src/core/source'
 
 describe('configuration boundary', () => {
   it('finds unprefixed content component directories in layer priority order', () => {
@@ -65,6 +66,40 @@ describe('configuration boundary', () => {
 
   it('rejects non-Markdown data collections', () => {
     expect(() => defineCollection({ type: 'data' as 'page', source: '**/*.json' })).toThrow('Markdown page collections are the only supported collection type')
+  })
+
+  it('accepts a glob that lists Markdown among its extensions', () => {
+    expect(() => defineCollection({ type: 'page', source: '**/*.{md,yml}' })).not.toThrow()
+    expect(() => defineCollection({ type: 'page', source: { include: '3.docs/**/*.{md,yml}' } })).not.toThrow()
+    expect(() => defineCollection({ type: 'page', source: '**/*.md' })).not.toThrow()
+    expect(() => defineCollection({ type: 'page', source: '**/*' })).not.toThrow()
+    expect(() => defineCollection({ type: 'page', source: '**/*.{json,yml}' })).toThrow('Markdown files are the only supported collection source')
+    expect(() => defineCollection({ type: 'page', source: '**/*.json' })).toThrow('Markdown files are the only supported collection source')
+  })
+
+  it('reports a collection name that two content configurations define', () => {
+    expect(() => mergeCollectionSources([
+      { configPath: '/site/content.config.ts', collections: { docs: defineCollection({ type: 'page' }) } },
+      { configPath: '/layer/content.config.ts', collections: { docs: defineCollection({ type: 'page' }) } },
+    ])).toThrow('/layer/content.config.ts:1:1 Collection "docs" is already defined in /site/content.config.ts')
+  })
+
+  it('keeps every uniquely named collection with its configuration directory', () => {
+    expect(mergeCollectionSources([
+      { configPath: '/site/content.config.ts', collections: { docs: defineCollection({ type: 'page' }) } },
+      { configPath: '/layer/content.config.ts', collections: { blog: defineCollection({ type: 'page' }) } },
+    ]).map(collection => [collection.name, collection.rootDir])).toEqual([
+      ['docs', '/site'],
+      ['blog', '/layer'],
+    ])
+  })
+
+  it('rebuilds content when Markdown is added, changed, or deleted', () => {
+    expect(isMarkdownWatchEvent('add', '/site/content/new.md')).toBe(true)
+    expect(isMarkdownWatchEvent('change', '/site/content/new.md')).toBe(true)
+    expect(isMarkdownWatchEvent('unlink', '/site/content/new.md')).toBe(true)
+    expect(isMarkdownWatchEvent('addDir', '/site/content/guide')).toBe(false)
+    expect(isMarkdownWatchEvent('change', '/site/app/app.vue')).toBe(false)
   })
 
   it('reports database configuration as unsupported at its source', () => {

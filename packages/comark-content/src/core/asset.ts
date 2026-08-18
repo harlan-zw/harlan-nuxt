@@ -1,4 +1,4 @@
-import type { ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../runtime/types'
+import type { ContentCollectionManifestEntry, ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../runtime/types'
 import { createHash } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { createNavigationSource, createSearchSections } from '../runtime/core/navigation'
@@ -11,8 +11,14 @@ export interface GeneratedContentAsset {
 }
 
 export interface ContentAssetPlan {
-  collectionNames: string[]
+  manifest: ContentCollectionManifestEntry[]
   assets: GeneratedContentAsset[]
+}
+
+export interface ContentAssetPlanInput {
+  collections: Record<string, PageCollectionItemBase[]>
+  /** Names of the collections the sitemap includes. */
+  sitemapCollections: readonly string[]
 }
 
 const bodyAssetName = (id: string) => `${createHash('sha256').update(id).digest('hex').slice(0, 32)}.json.gz`
@@ -27,11 +33,13 @@ function canonicalContent(collections: Record<string, PageCollectionItemBase[]>)
   })
 }
 
-export function createContentRevision(buildId: string, collections: Record<string, PageCollectionItemBase[]>) {
+/**
+ * Hashes the parsed content only.
+ * The application build is excluded, so a redeploy keeps serving live clients.
+ */
+export function createContentRevision(collections: Record<string, PageCollectionItemBase[]>) {
   return createHash('sha256')
     .update('comark-content-assets-v1\0')
-    .update(buildId)
-    .update('\0')
     .update(canonicalContent(collections))
     .digest('hex')
 }
@@ -56,13 +64,14 @@ export function projectCollectionAssets(name: string, items: PageCollectionItemB
   ]
 }
 
-export function createContentAssetPlan(collections: Record<string, PageCollectionItemBase[]>): ContentAssetPlan {
-  const collectionNames = Object.keys(collections)
+export function createContentAssetPlan(input: ContentAssetPlanInput): ContentAssetPlan {
+  const sitemapCollections = new Set(input.sitemapCollections)
+  const manifest = Object.keys(input.collections).map(name => ({ name, sitemap: sitemapCollections.has(name) }))
   return {
-    collectionNames,
+    manifest,
     assets: [
-      { path: 'collections.json.gz', data: encodeCollectionAsset(collectionNames) },
-      ...Object.entries(collections).flatMap(([name, items]) => projectCollectionAssets(name, items)),
+      { path: 'collections.json.gz', data: encodeCollectionAsset(manifest) },
+      ...Object.entries(input.collections).flatMap(([name, items]) => projectCollectionAssets(name, items)),
     ],
   }
 }

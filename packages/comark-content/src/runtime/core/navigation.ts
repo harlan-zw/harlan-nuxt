@@ -1,12 +1,6 @@
-import type { Node } from 'comark'
 import type { ContentNavigationItem, ContentSearchSection, NavigationCollectionItem, PageCollectionItemBase } from '../types'
+import { nodeToText } from './ast'
 import { generatedTitle } from './path'
-
-function text(node: Node): string {
-  return typeof node === 'string'
-    ? node
-    : node.slice(2).map(child => text(child as Node)).join('')
-}
 
 function navigationItem(page: NavigationCollectionItem, fields: string[]): ContentNavigationItem {
   const navigation = page.navigation
@@ -101,7 +95,7 @@ export function createSearchSections(pages: PageCollectionItemBase[]): ContentSe
     for (const node of page.body.nodes) {
       if (typeof node !== 'string' && typeof node[0] === 'string' && /^h[1-6]$/.test(node[0])) {
         const level = Number(node[0].slice(1))
-        const title = text(node)
+        const title = nodeToText(node)
         titles.splice(level - 1)
         current = {
           id: `${page.path}#${String(node[1].id ?? '')}`,
@@ -117,9 +111,9 @@ export function createSearchSections(pages: PageCollectionItemBase[]): ContentSe
         continue
       }
       if (current)
-        appendText(current, text(node))
+        appendText(current, nodeToText(node))
       else
-        preface = `${preface} ${text(node)}`.trim()
+        preface = `${preface} ${nodeToText(node)}`.trim()
     }
     return sections
   })
