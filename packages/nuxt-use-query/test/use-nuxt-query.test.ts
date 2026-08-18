@@ -389,6 +389,52 @@ describe('useNuxtQuery refetchInterval', () => {
   })
 })
 
+describe('shouldRefetchOnMount', () => {
+  it('refetches stale resolved data in the browser', async () => {
+    const { shouldRefetchOnMount } = await import('../src/runtime/query-lifecycle')
+    cache.lastFetched.set('q', Date.now() - 10_000)
+
+    expect(shouldRefetchOnMount({
+      cache,
+      data: { n: 1 },
+      isServerRender: false,
+      key: 'q',
+      option: true,
+      staleTime: 1,
+      status: 'success',
+    })).toBe(true)
+  })
+
+  it('never refetches during server rendering', async () => {
+    const { shouldRefetchOnMount } = await import('../src/runtime/query-lifecycle')
+    cache.lastFetched.set('q', Date.now() - 10_000)
+
+    expect(shouldRefetchOnMount({
+      cache,
+      data: { n: 1 },
+      isServerRender: true,
+      key: 'q',
+      option: true,
+      staleTime: 1,
+      status: 'success',
+    })).toBe(false)
+  })
+
+  it('never refetches during server rendering with refetchOnMount always', async () => {
+    const { shouldRefetchOnMount } = await import('../src/runtime/query-lifecycle')
+
+    expect(shouldRefetchOnMount({
+      cache,
+      data: { n: 1 },
+      isServerRender: true,
+      key: 'q',
+      option: 'always',
+      staleTime: 0,
+      status: 'success',
+    })).toBe(false)
+  })
+})
+
 describe('useNuxtQuery refetchOnMount', () => {
   it('refreshes stale resolved data on mount when refetchOnMount is true', () => {
     fetchState.data.value = { n: 1 }

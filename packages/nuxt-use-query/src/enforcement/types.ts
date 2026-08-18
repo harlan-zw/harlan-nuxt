@@ -21,13 +21,18 @@ export interface ContractQueryEnforcementOptions {
   serverApiDirs?: string[]
   /** Require server/api route files to import from shared/contracts. */
   requireServerContracts?: boolean
-  /** Extra path globs to skip. */
+  /**
+   * Extra paths to skip, on top of the built-in ones. Uses the same pattern
+   * syntax as `queryDirs`, so `app/queries` also skips
+   * `layers/pro/site/app/queries`.
+   */
   ignore?: string[]
   /**
    * Directories (relative to `rootDir`) the scanner walks. Limiting the scan to
    * Nuxt app/server code roots keeps build-time config (`nuxt.config.ts`, vite
-   * config, etc.) out of contract enforcement. Supports a single `*` segment
-   * for layer/module fan-out (e.g. `layers/<asterisk>/app`).
+   * config, etc.) out of contract enforcement. Every segment may hold a
+   * wildcard: `*` matches one directory name, `**` matches any depth. A layer
+   * workspace needs that, because it nests layers (`layers/pro/site/app`).
    */
   scanDirs?: string[]
 }
@@ -77,6 +82,8 @@ export interface RuleContext {
   options: ResolvedContractQueryEnforcementOptions
   isQueryFile: boolean
   isServerApiFile: boolean
+  /** Any file under a `server/` directory, not only `serverApiDirs`. */
+  isServerFile: boolean
 }
 
 export interface ContractRule {

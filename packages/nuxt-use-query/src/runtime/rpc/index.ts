@@ -10,21 +10,25 @@ export {
   useNuxtRpcQuery,
 } from '../composables/useNuxtRpc'
 export type {
+  NuxtRpcQueryErrorEvent,
   UseNuxtRpcOptions,
   UseNuxtRpcQueryOptions,
 } from '../composables/useNuxtRpc'
 export {
   createNuxtRpcClient,
+  createNuxtRpcError,
   defineNuxtQueryGroup,
   defineNuxtRpcMutation,
   defineNuxtRpcQuery,
   isAuthRpcError,
+  isNuxtRpcError,
   isRetryableRpcError,
   normalizeNuxtRpcError,
   parseNuxtRpcResponse,
   rpcErrorCategory,
   serializeNuxtRpcKey,
   toHumanNuxtRpcError,
+  toSerializableNuxtRpcError,
 } from './core'
 export type {
   NuxtRpcBodylessMutationOperation,
@@ -33,6 +37,7 @@ export type {
   NuxtRpcClientOptions,
   NuxtRpcError,
   NuxtRpcErrorCategory,
+  NuxtRpcErrorData,
   NuxtRpcErrorEvent,
   NuxtRpcGetQueryOperation,
   NuxtRpcKey,

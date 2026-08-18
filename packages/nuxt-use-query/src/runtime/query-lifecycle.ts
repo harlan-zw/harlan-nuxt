@@ -89,7 +89,15 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
       void query.refresh()
   })
 
-  if (enabled.value && shouldRefetchOnMount(query, cache, key.value, staleTime, refetchOnMount)) {
+  if (enabled.value && shouldRefetchOnMount({
+    cache,
+    data: query.data.value,
+    isServerRender: import.meta.server,
+    key: key.value,
+    option: refetchOnMount,
+    staleTime,
+    status: query.status.value,
+  })) {
     void query.refresh()
   }
 
@@ -133,22 +141,31 @@ function normalizeRefetchInterval(value: number | false | null | undefined): num
     : 0
 }
 
-function shouldRefetchOnMount(
-  query: { data: { value: unknown }, refresh: () => Promise<void>, status: { value: string } },
-  cache: ReturnType<typeof useQueryCache>,
-  key: string,
-  staleTime: QueryStaleTime,
-  option: boolean | 'always',
-): boolean {
-  if (!option || query.status.value === 'pending')
-    return false
-  if (option === 'always')
-    return true
-  return hasResolvedQueryData(query) && isQueryStale(cache, key, staleTime)
+export interface RefetchOnMountInput {
+  cache: ReturnType<typeof useQueryCache>
+  data: unknown
+  /**
+   * Refetch on mount is a browser behaviour. During server rendering the data
+   * was fetched moments ago in the same render, so a sibling mount that
+   * refetches only doubles the upstream load and races the response.
+   */
+  isServerRender: boolean
+  key: string
+  option: boolean | 'always'
+  staleTime: QueryStaleTime
+  status: string
 }
 
-function hasResolvedQueryData(query: { data: { value: unknown }, status: { value: string } }): boolean {
-  return query.status.value === 'success' || query.data.value !== undefined
+export function shouldRefetchOnMount(input: RefetchOnMountInput): boolean {
+  if (input.isServerRender || !input.option || input.status === 'pending')
+    return false
+  if (input.option === 'always')
+    return true
+  return hasResolvedQueryData(input) && isQueryStale(input.cache, input.key, input.staleTime)
+}
+
+function hasResolvedQueryData(input: Pick<RefetchOnMountInput, 'data' | 'status'>): boolean {
+  return input.status === 'success' || input.data !== undefined
 }
 
 function refetchIfAllowed(
