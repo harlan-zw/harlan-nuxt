@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/comark-content",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "pnpm@11.2.1",
   "description": "Markdown-only Nuxt content powered by Comark.",
   "author": {
