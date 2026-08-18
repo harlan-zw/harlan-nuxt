@@ -216,8 +216,9 @@ export interface DurableJobRecoveryQuery {
   /** Suppress rows reaped more recently than this timestamp so CF redelivery wins first. */
   staleReleasedBefore?: number
   /**
-   * Suppress rows the sweep itself already re-dispatched more recently than this
-   * timestamp.
+   * Suppress rows whose last SUCCESSFUL dispatch is more recent than this
+   * timestamp. A row that has never been dispatched, or whose last dispatch
+   * failed, always stays eligible.
    *
    * Without it the sweep has no memory: `findDispatchableJobs` orders oldest
    * candidates first, so on a queue whose consumer is slower than its producer
@@ -228,7 +229,7 @@ export interface DurableJobRecoveryQuery {
    *
    * Age alone cannot express this: `createdBefore` asks "is this row old?", which
    * is true of every row queued behind a backlog, whereas the question that
-   * matters is "did WE already re-send this one?".
+   * matters is "when was this one last sent?".
    */
   redispatchedBefore?: number
   limit?: number
@@ -251,6 +252,9 @@ export interface DurableJobRecoveryRepository<
    * Record that the orphan sweep re-dispatched these rows, so a later sweep can
    * exclude them via {@link DurableJobRecoveryQuery.redispatchedBefore}. Optional:
    * a repository without it degrades to the previous (memoryless) behaviour.
+   *
+   * Store this where it cannot be evicted. The D1 repository writes the
+   * `last_dispatched_at` and `dispatch_attempts` columns.
    */
   noteOrphanRedispatch?: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
   findStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Record[]>
@@ -352,7 +356,7 @@ export interface PrepareDurableJobOptions<
   payload: Payload
   route?: DurableJobRoute<Queue>
   registry?: DurableJobRegistryLike
-  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'>
+  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'backoff' | 'unique' | 'uniqueId'>
   id?: string
   batchId?: string
   userId?: number
@@ -378,7 +382,7 @@ export async function prepareDurableJobResult<
   Queue extends string,
 >(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<Result<DurableJobRecord<Queue>, JobError>> {
   const now = opts.now ?? Math.floor(Date.now() / 1000)
-  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'> | undefined
+  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'backoff' | 'unique' | 'uniqueId'> | undefined
 
   const route = resolveDurableJobRoute(opts.name, opts.route, definition, opts.registry)
   if (!route)

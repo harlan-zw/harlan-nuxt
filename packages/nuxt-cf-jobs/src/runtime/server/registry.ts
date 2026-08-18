@@ -27,8 +27,8 @@ interface DefineJobBaseOptions<
   handle: JobHandler<Payload, Env, Db, Logger>
   failed?: JobFailedHandler<Payload, Env, Db, Logger>
   middleware?: Array<JobMiddleware<Payload, Env, Db, Logger>>
+  /** Attempt cap for this job. Replaces the removed `maxAttempts` alias. */
   tries?: number
-  maxAttempts?: number
   backoff?: JobBackoff
   unique?: boolean
   uniqueId?: (payload: Payload) => string
@@ -46,7 +46,6 @@ export interface LazyJobEntry<Name extends string = string, Queue extends string
   name: Name
   queue?: Queue
   jobType?: string
-  maxAttempts?: number
   tries?: number
   unique?: boolean
   /** Whether the source `defineJob` declares an `input` schema (AST flag). */
@@ -67,7 +66,7 @@ export function isLazyJobEntry(entry: RegistryEntry): entry is LazyJobEntry {
 /** Static routing metadata shared by eager defs and lazy entries. */
 export type JobStaticDefinition = Pick<
   AnyJobDefinition,
-  'name' | 'queue' | 'jobType' | 'maxAttempts' | 'tries' | 'unique'
+  'name' | 'queue' | 'jobType' | 'tries' | 'unique'
 >
 
 function toStaticDefinition(entry: RegistryEntry): JobStaticDefinition {
@@ -75,7 +74,6 @@ function toStaticDefinition(entry: RegistryEntry): JobStaticDefinition {
     name: entry.name,
     queue: entry.queue as string,
     jobType: entry.jobType,
-    maxAttempts: entry.maxAttempts,
     tries: entry.tries,
     unique: entry.unique,
   }
@@ -149,7 +147,7 @@ export type BroadcastEnvelopeOf<Jobs extends readonly Partial<Pick<JobDefinition
 
 export interface JobDefinitionValidationIssue {
   name: string
-  reason: 'invalid-definition' | 'duplicate-name' | 'invalid-queue'
+  reason: 'invalid-definition' | 'duplicate-name' | 'invalid-queue' | 'removed-max-attempts'
 }
 
 export function defineJob<
@@ -228,6 +226,11 @@ export function validateJobDefinitions(
     if (typeof definition.queue !== 'string' || definition.queue.length === 0)
       issues.push({ name, reason: 'invalid-queue' })
 
+    // `maxAttempts` was an alias for `tries` that `tries` silently won. It is
+    // gone, so a job still using it now runs on the default cap. Say so.
+    if ('maxAttempts' in definition)
+      issues.push({ name, reason: 'removed-max-attempts' })
+
     if (seen.has(name))
       issues.push({ name, reason: 'duplicate-name' })
     seen.add(name)
@@ -236,8 +239,23 @@ export function validateJobDefinitions(
   return issues
 }
 
+/** One sentence per issue, so a boot warning states the fix. */
+export function describeJobDefinitionIssue(issue: JobDefinitionValidationIssue): string {
+  switch (issue.reason) {
+    case 'invalid-definition':
+      return 'invalid definition: it needs a non-empty `name` and a `handle` function.'
+    case 'duplicate-name':
+      return 'duplicate name: two jobs declare this name.'
+    case 'invalid-queue':
+      return 'invalid queue: set a non-empty `queue`, or set `cfJobs.defaultQueue`.'
+    case 'removed-max-attempts':
+      return '`maxAttempts` was removed. Rename it to `tries`, or this job runs on the default attempt cap.'
+  }
+}
+
 export function assertJobDefinitions(jobs: readonly unknown[]): void {
-  const issues = validateJobDefinitions(jobs)
+  // A removed alias is a defect to report, not a reason to refuse to boot.
+  const issues = validateJobDefinitions(jobs).filter(issue => issue.reason !== 'removed-max-attempts')
   if (issues.length === 0)
     return
 

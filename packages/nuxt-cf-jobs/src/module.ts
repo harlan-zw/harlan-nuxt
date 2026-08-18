@@ -5,6 +5,8 @@ import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
 import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import { addImportsDir, addServerHandler, addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { resolveLayeredDirs } from './build/layers'
+import { inlineTemplateInNitroDev } from './build/nitro-dev'
 import { installRegistryTemplates } from './build/registry'
 import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast-constants'
 import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
@@ -40,9 +42,36 @@ declare module '@nuxt/schema' {
 }
 
 interface ResolvedBroadcastOptions extends Required<Pick<BroadcastOptions, 'route' | 'durableObjectBinding' | 'durableObjectName'>> {}
-interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'staleSeconds' | 'orphanedSeconds' | 'redeliveryGraceSeconds' | 'orphanedBatchSeconds' | 'limit'>> {
+interface ResolvedReconcileOptions extends Required<Pick<ReconcileOptions, 'staleSeconds' | 'orphanedSeconds' | 'redispatchGraceSeconds' | 'redeliveryGraceSeconds' | 'orphanedBatchSeconds' | 'limit'>> {
   d1Binding?: string
 }
+
+/**
+ * Ownership window for a reserved row, in seconds.
+ *
+ * One value drives two knobs that MUST agree: `reconcile.staleSeconds` (when the
+ * reaper treats a reservation as abandoned) and the consumer's
+ * `reclaimAfterSeconds` (when a redelivery may take the row from its holder).
+ * When they drift, reconcile releases and re-dispatches a job the consumer is
+ * still running, so the losing copy is terminalized without settling its batch.
+ *
+ * 900s exceeds any realistic handler runtime, so only a dead reservation
+ * (isolate recycle, Worker limit) is reclaimed.
+ */
+export const CF_JOBS_DEFAULT_RESERVATION_SECONDS = 900
+
+/**
+ * How long a due, unreserved row must sit before the sweep calls it orphaned.
+ *
+ * This is a producer rate control, not only a recovery knob. The orphan test
+ * cannot tell "the dispatch was lost" from "dispatched fine, still queued", so a
+ * window shorter than the worst queue wait makes the backstop re-dispatch work
+ * that was never lost, which deepens the queue, which makes the next rows wait
+ * longer. On a `max_concurrency: 1` consumer that wait is hours. The old 600s
+ * default made the backstop the largest producer on a production account
+ * (8,987 writes/hr against 95 reads/hr, and a 122k backlog rebuilt in 23h).
+ */
+export const CF_JOBS_DEFAULT_ORPHANED_SECONDS = 6 * 60 * 60
 
 export default defineNuxtModule<ModuleOptions>().with({
   meta: {
@@ -159,13 +188,18 @@ function resolveBroadcastOptions(input: ModuleOptions['broadcast']): ResolvedBro
   }
 }
 
-function resolveReconcileOptions(input: ModuleOptions['reconcile']): ResolvedReconcileOptions | null {
+export function resolveReconcileOptions(input: ModuleOptions['reconcile']): ResolvedReconcileOptions | null {
   if (!isReconcileEnabled(input))
     return null
   const opts: ReconcileOptions = typeof input === 'object' ? input : {}
+  const orphanedSeconds = opts.orphanedSeconds ?? CF_JOBS_DEFAULT_ORPHANED_SECONDS
   return {
-    staleSeconds: opts.staleSeconds ?? 300,
-    orphanedSeconds: opts.orphanedSeconds ?? 600,
+    staleSeconds: opts.staleSeconds ?? CF_JOBS_DEFAULT_RESERVATION_SECONDS,
+    orphanedSeconds,
+    // One re-send per orphan window per row. The two controls multiply: the
+    // window bounds how many rows qualify, this bounds how often each one is
+    // re-sent. Neither alone bounds the sweep's write rate.
+    redispatchGraceSeconds: opts.redispatchGraceSeconds ?? orphanedSeconds,
     redeliveryGraceSeconds: opts.redeliveryGraceSeconds ?? 120,
     orphanedBatchSeconds: opts.orphanedBatchSeconds ?? 7 * 86400,
     limit: opts.limit ?? 100,
@@ -177,7 +211,7 @@ function isReconcileEnabled(input: ModuleOptions['reconcile']): boolean {
   return input !== false && (input === true || input === undefined || input.enabled !== false)
 }
 
-function installReconcileContextTemplate(input: ModuleOptions['reconcile'], nuxt: Nuxt): void {
+export function installReconcileContextTemplate(input: ModuleOptions['reconcile'], nuxt: Nuxt): void {
   const contextModule = typeof input === 'object' ? input.terminalFailureContext : undefined
   const template = addTemplate({
     filename: 'cf-jobs/reconcile-context.mjs',
@@ -185,6 +219,11 @@ function installReconcileContextTemplate(input: ModuleOptions['reconcile'], nuxt
     getContents: () => renderReconcileContextProxy(nuxt.options.rootDir, contextModule),
   })
   nuxt.options.alias['#cf-jobs/reconcile-context'] = template.dst
+  // The template re-exports application source by absolute path. Nitro leaves
+  // buildDir modules outside its dev bundle, so without this Node's own ESM
+  // loader reads that source and fails on its TypeScript syntax and path
+  // aliases, which errors every route. Inlining hands the file to Rollup.
+  inlineTemplateInNitroDev(nuxt, template.dst)
 }
 
 export function renderReconcileContextProxy(rootDir: string, contextModule?: string): string {
@@ -321,20 +360,7 @@ async function wireScheduledTasks(options: ModuleOptions, nuxt: Nuxt, templateDi
  * a string/array is passed through (collectTasks resolves them from rootDir).
  */
 function resolveTaskDirs(tasksDir: NonNullable<ModuleOptions['tasksDir']>, nuxt: Nuxt): string[] {
-  if (tasksDir === false)
-    return []
-  if (tasksDir !== true)
-    return Array.isArray(tasksDir) ? tasksDir : [tasksDir]
-
-  const layers = (nuxt.options as unknown as { _layers?: ReadonlyArray<{ cwd?: string, config?: { rootDir?: string } }> })._layers ?? []
-  const dirs = [
-    resolve(nuxt.options.rootDir, 'server/tasks'),
-    ...layers
-      .map(layer => layer.cwd ?? layer.config?.rootDir)
-      .filter((cwd): cwd is string => !!cwd)
-      .map(cwd => resolve(cwd, 'server/tasks')),
-  ]
-  return [...new Set(dirs)]
+  return resolveLayeredDirs(tasksDir, nuxt, 'server/tasks')
 }
 
 function runWranglerCrossCheck(options: ModuleOptions, rootDir: string, templateDir: string, nitroOptions: unknown): void {

@@ -35,10 +35,32 @@ export interface ReconcileOptions {
   enabled?: boolean
   /** D1 binding that owns the durable jobs tables. Defaults to auto-detect. */
   d1Binding?: string
-  /** Reserved jobs older than this are released for retry. Defaults to 300s. */
+  /**
+   * Reserved jobs older than this are released for retry. Defaults to 900s.
+   *
+   * This is the row's ownership window. The durable consumer's
+   * `reclaimAfterSeconds` defaults to this same value, so a redelivery and the
+   * reaper agree on when a reservation is abandoned. Set it above your longest
+   * handler runtime: a shorter window releases a job that is still running.
+   */
   staleSeconds?: number
-  /** Due, unreserved jobs older than this are treated as orphaned. Defaults to 600s. */
+  /**
+   * Due, unreserved jobs older than this are treated as orphaned. Defaults to 6h.
+   *
+   * The orphan test cannot tell "the dispatch was lost" from "dispatched fine,
+   * still queued", so keep this above the worst queue wait. On a
+   * `max_concurrency: 1` consumer that wait is hours.
+   */
   orphanedSeconds?: number
+  /**
+   * Minimum gap between two sweep re-dispatches of the SAME row. Defaults to
+   * `orphanedSeconds`.
+   *
+   * The sweep measures it from the row's last successful dispatch
+   * (`last_dispatched_at`), so a row that is merely waiting its turn is never
+   * re-sent inside this window.
+   */
+  redispatchGraceSeconds?: number
   /** Grace for the original CF redelivery before reconcile sends a duplicate. Defaults to 120s. */
   redeliveryGraceSeconds?: number
   /** Pending batches with no active jobs older than this are closed. Defaults to 7 days. */
@@ -70,10 +92,16 @@ export interface ModuleOptions {
    */
   defaultQueue?: string
   /**
-   * Directories scanned at build/dev time for default-exported job definitions.
-   * Relative paths are resolved from the Nuxt root directory.
+   * Where to find default-exported `defineJob` definitions.
+   *
+   * - `true` — auto-discover `server/jobs` in the app and **every extended
+   *   layer** (`nuxt.options._layers`), the same rule as `tasksDir: true`.
+   * - `string | string[]` — explicit dirs, resolved from the Nuxt root.
+   * - unset — `server/jobs` in the app only.
+   * - `false` — no discovery; only jobs contributed through the
+   *   `cf-jobs:registry:sources` hook are registered.
    */
-  jobsDir?: string | string[]
+  jobsDir?: string | string[] | boolean
   /**
    * Glob pattern used inside each jobsDir.
    */

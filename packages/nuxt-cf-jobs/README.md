@@ -125,7 +125,7 @@ Useful job options include:
 | Option | Purpose |
 | --- | --- |
 | `input` | Validate payloads with a `safeParse()` compatible schema. |
-| `tries` | Set the total attempt limit. `maxAttempts` is supported as an alias. |
+| `tries` | Set the total attempt limit. |
 | `backoff` | Set a retry delay, a delay sequence, or a function of the attempt number. |
 | `middleware` | Wrap the handler with shared job middleware. |
 | `failed` | Run job-specific failure handling. |
@@ -368,8 +368,9 @@ export default defineNuxtConfig({
     reconcile: {
       d1Binding: 'DB',
       terminalFailureContext: './server/cf-jobs-reconcile-context.ts',
-      staleSeconds: 300,
-      orphanedSeconds: 600,
+      staleSeconds: 900,
+      orphanedSeconds: 6 * 60 * 60,
+      redispatchGraceSeconds: 6 * 60 * 60,
       redeliveryGraceSeconds: 120,
       orphanedBatchSeconds: 7 * 86400,
       limit: 100,
@@ -381,6 +382,24 @@ export default defineNuxtConfig({
 ```
 
 Pin `d1Binding` when the Worker exposes more than one D1-like binding.
+
+The sweep is a producer, so two windows bound its write rate.
+
+- `orphanedSeconds` decides which rows qualify. The orphan test cannot tell "the
+  dispatch was lost" from "dispatched fine, still queued", so keep it above the
+  worst queue wait. On a `max_concurrency: 1` consumer that wait is hours.
+- `redispatchGraceSeconds` decides how often one row may be re-sent. The sweep
+  measures it from the row's last successful dispatch (`last_dispatched_at`),
+  which the producer stamps, so a row waiting its turn is never re-sent inside
+  the window.
+
+`staleSeconds` is the row's ownership window. The durable consumer's
+`reclaimAfterSeconds` defaults to the same value, so the reaper and a redelivery
+agree on when a reservation is abandoned. Set it above your longest handler
+runtime. If the reaper's window is shorter, it releases and re-dispatches a job
+that is still running, and the losing copy is terminalized without settling its
+batch. Pass `reclaimAfterSeconds` to `createDurableRuntime()` only to override
+that on purpose.
 
 `terminalFailureContext` points to an application module exporting
 `createReconcileJobContext`. Configure it when job definitions have `failed`
@@ -677,7 +696,7 @@ For plain Vitest, run `nuxt prepare`, alias `#cf-jobs/app` to `.nuxt/cf-jobs/reg
 | --- | --- | --- |
 | `queues` | `{}` | Logical queue names mapped to bindings or queue option objects. |
 | `defaultQueue` | None | Queue used when a job omits `queue`. |
-| `jobsDir` | `server/jobs` | One directory or an array, resolved from the Nuxt root. |
+| `jobsDir` | `server/jobs` | `true` to discover `server/jobs` in the app and every extended layer, or one path or an array resolved from the Nuxt root. |
 | `jobsPattern` | `**/*.ts` | Glob used inside each jobs directory. |
 | `jobsIgnore` | Private, declaration, test, and spec files | Extra ignore globs. |
 | `tasksDir` | Disabled | `true`, a path, or paths used to discover Nitro tasks. |
