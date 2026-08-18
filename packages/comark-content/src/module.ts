@@ -24,7 +24,7 @@ import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtU
 import { assertCloudflareCacheModule, assertSupportedOptions } from './config'
 import { createContentAssetPlan, createContentRevision } from './core/asset'
 import { ingestCollections } from './core/ingest'
-import { excludeNuxtContentSitemapSource } from './sitemap'
+import { excludeNuxtContentSitemapSource, NUXT_CONTENT_SITEMAP_ROUTE } from './sitemap'
 
 export * from './config'
 export type * from './highlight'
@@ -137,6 +137,9 @@ export default defineNuxtModule<ModuleOptions>({
     ])
     addServerHandler({ route: '/__comark_content/query', method: 'post', handler: resolver.resolve('./runtime/server/api/query.post') })
     addServerPlugin(resolver.resolve('./runtime/server/plugins/sitemap'))
+    // Answers the @nuxt/content sitemap source that @nuxtjs/sitemap keeps whenever it
+    // resolved its options before this module ran. See NUXT_CONTENT_SITEMAP_ROUTE.
+    addServerHandler({ route: NUXT_CONTENT_SITEMAP_ROUTE, method: 'get', handler: resolver.resolve('./runtime/server/api/nuxt-content-urls.get') })
 
     nuxt.hook('nitro:config', (config: NitroConfig) => {
       config.serverAssets ||= []
