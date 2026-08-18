@@ -1,0 +1,89 @@
+{
+  "name": "@harlan-zw/nuxt-sentry",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "One Sentry Report Policy for Nuxt: registration, gating, drop rules, and redaction.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-sentry#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/nuxt-sentry"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/module.mjs"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/types.d.mts",
+  "typesVersions": {
+    "*": {
+      "server": ["dist/runtime/server/index.d.ts"]
+    }
+  },
+  "files": ["dist"],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "prepack": "pnpm run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "test:attw": "attw --pack",
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
+  },
+  "peerDependencies": {
+    "@sentry/cloudflare": "catalog:",
+    "@sentry/nuxt": "catalog:",
+    "nuxt": ">=4.5.0 <5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@sentry/cloudflare": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:",
+    "pathe": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@nuxt/schema": "catalog:",
+    "@sentry/cloudflare": "catalog:",
+    "@sentry/nuxt": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "h3": "catalog:",
+    "nitropack": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vitest": "catalog:",
+    "vue": "catalog:"
+  }
+}
