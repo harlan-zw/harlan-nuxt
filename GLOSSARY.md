@@ -14,10 +14,12 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 | Diagnostic | `@harlan-zw/nuxt-dx` | published | developers and CI | "diagnostic" |
 | Wide Event | `@harlan-zw/nuxt-wide-events` | planned | Nuxt server code | "wide event" |
 | Field | `@harlan-zw/nuxt-wide-events/server` | planned | Nuxt server code | "field" |
+| Wrangler Diagnostic | `@harlan-zw/nuxt-cloudflare` | published | developers and CI | "warning" |
+| Collection | `@harlan-zw/comark-content/server` | published | Nuxt server code | "collection" |
 
 Collisions
 
-None recorded.
+`Diagnostic` belongs to `nuxt-dx`. `nuxt-cloudflare` always qualifies its findings as `Wrangler Diagnostic`.
 
 ## Terms
 
@@ -76,6 +78,20 @@ None recorded.
 **Use for:** reports, budgets, and developer messages.
 **Never:** issue, alert.
 **Casing:** `Diagnostic` in headings and `diagnostic` elsewhere.
+
+### Wrangler Diagnostic
+
+**Is:** one finding that `nuxt-cloudflare` raises against a generated Wrangler config.
+**Use for:** doctor output, build errors, and docs.
+**Never:** Diagnostic on its own, wrangler warning, lint error.
+**Casing:** `Wrangler Diagnostic` in headings and `Wrangler diagnostic` elsewhere.
+
+### Collection
+
+**Is:** a named set of markdown files that `comark-content` ingests, queries, and serves.
+**Use for:** `comark-content` APIs, configuration, and docs.
+**Never:** content source, corpus, folder.
+**Casing:** `Collection` in headings and `collection` elsewhere.
 
 ## Banned
 
