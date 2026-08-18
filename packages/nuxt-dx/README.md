@@ -236,6 +236,8 @@ permissions:
   contents: read
   # the action lists workflow runs and downloads the baseline report from one
   actions: read
+  # the action posts the diff as a pull request comment, and replaces its own
+  pull-requests: write
 
 jobs:
   build:
@@ -261,7 +263,11 @@ The baseline is the report left behind by the last successful run of the same wo
 
 A run with no baseline says so in the job summary and passes. That covers the first ever run, a branch whose artifact has passed its retention window, and a workflow that has never been green on the base branch. A missing baseline never fails a pull request.
 
-The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and works on pull requests from forks. The step fails only when a target grew past the threshold.
+On a pull request the diff lands twice: in `$GITHUB_STEP_SUMMARY`, and as one comment on the pull request. The comment is keyed to the action, so every push edits the same comment rather than adding another. Turn it off with `comment: false`.
+
+The comment needs `pull-requests: write`. Without it, and on pull requests from forks, the comment step logs a notice and the summary carries the diff on its own.
+
+The step reports growth, it does not block. Set `fail-on-breach: true` to fail the job when a target grows past the threshold. The step still fails when the two reports could not be compared at all, since that leaves nothing measured.
 
 | Input | Default | |
 | --- | --- | --- |
@@ -270,7 +276,9 @@ The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and wo
 | `artifact-name` | `nuxt-dx-size-budget-v2` | Artifact the report is uploaded to and read back from |
 | `base-branch` | pull request base, then the default branch | Branch the baseline comes from |
 | `working-directory` | `.` | Directory the app was built in |
-| `github-token` | `${{ github.token }}` | Needs `actions: read` |
+| `comment` | `true` | Post the diff as a pull request comment, replacing this action's previous one |
+| `fail-on-breach` | `false` | Fail the job when a target grew past the threshold |
+| `github-token` | `${{ github.token }}` | Needs `actions: read`, plus `pull-requests: write` to comment |
 
 ## Configuring budgets
 
