@@ -41,8 +41,8 @@ export default defineEventHandler(async (event): Promise<GitHubSponsorsResponse>
 
   const { fetchedAt, result } = await cachedSponsorships({ login: config.login, token })
   if (result._tag === 'err') {
-    console.error('[nuxt-github-sponsors] GitHub fetch failed', { errorTag: result.errorTag })
-    return toGitHubSponsorsResponse({ _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag }, fallback, fetchedAt)
+    console.error('[nuxt-github-sponsors] GitHub fetch failed', { errorTag: result.errorTag, message: result.errorMessage })
+    return toGitHubSponsorsResponse({ _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag, errorMessage: result.errorMessage }, fallback, fetchedAt)
   }
 
   const prepared = preparePublicSponsors(result.sponsorships, config.tiers, config.overrides)

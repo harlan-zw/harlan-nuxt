@@ -82,11 +82,16 @@ export interface PreparedSponsors {
 export type SponsorFeedResult
   = | { _tag: 'available', collection: SponsorCollection, unmatchedOverrides: string[] }
     | { _tag: 'unavailable', reason: 'not-configured' }
-    | { _tag: 'unavailable', reason: 'upstream-error', errorTag: GitHubSponsorsErrorTag }
+    | { _tag: 'unavailable', reason: 'upstream-error', errorTag: GitHubSponsorsErrorTag, errorMessage: string }
 
 export type SponsorshipsResult
   = { _tag: 'ok', sponsorships: SourceSponsorship[] }
-    | { _tag: 'err', errorTag: GitHubSponsorsErrorTag }
+    /**
+     * `errorMessage` is what GitHub said. It stays server side, for the log only.
+     * Without it a rejected token, a missing scope and a rate limit all read as
+     * `GraphQLError`, which is the same as saying nothing.
+     */
+    | { _tag: 'err', errorTag: GitHubSponsorsErrorTag, errorMessage: string }
 
 /**
  * The upstream call on its own. Tier grouping and overrides stay out, so a
@@ -102,7 +107,7 @@ export async function fetchGitHubSponsorships(input: {
   const result = await fetchActiveGitHubSponsors(input)
   return result._tag === 'ok'
     ? { _tag: 'ok', sponsorships: result.value }
-    : { _tag: 'err', errorTag: result.error._tag }
+    : { _tag: 'err', errorTag: result.error._tag, errorMessage: result.error.message }
 }
 
 export async function fetchGitHubSponsorFeed(input: {
@@ -119,7 +124,7 @@ export async function fetchGitHubSponsorFeed(input: {
     return { _tag: 'unavailable', reason: 'not-configured' }
   const result = await fetchGitHubSponsorships({ ...input, token })
   if (result._tag === 'err')
-    return { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag }
+    return { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag, errorMessage: result.errorMessage }
   const prepared = preparePublicSponsors(result.sponsorships, input.tiers, input.overrides)
   return { _tag: 'available', collection: prepared.collection, unmatchedOverrides: prepared.unmatchedOverrides }
 }
@@ -136,6 +141,8 @@ export function toGitHubSponsorsResponse(
   if (result._tag === 'available')
     return { _tag: 'available', fetchedAt, ...result.collection }
   if (result.reason === 'upstream-error')
+    // `errorMessage` deliberately stops here. The browser gets the tag, the server log
+    // gets what GitHub said, so upstream detail never reaches a page.
     return { _tag: 'unavailable', reason: 'upstream-error', errorTag: result.errorTag, ...fallback }
   return { _tag: 'unavailable', reason: 'not-configured', ...fallback }
 }

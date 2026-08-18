@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-github-sponsors",
   "type": "module",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Experimental typed GitHub Sponsors data for Nuxt sites.",
   "author": {
     "name": "Harlan Wilton",
