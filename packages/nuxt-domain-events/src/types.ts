@@ -7,7 +7,10 @@ export interface ModuleOptions {
   eventsIgnore?: string[]
   listenersIgnore?: string[]
   scanLayers?: boolean
-  /** Logical queue names accepted by queued listener metadata. */
+  /**
+   * Logical queue names accepted by queued listener metadata.
+   * Omit, or set an empty array, to derive the names from `cfJobs.queues`.
+   */
   queues?: string[]
   /** Allow a layer to contribute listeners whose event contract is supplied by final app composition. */
   allowExternalEvents?: boolean
@@ -19,11 +22,15 @@ export interface ModuleOptions {
   requiredListeners?: string[]
   /** Public extension contracts intentionally permitted to have no listeners in the assembled app. */
   allowEmptyEvents?: string[]
-  /** Server module exporting observeEventListener and optionally observeEventListenerFallback. */
+  /**
+   * Server module exporting observeEventListener and optionally observeEventListenerFallback.
+   * A relative path resolves against the layer that declares it.
+   */
   observer?: string
   /**
    * Server module exporting `createQueuedEventListenerContext(jobContext)`.
    * Required to contribute the generic cf-jobs delivery definition.
+   * A relative path resolves against the layer that declares it.
    */
   queuedDeliveryContext?: string
 }
