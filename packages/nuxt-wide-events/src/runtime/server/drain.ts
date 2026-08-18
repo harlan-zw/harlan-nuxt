@@ -1,8 +1,7 @@
 import type { NitroApp } from 'nitropack/types'
-import type { WideEventRecord } from './index'
-import type { StandaloneWideEventRecord } from './standalone-core'
+import type { BackgroundWideEventRecord, WideEventRecord } from './index'
 
-type DrainedWideEventRecord = StandaloneWideEventRecord | WideEventRecord
+type DrainedWideEventRecord = BackgroundWideEventRecord | WideEventRecord
 
 declare module 'nitropack/types' {
   interface NitroRuntimeHooks {
@@ -23,7 +22,8 @@ export function scheduleWideEventDrain(
   context: WideEventDrainContext,
   record: WideEventRecord,
 ): void {
-  context.waitUntil(drainWideEvent(app, record).catch(() => {
-    console.error('[nuxt-wide-events] Wide Event drain failed.')
+  context.waitUntil(drainWideEvent(app, record).catch((error: unknown) => {
+    // The drain owns the only durable copy of this record, so report why it was lost.
+    console.error('[nuxt-wide-events] Wide Event drain failed.', error)
   }))
 }

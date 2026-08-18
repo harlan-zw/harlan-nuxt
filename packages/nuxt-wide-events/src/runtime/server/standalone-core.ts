@@ -1,89 +1,63 @@
-import type { WideEventFields, WideEventLike, WideEventValue } from './index'
-import { addWideEventFields, emitWideEvent, startWideEvent } from './index'
+import type { BackgroundWideEventRecord, WideEventFields, WideEventLevel, WideEventLike } from './index'
+import { addWideEventFields, emitBackgroundWideEvent, setWideEventLevel, startWideEvent } from './index'
 
-export type StandaloneWideEventLevel = 'debug' | 'error' | 'info' | 'warn'
+export interface BackgroundWideEvent extends WideEventLike {
+  emit: () => BackgroundWideEventRecord | null
+  setLevel: (level: WideEventLevel) => void
+}
 
-export interface StandaloneWideEventRecord extends Record<string, WideEventValue | undefined> {
-  durationMs: number
-  level: StandaloneWideEventLevel
-  method: string
-  requestId: string
-  status: number
-  timestamp: string
-  path?: string
+export interface DrainedBackgroundWideEvent extends WideEventLike {
+  emit: () => Promise<BackgroundWideEventRecord | null>
+  setLevel: (level: WideEventLevel) => void
+}
+
+interface BackgroundWideEventOptions {
+  output?: (record: BackgroundWideEventRecord) => void
+  sampling?: BackgroundWideEventSampling
   service?: string
 }
 
-export interface StandaloneWideEvent extends WideEventLike {
-  emit: () => StandaloneWideEventRecord | null
-  setLevel: (level: StandaloneWideEventLevel) => void
+interface DrainedBackgroundWideEventOptions extends BackgroundWideEventOptions {
+  output: (record: BackgroundWideEventRecord) => Promise<void>
 }
 
-export interface DrainedStandaloneWideEvent extends WideEventLike {
-  emit: () => Promise<StandaloneWideEventRecord | null>
-  setLevel: (level: StandaloneWideEventLevel) => void
-}
-
-interface StandaloneWideEventOptions {
-  output?: (record: StandaloneWideEventRecord) => void
-  sampling?: StandaloneWideEventSampling
-  service?: string
-}
-
-interface DrainedStandaloneWideEventOptions extends StandaloneWideEventOptions {
-  output: (record: StandaloneWideEventRecord) => Promise<void>
-}
-
-interface StandaloneWideEventSampling {
+interface BackgroundWideEventSampling {
   debug?: number
-  duration?: number
   error?: number
   info?: number
-  status?: number
+  keep?: { duration?: number, status?: number }[]
   warn?: number
 }
 
-export function createStandaloneWideEvent(
+export function createBackgroundWideEvent(
   initialFields: WideEventFields | undefined,
-  options: StandaloneWideEventOptions,
-): StandaloneWideEvent {
-  const event = {
-    context: {},
-    method: 'UNKNOWN',
-  } as StandaloneWideEvent
-  let emitted = false
-  let level: StandaloneWideEventLevel = 'info'
+  options: BackgroundWideEventOptions,
+): BackgroundWideEvent {
+  const event = { context: {} } as BackgroundWideEvent
 
   startWideEvent(event)
   if (initialFields)
     addWideEventFields(event, initialFields)
 
-  event.setLevel = (nextLevel) => {
-    if (emitted)
-      throw new Error('The Wide Event was already emitted.')
-    level = parseLevel(nextLevel)
-  }
+  event.setLevel = level => setWideEventLevel(event, level)
   event.emit = () => {
-    const record = emitWideEvent(event, 200, options.service)
+    const record = emitBackgroundWideEvent(event, options.service)
     if (!record)
       return null
-    emitted = true
-    const output = record as StandaloneWideEventRecord
-    output.level = level
-    if (options.sampling && !shouldEmitStandaloneWideEvent(output, options.sampling))
+    if (options.sampling && !shouldEmitBackgroundWideEvent(record, options.sampling))
       return null
-    options.output?.(output)
-    return output
+    options.output?.(record)
+    return record
   }
 
   return event
 }
 
-export function createDrainedStandaloneWideEvent(
+export function createDrainedBackgroundWideEvent(
   initialFields: WideEventFields | undefined,
-  options: DrainedStandaloneWideEventOptions,
-): DrainedStandaloneWideEvent {
-  const event = createStandaloneWideEvent(initialFields, {
+  options: DrainedBackgroundWideEventOptions,
+): DrainedBackgroundWideEvent {
+  const event = createBackgroundWideEvent(initialFields, {
     sampling: options.sampling,
     service: options.service,
   })
@@ -94,29 +68,20 @@ export function createDrainedStandaloneWideEvent(
       return Promise.resolve(null)
     return options.output(record).then(() => record)
   }) as never
-  return event as unknown as DrainedStandaloneWideEvent
+  return event as unknown as DrainedBackgroundWideEvent
 }
 
-function shouldEmitStandaloneWideEvent(
-  record: StandaloneWideEventRecord,
-  sampling: StandaloneWideEventSampling,
+function shouldEmitBackgroundWideEvent(
+  record: BackgroundWideEventRecord,
+  sampling: BackgroundWideEventSampling,
 ): boolean {
-  if (sampling.duration !== undefined && Number(record.durationMs) >= sampling.duration)
-    return true
-  if (sampling.status !== undefined && Number(record.status) >= sampling.status)
-    return true
+  // A background Wide Event has no status, so a status condition can never keep it.
+  for (const condition of sampling.keep ?? []) {
+    if (condition.status !== undefined)
+      continue
+    if (condition.duration === undefined || record.durationMs >= condition.duration)
+      return true
+  }
   const rate = sampling[record.level] ?? 100
   return rate > 0 && (rate >= 100 || Math.random() * 100 < rate)
-}
-
-function parseLevel(input: StandaloneWideEventLevel): StandaloneWideEventLevel {
-  switch (input) {
-    case 'debug':
-    case 'error':
-    case 'info':
-    case 'warn':
-      return input
-    default:
-      throw new TypeError('Wide Event level must be debug, error, info, or warn.')
-  }
 }

@@ -243,8 +243,19 @@ async function main() {
   })}\n`)
 }
 
+/**
+ * Fields this branch adds to every record on purpose.
+ *
+ * The parity guard checks that both runtimes do the same work, not that they emit the
+ * same schema. A deliberate new field is dropped from both sides so the guard still
+ * catches an accidental workload change. Remove an entry once the base runtime emits it.
+ */
+const INTENTIONAL_NEW_FIELDS = ['kind']
+
 function normalizedOutput(scenario, output) {
   const record = JSON.parse(output)
+  for (const field of INTENTIONAL_NEW_FIELDS)
+    delete record[field]
   if (scenario.id !== 'runtime')
     return record
   ok(typeof record.durationMs === 'number')

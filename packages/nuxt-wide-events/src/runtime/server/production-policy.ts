@@ -6,11 +6,14 @@ export function shouldEmitWideEvent(
   sampling: WideEventsRuntimeSampling,
   random: () => number = Math.random,
 ): boolean {
-  if (sampling.duration !== undefined && record.durationMs >= sampling.duration)
+  for (const condition of sampling.keep ?? []) {
+    if (condition.duration !== undefined && record.durationMs < condition.duration)
+      continue
+    if (condition.status !== undefined && record.status < condition.status)
+      continue
     return true
-  if (sampling.status !== undefined && record.status >= sampling.status)
-    return true
-  const rate = record.level === 'error' ? sampling.error ?? 100 : sampling.info ?? 100
+  }
+  const rate = sampling[record.level] ?? 100
   if (rate <= 0)
     return false
   return rate >= 100 || random() * 100 < rate

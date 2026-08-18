@@ -30,6 +30,7 @@ describe('nuxt module integration', () => {
     expect(record.response).toEqual({ recorded: true })
     expect(record.logs).toEqual([
       expect.objectContaining({
+        'kind': 'request',
         'level': 'info',
         'method': 'GET',
         'path': '/api/record',
@@ -80,17 +81,32 @@ describe('nuxt module integration', () => {
     ])
   }, 60_000)
 
-  it('keeps standalone collection and removes request collection when disabled', async () => {
+  it('keeps background collection and removes request collection when request is off', async () => {
     await runNuxt(['build', 'tests/fixtures/basic'], { NUXT_WIDE_EVENTS_STANDALONE: 'true' })
 
-    expect(await requestStandaloneFixture()).toEqual([
+    const records = await requestStandaloneFixture()
+
+    expect(records).toEqual([
       expect.objectContaining({
+        'kind': 'background',
         'level': 'warn',
-        'method': 'UNKNOWN',
         'service': 'integration-fixture',
         'user.id': 'standalone_1',
       }),
+      expect.objectContaining({
+        'kind': 'background',
+        'level': 'warn',
+        'service': 'integration-fixture',
+        'user.id': 'deep_1',
+      }),
     ])
+    expect(records.every(record => record.method === undefined && record.status === undefined)).toBe(true)
+  }, 60_000)
+
+  it('keeps every server import and stops output when the module is disabled', async () => {
+    await runNuxt(['build', 'tests/fixtures/basic'], { NUXT_WIDE_EVENTS_DISABLED: 'true' })
+
+    expect(await requestDisabledFixture()).toEqual({ logs: [], response: { recorded: true } })
   }, 60_000)
 
   it('drains request and background Wide Events through one hook', async () => {
@@ -100,9 +116,9 @@ describe('nuxt module integration', () => {
 
     expect(result.standaloneStatus).toBe(500)
     expect(result.d1).toEqual([
-      expect.objectContaining({ 'path': '/api/record', 'user.id': 'user_1' }),
-      expect.objectContaining({ 'method': 'UNKNOWN', 'user.id': 'standalone_1' }),
-      expect.objectContaining({ level: 'error', path: '/api/standalone', status: 500 }),
+      expect.objectContaining({ 'kind': 'request', 'path': '/api/record', 'user.id': 'user_1' }),
+      expect.objectContaining({ 'kind': 'background', 'user.id': 'standalone_1' }),
+      expect.objectContaining({ kind: 'request', level: 'error', path: '/api/standalone', status: 500 }),
     ])
     expect(result.sentry).toEqual(result.d1)
   }, 60_000)
@@ -232,8 +248,38 @@ async function requestStandaloneFixture(): Promise<Record<string, unknown>[]> {
     await waitForServer(child, port, () => output)
     output = ''
     await fetch(`http://127.0.0.1:${port}/api/standalone`)
-    await waitFor(() => eventLogs(output).length === 1, child, () => output)
+    await fetch(`http://127.0.0.1:${port}/api/deep-standalone`)
+    await waitFor(() => eventLogs(output).length === 2, child, () => output)
     return eventLogs(output)
+  }
+  finally {
+    child.kill('SIGTERM')
+  }
+}
+
+async function requestDisabledFixture(): Promise<{ logs: Record<string, unknown>[], response: unknown }> {
+  const port = await availablePort()
+  const child = spawn(process.execPath, ['.output/server/index.mjs'], {
+    cwd: basicFixture,
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      NO_COLOR: '1',
+      PORT: String(port),
+    },
+    stdio: 'pipe',
+  })
+  let output = ''
+  child.stdout.on('data', chunk => output += String(chunk))
+  child.stderr.on('data', chunk => output += String(chunk))
+
+  try {
+    await waitForServer(child, port, () => output)
+    output = ''
+    const response = await fetch(`http://127.0.0.1:${port}/api/record`).then(value => value.json())
+    await fetch(`http://127.0.0.1:${port}/api/standalone`)
+    await new Promise(resolve => setTimeout(resolve, 250))
+    return { logs: eventLogs(output), response }
   }
   finally {
     child.kill('SIGTERM')

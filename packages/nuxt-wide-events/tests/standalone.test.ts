@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { addWideEventFields } from '../src/runtime/server/index'
 import { createWideEvent } from '../src/runtime/server/standalone'
-import { createDrainedStandaloneWideEvent, createStandaloneWideEvent } from '../src/runtime/server/standalone-core'
+import { createBackgroundWideEvent, createDrainedBackgroundWideEvent } from '../src/runtime/server/standalone-core'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -71,7 +71,7 @@ describe('standalone Wide Event', () => {
   it('applies standalone levels and emits an object to development output', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     const output = vi.fn()
-    const sampled = createStandaloneWideEvent(undefined, {
+    const sampled = createBackgroundWideEvent(undefined, {
       output,
       sampling: { debug: 0, warn: 100 },
       service: 'worker',
@@ -81,7 +81,7 @@ describe('standalone Wide Event', () => {
     expect(sampled.emit()).toBeNull()
     expect(output).not.toHaveBeenCalled()
 
-    const kept = createStandaloneWideEvent(undefined, {
+    const kept = createBackgroundWideEvent(undefined, {
       output,
       sampling: { warn: 100 },
       service: 'worker',
@@ -94,7 +94,7 @@ describe('standalone Wide Event', () => {
 
   it('waits for asynchronous drain output before resolving', async () => {
     let finishDrain: (() => void) | undefined
-    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
+    const wideEvent = createDrainedBackgroundWideEvent(undefined, {
       output: () => new Promise<void>((resolve) => {
         finishDrain = resolve
       }),
@@ -112,12 +112,40 @@ describe('standalone Wide Event', () => {
   })
 
   it('surfaces asynchronous drain failures', async () => {
-    const wideEvent = createDrainedStandaloneWideEvent(undefined, {
+    const wideEvent = createDrainedBackgroundWideEvent(undefined, {
       output: async () => {
         throw new Error('D1 unavailable')
       },
     })
 
     await expect(wideEvent.emit()).rejects.toThrow('D1 unavailable')
+  })
+
+  it('marks a background record and omits request only fields', () => {
+    const output = vi.fn()
+    const wideEvent = createBackgroundWideEvent({ 'job.id': 'job_1' } as never, { output })
+
+    const record = wideEvent.emit()!
+
+    expect(record.kind).toBe('background')
+    expect(Object.hasOwn(record, 'method')).toBe(false)
+    expect(Object.hasOwn(record, 'status')).toBe(false)
+  })
+
+  it('keeps a slow background record before applying the rate', () => {
+    const output = vi.fn()
+    const slow = createBackgroundWideEvent(undefined, {
+      output,
+      sampling: { info: 0, keep: [{ duration: 0 }] },
+    })
+
+    expect(slow.emit()).not.toBeNull()
+
+    const dropped = createBackgroundWideEvent(undefined, {
+      output,
+      sampling: { info: 0, keep: [{ status: 500 }] },
+    })
+
+    expect(dropped.emit()).toBeNull()
   })
 })

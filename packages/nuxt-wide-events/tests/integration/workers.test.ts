@@ -49,6 +49,7 @@ describe('cloudflare Workers integration', () => {
       expect(created.status).toBe(201)
       expect(eventLogs(output)).toEqual([
         expect.objectContaining({
+          'kind': 'request',
           'level': 'info',
           'method': 'GET',
           'path': '/api/record',

@@ -11,9 +11,11 @@ type RuntimeOptions = Pick<ModuleOptions, 'console' | 'drain' | 'exclude' | 'sam
 export function resolveWideEventsRuntimeConfig(options: RuntimeOptions): WideEventsRuntimeConfig {
   const exclude = compileRoutePatterns(options.exclude)
   const sampling = resolveSampling(options.sampling?.rates, options.sampling?.keep)
+  const drain = options.drain ?? false
   return {
-    console: options.console ?? true,
-    drain: options.drain ?? false,
+    // A drain owns the record, so console output would duplicate it.
+    console: options.console ?? !drain,
+    drain,
     ...(options.service === undefined ? {} : { service: options.service }),
     ...(exclude === undefined ? {} : { exclude }),
     ...(sampling === undefined ? {} : { sampling }),
@@ -34,13 +36,19 @@ function compileRoutePatterns(patterns: string[] | undefined): RegExp | undefine
   return new RegExp(`^(?:${patterns.map(globSource).join('|')})$`)
 }
 
+const TRAILING_GLOBSTAR = '\u0001'
+const GLOBSTAR = '\u0002'
+
 function globSource(pattern: string): string {
+  // A trailing `/**` also matches the bare prefix, which is how Nitro matches routes.
   return pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replaceAll('**', '\0')
+    .replace(/\/\*\*$/, TRAILING_GLOBSTAR)
+    .replaceAll('**', GLOBSTAR)
     .replaceAll('*', '[^/]*')
-    .replaceAll('\0', '.*')
     .replaceAll('?', '[^/]')
+    .replaceAll(GLOBSTAR, '.*')
+    .replaceAll(TRAILING_GLOBSTAR, '(?:/.*)?')
 }
 
 function resolveSampling(
@@ -49,27 +57,19 @@ function resolveSampling(
 ): WideEventsRuntimeSampling | undefined {
   for (const [level, rate] of Object.entries(rates ?? {}))
     parseRate(level, rate)
-  for (const [index, condition] of (keep ?? []).entries()) {
-    if (condition.duration !== undefined && (!Number.isFinite(condition.duration) || condition.duration < 0))
-      throw new TypeError(`wideEvents.sampling.keep[${index}].duration must be a finite nonnegative number.`)
-    if (condition.status !== undefined && (!Number.isInteger(condition.status) || condition.status < 0))
-      throw new TypeError(`wideEvents.sampling.keep[${index}].status must be a nonnegative integer.`)
-  }
+  const conditions = (keep ?? []).map(parseCondition)
 
-  const duration = minimum(keep?.map(condition => condition.duration))
-  const status = minimum(keep?.map(condition => condition.status))
   const info = rates?.info
   const error = rates?.error
   const debug = rates?.debug
   const warn = rates?.warn
-  if (duration === undefined && status === undefined && info === undefined && error === undefined && debug === undefined && warn === undefined)
+  if (conditions.length === 0 && info === undefined && error === undefined && debug === undefined && warn === undefined)
     return undefined
   return {
     ...(debug === undefined ? {} : { debug }),
-    ...(duration === undefined ? {} : { duration }),
     ...(error === undefined ? {} : { error }),
     ...(info === undefined ? {} : { info }),
-    ...(status === undefined ? {} : { status }),
+    ...(conditions.length === 0 ? {} : { keep: conditions }),
     ...(warn === undefined ? {} : { warn }),
   }
 }
@@ -79,11 +79,15 @@ function parseRate(level: string, rate: number): void {
     throw new TypeError(`wideEvents.sampling.rates.${level} must be a finite number from 0 to 100.`)
 }
 
-function minimum(values: (number | undefined)[] | undefined): number | undefined {
-  let result: number | undefined
-  for (const value of values ?? []) {
-    if (value !== undefined && (result === undefined || value < result))
-      result = value
+function parseCondition(condition: WideEventTailSamplingCondition, index: number): WideEventTailSamplingCondition {
+  if (condition.duration !== undefined && (!Number.isFinite(condition.duration) || condition.duration < 0))
+    throw new TypeError(`wideEvents.sampling.keep[${index}].duration must be a finite nonnegative number.`)
+  if (condition.status !== undefined && (!Number.isInteger(condition.status) || condition.status < 0))
+    throw new TypeError(`wideEvents.sampling.keep[${index}].status must be a nonnegative integer.`)
+  if (condition.duration === undefined && condition.status === undefined)
+    throw new TypeError(`wideEvents.sampling.keep[${index}] must set duration, status, or both.`)
+  return {
+    ...(condition.duration === undefined ? {} : { duration: condition.duration }),
+    ...(condition.status === undefined ? {} : { status: condition.status }),
   }
-  return result
 }

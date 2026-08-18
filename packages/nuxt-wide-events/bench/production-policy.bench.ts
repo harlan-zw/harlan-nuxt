@@ -3,9 +3,10 @@ import { afterAll, bench, describe } from 'vitest'
 import { shouldEmitWideEvent } from '../src/runtime/server/production-policy'
 
 const exclude = /^(?:\/api\/_nuxt_icon\/.*|\/api\/_content\/.*|\/api\/_mdc\/.*)$/
-const sampling = { duration: 1000, info: 10, status: 400 }
+const sampling = { info: 10, keep: [{ duration: 1000 }, { status: 400 }] }
 const request: WideEventRecord = {
   durationMs: 10,
+  kind: 'request',
   level: 'info',
   method: 'GET',
   path: '/api/checkout',

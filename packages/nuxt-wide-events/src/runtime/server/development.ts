@@ -1,15 +1,15 @@
-import type { WideEventRecord } from './index'
-import type { StandaloneWideEventLevel } from './standalone-core'
+import type { WideEventKind, WideEventLevel, WideEventRecord } from './index'
 
 export interface DevelopmentWideEventRecord extends Record<string, string | number | boolean | null | undefined> {
   durationMs: number
-  level: StandaloneWideEventLevel
-  method: string
+  kind: WideEventKind
+  level: WideEventLevel
   requestId: string
-  status: number
   timestamp: string
+  method?: string
   path?: string
   service?: string
+  status?: number
 }
 
 interface DevelopmentWideEventFormatOptions {
@@ -52,7 +52,7 @@ export function formatDevelopmentWideEvent(
   const scope = typeof record.scope === 'string' ? record.scope : undefined
   const tag = safeTerminalText(record.service ?? scope ?? 'Wide Event')
   const level = record.level.toUpperCase()
-  const request = record.path !== undefined
+  const request = record.kind === 'request'
   const header = [
     paint(formatTimestamp(record.timestamp), ANSI.dim, colors),
     paint(level, levelColor(record.level), colors),
@@ -60,8 +60,8 @@ export function formatDevelopmentWideEvent(
   ]
 
   if (request) {
-    header.push(`${safeTerminalText(record.method)} ${safeTerminalText(record.path ?? '')}`)
-    header.push(paint(String(record.status), record.status >= 400 ? ANSI.red : ANSI.green, colors))
+    header.push(`${safeTerminalText(record.method ?? '')} ${safeTerminalText(record.path ?? '')}`)
+    header.push(paint(String(record.status), (record.status ?? 0) >= 400 ? ANSI.red : ANSI.green, colors))
     header.push(paint(`in ${formatDuration(record.durationMs)}`, ANSI.dim, colors))
   }
   if (messageLines?.[0])
@@ -129,6 +129,7 @@ function indentMessageLines(lines: string[]): string[] {
 function isHeaderField(field: string): boolean {
   switch (field) {
     case 'durationMs':
+    case 'kind':
     case 'level':
     case 'method':
     case 'path':
@@ -141,7 +142,7 @@ function isHeaderField(field: string): boolean {
   }
 }
 
-function levelColor(level: StandaloneWideEventLevel): string {
+function levelColor(level: WideEventLevel): string {
   switch (level) {
     case 'debug':
       return ANSI.gray

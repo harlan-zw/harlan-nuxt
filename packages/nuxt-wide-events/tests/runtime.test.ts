@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addWideEventFields, captureWideEventError, emitWideEvent, startWideEvent } from '../src/runtime/server/index'
+import { addWideEventFields, captureWideEventError, emitWideEvent, setWideEventLevel, startWideEvent } from '../src/runtime/server/index'
 
 function event() {
   return {
@@ -27,6 +27,7 @@ describe('wide Event runtime', () => {
     expect(emitWideEvent(request, 201, 'shop', '/api/cart', 12.5, '2026-08-13T00:00:00.000Z')).toEqual({
       'timestamp': '2026-08-13T00:00:00.000Z',
       'level': 'info',
+      'kind': 'request',
       'service': 'shop',
       'method': 'POST',
       'path': '/api/cart',
@@ -198,5 +199,61 @@ describe('wide Event runtime', () => {
     emitWideEvent(request, 200, undefined, undefined, 11, 'now')
 
     expect(() => addWideEventFields(request, { 'user.id': 'late' } as never)).toThrow(/already emitted/)
+  })
+
+  it('marks a request record with an explicit level', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    setWideEventLevel(request, 'error')
+
+    expect(emitWideEvent(request, 200, undefined, undefined, 11, 'now')).toEqual(expect.objectContaining({
+      kind: 'request',
+      level: 'error',
+      status: 200,
+    }))
+  })
+
+  it('keeps the highest level so a captured error survives a later level', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    captureWideEventError(request, new Error('recovered'))
+    setWideEventLevel(request, 'info')
+
+    expect(emitWideEvent(request, 200, undefined, undefined, 11, 'now')?.level).toBe('error')
+  })
+
+  it('raises the level from warn to error', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    setWideEventLevel(request, 'warn')
+    setWideEventLevel(request, 'error')
+
+    expect(emitWideEvent(request, 200, undefined, undefined, 11, 'now')?.level).toBe('error')
+  })
+
+  it('starts collection when the level arrives before any Field', () => {
+    const request = event()
+    setWideEventLevel(request, 'warn')
+    addWideEventFields(request, { 'user.id': 'user_1' } as never)
+
+    expect(emitWideEvent(request, 200, undefined, undefined, undefined, 'now')).toEqual(expect.objectContaining({
+      'level': 'warn',
+      'user.id': 'user_1',
+    }))
+  })
+
+  it('rejects an unknown level', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+
+    expect(() => setWideEventLevel(request, 'secret' as never)).toThrow(/level must be/)
+  })
+
+  it('rejects a level change after emission', () => {
+    const request = event()
+    startWideEvent(request, 'req_1', 10)
+    emitWideEvent(request, 200, undefined, undefined, 11, 'now')
+
+    expect(() => setWideEventLevel(request, 'error')).toThrow(/already emitted/)
   })
 })

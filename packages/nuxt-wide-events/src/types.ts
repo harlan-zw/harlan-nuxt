@@ -1,5 +1,5 @@
 export interface ModuleOptions {
-  /** Emit Wide Events. */
+  /** Emit Wide Events. Set `false` to keep Field enforcement and stop all output. */
   enabled?: boolean
   /** Collect one Wide Event for each request. */
   request?: boolean
@@ -11,7 +11,7 @@ export interface ModuleOptions {
   exclude?: string[]
   /** Reduce production Wide Event volume after the request completes. */
   sampling?: WideEventSamplingConfig
-  /** Write each Wide Event as one JSON line to stdout. */
+  /** Write each Wide Event as one JSON line to stdout. Defaults to `false` when `drain` is set. */
   console?: boolean
   /** Call the wide-events:emit hook for each request and background Wide Event. */
   drain?: boolean
@@ -34,17 +34,12 @@ export interface WideEventTailSamplingCondition {
 export interface WideEventSamplingConfig {
   /** Percentage of each level to keep, from 0 to 100. */
   rates?: WideEventSamplingRates
-  /** Conditions that bypass percentage sampling. */
+  /** Conditions that bypass percentage sampling. Every part of one condition must match. */
   keep?: WideEventTailSamplingCondition[]
 }
 
-export interface WideEventsRuntimeSampling {
-  debug?: number
-  duration?: number
-  error?: number
-  info?: number
-  status?: number
-  warn?: number
+export interface WideEventsRuntimeSampling extends WideEventSamplingRates {
+  keep?: WideEventTailSamplingCondition[]
 }
 
 export interface WideEventsRuntimeConfig {

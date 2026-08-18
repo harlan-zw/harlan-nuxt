@@ -49,6 +49,24 @@ export default defineEventHandler((event) => {
 
 Each value must be a string, number, boolean, or `null`. Nested objects cannot hide unapproved data.
 
+## Set the Level
+
+`setWideEventLevel` marks a request Wide Event as `debug`, `info`, `warn`, or `error`.
+
+```ts
+export default defineEventHandler(async (event) => {
+  try {
+    return await chargeCard()
+  }
+  catch {
+    setWideEventLevel(event, 'error')
+    return { charged: false }
+  }
+})
+```
+
+A record keeps the highest level it receives. If the request handler recovers from an error, the record stays an error. A drain and a sampling rate both see the real level.
+
 This code stops the build because `user.email` is not configured:
 
 ```ts
@@ -71,8 +89,10 @@ This constraint keeps the Field boundary visible to reviewers and coding agents.
 Default production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.
 
 ```json
-{ "timestamp": "2026-08-13T04:12:00.000Z", "level": "info", "service": "shop", "method": "GET", "path": "/api/cart", "status": 200, "durationMs": 1.4, "requestId": "req_123", "cart.itemCount": 2, "user.id": "user_123" }
+{ "timestamp": "2026-08-13T04:12:00.000Z", "level": "info", "kind": "request", "service": "shop", "method": "GET", "path": "/api/cart", "status": 200, "durationMs": 1.4, "requestId": "req_123", "cart.itemCount": 2, "user.id": "user_123" }
 ```
+
+`kind` is `request` for a request record and `background` for a background record.
 
 Production errors include status only. All error strings remain absent because they can contain unapproved data.
 
@@ -86,17 +106,21 @@ Development records include error messages and stacks. Development uses compact 
 export default defineTask({
   async run() {
     const wideEvent = createWideEvent({ 'job.id': 'job_123' })
-    wideEvent.setLevel('info')
+    wideEvent.setLevel('warn')
     return await wideEvent.emit()
   },
 })
 ```
 
-The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` remains synchronous.
+A background record carries `kind: "background"`. It has no `method`, `path`, or `status`, because a background operation has none.
 
-Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. This package export always uses production JSON output without module configuration.
+The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, `sampling`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` remains synchronous.
 
-Set `request: false` to disable request collection. Field enforcement and `createWideEvent` remain available.
+Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. Inside Nitro this export resolves to the same configured variant as the auto-import, so a deep import never loses `service`, `console`, `sampling`, or `drain`. Outside Nitro it writes production JSON without module configuration.
+
+Set `request: false` to disable request collection. Field enforcement, `createWideEvent`, and `setWideEventLevel` remain available.
+
+Set `enabled: false` to stop all output. Every server import still resolves, so application code needs no change.
 
 ## Migrate from evlog
 
@@ -109,6 +133,8 @@ addWideEventFields(event, { 'section.value': value })
 ```
 
 For background operations, replace `createLogger(fields)` with `createWideEvent(fields)`. Replace each `.set(fields)` call with `addWideEventFields(wideEvent, fields)`. Keep `.setLevel()`. If `drain` is enabled, await or return `.emit()`.
+
+For requests, replace `log.setLevel(level)` with `setWideEventLevel(event, level)`.
 
 Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
 
@@ -128,9 +154,11 @@ export default defineNuxtConfig({
 })
 ```
 
-Rates are percentages. Keep conditions use `>=` and OR logic. Request Wide Events use `info` and `error` rates. Standalone Wide Events also use `debug` and `warn` rates.
+Rates are percentages. A record is kept when it matches one whole keep condition. Every part of one condition must match, and the conditions are tried in order. So `{ duration: 1000, status: 500 }` keeps a slow server error, while `[{ duration: 1000 }, { status: 500 }]` keeps either one.
 
-The module compiles route patterns during the build. Default production uses a separate plugin without filtering code.
+Every level rate applies to every Wide Event. A background record has no status, so a status condition never keeps one.
+
+The module compiles route patterns during the build. A pattern that ends with `/**` also matches the bare prefix, which is how Nitro matches routes. Default production uses a separate plugin without filtering code.
 
 ## Drain Records
 
@@ -144,20 +172,20 @@ export default defineNitroPlugin((nitroApp) => {
 })
 ```
 
-Set `drain: true` to enable this hook. Set `console: false` when the hook owns output.
+Set `drain: true` to enable this hook. `console` then defaults to `false`, because the hook owns the record. Set `console: true` to keep stdout output as well.
 Request drains use `event.waitUntil()`. Background `emit()` waits for every hook adapter and surfaces adapter failures.
 
 ## Options
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `enabled` | `true` | Register request collection and output. |
+| `enabled` | `true` | Emit Wide Events. `false` keeps Field enforcement and server imports. |
 | `request` | `true` | Collect one Wide Event for each request. |
 | `fields` | `[]` | Allow application Fields. |
 | `service` | none | Add a service name. |
 | `exclude` | `[]` | Exclude routes that match a glob pattern. |
 | `sampling` | none | Set rates and keep conditions for production. |
-| `console` | `true` | Write records to stdout. |
+| `console` | `true`, or `false` with a drain | Write records to stdout. |
 | `drain` | `false` | Call the `wide-events:emit` hook for request and background records. |
 
 ## Benchmarks

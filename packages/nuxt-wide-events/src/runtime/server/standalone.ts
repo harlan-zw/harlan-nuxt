@@ -1,16 +1,18 @@
 import type { WideEventFields } from './index'
-import type { StandaloneWideEvent } from './standalone-core'
-import { createStandaloneWideEvent } from './standalone-core'
+import type { BackgroundWideEvent } from './standalone-core'
+import { createBackgroundWideEvent } from './standalone-core'
 
-export type {
-  StandaloneWideEvent,
-  StandaloneWideEventLevel,
-  StandaloneWideEventRecord,
-} from './standalone-core'
+export type { BackgroundWideEventRecord, WideEventLevel } from './index'
+export type { BackgroundWideEvent, DrainedBackgroundWideEvent } from './standalone-core'
 
-/** Create one production Wide Event for a background operation. */
-export function createWideEvent(initialFields?: WideEventFields): StandaloneWideEvent {
-  return createStandaloneWideEvent(initialFields, {
+/**
+ * Create one Wide Event for a background operation, outside Nuxt.
+ *
+ * Inside Nitro this entry point resolves to the configured variant, so the
+ * record keeps the `service`, `console`, `sampling`, and `drain` options.
+ */
+export function createWideEvent(initialFields?: WideEventFields): BackgroundWideEvent {
+  return createBackgroundWideEvent(initialFields, {
     output: record => console.log(JSON.stringify(record)),
   })
 }
