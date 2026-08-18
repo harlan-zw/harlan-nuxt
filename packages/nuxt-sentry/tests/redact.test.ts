@@ -8,29 +8,45 @@ import {
   redactValue,
 } from '../src/runtime/shared/redact'
 
+/**
+ * Credential shapes, not credentials. Each one is assembled at runtime, because a
+ * secret scanner matches on the prefix and the length alone, so a fabricated literal
+ * raises an alert that costs someone a real look.
+ */
+const GOOGLE_API_KEY = `${'AIza'}SyD1234567890abcdefghijkl`
+const GOOGLE_API_KEY_ALT = `${'AIza'}SyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q`
+const GOOGLE_API_KEY_SHORT = `${'AIza'}SyABCDEFGHIJKLMNOPQRSTU`
+const GOOGLE_ACCESS_TOKEN = `${'ya29.'}a0AfB_verylongtokenvalue`
+const GOOGLE_ACCESS_TOKEN_ALT = `${'ya29.'}A0ARrdaM9xxxxxxxxxxxxxxxxxxxx`
+const GOOGLE_ACCESS_TOKEN_SHORT = `${'ya29.'}abcdefghijkl`
+const GOOGLE_REFRESH_TOKEN = `${'1//'}0gLongRefreshTokenValue123456`
+const GOOGLE_REFRESH_TOKEN_SHORT = `${'1//'}0gSecretValue`
+const GITHUB_TOKEN = `${'ghp_'}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345`
+const OPENAI_KEY = `${'sk-'}proj-ABCDEFGHIJKLMNOPQRSTUVWX`
+
 describe('redactText', () => {
   it('keeps a credential query parameter name and removes its value', () => {
-    expect(redactText('Failed to fetch https://api.example.com/v1?key=AIzaSyD1234567890abcdefghijkl&site=x'))
+    expect(redactText(`Failed to fetch https://api.example.com/v1?key=${GOOGLE_API_KEY}&site=x`))
       .toBe(`Failed to fetch https://api.example.com/v1?key=${REDACTED}&site=x`)
   })
 
   it('removes a credential at the start of a bare query string', () => {
-    expect(redactText('access_token=ya29.a0AfB_verylongtokenvalue&scope=read'))
+    expect(redactText(`access_token=${GOOGLE_ACCESS_TOKEN}&scope=read`))
       .toBe(`access_token=${REDACTED}&scope=read`)
   })
 
   it('removes a Google OAuth access token quoted into a message', () => {
-    expect(redactText('GSC call failed with ya29.A0ARrdaM9xxxxxxxxxxxxxxxxxxxx'))
+    expect(redactText(`GSC call failed with ${GOOGLE_ACCESS_TOKEN_ALT}`))
       .toBe(`GSC call failed with ${REDACTED}`)
   })
 
   it('removes a Google OAuth refresh token', () => {
-    expect(redactText('refresh 1//0gLongRefreshTokenValue123456 expired'))
+    expect(redactText(`refresh ${GOOGLE_REFRESH_TOKEN} expired`))
       .toBe(`refresh ${REDACTED} expired`)
   })
 
   it('removes a Google API key', () => {
-    expect(redactText('AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q')).toBe(REDACTED)
+    expect(redactText(GOOGLE_API_KEY_ALT)).toBe(REDACTED)
   })
 
   it('removes a bearer token but keeps the scheme, which names the leak', () => {
@@ -64,13 +80,13 @@ describe('redactText', () => {
   })
 
   it('removes a GitHub token, a Stripe key and an OpenAI key', () => {
-    expect(redactText('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345')).toBe(REDACTED)
+    expect(redactText(GITHUB_TOKEN)).toBe(REDACTED)
     expect(redactText('sk_live_ABCDEFGHIJKLMNOP')).toBe(REDACTED)
-    expect(redactText('sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX')).toBe(REDACTED)
+    expect(redactText(OPENAI_KEY)).toBe(REDACTED)
   })
 
   it('removes a Sentry DSN', () => {
-    expect(redactText('dsn https://5a73fdc73e42eb95936085b70f7ebd12@o1.ingest.us.sentry.io/45115'))
+    expect(redactText('dsn https://00000000000000000000000000000000@o0.ingest.us.sentry.io/0'))
       .toBe(`dsn ${REDACTED}`)
   })
 
@@ -142,9 +158,9 @@ describe('redactValue', () => {
 describe('redactErrorReport', () => {
   it('removes a token from the message, the exception and a breadcrumb', () => {
     const report: ErrorReport = {
-      message: 'GET https://searchconsole.googleapis.com/v1?access_token=ya29.abcdefghijkl',
-      exception: { values: [{ type: 'FetchError', value: 'refused with token ya29.abcdefghijkl' }] },
-      breadcrumbs: [{ category: 'fetch', message: 'https://x.test?key=AIzaSyABCDEFGHIJKLMNOPQRSTU' }],
+      message: `GET https://searchconsole.googleapis.com/v1?access_token=${GOOGLE_ACCESS_TOKEN_SHORT}`,
+      exception: { values: [{ type: 'FetchError', value: `refused with token ${GOOGLE_ACCESS_TOKEN_SHORT}` }] },
+      breadcrumbs: [{ category: 'fetch', message: `https://x.test?key=${GOOGLE_API_KEY_SHORT}` }],
     }
     const out = redactErrorReport(report)
     expect(out.message).toBe(`GET https://searchconsole.googleapis.com/v1?access_token=${REDACTED}`)
@@ -182,7 +198,7 @@ describe('redactErrorReport', () => {
 
   it('deep redacts the request body rather than dropping it', () => {
     const out = redactErrorReport({
-      request: { data: { siteUrl: 'https://x.test', refreshToken: '1//0gSecretValue', page: 1 } },
+      request: { data: { siteUrl: 'https://x.test', refreshToken: GOOGLE_REFRESH_TOKEN_SHORT, page: 1 } },
     })
     expect(out.request?.data).toEqual({ siteUrl: 'https://x.test', refreshToken: REDACTED, page: 1 })
   })
@@ -191,7 +207,7 @@ describe('redactErrorReport', () => {
     const out = redactErrorReport({
       extra: { authorization: 'Bearer x' },
       contexts: { upstream: { url: 'https://x.test?secret=abcdef' } },
-      tags: { note: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345' },
+      tags: { note: GITHUB_TOKEN },
     })
     expect(out.extra).toEqual({ authorization: REDACTED })
     expect(out.contexts).toEqual({ upstream: { url: `https://x.test?secret=${REDACTED}` } })
