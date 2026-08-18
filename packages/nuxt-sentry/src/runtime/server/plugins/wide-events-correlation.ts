@@ -16,15 +16,15 @@ import { parseSentryCorrelation } from '../wide-events'
  * joined. Without them the two sinks hold two halves of one failure with no key
  * between them.
  *
- * The single object literal is load bearing. `@harlan-zw/nuxt-wide-events`
- * parses every server file at build time and rejects an `addWideEventFields`
- * call whose argument is not an object literal, so every key is present on
- * every call and `null` where the value is unavailable.
+ * The fields argument must be a single object literal. `@harlan-zw/nuxt-wide-events`
+ * parses every server file at build time and rejects any other shape, so every key is
+ * present on every call and `null` where the value is unavailable. The request event
+ * comes first: the fields go on that request's Wide Event.
  */
 export default defineNitroPlugin((nitroApp: NitroApp) => {
-  nitroApp.hooks.hook('request', () => {
+  nitroApp.hooks.hook('request', (event) => {
     const correlation = parseSentryCorrelation(getTraceData())
-    addWideEventFields({
+    addWideEventFields(event, {
       'sentry.traceId': correlation['sentry.traceId'],
       'sentry.spanId': correlation['sentry.spanId'],
     })

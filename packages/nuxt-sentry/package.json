@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-sentry",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One Sentry Report Policy for Nuxt: registration, gating, drop rules, and redaction.",
   "author": {
     "name": "Harlan Wilton",
