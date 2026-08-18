@@ -20,6 +20,7 @@ import {
   updateTemplates,
   useLogger,
 } from '@nuxt/kit'
+import { version } from '../package.json'
 import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
 import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSources } from './config'
 import { createContentAssetPlan, createContentRevision, syncContentAssets } from './core/asset'
@@ -75,6 +76,9 @@ async function loadCollections(layers: ReadonlyArray<Record<string, unknown>>): 
 export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/comark-content',
+    // Without this, getNuxtModuleVersion() returns false, so every consumer
+    // calling hasNuxtModuleCompatibility() sees no version and fails closed.
+    version,
     configKey: 'content',
     compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },

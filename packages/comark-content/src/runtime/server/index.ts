@@ -1,9 +1,19 @@
 import type { CollectionItem, CollectionName } from '../types'
+import { renderPageMarkdown } from '../core/markdown'
 import { createNavigation, createSurroundings } from '../core/navigation'
 import { createQueryBuilder, executeIndexedQueryPlan } from '../core/query'
-import { loadCollectionIndex, loadDocumentBody, loadNavigationCollection, loadSearchSections } from './storage'
+import { loadCollectionIndex, loadCollectionManifest, loadDocumentBody, loadNavigationCollection, loadSearchSections } from './storage'
 
-export type { Collections, ContentNavigationItem, ContentSearchSection, PageCollectionItemBase, PageCollections, TocLink } from '../types'
+export type { RenderPageMarkdownOptions } from '../core/markdown'
+export type { Collections, ContentCollectionManifestEntry, ContentNavigationItem, ContentSearchSection, PageCollectionItemBase, PageCollections, TocLink } from '../types'
+export { renderPageMarkdown }
+
+/**
+ * Every collection the build generated, with its sitemap opt out.
+ *
+ * Build-time consumers need this to walk collections without hard coding names.
+ */
+export const queryCollectionManifest = async (_event?: unknown) => loadCollectionManifest()
 
 export function queryCollection<TName extends CollectionName | string>(_event: unknown, collection: TName) {
   return createQueryBuilder<CollectionItem<TName>>(async plan => executeIndexedQueryPlan(
