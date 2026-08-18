@@ -16,7 +16,9 @@ import {
 
 export interface RecoverDurableJobsOptions {
   now?: number
+  /** Reserved rows older than this are released. Defaults to 900s. */
   staleSeconds?: number
+  /** Due, unreserved rows older than this are treated as orphaned. Defaults to 6h. */
   orphanedSeconds?: number
   /** Let the original CF message reclaim a reaped row before dispatching a duplicate. Defaults to 120s. */
   redeliveryGraceSeconds?: number
@@ -61,8 +63,8 @@ export async function recoverDurableJobs<
   opts: RecoverDurableJobsOptions = {},
 ): Promise<RecoverDurableJobsResult<Queue>> {
   const nowSeconds = opts.now ?? Math.floor(Date.now() / 1000)
-  const staleSeconds = opts.staleSeconds ?? 300
-  const orphanedSeconds = opts.orphanedSeconds ?? 600
+  const staleSeconds = opts.staleSeconds ?? 900
+  const orphanedSeconds = opts.orphanedSeconds ?? 6 * 60 * 60
   const redeliveryGraceSeconds = Math.max(0, opts.redeliveryGraceSeconds ?? 120)
   const limit = opts.limit ?? 100
   const staleBefore = nowSeconds - staleSeconds

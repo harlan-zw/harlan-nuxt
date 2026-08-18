@@ -36,6 +36,7 @@ interface ReconcileRuntimeConfig {
       d1Binding?: string
       staleSeconds?: number
       orphanedSeconds?: number
+      redispatchGraceSeconds?: number
       redeliveryGraceSeconds?: number
       orphanedBatchSeconds?: number
       limit?: number
@@ -117,8 +118,11 @@ export default defineScheduledTask({
         console.warn(`[cf-jobs:reconcile] no working queue producer binding for "${queue}" — ${count} message(s) NOT dispatched (binding missing or lacks .send here).`),
     })
 
-    const staleSeconds = reconcile.staleSeconds ?? 300
-    const orphanedSeconds = reconcile.orphanedSeconds ?? 600
+    // Defaults mirror `resolveReconcileOptions` in the module, for the case where
+    // an app writes `runtimeConfig.cfJobs.reconcile` by hand.
+    const staleSeconds = reconcile.staleSeconds ?? 900
+    const orphanedSeconds = reconcile.orphanedSeconds ?? 6 * 60 * 60
+    const redispatchGraceSeconds = reconcile.redispatchGraceSeconds ?? orphanedSeconds
     const redeliveryGraceSeconds = reconcile.redeliveryGraceSeconds ?? 120
     const orphanedBatchSeconds = reconcile.orphanedBatchSeconds ?? 7 * 86400
     const limit = reconcile.limit ?? 100
@@ -151,6 +155,7 @@ export default defineScheduledTask({
         now: nowSeconds,
         staleSeconds,
         orphanedSeconds,
+        redispatchGraceSeconds,
         redeliveryGraceSeconds,
         limit,
         staleError: 'stale-reservation',

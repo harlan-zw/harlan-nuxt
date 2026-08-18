@@ -1025,8 +1025,9 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('supports Laravel-style job policy aliases', () => {
-    expect(resolveJobMaxAttempts({ tries: 3, maxAttempts: 5 })).toBe(3)
-    expect(resolveJobMaxAttempts({ maxAttempts: 5 })).toBe(5)
+    // `tries` is the only attempt cap. The `maxAttempts` alias is gone.
+    expect(resolveJobMaxAttempts({ tries: 3 })).toBe(3)
+    expect(resolveJobMaxAttempts({})).toBeUndefined()
     expect(resolveJobBackoff(30, 2)).toBe(30)
     expect(resolveJobBackoff([10, 30, 90], 2)).toBe(30)
     expect(resolveJobBackoff([10, 30, 90], 10)).toBe(90)

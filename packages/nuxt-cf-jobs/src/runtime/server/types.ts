@@ -177,8 +177,8 @@ export interface JobDefinition<Name extends string, Payload, Queue extends strin
   failed?: JobFailedHandler<Payload, Env, Db, Logger>
   broadcast?: JobBroadcastDefinition<Payload, Env>
   middleware?: Array<JobMiddleware<Payload, Env, Db, Logger>>
+  /** Attempt cap for this job. Replaces the removed `maxAttempts` alias. */
   tries?: number
-  maxAttempts?: number
   backoff?: JobBackoff
   unique?: boolean
   uniqueId?: (payload: Payload) => string

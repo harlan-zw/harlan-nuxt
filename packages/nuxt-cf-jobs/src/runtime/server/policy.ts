@@ -9,10 +9,15 @@ export function clampDelay(seconds: number | undefined): number | undefined {
   return Math.min(seconds, CF_QUEUE_MAX_DELAY_SECONDS)
 }
 
+/**
+ * Attempt cap stored on a durable row. `tries` is the only source; the
+ * `maxAttempts` alias was removed because it silently lost to `tries` whenever
+ * both were set.
+ */
 export function resolveJobMaxAttempts(
-  definition: Pick<JobDefinition<string, unknown, string, unknown, unknown, unknown>, 'tries' | 'maxAttempts'> | undefined,
+  definition: Pick<JobDefinition<string, unknown, string, unknown, unknown, unknown>, 'tries'> | undefined,
 ): number | undefined {
-  return definition?.tries ?? definition?.maxAttempts
+  return definition?.tries
 }
 
 export function resolveJobBackoff(backoff: JobBackoff | undefined, attempt: number): number | undefined {
