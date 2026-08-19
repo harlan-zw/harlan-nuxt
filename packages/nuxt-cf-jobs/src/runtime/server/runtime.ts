@@ -257,6 +257,8 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
   claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
+  inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
+  maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
   completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
@@ -483,6 +485,8 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds ?? createStoredJobRetryDelay(opts.onLog),
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
+        inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
+        maxInFlightRetries: opts.maxInFlightRetries,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
@@ -573,6 +577,10 @@ export interface CreateDurableJobsRuntimeOptions<
   retryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['retryDelaySeconds']
   /** Backoff (s) when the claim step itself throws (overloaded store). Default 10. */
   claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
+  /** Backoff (s) when another run holds the row. Default 60s doubled per delivery. */
+  inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
+  /** Retries to spend on a held row before the message acks. Default 2. */
+  maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
   /** Classify a queue as a dead-letter queue (defaults to a `-dlq` suffix check). */
   isDlqQueue?: (queue: string) => boolean
@@ -745,6 +753,8 @@ export function createDurableJobsRuntime<
         createJobContext: opts.createJobContext,
         retryDelaySeconds: opts.retryDelaySeconds ?? createStoredJobRetryDelay(opts.onLog),
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
+        inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
+        maxInFlightRetries: opts.maxInFlightRetries,
         maxAttemptsOf: stored => stored.max_attempts,
         completeResult: opts.completeResult,
         createJobScope: opts.createJobScope,
@@ -772,6 +782,8 @@ export function createDurableJobsRuntime<
       onBatchProgress,
       retryDelaySeconds: opts.retryDelaySeconds,
       claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
+      inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
+      maxInFlightRetries: opts.maxInFlightRetries,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate: dedup?.has,
