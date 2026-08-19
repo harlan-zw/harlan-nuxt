@@ -140,9 +140,16 @@ A pool that fits the CPU threshold but not the memory budget is held.
 
 **The budget gates bursts, not warm slots.** A warm slot claims a job without
 asking, so the sum of `warm * memory` across pools is capacity this host has
-promised unconditionally, and no admission decision can take it back. The
-supervisor logs that floor at startup when it exceeds the budget. Lowering
-`warm` on the wider pools is the only lever for that half.
+promised unconditionally, and no admission decision can take it back. A busy
+warm slot does spend, which keeps later bursts honest, but nothing can refuse
+the warm job itself. The supervisor logs that floor at startup when it exceeds
+host RAM.
+
+`warm` is not the lever for it. **Every pool needs `warm` of at least 1 or it is
+inert.** The only demand signal in this system is a running container claiming a
+job, so a pool with no warm slot never spawns a container, never claims, and
+never bursts. That puts a hard floor under the promised total of one container
+per pool, and the levers are the pools' `memory` values and the number of pools.
 
 `CPU_BUDGET` holds back **bursts**; it cannot cap total load. A warm container
 claims its job straight from GitHub and the supervisor has no say in it, so the

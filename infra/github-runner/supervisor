@@ -561,11 +561,20 @@ main() {
 
   # The memory budget gates BURSTS. A warm slot claims a job without asking, so
   # the warm floor is capacity this host has already promised unconditionally.
-  # If every warm slot goes busy at once the host owes that much regardless of
-  # the budget, and no admission decision can take it back. Lowering warm is the
-  # only lever for that half.
-  if (( warm_memory_floor > memory_budget_gib )); then
-    log "Warm slots can hold ${warm_memory_floor}g at once against a ${memory_budget_gib}g budget. Warm slots never ask, so that much can still be promised. Lower warm on the wider pools."
+  # A busy warm slot does spend, which keeps later bursts honest, but nothing can
+  # refuse the warm job itself.
+  #
+  # This is reported against host RAM, not against the budget. Every pool needs
+  # `warm` of at least 1 or it is inert -- the only demand signal in this system
+  # is a running container claiming a job, so a pool with no warm slot never
+  # spawns, never claims, and never bursts. That puts a hard floor under this
+  # number, so comparing it to the budget would print a warning that no
+  # configuration could ever clear. The levers are the pools' `memory` values and
+  # the number of pools, never `warm`.
+  local host_ram_gib
+  host_ram_gib="$(free --gibi | awk '/^Mem:/ { print $2 }')"
+  if [[ -n "$host_ram_gib" ]] && (( warm_memory_floor > host_ram_gib )); then
+    log "Warm slots can promise ${warm_memory_floor}g at once against ${host_ram_gib}g of RAM, and a warm job cannot be refused. Only every pool building at the same instant reaches that, but nothing prevents it. Lower the pools' memory values, or run fewer pools."
   fi
 
   # A pool whose single container cannot fit the budget would be held forever.
