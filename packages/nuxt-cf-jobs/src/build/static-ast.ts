@@ -1,20 +1,35 @@
-import { parseModule } from 'magicast'
+import { parseSync, Visitor } from 'vite'
 
-// Minimal structural typing of the Babel AST nodes we touch. Keeping this local
-// avoids coupling build-time metadata extraction to @babel/types.
+// Keep parser-specific AST types behind this build-time module.
 export interface StaticAstNode {
   type: string
   [key: string]: unknown
 }
 
-export function findStaticObjectCall(source: string, calleeNames: readonly string[]): StaticAstNode | undefined {
-  return firstObjectArg(findCallExpression(parseStaticModule(source), calleeNames))
+export function findStaticObjectCall(source: string, calleeNames: readonly string[], filename = 'source.ts'): StaticAstNode | undefined {
+  const root = parseStaticModule(source, filename)
+  if (!root)
+    return undefined
+
+  let call: StaticAstNode | undefined
+  new Visitor({
+    CallExpression(node) {
+      if (call)
+        return
+      const callee = unwrap(node.callee)
+      if (callee?.type === 'Identifier' && typeof callee.name === 'string' && calleeNames.includes(callee.name))
+        call = node as unknown as StaticAstNode
+    },
+  }).visit(root as unknown as Parameters<Visitor['visit']>[0])
+  return firstObjectArg(call)
 }
 
-function parseStaticModule(source: string): StaticAstNode | undefined {
+function parseStaticModule(source: string, filename: string): StaticAstNode | undefined {
   try {
-    const ast = parseModule(source).$ast
-    return isStaticAstNode(ast) ? ast : undefined
+    const result = parseSync(filename, source, { sourceType: 'module' })
+    return result.errors.length === 0 && isStaticAstNode(result.program)
+      ? result.program as unknown as StaticAstNode
+      : undefined
   }
   catch {
     return undefined
@@ -23,36 +38,6 @@ function parseStaticModule(source: string): StaticAstNode | undefined {
 
 function isStaticAstNode(value: unknown): value is StaticAstNode {
   return typeof value === 'object' && value !== null && typeof (value as StaticAstNode).type === 'string'
-}
-
-function findCallExpression(node: unknown, calleeNames: readonly string[]): StaticAstNode | undefined {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findCallExpression(child, calleeNames)
-      if (found)
-        return found
-    }
-    return undefined
-  }
-
-  if (!isStaticAstNode(node))
-    return undefined
-
-  if (node.type === 'CallExpression') {
-    const callee = node.callee
-    if (isStaticAstNode(callee) && callee.type === 'Identifier' && typeof callee.name === 'string' && calleeNames.includes(callee.name))
-      return node
-  }
-
-  for (const key in node) {
-    if (key === 'type')
-      continue
-    const found = findCallExpression(node[key], calleeNames)
-    if (found)
-      return found
-  }
-
-  return undefined
 }
 
 function firstObjectArg(call: StaticAstNode | undefined): StaticAstNode | undefined {
@@ -66,7 +51,7 @@ function getObjectProperty(obj: StaticAstNode | undefined, name: string): Static
     return undefined
   return obj.properties.find((prop): prop is StaticAstNode => (
     isStaticAstNode(prop)
-    && prop.type === 'ObjectProperty'
+    && prop.type === 'Property'
     && prop.computed !== true
     && propKeyName(prop) === name
   ))
@@ -84,7 +69,7 @@ export function hasStaticObjectProperty(obj: StaticAstNode | undefined, name: st
 export function stringLiteralValue(node: unknown): string | undefined {
   if (!isStaticAstNode(node))
     return undefined
-  if (node.type === 'StringLiteral' && typeof node.value === 'string')
+  if (node.type === 'Literal' && typeof node.value === 'string')
     return node.value
   if (node.type === 'TemplateLiteral' && Array.isArray(node.expressions) && node.expressions.length === 0) {
     const quasi = Array.isArray(node.quasis) ? node.quasis[0] : undefined
@@ -93,13 +78,13 @@ export function stringLiteralValue(node: unknown): string | undefined {
 }
 
 export function numberLiteralValue(node: unknown): number | undefined {
-  return isStaticAstNode(node) && node.type === 'NumericLiteral' && typeof node.value === 'number'
+  return isStaticAstNode(node) && node.type === 'Literal' && typeof node.value === 'number'
     ? node.value
     : undefined
 }
 
 export function booleanLiteralValue(node: unknown): boolean | undefined {
-  return isStaticAstNode(node) && node.type === 'BooleanLiteral' && typeof node.value === 'boolean'
+  return isStaticAstNode(node) && node.type === 'Literal' && typeof node.value === 'boolean'
     ? node.value
     : undefined
 }
@@ -123,8 +108,22 @@ function propKeyName(prop: StaticAstNode): string | undefined {
     return undefined
   if (key.type === 'Identifier' && typeof key.name === 'string')
     return key.name
-  if (key.type === 'StringLiteral' && typeof key.value === 'string')
+  if (key.type === 'Literal' && typeof key.value === 'string')
     return key.value
+}
+
+function unwrap(input: unknown): StaticAstNode | undefined {
+  if (!isStaticAstNode(input))
+    return undefined
+  if (
+    input.type === 'TSAsExpression'
+    || input.type === 'TSSatisfiesExpression'
+    || input.type === 'TSNonNullExpression'
+    || input.type === 'ChainExpression'
+  ) {
+    return unwrap(input.expression)
+  }
+  return input
 }
 
 function templateElementCooked(node: unknown): string | undefined {

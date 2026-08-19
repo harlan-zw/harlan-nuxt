@@ -5,6 +5,7 @@ import { resolve } from 'pathe'
 import { evaluateWranglerDiagnostics, parseWranglerAllowedWarnings } from '../diagnostics'
 import { diagnoseWranglerProject } from '../doctor'
 import { formatWranglerDiagnostics } from '../wrangler'
+import { readCliVersion } from './meta'
 
 const doctor = defineCommand({
   meta: { name: 'doctor', description: 'Audit the effective Wrangler configuration' },
@@ -63,7 +64,7 @@ const doctor = defineCommand({
 const main = defineCommand({
   meta: {
     name: 'nuxt-cloudflare',
-    version: '0.0.7',
+    version: readCliVersion(),
     description: 'Cloudflare deployment defaults and diagnostics for Nuxt',
   },
   subCommands: { doctor },

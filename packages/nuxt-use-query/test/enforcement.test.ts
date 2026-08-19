@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { createContractQueryEnforcer, formatContractQueryViolations } from '../src/enforcement'
 import { resolveContractQueryEnforcementOptions } from '../src/enforcement/options'
@@ -204,5 +204,179 @@ describe('contract query enforcer', () => {
     })
 
     expect(violations.map(violation => violation.code)).toContain('missing-contract-import')
+  })
+})
+
+describe('contract query scan directories', () => {
+  async function withTempRoot(build: (rootDir: string) => Promise<void>): Promise<string> {
+    const rootDir = await mkdtemp(join(tmpdir(), 'nuxt-use-query-scan-'))
+    await build(rootDir)
+    return rootDir
+  }
+
+  async function writeFileAt(rootDir: string, file: string, source: string): Promise<void> {
+    const path = join(rootDir, file)
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, source)
+  }
+
+  it('expands every wildcard segment in a scan dir pattern', async () => {
+    const rootDir = await withTempRoot(async (root) => {
+      await writeFileAt(root, 'layers/pro/site/app/pages/index.vue', '<script setup>await $fetch("/api/pro/sites")</script>')
+      await writeFileAt(root, 'layers/site/marketing/app/pages/home.vue', '<script setup>await $fetch("/api/home")</script>')
+    })
+
+    const enforcer = createContractQueryEnforcer()
+    const violations = await enforcer.scan(rootDir, {
+      scanDirs: ['layers/*/*/app'],
+    }).finally(() => rm(rootDir, { force: true, recursive: true }))
+
+    expect(violations.map(violation => violation.file).sort()).toEqual([
+      'layers/pro/site/app/pages/index.vue',
+      'layers/site/marketing/app/pages/home.vue',
+    ])
+  })
+
+  it('expands a globstar scan dir across any nesting depth', async () => {
+    const rootDir = await withTempRoot(async (root) => {
+      await writeFileAt(root, 'layers/core/app/x.ts', 'await $fetch("/api/a")')
+      await writeFileAt(root, 'layers/pro/site/app/y.ts', 'await $fetch("/api/b")')
+      await writeFileAt(root, 'layers/pro/node_modules/dep/app/z.ts', 'await $fetch("/api/c")')
+    })
+
+    const enforcer = createContractQueryEnforcer()
+    const violations = await enforcer.scan(rootDir, {
+      scanDirs: ['layers/**/app'],
+    }).finally(() => rm(rootDir, { force: true, recursive: true }))
+
+    expect(violations.map(violation => violation.file).sort()).toEqual([
+      'layers/core/app/x.ts',
+      'layers/pro/site/app/y.ts',
+    ])
+  })
+
+  it('matches an ignore pattern anywhere in the path, like queryDirs', async () => {
+    const rootDir = await withTempRoot(async (root) => {
+      await writeFileAt(root, 'layers/pro/site/app/queries/sites.ts', 'export const sites = { path: "/api/sites" }')
+      await writeFileAt(root, 'layers/core/app/composables/nav.ts', 'export const docs = "/api/docs"')
+      await writeFileAt(root, 'layers/core/app/pages/index.vue', '<script setup>await $fetch("/api/kept")</script>')
+    })
+
+    const enforcer = createContractQueryEnforcer()
+    const violations = await enforcer.scan(rootDir, {
+      ignore: ['app/queries', 'app/composables/nav.ts'],
+      scanDirs: ['layers/*/app', 'layers/*/*/app'],
+    }).finally(() => rm(rootDir, { force: true, recursive: true }))
+
+    expect(violations.map(violation => violation.file)).toEqual([
+      'layers/core/app/pages/index.vue',
+    ])
+  })
+})
+
+describe('rpc operation factories', () => {
+  const contractImport = 'import { siteSchema } from "@/shared/contracts/site";'
+
+  it('resolves an rpc factory imported under an alias', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'layers/saas/app/queries/rpc.ts',
+          source: `import { defineNuxtRpcQuery as defineProQuery } from "@harlan-zw/nuxt-use-query/rpc"; ${contractImport} export const sites = defineProQuery({ key: "sites", path: "/api/sites", response: siteSchema })`,
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations).toEqual([])
+  })
+
+  it('checks an aliased operation for its response schema', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'app/queries/rpc.ts',
+          source: `import { defineNuxtRpcQuery as defineProQuery } from "@harlan-zw/nuxt-use-query/rpc"; ${contractImport} export const sites = defineProQuery({ key: "sites", path: "/api/sites" })`,
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations.map(violation => violation.code)).toEqual(['operation-response-schema-missing'])
+  })
+
+  it('resolves a local alias of an auto-imported rpc factory', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'app/queries/local-alias.ts',
+          source: `${contractImport} const defineProQuery = defineNuxtRpcQuery; export const sites = defineProQuery({ key: "sites", path: "/api/sites", response: siteSchema })`,
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations).toEqual([])
+  })
+
+  it('accepts a wrapper factory in a query file when it takes an operation object', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'layers/pro/app/queries/sites.ts',
+          source: `${contractImport} export const sites = defineProQuery({ key: "sites", path: "/api/sites", response: siteSchema })`,
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations).toEqual([])
+  })
+
+  it('does not read a navigation target as an rpc operation', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        {
+          file: 'app/queries/nav.ts',
+          source: 'export function goToSites() { return navigateTo({ path: "/api/sites" }) }',
+        },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations.map(violation => violation.code)).toEqual(['query-file-without-operation'])
+  })
+})
+
+describe('server directory exemption', () => {
+  it('does not flag api path literals in server code outside server/api', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        { file: 'server/middleware/auth.ts', source: 'export default defineEventHandler((event) => { if (event.path.startsWith("/api/pro")) return }) ' },
+        { file: 'server/utils/proxy.ts', source: 'export const upstream = () => $fetch("/api/pro/sites")' },
+        { file: 'layers/pro/server/plugins/warm.ts', source: 'export default () => $fetch("/api/pro/sites")' },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations).toEqual([])
+  })
+
+  it('still flags api path literals in app code', async () => {
+    const enforcer = createContractQueryEnforcer({
+      readSourceFiles: async () => [
+        { file: 'app/components/Sites.vue', source: '<script setup>await $fetch("/api/pro/sites")</script>' },
+      ],
+    })
+
+    const violations = await enforcer.scan('/app')
+
+    expect(violations.map(violation => violation.code)).toEqual(['api-literal-outside-query'])
   })
 })

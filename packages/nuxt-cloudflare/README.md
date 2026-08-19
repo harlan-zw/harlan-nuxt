@@ -6,22 +6,26 @@ The module extracts production patterns already proven in Nuxt SEO and gscdump. 
 
 ## Defaults
 
+Every default below yields to a value you wrote. The root `wrangler.jsonc`, `wrangler.json`, or `wrangler.toml` is authored config, and so is `nitro.cloudflare.wrangler`. A module default applies only where neither names the key. Workers Caching is the one exception: the module owns that policy because it also registers the caching plugin.
+
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
 - Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
-- Workers Logs sampled at 10%, traces at 1%, both overridable
+- Workers Logs sampled at 1%, traces at 1%, both overridable
 - Preview URLs disabled unless explicitly enabled
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
 - Smart Placement enabled unless the project chooses a placement
 - Workers Caching enabled with version isolation
 - Rendered HTML forced to `private, no-store`; explicit non-HTML cache policies remain intact
-- Source-map upload when the Nitro build emits maps; explicit `false` is preserved
+- Source-map upload when the Nitro build emits maps; an authored value is preserved
+- `nodejs_compat` added unless the config chooses `nodejs_compat_v2`, which Cloudflare rejects alongside it
 - Module-wide `secrets.required` names copied to each environment; source root secrets remain scoped to the root
 - Version metadata is skipped when `CF_VERSION_METADATA` already names another binding
 - Raw `cloudflare-kv-binding` on Nitro's `cache` mount upgraded to a 30-day physical expiry
 - Final generated Wrangler config validated through Wrangler, then audited after production Nitro compiles
 - Production builds fail when server runtime config contains a value copied from a secret build environment variable. The error lists config paths only
 - Complete defaults and diagnostics applied to every named Wrangler environment
+- Exact Cloudflare binding and runtime types generated during `nuxt prepare`
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
 
@@ -95,6 +99,23 @@ export default defineNuxtConfig({
 
 It emits `max-age`, never `s-maxage`. Cloudflare reads `s-maxage` as implying `proxy-revalidate`, which disables `stale-while-revalidate` and `stale-if-error`, so a policy that looks like it serves stale blocks on revalidation instead. The module warns at build if a route rule you wrote by hand hits that.
 
+## Cost controls
+
+Cloudflare pricing changes. Check the linked pricing pages before making a budget.
+
+- Workers Logs use a 1% routine sample. Paid plans include 20 million monthly events. Extra events cost $0.60 per million. See [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing).
+- Invocation logs remain enabled. High-volume Workers with complete error telemetry can set `observability.logs.invocation_logs: false`. This removes one event per sampled invocation.
+- Traces use a separate 1% sample. Each span is metered. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) lists 10 million included monthly events. It also says the quota is shared with logs. The Workers Logs page lists 20 million. Budget against 10 million until the pages agree.
+- Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests. This includes static assets and Worker-to-Worker requests. Disable caching when CPU savings do not exceed the added request cost.
+- Static assets stay asset first. Their requests are free and unlimited. The module warns when blanket Worker-first routing makes assets billable.
+- Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000. A higher ceiling increases runaway-cost exposure.
+- Queue retries add billed read operations. Each 64 KB message chunk incurs write, read, and delete operations. Keep payloads small and retries deliberate.
+- The KV-backed Nitro cache expires entries after 30 days. This bounds stored cache data. It does not reduce billed operations.
+
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas add no separate charge. The module preserves D1 routing and session behavior.
+
+Doctor warnings surface log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
+
 ## Doctor
 
 Audit Wrangler's effective configuration, including generated config redirects and named environments:
@@ -149,9 +170,16 @@ Pass the final generated config explicitly to `types` and `check startup`; Nitro
 ### D1 sessions and safe retries
 
 ```ts
-import { getRequestD1Session, retryIdempotentD1Write } from '@harlan-zw/nuxt-cloudflare/d1'
+import {
+  getRecoveringRequestD1Session,
+  retryIdempotentD1Write,
+} from '@harlan-zw/nuxt-cloudflare/d1'
 
-const session = getRequestD1Session(event.context, 'DB', event.context.cloudflare.env.DB)
+const session = getRecoveringRequestD1Session(
+  event.context,
+  'DB',
+  event.context.cloudflare.env.DB,
+)
 
 await retryIdempotentD1Write({
   safety: { _tag: 'replay-safe' },
@@ -159,7 +187,11 @@ await retryIdempotentD1Write({
 })
 ```
 
-One `first-primary` session is cached per request and binding. D1 already retries read-only queries. Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
+`getRecoveringRequestD1Session` caches one `first-primary` session per request and binding. Use `withD1ResetRecovery` when no request context exists. D1 already retries read-only queries. Recovery handles failures that outlive those retries. It opens a replacement session after `D1_RESET_DO`, carries the last bookmark, and rebuilds the prepared statement with its bound values. Replica disconnects and connection loss retry on the current session.
+
+Recovery replays only `SELECT`, read-only CTE, and `EXPLAIN` statements. It never replays writes, PRAGMA statements, mixed batches, or unknown statements. A session reset still opens a healthy session for the next statement. `onRecovery` receives tagged `retrying` or `stopped` events for request telemetry.
+
+Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
 
 ### D1 parameter plans
 
@@ -187,15 +219,26 @@ D1 allows 100 bound parameters per statement, including each statement inside `d
 ### Bindings
 
 ```ts
-import type { CloudflareEventLike } from '@harlan-zw/nuxt-cloudflare/bindings'
-import { requireCloudflareBinding } from '@harlan-zw/nuxt-cloudflare/bindings'
+import type { H3Event } from 'h3'
+import { createCloudflareBindings, useCloudflareRuntimeConfig } from '@harlan-zw/nuxt-cloudflare/bindings'
 
-function requireDatabase(event: CloudflareEventLike<Env>) {
-  return requireCloudflareBinding(event, 'DB')
+const cloudflare = createCloudflareBindings()
+
+function requireDatabase(source?: unknown) {
+  return cloudflare.require('DB', source)
+}
+
+// `event` on the request path, nothing in a queue, scheduled, email, or task handler.
+function apiToken(event?: H3Event) {
+  return useCloudflareRuntimeConfig(event).apiToken
 }
 ```
 
-`Env` comes from `wrangler types`. Binding access is request-bound and binding names are constrained to `keyof Env`. Missing required bindings throw; there is no global or empty-object fallback.
+`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
+
+The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
+
+`useCloudflareRuntimeConfig` reads runtime config from both contexts. On Cloudflare, `NUXT_*` Worker vars and secrets bind onto runtime config only through an event, so a bare `useRuntimeConfig()` off the request path returns build-time defaults. Without an event this reads the Cloudflare entry environment and wraps it as the source Nitro requires. The module's Nitro plugin supplies the reader; use `runtimeConfigSource` directly only when you own the `useRuntimeConfig` call.
 
 ### Scoped secrets file
 
@@ -211,13 +254,12 @@ if (resolved._tag === 'missing')
   throw new Error(`Missing Worker secrets: ${resolved.names.join(', ')}`)
 
 await withWorkerSecretsFile({
-  path: '/secure/temp/secrets.json',
   secrets: resolved.secrets,
   use: path => exec('pnpm', ['wrangler', 'deploy', '--secrets-file', path]),
 })
 ```
 
-The writer uses exclusive creation and mode 0600. It removes partial files after write failures and removes the completed file after deployment succeeds or fails.
+The helper owns a private temporary directory and creates the JSON file with mode 0600. It removes the directory after deployment succeeds or fails. Secret values may be strings or `null`; Wrangler treats `null` as a deletion marker.
 
 ## Deliberate boundaries
 

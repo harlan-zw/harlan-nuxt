@@ -1,6 +1,6 @@
+import type { WranglerConfigInput } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import type { ModuleOptions, QueueBindingOptions } from './types'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readWranglerConfigFile } from '@harlan-zw/nuxt-cloudflare/wrangler'
 
 export interface WranglerQueueProducer {
   binding: string
@@ -34,98 +34,10 @@ export interface WranglerConfig {
   d1Databases?: WranglerD1Database[]
 }
 
-const WRANGLER_FILES = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml']
-const JSONC_BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g
-const JSONC_LINE_COMMENT_RE = /(^|[^:"'\\])\/\/.*$/gm
 const SNAKE_CASE_RE = /_([a-z])/g
-const QUEUE_BLOCK_RE = /^\s*\[\[\s*queues\.(producers|consumers)\s*\]\]\s*$/gm
-const TOML_QUEUE_STOP_RE = /^\s*\[[^\]]+\]\]?\s*$/m
-const TOML_KEY_RE = /^[a-z_]+$/i
-const TOML_NUMBER_RE = /^-?\d+(?:\.\d+)?$/
-const TOML_TRIGGERS_HEADER_RE = /^\s*\[triggers\]\s*$/m
-const TOML_HEADER_RE = /^\s*\[/m
-const TOML_CRONS_RE = /crons\s*=\s*\[([\s\S]*?)\]/
-
-export function findWranglerConfig(rootDir: string): string | undefined {
-  for (const name of WRANGLER_FILES) {
-    const full = resolve(rootDir, name)
-    if (existsSync(full))
-      return full
-  }
-  return undefined
-}
-
-function stripJsoncComments(source: string): string {
-  // remove /* ... */ blocks and // line comments outside strings (best-effort)
-  return source
-    .replace(JSONC_BLOCK_COMMENT_RE, '')
-    .replace(JSONC_LINE_COMMENT_RE, (_match, prefix) => prefix)
-}
 
 function camelCase(key: string): string {
   return key.replace(SNAKE_CASE_RE, (_, c) => c.toUpperCase())
-}
-
-function stripTomlInlineComment(raw: string): string {
-  let quote: string | undefined
-  for (let i = 0; i < raw.length; i++) {
-    const char = raw[i]
-    if ((char === '"' || char === '\'') && raw[i - 1] !== '\\') {
-      quote = quote === char ? undefined : quote ?? char
-      continue
-    }
-    if (char === '#' && quote === undefined)
-      return raw.slice(0, i)
-  }
-  return raw
-}
-
-function parseTomlQueueBlocks(source: string): { producers: WranglerQueueProducer[], consumers: WranglerQueueConsumer[] } {
-  const producers: WranglerQueueProducer[] = []
-  const consumers: WranglerQueueConsumer[] = []
-  const matches: Array<{ kind: 'producers' | 'consumers', index: number }> = []
-  QUEUE_BLOCK_RE.lastIndex = 0
-  for (let m = QUEUE_BLOCK_RE.exec(source); m !== null; m = QUEUE_BLOCK_RE.exec(source))
-    matches.push({ kind: m[1] as 'producers' | 'consumers', index: m.index + m[0].length })
-
-  for (let i = 0; i < matches.length; i++) {
-    const start = matches[i]!.index
-    const end = i + 1 < matches.length ? matches[i + 1]!.index - (matches[i + 1]?.kind.length ?? 0) : source.length
-    const slice = source.slice(start, end)
-    const nextHeader = TOML_QUEUE_STOP_RE.exec(slice)
-    const body = nextHeader ? slice.slice(0, nextHeader.index) : slice
-    const entry: Record<string, string | number> = {}
-    for (const line of body.split('\n')) {
-      const separator = line.indexOf('=')
-      if (separator === -1)
-        continue
-      const rawKey = line.slice(0, separator).trim()
-      if (!TOML_KEY_RE.test(rawKey))
-        continue
-      const key = camelCase(rawKey)
-      const raw = stripTomlInlineComment(line.slice(separator + 1)).trim()
-      if (raw.startsWith('"') || raw.startsWith('\''))
-        entry[key] = raw.slice(1, -1)
-      else if (TOML_NUMBER_RE.test(raw))
-        entry[key] = Number(raw)
-      else
-        entry[key] = raw
-    }
-    if (matches[i]!.kind === 'producers' && typeof entry.binding === 'string' && typeof entry.queue === 'string')
-      producers.push({ binding: entry.binding, queue: entry.queue })
-    if (matches[i]!.kind === 'consumers' && typeof entry.queue === 'string') {
-      const consumer: WranglerQueueConsumer = { queue: entry.queue }
-      for (const [k, v] of Object.entries(entry)) {
-        if (k === 'queue') {
-          continue
-        }
-        ;(consumer as unknown as Record<string, unknown>)[k] = v
-      }
-      consumers.push(consumer)
-    }
-  }
-
-  return { producers, consumers }
 }
 
 interface WranglerJsonConfig {
@@ -158,56 +70,11 @@ function parseJsoncQueues(parsed: WranglerJsonConfig): { producers: WranglerQueu
   }
 }
 
-const ARRAY_STRING_RE = /(['"])(.*?)\1/g
-
-function parseStringArrayLiteral(raw: string): string[] {
-  return [...raw.matchAll(ARRAY_STRING_RE)].map(m => m[2]!)
-}
-
-function parseTomlCrons(source: string): string[] | undefined {
-  // `[triggers]` table with `crons = ["...", "..."]` (may span lines).
-  const header = TOML_TRIGGERS_HEADER_RE.exec(source)
-  if (!header)
-    return undefined
-  const rest = source.slice(header.index + header[0].length)
-  // Stop at the next table header.
-  const next = TOML_HEADER_RE.exec(rest)
-  const body = next ? rest.slice(0, next.index) : rest
-  const cronsMatch = body.match(TOML_CRONS_RE)
-  if (!cronsMatch)
-    return undefined
-  return parseStringArrayLiteral(cronsMatch[1]!)
-}
-
 function parseJsoncCrons(parsed: WranglerJsonConfig): string[] | undefined {
   const crons = parsed.triggers?.crons
   if (!Array.isArray(crons))
     return undefined
   return crons.filter((c): c is string => typeof c === 'string')
-}
-
-// `[ \t]` rather than `\s` keeps these linear (no unicode-whitespace backtracking).
-const D1_BLOCK_RE = /^[ \t]*\[\[[ \t]*d1_databases[ \t]*\]\][ \t]*$/gm
-const TOML_TABLE_HEADER_RE = /^[ \t]*\[/m
-// key = "value"  (quoted string only; trailing comments after the close quote are ignored)
-const TOML_STRING_KV_RE = /^([a-z_]+)[ \t]*=[ \t]*(["'])(.*?)\2/i
-
-function parseTomlD1Databases(source: string): WranglerD1Database[] {
-  const out: WranglerD1Database[] = []
-  for (const block of source.matchAll(D1_BLOCK_RE)) {
-    const slice = source.slice(block.index + block[0].length)
-    const next = TOML_TABLE_HEADER_RE.exec(slice)
-    const body = next ? slice.slice(0, next.index) : slice
-    const entry: Record<string, string> = {}
-    for (const line of body.split('\n')) {
-      const kv = line.trim().match(TOML_STRING_KV_RE)
-      if (kv)
-        entry[camelCase(kv[1]!)] = kv[3]!
-    }
-    if (entry.binding)
-      out.push({ binding: entry.binding, databaseName: entry.databaseName, databaseId: entry.databaseId })
-  }
-  return out
 }
 
 function parseJsoncD1Databases(parsed: WranglerJsonConfig): WranglerD1Database[] {
@@ -222,23 +89,16 @@ function parseJsoncD1Databases(parsed: WranglerJsonConfig): WranglerD1Database[]
 }
 
 export function parseWranglerConfig(path: string): WranglerConfig {
-  const source = readFileSync(path, 'utf8')
-  const isJson = path.endsWith('.jsonc') || path.endsWith('.json')
-  let json: WranglerJsonConfig | undefined
-  if (isJson) {
-    try {
-      const parsed = JSON.parse(stripJsoncComments(source)) as unknown
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-        throw new TypeError('top-level value must be an object')
-      json = parsed as WranglerJsonConfig
-    }
-    catch (cause) {
-      throw new SyntaxError(`Invalid Wrangler JSON config "${path}": ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
-    }
+  const loaded = readWranglerConfigFile(path)
+  if (loaded._tag !== 'loaded') {
+    const format = path.endsWith('.json') || path.endsWith('.jsonc') ? 'JSON ' : ''
+    const reason = loaded._tag === 'missing' ? 'file does not exist' : loaded.reason
+    throw new SyntaxError(`Invalid Wrangler ${format}config "${path}": ${reason}`)
   }
-  const parsed = json ? parseJsoncQueues(json) : parseTomlQueueBlocks(source)
-  const crons = json ? parseJsoncCrons(json) : parseTomlCrons(source)
-  const d1Databases = json ? parseJsoncD1Databases(json) : parseTomlD1Databases(source)
+  const json = loaded.config as WranglerConfigInput & WranglerJsonConfig
+  const parsed = parseJsoncQueues(json)
+  const crons = parseJsoncCrons(json)
+  const d1Databases = parseJsoncD1Databases(json)
   return { path, producers: parsed.producers, consumers: parsed.consumers, crons, d1Databases }
 }
 

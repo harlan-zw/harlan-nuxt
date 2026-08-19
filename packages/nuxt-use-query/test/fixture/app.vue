@@ -71,6 +71,15 @@ const mutationOperation = defineNuxtRpcMutation({
 })
 const rpcKey = serializeNuxtRpcKey(['fixture', 'rpc-query'])
 
+// A query that fails during SSR. Proves the tagged error survives the render
+// and that the payload still serializes with an `Error` in the error ref.
+const failingQuery = defineNuxtRpcQuery({
+  key: ['fixture', 'fail'],
+  path: '/api/fail',
+  response: echoSchema,
+})
+const { error: rpcQueryError } = await useNuxtRpcQuery(failingQuery)
+
 // Resolve the cache that's been attached to the Nuxt app. `useQueryCache()`
 // is the seam this whole module is built on. Stamp two keys directly to prove
 // the returned object is a real, mutable cache (the SSR `pending → success`
@@ -116,6 +125,9 @@ const probe = {
   rpcDefault,
   rpcKey,
   rpcQuery: rpcQuery.value,
+  rpcQueryError: rpcQueryError.value
+    ? { isError: rpcQueryError.value instanceof Error, name: rpcQueryError.value.name, status: rpcQueryError.value.type === 'fetch' ? rpcQueryError.value.status : undefined, type: rpcQueryError.value.type }
+    : null,
 }
 </script>
 

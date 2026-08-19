@@ -24,6 +24,7 @@ Status: experimental. APIs may change before the first release.
 - 🔌 **Route and composable:** a public route plus `useGitHubSponsors()` for a typed response, paginated across every active sponsorship.
 - 🔒 **Private sponsors filtered:** only a minimal public DTO leaves the server.
 - 🏅 **Tiers and overrides:** assign tier keys by minimum monthly amount, and correct names, avatars, and links without patching GitHub.
+- 🔤 **Tier keys typed from config:** a page that reads a renamed tier fails to compile.
 - ⚡ **One-day SWR cache:** only successful upstream results are cached.
 - 🎨 **Headless by design:** no sponsor UI, so your visual identity stays yours.
 
@@ -38,16 +39,51 @@ export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-github-sponsors'],
   githubSponsors: {
     login: 'your-github-login',
-    mode: 'runtime', // or 'prerender'
-    tiers: [
-      { key: 'partner', minimumMonthlyDollars: 50 },
-      { key: 'supporter', minimumMonthlyDollars: 25 },
-    ],
   },
 })
 ```
 
-Set `NUXT_GITHUB_SPONSORS_TOKEN` at runtime.
+Set `NUXT_GITHUB_SPONSORS_TOKEN`. The token must be a classic token, because a
+fine-grained token cannot call the GitHub GraphQL API.
+
+## Options
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `login` | required | GitHub login to read sponsorships for. |
+| `mode` | `'prerender'` | See Modes. |
+| `route` | `'/api/github-sponsors'` | Public route serving the response. |
+| `tiers` | `top` at $50, `gold` at $25 | Tier keys, by minimum monthly amount. |
+| `overrides` | `{}` | Corrections by sponsor login or name. |
+| `tokenEnv` | `'NUXT_GITHUB_SPONSORS_TOKEN'` | Env name holding the token. |
+
+Set `tokenEnv` when the default name is already taken:
+
+```ts
+export default defineNuxtConfig({
+  githubSponsors: {
+    login: 'your-github-login',
+    tokenEnv: 'NUXT_GITHUB_AUTH_TOKEN',
+  },
+})
+```
+
+## Modes
+
+`prerender` bakes the route at build. It needs the token at build time. If the
+token is absent, the module warns and skips the prerender, so no empty sponsor
+list is baked into the deploy.
+
+`runtime` serves the route from the server with a one-day SWR cache.
+
+`client` skips server rendering. The page fetches after mount, so sponsors stay
+out of the rendered HTML and need no `onMounted` gate of your own.
+
+## Tier keys
+
+The module types the tier keys from your configured tiers, so `tiers.top` is
+checked against your config. Renaming a tier turns a silently empty page into a
+compile error.
 
 ## Usage
 
@@ -57,7 +93,14 @@ The package intentionally has no sponsor UI. Each site keeps control of its visu
 
 ## Failure states
 
-The route returns an explicit `unavailable` state with reason `not-configured` when no token exists, and a `502` response when GitHub cannot be refreshed. No secret is logged.
+The route always answers `200` with a tagged state. `unavailable` with reason
+`not-configured` means no token. `unavailable` with reason `upstream-error`
+carries an `errorTag` naming the upstream fault. Both states carry an empty
+collection, so a page renders and a prerender with `failOnError` still builds.
+Only a successful upstream result is cached. No secret is logged.
+
+Override keys that match no sponsor are reported in a server warning, because a
+key with a typo would otherwise do nothing at all.
 
 ## Sponsors
 

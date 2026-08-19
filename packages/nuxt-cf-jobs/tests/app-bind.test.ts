@@ -78,8 +78,8 @@ describe('createCfJobsApp (statically-injected jobs + useRuntimeConfig)', () => 
         .toThrow('Invalid nuxt-cf-jobs registry')
       expect(warn).toHaveBeenCalledOnce()
       expect(warn.mock.calls[0]?.[0]).toContain('[nuxt-cf-jobs] job definition warnings')
-      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid-definition')
-      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid-queue')
+      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid definition')
+      expect(warn.mock.calls[0]?.[0]).toContain('[job:<unknown>] invalid queue')
     }
     finally {
       warn.mockRestore()

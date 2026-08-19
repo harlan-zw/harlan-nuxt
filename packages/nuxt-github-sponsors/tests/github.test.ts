@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fetchGitHubSponsorFeed } from '../src/runtime/server/github'
+import { fetchGitHubSponsorFeed, toGitHubSponsorsResponse } from '../src/runtime/server/github'
 
 function sponsorNode(login: string, amount = 25, privacyLevel = 'PUBLIC', websiteUrl: string | null = 'example.com', isOneTime = false) {
   return {
@@ -49,7 +49,7 @@ describe('github sponsors', () => {
     const fetchMock = vi.fn(async () => new Response('rate limited', { status: 429 })) as unknown as typeof fetch
     await expect(fetchGitHubSponsorFeed({ token: 'secret', login: 'harlan-zw', fetch: fetchMock, tiers: [] }))
       .resolves
-      .toEqual({ _tag: 'unavailable', reason: 'upstream-error', errorTag: 'HttpError' })
+      .toEqual({ _tag: 'unavailable', reason: 'upstream-error', errorTag: 'HttpError', errorMessage: expect.stringContaining('429') })
   })
 
   it('filters private sponsors, projects a minimal DTO, and assigns exact tier thresholds', async () => {
@@ -101,5 +101,27 @@ describe('github sponsors', () => {
     const fetchMock = vi.fn(async () => githubResponse([unsafe])) as unknown as typeof fetch
     const result = await fetchGitHubSponsorFeed({ token: 'secret', login: 'harlan-zw', fetch: fetchMock, tiers: [] })
     expect(result._tag === 'available' ? result.collection.sponsors[0]?.websiteUrl : 'unavailable').toBeNull()
+  })
+})
+
+describe('upstream error reporting', () => {
+  it('carries what GitHub said to the server, and only the tag to the browser', async () => {
+    // GitHub answers a permission failure with a well formed envelope that carries
+    // `errors`, so the schema passes and the GraphQL branch is what decides.
+    const body = JSON.stringify({
+      data: { user: { sponsorshipsAsMaintainer: { nodes: [], pageInfo: { endCursor: null, hasNextPage: false } } } },
+      errors: [{ message: 'Resource not accessible by personal access token' }],
+    })
+    const fetchMock = vi.fn(async () => new Response(body, { headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch
+    const result = await fetchGitHubSponsorFeed({ token: 'secret', login: 'harlan-zw', fetch: fetchMock, tiers: [] })
+
+    expect(result).toMatchObject({
+      errorMessage: 'Resource not accessible by personal access token',
+      errorTag: 'GraphQLError',
+    })
+
+    const response = toGitHubSponsorsResponse(result, { sponsors: [], tiers: {}, ungrouped: [] }, '2026-08-19T00:00:00.000Z')
+    expect(response).not.toHaveProperty('errorMessage')
+    expect(response).toMatchObject({ errorTag: 'GraphQLError', reason: 'upstream-error' })
   })
 })

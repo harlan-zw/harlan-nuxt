@@ -1,5 +1,5 @@
 import type { useRuntimeConfig } from 'nitropack/runtime'
-import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
+import { resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 
 type UseRuntimeConfig = typeof useRuntimeConfig
 
@@ -33,7 +33,7 @@ export function provideJobRuntimeConfig(fn: UseRuntimeConfig): void {
  * creds). The Cloudflare worker entry assigns the live env to
  * `globalThis.__env__` at *every* handler (`queue`, `scheduled`, `email`,
  * `tail`, and the durable-object `fetch`), so this reads that shim
- * (`resolveNitroTaskEnv`) and wraps it as the event-shaped source
+ * (`resolveCloudflareBindings`) and wraps it as the event-shaped source
  * `useRuntimeConfig` applies env overrides from.
  *
  * On the request path keep calling `useRuntimeConfig(event)` directly — the
@@ -47,6 +47,6 @@ export function useJobRuntimeConfig(event?: unknown): ReturnType<typeof useRunti
   }
   if (event)
     return injectedUseRuntimeConfig(event as never)
-  const env = resolveNitroTaskEnv()
+  const env = resolveCloudflareBindings<Record<string, unknown>>()
   return injectedUseRuntimeConfig(env ? runtimeConfigSource(env) as never : undefined)
 }

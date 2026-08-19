@@ -2,7 +2,8 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { buildRegistryPlan, collectRegistrySources, createRegistrySourceTracker, generateRegistryTemplate, generateRegistryTypesTemplate, inlineRegistryTemplateInNitroDev } from '../src/build/registry'
+import { inlineTemplateInNitroDev } from '../src/build/nitro-dev'
+import { buildRegistryPlan, collectRegistrySources, createRegistrySourceTracker, generateRegistryTemplate, generateRegistryTypesTemplate, resolveJobDirs } from '../src/build/registry'
 
 const rootDir = resolve(__dirname, 'fixtures/nuxt-demo')
 const templateDir = resolve(__dirname, 'fixtures/nuxt-demo/.nuxt/cf-jobs')
@@ -87,9 +88,13 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).toContain(`.then(m => m.default)`)
   })
 
-  it('strips the .ts extension from lazy import paths', async () => {
+  it('keeps the source extension on lazy import paths so Node can resolve them', async () => {
+    // Nitro leaves the generated registry outside its dev bundle for tasks, so
+    // Node's ESM loader reads it. Node needs the extension; an extensionless
+    // specifier throws `Cannot find module` and no durable job runs in dev.
     const out = await generateRegistryTemplate(options, rootDir, templateDir)
-    expect(out).not.toMatch(/import\(".*\.ts"\)/)
+    for (const specifier of [...out.matchAll(/load: \(\) => import\("([^"]+)"\)/g)].map(match => match[1]))
+      expect(specifier).toMatch(/\.ts$/)
   })
 
   it('builds the app from a lazy metadata array and re-exports the facade', async () => {
@@ -98,13 +103,15 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
     expect(out).not.toContain('as const')
     expect(out).toContain('@type {import(\'@harlan-zw/nuxt-cf-jobs/server\').CfJobsApp<readonly [')
     expect(out).toMatch(/createGeneratedCfJobsApp\(jobs,\s*\{/)
-    // Every facade helper (incl. loadJobDefinition) is destructured straight off
-    // the runtime app — no hand-written typed wrapper.
+    // Registry-bound helpers keep the precise job tuple. getQueue accepts any
+    // valid job definition because callers may dispatch module-contributed jobs.
     expect(out).toContain('} = app')
     expect(out).toContain('loadJobDefinition,')
     expect(out).toContain('registerQueueConsumer,')
     expect(out).toContain('createDurableRuntime,')
     expect(out).toContain('jobRegistry,')
+    expect(out).toContain(`@type {ReturnType<typeof createGeneratedCfJobsApp>['getQueue']}`)
+    expect(out).toContain('export const getQueue = app.getQueue')
   })
 
   it('emits plain JavaScript only (no TypeScript syntax)', async () => {
@@ -149,14 +156,16 @@ describe('generateRegistryTemplate (data-only lazy registry)', () => {
 })
 
 describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
-  it('augments the resolved module rather than re-declaring it', async () => {
+  it('declares runtime exports against the generated job types', async () => {
     const out = await generateRegistryTypesTemplate(options, rootDir, templateDir)
     expect(out).toMatch(/^import type /m)
     expect(out).toMatch(/declare module ["']#cf-jobs\/app["'] \{/)
-    // Runtime values come from the plain JS template; precision is added with
-    // JSDoc on `app`, not value re-declarations in the augmentation.
-    expect(out).not.toContain('export declare const jobs')
-    expect(out).not.toContain('export declare const app')
+    expect(out).toContain(`type App = import('@harlan-zw/nuxt-cf-jobs/server').CfJobsApp<Jobs>`)
+    expect(out).toContain(`type GeneratedApp = ReturnType<(typeof import('@harlan-zw/nuxt-cf-jobs/server'))['createGeneratedCfJobsApp']>`)
+    expect(out).toContain('export const jobs: Jobs')
+    expect(out).toContain('export const app: App')
+    expect(out).toContain('export const getQueue: GeneratedApp["getQueue"]')
+    expect(out).toContain('export const buildJobPayload: App["buildJobPayload"]')
   })
 
   it('re-exports app helper option types from the augmentation', async () => {
@@ -184,7 +193,7 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     expect(out).toMatch(/declare module ["']#my\/jobs["'] \{/)
   })
 
-  it('strips TS-family source extensions from value and type imports', async () => {
+  it('strips TS-family source extensions from TYPE imports only', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cf-jobs-ext-'))
     mkdirSync(join(root, 'server/jobs'), { recursive: true })
     writeFileSync(join(root, 'server/jobs/a.mts'), `export default defineJob({ name: 'a', queue: 'default', handle() {} })`)
@@ -194,7 +203,10 @@ describe('generateRegistryTypesTemplate (#cf-jobs/app augmentation)', () => {
     const value = await generateRegistryTemplate(opts, root, join(root, '.nuxt/cf-jobs'))
     const types = await generateRegistryTypesTemplate(opts, root, join(root, '.nuxt/cf-jobs'))
 
-    expect(value).not.toMatch(/import\(".*\.(?:mts|tsx)"\)/)
+    // `import("x.mts")` is not a valid TYPE, but it is the only VALUE specifier
+    // Node's ESM loader can resolve.
+    expect(value).toMatch(/load: \(\) => import\(".*\.mts"\)/)
+    expect(value).toMatch(/load: \(\) => import\(".*\.tsx"\)/)
     expect(types).not.toMatch(/import\(".*\.(?:mts|tsx)"\)/)
   })
 
@@ -243,7 +255,7 @@ describe('inlineRegistryTemplateInNitroDev', () => {
       },
     }
 
-    inlineRegistryTemplateInNitroDev(nuxt as never, registryPath)
+    inlineTemplateInNitroDev(nuxt as never, registryPath)
 
     const inline = nuxt.options.nitro.externals.inline
     expect(inline[0]).toBe(existingInline)
@@ -260,8 +272,74 @@ describe('inlineRegistryTemplateInNitroDev', () => {
       },
     }
 
-    inlineRegistryTemplateInNitroDev(nuxt as never, '/tmp/app/.nuxt/cf-jobs/registry.js')
+    inlineTemplateInNitroDev(nuxt as never, '/tmp/app/.nuxt/cf-jobs/registry.js')
 
     expect(nuxt.options).not.toHaveProperty('nitro')
+  })
+})
+
+describe('resolveJobDirs (layer discovery)', () => {
+  it('discovers server/jobs in the app and in every extended layer', () => {
+    const nuxt = {
+      options: {
+        rootDir: '/app',
+        _layers: [
+          { cwd: '/app' },
+          { cwd: '/repo/layers/gsc' },
+          { config: { rootDir: '/repo/layers/billing' } },
+        ],
+      },
+    }
+
+    expect(resolveJobDirs(true, nuxt as never)).toEqual([
+      '/app/server/jobs',
+      '/repo/layers/gsc/server/jobs',
+      '/repo/layers/billing/server/jobs',
+    ])
+  })
+
+  it('passes explicit dirs through and disables discovery on false', () => {
+    const nuxt = { options: { rootDir: '/app', _layers: [{ cwd: '/repo/layers/gsc' }] } }
+
+    expect(resolveJobDirs(['server/jobs', '../layers/a/server/jobs'], nuxt as never)).toEqual(['server/jobs', '../layers/a/server/jobs'])
+    expect(resolveJobDirs(undefined, nuxt as never)).toEqual(['server/jobs'])
+    expect(resolveJobDirs(false, nuxt as never)).toEqual([])
+  })
+})
+
+describe('build warnings for unroutable jobs', () => {
+  async function planFor(source: string, extra: Record<string, unknown> = {}) {
+    const root = mkdtempSync(join(tmpdir(), 'cf-jobs-warn-'))
+    mkdirSync(join(root, 'server/jobs'), { recursive: true })
+    writeFileSync(join(root, 'server/jobs/thing.ts'), source)
+    return await buildRegistryPlan({ ...options, ...extra } as never, root, join(root, '.nuxt/cf-jobs'))
+  }
+
+  it('warns when queue is not a readable string literal', async () => {
+    const plan = await planFor(`export default defineJob({ name: 'thing', queue: QUEUE, handle() {} })`)
+    expect(plan.warnings).toEqual([expect.stringContaining('sets `queue` to a value this build cannot read')])
+  })
+
+  it('warns when the queue name is not a key of cfJobs.queues', async () => {
+    const plan = await planFor(`export default defineJob({ name: 'thing', queue: 'defualt', handle() {} })`)
+    expect(plan.warnings).toEqual([expect.stringContaining('targets queue "defualt"')])
+  })
+
+  it('warns when a job declares no queue and there is no defaultQueue', async () => {
+    const plan = await planFor(`export default defineJob({ name: 'thing', handle() {} })`)
+    expect(plan.warnings).toEqual([expect.stringContaining('declares no `queue`')])
+    await expect(planFor(`export default defineJob({ name: 'thing', handle() {} })`, { defaultQueue: 'default' }))
+      .resolves
+      .toMatchObject({ warnings: [] })
+  })
+
+  it('warns that maxAttempts was removed', async () => {
+    const plan = await planFor(`export default defineJob({ name: 'thing', queue: 'default', maxAttempts: 5, handle() {} })`)
+    expect(plan.warnings).toEqual([expect.stringContaining('`maxAttempts` was removed')])
+  })
+
+  it('stays quiet for a job whose queue is declared', async () => {
+    const plan = await planFor(`export default defineJob({ name: 'thing', queue: 'default', tries: 5, handle() {} })`)
+    expect(plan.warnings).toEqual([])
   })
 })

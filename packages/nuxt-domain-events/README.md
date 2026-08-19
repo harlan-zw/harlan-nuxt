@@ -26,6 +26,7 @@ Status: experimental. APIs may change before the first release.
 - 📦 **Two contract kinds:** `local` for request-scoped state, `transfer` for versioned JSON with a byte limit.
 - 🏷️ **Errors as tagged values:** unknown event, payload mismatch, lazy import failure, registry drift, queue failure, and after-commit misuse.
 - 💾 **After-commit publication:** stage queue rows beside domain SQL so a rollback leaves zero queue evidence.
+- 🚰 **One-call deferred drain:** `dispatchEventAndDrain` hands deferred work to the host `waitUntil`, or awaits it.
 
 ## Installation
 
@@ -44,6 +45,26 @@ export default defineNuxtConfig({
 Listeners run like Laravel listeners. Omitting `execution` means serial synchronous execution with propagated failure. That failure aborts the producer and prevents deferred work or queue publication. `sync` isolation, `deferred`, and `queued` are explicit alternatives.
 
 Queued listeners cannot declare `shouldHandle`; synchronous and deferred listeners may use it as an in-process condition. Queued listeners may declare a functional `failed(payload, context, error)` callback, invoked after terminal settlement.
+
+## Deferred dispatch
+
+`dispatchEvent` schedules deferred listeners through `context.waitUntil`. `dispatchEventAndDrain` removes the collect-and-drain loop from every producer:
+
+```ts
+await dispatchEventAndDrain('user:registered', payload, {
+  waitUntil: event.context.cloudflare?.context?.waitUntil?.bind(event.context.cloudflare.context),
+})
+```
+
+If the host supplies `waitUntil`, deferred work is handed to it. If the host has no `waitUntil`, the deferred work is awaited before the call resolves. Deferred failures stay isolated in both paths.
+
+## Queues
+
+`domainEvents.queues` names the logical queues that queued listeners may use. Omit it, or set it to `[]`, to derive the list from `cfJobs.queues`.
+
+## Observer
+
+`domainEvents.observer` names a server module that exports `observeEventListener`. A relative path resolves against the layer that declares it, so a layer can ship its own observer. If no observer is configured, the module warns at build, and listener and dispatch failures reach stderr only.
 
 ## Event contracts
 

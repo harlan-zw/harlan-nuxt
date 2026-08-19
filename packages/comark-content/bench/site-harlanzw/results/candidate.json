@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "variant": "candidate",
+  "status": "smoke",
+  "createdAt": "2026-08-14T06:24:09.428Z",
+  "environment": {
+    "browser": "dev-browser Chromium",
+    "cpuThrottle": 4,
+    "downloadBytesPerSecond": 4000000,
+    "latencyMs": 40,
+    "node": "v24.17.0",
+    "pnpm": "11.2.1",
+    "samples": 1,
+    "uploadBytesPerSecond": 1000000,
+    "viewport": {
+      "height": 844,
+      "width": 390
+    }
+  },
+  "source": {
+    "repository": "/home/harlan/sites/harlanzw.com",
+    "revision": "467359fe698bda36bbd238bf664f078e49f294a1",
+    "route": "/blog/modern-package-development/"
+  },
+  "packageFingerprint": "153ac8aff36742cfddcccc721599e2b7cbd803a3446d6aff2049c34d6256d163",
+  "build": {
+    "durationMs": 26536.520599000003,
+    "sizes": {
+      "clientJavaScriptBytes": 1203911,
+      "nitroServerBytes": 6294916
+    }
+  },
+  "samples": [
+    {
+      "variant": "candidate",
+      "sample": 1,
+      "status": 200,
+      "assertions": {
+        "heading": 1,
+        "prose": 1,
+        "rawContentTags": 0
+      },
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/home/harlan/.dev-browser/tmp/comark-content-harlanzw-candidate.png",
+      "metrics": {
+        "cls": 0.0030957596592501,
+        "domContentLoadedMs": 331.6000000014901,
+        "fcpMs": 220,
+        "interaction": {
+          "durationMs": 112,
+          "inputDelayMs": 1.800000000745058,
+          "presentationDelayMs": 108,
+          "processingDurationMs": 2.199999999254942,
+          "target": "SPAN"
+        },
+        "lcp": {
+          "element": "H1",
+          "size": 58752,
+          "startTimeMs": 220,
+          "url": ""
+        },
+        "loadMs": 644.6000000014901,
+        "requests": 43,
+        "resourceNames": [
+          "/_nuxt/entry.Emy3V_Nf.css",
+          "/_nuxt/Btbfk0Ek.js",
+          "/blog/modern-package-development/_payload.json",
+          "/_nuxt/B7k6EGQ1.js",
+          "/_nuxt/Db4gZCMZ.js",
+          "/_nuxt/CwnFrpDE.js",
+          "/_nuxt/C8Fzl-oj.js",
+          "/_nuxt/BuFA1n-w.js",
+          "/_nuxt/D49f-Yi3.js",
+          "/_nuxt/BdP-4Bq1.js",
+          "/_nuxt/DtFD39xA.js",
+          "/_nuxt/BF-zs7n0.js",
+          "/_nuxt/7CQdl7MM.js",
+          "/_nuxt/BDNMzG2s.js",
+          "/_nuxt/M6_jqeE9.js",
+          "/_nuxt/Cv992-_h.js",
+          "/_nuxt/B3_G6jWd.js",
+          "/script.js",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_80,h_80/images/harlan-wilton.jpeg",
+          "/_nuxt/C2NUk9DW.js",
+          "/_nuxt/CYhGoRiV.js",
+          "/fonts/overused-grotesk-variable.woff2",
+          "/fonts/commit-mono-400.woff2",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_1552,h_416/images/numbers-go-down",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_1554,h_399/images/numbers-go-up",
+          "/",
+          "/_nuxt/default.Bixk4Wi1.css",
+          "/_nuxt/_...OwSe3U4Q.css",
+          "/_nuxt/CYhGoRiV.js",
+          "/_nuxt/builds/meta/7808d37a-0ac3-4d45-b900-b459256d0184.json",
+          "/blog/modern-package-development/_payload.json",
+          "/__comark_content/query",
+          "/api/4511887363211264/envelope/",
+          "/favicon.ico",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_80,h_80/images/harlan-wilton.jpeg",
+          "/favicon.ico",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_1552,h_416/images/numbers-go-down",
+          "/dl6o1xpyq/image/upload/f_auto,q_auto:best,dpr_auto,w_1554,h_399/images/numbers-go-up",
+          "/_payload.json",
+          "/_payload.json",
+          "/blog/_payload.json",
+          "/blog/modern-package-development/_payload.json"
+        ],
+        "resourceDecodedBytes": 2116817,
+        "resourceTransferBytes": 796087,
+        "ttfbMs": 3.5
+      }
+    }
+  ],
+  "medians": {
+    "metrics.cls": 0.0030957596592501,
+    "metrics.domContentLoadedMs": 331.6000000014901,
+    "metrics.fcpMs": 220,
+    "metrics.interaction.durationMs": 112,
+    "metrics.lcp.startTimeMs": 220,
+    "metrics.loadMs": 644.6000000014901,
+    "metrics.requests": 43,
+    "metrics.resourceDecodedBytes": 2116817,
+    "metrics.resourceTransferBytes": 796087,
+    "metrics.ttfbMs": 3.5
+  }
+}

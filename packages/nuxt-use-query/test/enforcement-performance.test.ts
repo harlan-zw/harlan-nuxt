@@ -1,22 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const walkSpy = vi.hoisted(() => vi.fn())
+const visitSpy = vi.hoisted(() => vi.fn())
 
-vi.mock('oxc-walker', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('oxc-walker')>()
+vi.mock('vite', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vite')>()
+  class TrackingVisitor extends actual.Visitor {
+    override visit(...args: Parameters<InstanceType<typeof actual.Visitor>['visit']>) {
+      visitSpy()
+      return super.visit(...args)
+    }
+  }
   return {
     ...actual,
-    walk: (...args: Parameters<typeof actual.walk>) => {
-      walkSpy()
-      return actual.walk(...args)
-    },
+    Visitor: TrackingVisitor,
   }
 })
 
 const { createContractQueryEnforcer } = await import('../src/enforcement/scan')
 
 describe('contract enforcement performance', () => {
-  beforeEach(() => walkSpy.mockClear())
+  beforeEach(() => visitSpy.mockClear())
 
   it('analyzes each parsed file with one AST traversal', async () => {
     const enforcer = createContractQueryEnforcer({
@@ -34,6 +37,6 @@ describe('contract enforcement performance', () => {
     })
 
     await expect(enforcer.scan('.')).resolves.toEqual([])
-    expect(walkSpy).toHaveBeenCalledOnce()
+    expect(visitSpy).toHaveBeenCalledOnce()
   })
 })

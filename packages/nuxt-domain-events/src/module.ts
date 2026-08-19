@@ -1,6 +1,7 @@
 import type { ModuleOptions } from './types'
 import { resolve } from 'node:path'
-import { addServerImports, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addServerImports, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { collectSetupWarnings, resolveLayerFile, resolveQueueNames } from './build/options'
 import { installEventRegistryTemplates } from './build/registry'
 import { resolveRuntimeFile } from './build/runtime-file'
 
@@ -11,6 +12,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-domain-events',
     configKey: 'domainEvents',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     eventsDir: 'server/events',
@@ -23,15 +25,23 @@ export default defineNuxtModule<ModuleOptions>({
   },
   async setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
+    const logger = useLogger('@harlan-zw/nuxt-domain-events')
+    for (const warning of collectSetupWarnings(options))
+      logger.warn(warning)
+
     const cfJobsQueues = Object.keys((nuxt.options as unknown as {
       cfJobs?: { queues?: Record<string, unknown> }
     }).cfJobs?.queues ?? {})
+    const layerRoots = [nuxt.options.rootDir, ...nuxt.options._layers.map(layer => layer.config.rootDir)]
     const resolvedOptions: ModuleOptions = {
       ...options,
-      queues: options.queues ?? cfJobsQueues,
+      queues: resolveQueueNames(options.queues, cfJobsQueues),
+      ...(options.queuedDeliveryContext
+        ? { queuedDeliveryContext: resolveDeclaredFile('queuedDeliveryContext', options.queuedDeliveryContext, layerRoots) }
+        : {}),
     }
     const observerPath = options.observer
-      ? resolve(nuxt.options.rootDir, options.observer)
+      ? resolveDeclaredFile('observer', options.observer, layerRoots)
       : resolver.resolve('./runtime/server/observer')
     nuxt.options.alias['#domain-events/observer'] = observerPath
     const nitro = ((nuxt.options as unknown as { nitro?: Record<string, any> }).nitro ??= {})
@@ -44,14 +54,15 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'defineEvent', from: resolver.resolve('./runtime/server/definitions') },
       { name: 'defineListener', from: resolver.resolve('./runtime/server/definitions') },
       { name: 'dispatchEvent', from: '#domain-events/server' },
+      { name: 'dispatchEventAndDrain', from: '#domain-events/server' },
       { name: 'planEvent', from: '#domain-events/server' },
       { name: 'commitEventPlan', from: '#domain-events/server' },
       { name: 'deliverQueuedListener', from: '#domain-events/server' },
       { name: 'handleQueuedListenerTerminalFailure', from: '#domain-events/server' },
     ])
 
-    if (options.queuedDeliveryContext) {
-      const deliveryContextPath = resolve(nuxt.options.rootDir, options.queuedDeliveryContext)
+    if (resolvedOptions.queuedDeliveryContext) {
+      const deliveryContextPath = resolvedOptions.queuedDeliveryContext
       const deliveryJobPath = await resolveRuntimeFile(resolver, './runtime/server/jobs/deliver-listener')
       nuxt.options.alias['#domain-events/context'] = deliveryContextPath
       nitro.alias['#domain-events/context'] = deliveryContextPath
@@ -64,3 +75,10 @@ export default defineNuxtModule<ModuleOptions>({
     }
   },
 })
+
+function resolveDeclaredFile(option: string, path: string, roots: readonly string[]): string {
+  const result = resolveLayerFile(path, roots)
+  if (result._tag === 'err')
+    throw new Error(`Unable to resolve domainEvents.${option} "${path}". Searched: ${result.searched.join(', ')}`)
+  return result.path
+}

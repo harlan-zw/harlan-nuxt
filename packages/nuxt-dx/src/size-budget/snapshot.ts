@@ -5,8 +5,19 @@ import { dirname } from 'node:path'
 import { displayId } from './report'
 import { isBudgetScope } from './scope'
 
-/** Bumped whenever the shape changes, so `compare` refuses a report it cannot read. */
-export const SNAPSHOT_VERSION = 2
+/**
+ * Bumped whenever the shape changes, so `compare` refuses a report it cannot read.
+ * Format 3 keys entries by a workspace-relative path, where format 2 left every entry
+ * above the app root absolute and so machine-specific.
+ */
+export const SNAPSHOT_VERSION = 3
+
+/**
+ * Artifact the CI action stores the report in, and reads the baseline back from. Keyed by
+ * format, so a format bump starts a clean artifact instead of pairing a new report with a
+ * baseline that `compare` refuses to read.
+ */
+export const SNAPSHOT_ARTIFACT_NAME = `nuxt-dx-size-budget-v${SNAPSHOT_VERSION}`
 
 /**
  * Where the report lands, relative to the app root. Not `nuxt.options.buildDir`: that
@@ -33,7 +44,7 @@ export interface SnapshotEntry {
   name?: string
   /** Nuxt module that registered this runtime entry, when known. */
   owner?: string
-  /** Root-relative file or package path, so two checkouts of the same repo agree. */
+  /** Workspace-relative file or package path, so two checkouts of the same repo agree. */
   path: string
   /** Bytes of the target's own bundled files. */
   ownBytes: number
@@ -52,13 +63,13 @@ export function entryKey(entry: Pick<SnapshotEntry, 'scope' | 'name' | 'path'>):
   return `${entry.scope}:${entry.name ?? entry.path}`
 }
 
-function toEntry(scope: BudgetScope, target: MeasuredTarget, rootDir: string): SnapshotEntry {
+function toEntry(scope: BudgetScope, target: MeasuredTarget, baseDir: string): SnapshotEntry {
   const { ownBytes, exclusiveBytes, totalBytes } = target.measurement
   return {
     scope,
     ...(target.name === undefined ? {} : { name: target.name }),
     ...(target.owner === undefined ? {} : { owner: target.owner }),
-    path: displayId(target.path, rootDir),
+    path: displayId(target.path, baseDir),
     ownBytes,
     exclusiveBytes,
     totalBytes,
@@ -71,10 +82,10 @@ function toEntry(scope: BudgetScope, target: MeasuredTarget, rootDir: string): S
  * the whole report rather than waiting for a build-wide hook that a failed budget
  * would never reach.
  */
-export function createSnapshotWriter(file: string, rootDir: string) {
+export function createSnapshotWriter(file: string, baseDir: string) {
   const byScope = new Map<BudgetScope, SnapshotEntry[]>()
   return async (scope: BudgetScope, measured: readonly MeasuredTarget[]): Promise<void> => {
-    byScope.set(scope, measured.map(target => toEntry(scope, target, rootDir)))
+    byScope.set(scope, measured.map(target => toEntry(scope, target, baseDir)))
     const entries = [...byScope.values()]
       .flat()
       .sort((a, b) => entryKey(a).localeCompare(entryKey(b)))

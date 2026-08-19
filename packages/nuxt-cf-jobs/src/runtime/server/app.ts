@@ -21,6 +21,7 @@ import type {
 } from './runtime'
 import type { QueueSource } from './runtime-env'
 import type { QueueBindingsConfig } from './types'
+import { resolveCloudflareBindings, runtimeConfigSource } from '@harlan-zw/nuxt-cloudflare/bindings'
 import { cfJobsAppExportNames } from '../shared/app-exports'
 import { prepareRegisteredDurableJob } from './outbox'
 import {
@@ -32,13 +33,16 @@ import {
   validateQueueBindingShape,
   validateQueueConsumerConfig,
 } from './queue'
-import { defineJobRegistry, validateJobDefinitions } from './registry'
+import { defineJobRegistry, describeJobDefinitionIssue, validateJobDefinitions } from './registry'
 import { createDurableJobsRuntime } from './runtime'
 import { useJobRuntimeConfig } from './runtime-config'
-import { resolveNitroTaskEnv, runtimeConfigSource } from './runtime-env'
 
 export interface CfJobsRuntimeConfig {
-  cfJobs: { queues: QueueBindingsConfig }
+  cfJobs: {
+    queues: QueueBindingsConfig
+    /** Written by the Nuxt module from `cfJobs.reconcile`. */
+    reconcile?: { staleSeconds?: number }
+  }
 }
 
 export type CfJobsQueueConsumerOptions<Env extends Record<string, unknown>, Db, Logger>
@@ -88,7 +92,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
   // Eager: invalid `defineJob` shapes surface at boot rather than on first message.
   const jobIssues = validateJobDefinitions(materialized)
   if (jobIssues.length > 0) {
-    console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${i.reason}`).join('\n')}`)
+    console.warn(`[nuxt-cf-jobs] job definition warnings:\n${jobIssues.map(i => `  - [job:${i.name}] ${describeJobDefinitionIssue(i)}`).join('\n')}`)
   }
 
   const jobRegistry = defineJobRegistry(materialized)
@@ -119,7 +123,7 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
     const source = (isJobOnly ? undefined : sourceOrJob) as QueueSource | undefined
     const resolvedSource: QueueSource | undefined = source
       ?? (() => {
-        const env = resolveNitroTaskEnv()
+        const env = resolveCloudflareBindings<Record<string, unknown>>()
         return env ? { context: { cloudflare: { env } } } : undefined
       })()
     const runtimeConfig = readRuntimeConfig(resolvedSource)
@@ -209,8 +213,19 @@ export function createCfJobsApp<const Jobs extends readonly AnyJobDefinition[]>(
       getJobRoute: name => jobRegistry.getJobRoute(name),
     }
 
+    // One ownership window, not two. `reconcile.staleSeconds` decides when the
+    // reaper calls a reservation abandoned; `reclaimAfterSeconds` decides when a
+    // redelivery may take the row from its holder. If the consumer's window is
+    // the longer one, reconcile releases and re-dispatches a job the consumer
+    // still owns, and the losing copy is terminalized without settling its
+    // batch. Deriving one from the other removes the drift. An explicit
+    // `reclaimAfterSeconds` still wins.
+    const reclaimAfterSeconds = opts.reclaimAfterSeconds
+      ?? readRuntimeConfig(runtimeConfigSource(opts.env)).cfJobs?.reconcile?.staleSeconds
+
     return createDurableJobsRuntime({
       ...opts,
+      reclaimAfterSeconds,
       registry,
       resolveQueueBinding,
     })

@@ -43,6 +43,12 @@ interface RuntimeReportState {
 
 export interface GeneratedEventRuntime {
   dispatchEvent: (name: string, payload: unknown, context?: EventDispatchContext) => Promise<DispatchReport>
+  /**
+   * Dispatch, then settle the deferred listeners this dispatch scheduled.
+   * If the host supplies waitUntil, deferred work is handed to it. If the host
+   * has no waitUntil, the deferred work is awaited before this resolves.
+   */
+  dispatchEventAndDrain: (name: string, payload: unknown, context?: EventDispatchContext) => Promise<DispatchReport>
   planEvent: (name: string, payload: unknown, context?: EventDispatchContext) => Promise<EventPlan>
   commitEventPlan: (plan: EventPlan, unitOfWork: EventCommitUnitOfWork, context: EventDispatchContext) => Promise<CommitEventPlanResult>
   deliverQueuedListener: (envelope: EventListenerEnvelope, context: QueuedDeliveryContext) => Promise<void>
@@ -94,6 +100,30 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
       })
       return report
     }, () => dispatchFailureDetail(state, listenerNames))
+  }
+
+  const dispatchEventAndDrain = async (name: string, payload: unknown, context: EventDispatchContext = {}): Promise<DispatchReport> => {
+    const scheduled: Promise<void>[] = []
+    const outcome = await dispatchEvent(name, payload, { ...context, waitUntil: task => void scheduled.push(task) })
+      .then(report => ({ _tag: 'ok' as const, report }), (error: unknown) => ({ _tag: 'err' as const, error }))
+    const hostWaitUntil = context.waitUntil
+    if (hostWaitUntil) {
+      for (const task of scheduled)
+        hostWaitUntil(task)
+    }
+    else {
+      // Deferred listeners isolate their own failures and already reached the
+      // observer. A rejection here is a runtime defect, so report it and keep
+      // the producer outcome unchanged.
+      const settled = await Promise.allSettled(scheduled)
+      for (const result of settled) {
+        if (result.status === 'rejected')
+          await writeObserverConsole('[event-listeners] deferred drain failed', { eventName: name, error: result.reason })
+      }
+    }
+    if (outcome._tag === 'err')
+      throw outcome.error
+    return outcome.report
   }
 
   const planEvent = async (name: string, payload: unknown, context: EventDispatchContext = {}): Promise<EventPlan> => {
@@ -217,7 +247,7 @@ export function createGeneratedEventRuntime(registry: GeneratedEventRegistry, op
     })
   }
 
-  return { dispatchEvent, planEvent, commitEventPlan, deliverQueuedListener, handleQueuedListenerTerminalFailure }
+  return { dispatchEvent, dispatchEventAndDrain, planEvent, commitEventPlan, deliverQueuedListener, handleQueuedListenerTerminalFailure }
 }
 
 async function prepareQueuedListener(

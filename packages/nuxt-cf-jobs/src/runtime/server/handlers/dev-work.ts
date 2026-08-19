@@ -1,10 +1,10 @@
+import { resolveCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
 // @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
 import { useNitroApp, useRuntimeConfig } from 'nitropack/runtime'
 import { createD1DurableJobRepository } from '../d1'
 import { findD1Binding, markWorkerActive, resolveQueueWorkerConfig, runDevWorkerTick } from '../dev-worker'
 import { recentTerminalJobs, snapshotDurableQueues } from '../dev-worker-snapshot'
 import { findDispatchableDurableJobs } from '../outbox'
-import { resolveNitroTaskEnv } from '../runtime-env'
 
 /** Nitro's `useNitroApp()` typing doesn't declare the runtime `cloudflare:queue` hook, so narrow to what we call. */
 interface QueueConsumerHost {
@@ -100,7 +100,7 @@ export default async function devWorkHandler(event: DevWorkerEvent) {
 
 function resolveEnv(event: DevWorkerEvent): Record<string, unknown> {
   const fromEvent = (event.context.cloudflare as { env?: Record<string, unknown> } | undefined)?.env
-  const fromGlobal = resolveNitroTaskEnv()
+  const fromGlobal = resolveCloudflareBindings<Record<string, unknown>>()
   return { ...(fromGlobal ?? {}), ...(fromEvent ?? {}) }
 }
 

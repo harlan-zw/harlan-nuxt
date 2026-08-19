@@ -1,0 +1,94 @@
+{
+  "name": "@harlan-zw/comark-content",
+  "type": "module",
+  "version": "0.1.3",
+  "packageManager": "pnpm@11.2.1",
+  "description": "Markdown-only Nuxt content powered by Comark.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/comark-content#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/comark-content"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/module.d.mts",
+      "import": "./dist/module.mjs"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/shared/exports.d.ts",
+      "import": "./dist/runtime/shared/exports.js"
+    },
+    "./server": {
+      "types": "./dist/runtime/server/index.d.ts",
+      "import": "./dist/runtime/server/index.js"
+    }
+  },
+  "main": "./dist/module.mjs",
+  "types": "./dist/module.d.mts",
+  "typesVersions": {
+    "*": {
+      "runtime": [
+        "dist/runtime/shared/exports.d.ts"
+      ],
+      "server": [
+        "dist/runtime/server/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "bench": "node ./bench/run.mjs",
+    "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
+    "bench:warm-ingest": "node ./bench/warm-ingest/run.mjs",
+    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
+    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepack": "pnpm run build",
+    "test": "vitest run",
+    "test:attw": "attw --pack",
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz && node --input-type=module -e \"await import('./dist/runtime/core/navigation.js')\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "nuxt": ">=4.5.0 <5.0.0",
+    "vue": ">=3.5.0 <4.0.0"
+  },
+  "dependencies": {
+    "@nuxt/kit": "catalog:",
+    "comark": "catalog:",
+    "rangi": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@nuxt/module-builder": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "jiti": "catalog:",
+    "nuxt": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vue": "catalog:"
+  }
+}

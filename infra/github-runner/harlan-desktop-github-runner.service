@@ -1,0 +1,23 @@
+[Unit]
+Description=Harlan's desktop GitHub runner (ephemeral Actions runners for Harlan sites)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner/runners.conf
+# 24 physical cores, modestly oversubscribed; runner work is IO-heavy.
+Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=48
+# 60g host. Leaves ~24g for the desktop session, and lets the 32g deploy pool
+# run while holding CI back.
+Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=36
+ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -5,7 +5,7 @@
 
 Experimental Nuxt modules developed in one repo, so they share tooling and a single verification pipeline.
 
-Every package here publishes under the `experimental` npm tag. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
+Every package here publishes to npm with provenance. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
 
 <p align="center">
 <table>
@@ -26,6 +26,10 @@ Every package here publishes under the `experimental` npm tag. Versions and rele
 | [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
 | [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and JavaScript budgets for Nuxt and Nitro runtime entries. |
 | [`@harlan-zw/nuxt-github-sponsors`](./packages/nuxt-github-sponsors) | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
+| [`@harlan-zw/nuxt-wide-events`](./packages/nuxt-wide-events) | 📝 Minimal Wide Events with build-time Field enforcement and a small production runtime. |
+| [`@harlan-zw/nuxt-cloudflare`](./packages/nuxt-cloudflare) | 🌩️ Opinionated Cloudflare defaults, generated Wrangler config, and Wrangler diagnostics for Nuxt. |
+| [`@harlan-zw/nuxt-sentry`](./packages/nuxt-sentry) | 🛡️ One Sentry Report Policy: registration, enable gate, Drop Rules, and Redaction Rules for the client and the server. |
+| [`@harlan-zw/comark-content`](./packages/comark-content) | 📄 Markdown-only Nuxt content powered by Comark, with Collection queries, navigation, and search sections. |
 
 ## Development
 

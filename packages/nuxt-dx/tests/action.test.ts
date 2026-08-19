@@ -1,7 +1,11 @@
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
+import { SNAPSHOT_ARTIFACT_NAME } from '../src/size-budget/snapshot'
 
 /**
  * The composite action consumers paste into their own workflow. It cannot be executed
@@ -16,6 +20,7 @@ interface ActionStep {
   'uses'?: string
   'run'?: string
   'if'?: string
+  'env'?: Record<string, string>
   'continue-on-error'?: boolean
 }
 
@@ -54,10 +59,33 @@ describe('nuxt-dx-budget action', () => {
       expect(source).toMatch(new RegExp(`${uses.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} # v\\d+\\.\\d+\\.\\d+`))
   })
 
-  it('reads the baseline from the last green run on the base branch', () => {
-    expect(step('Find the baseline run').run).toContain('gh run list')
-    expect(step('Find the baseline run').run).toContain('--status success')
+  it('reads the baseline from the newest run on the base branch that still holds the artifact', () => {
+    const find = step('Find the baseline run').run!
+    expect(find).toContain('gh run list')
+    // A green workflow is the wrong test: the action drops into a job beside jobs it knows
+    // nothing about, so one red lint job on the base branch would leave every later pull
+    // request with no baseline. What matters is that the run left the artifact behind.
+    expect(find).not.toContain('--status success')
+    expect(find).toContain('actions/runs/')
+    expect(find).toContain('artifacts')
+    expect(find).toContain('ARTIFACT_NAME')
     expect(step('Download the baseline report').uses).toContain('actions/download-artifact')
+  })
+
+  it('names the baseline artifact after the report format, so a format bump starts clean', () => {
+    // A report the CLI refuses to read is a stuck branch: every run fails on the baseline
+    // that broke it, and never replaces it.
+    expect(action.inputs['artifact-name']!.default).toBe(SNAPSHOT_ARTIFACT_NAME)
+  })
+
+  it('fails loudly when the size budget CLI is not installed', () => {
+    // `npx --no-install` exits 1 for a missing bin, the same code a breach uses, so the
+    // job would otherwise pass green with an empty summary.
+    const find = step('Find the size budget CLI').run!
+    expect(find).toContain('node_modules/.bin/nuxt-dx')
+    expect(step('Compare against the baseline').if).toContain('steps.cli.outputs.path')
+    const verdict = step('Apply the verdict').run!
+    expect(verdict).toMatch(/-z "\$CLI"[\s\S]*?::error::[\s\S]*?exit 1/)
   })
 
   it('treats a missing or expired baseline as a pass', () => {
@@ -65,15 +93,81 @@ describe('nuxt-dx-budget action', () => {
     expect(step('Compare against the baseline').run).toContain('--allow-missing-base')
   })
 
-  it('writes the diff to the step summary and fails on the comparison, not on tee', () => {
-    const run = step('Compare against the baseline').run!
-    expect(run).toContain('"$GITHUB_STEP_SUMMARY"')
-    expect(run).toMatch(/exit "\$\{PIPESTATUS\[0\]\}"/)
+  it('writes the diff to the step summary', () => {
+    expect(step('Compare against the baseline').run).toContain('"$GITHUB_STEP_SUMMARY"')
+  })
+
+  it('reports growth without failing the job unless asked to', () => {
+    expect(action.inputs['fail-on-breach']!.default).toBe('false')
+    // The comparison itself never decides the job's fate, so a breach still leaves a
+    // summary, a comment and a new baseline behind.
+    expect(step('Compare against the baseline').run).not.toMatch(/^\s*exit\b/m)
+    const verdict = step('Apply the verdict').run!
+    expect(verdict).toContain('FAIL_ON_BREACH')
+    expect(verdict).toContain('::warning::')
+  })
+
+  it('still fails when the two reports could not be compared at all', () => {
+    // A broken comparison is not growth, so no input makes it passable.
+    expect(step('Compare against the baseline').run).toContain('status=broken')
+    expect(step('Apply the verdict').run).toMatch(/STATUS" = "broken"[\s\S]*?exit 1/)
+  })
+
+  it('decides the verdict after the baseline is uploaded, so a failure keeps it', () => {
+    const names = action.runs.steps.map(candidate => candidate.name)
+    expect(names.indexOf('Apply the verdict')).toBeGreaterThan(names.indexOf('Keep this report as the next baseline'))
+  })
+
+  it('replaces its own pull request comment instead of stacking them', () => {
+    const comment = step('Comment the summary on the pull request')
+    expect(comment.if).toContain('pull_request')
+    expect(comment.run).toContain('$ENV.MARKER')
+    // An HTML comment, so readers never see it, keyed by artifact name so a matrix
+    // of apps gets one comment each rather than fighting over one.
+    expect(comment.env!.MARKER).toMatch(/^<!-- nuxt-dx-size-budget:/)
+    expect(comment.env!.MARKER).toContain('inputs.artifact-name')
+    expect(comment.run).toContain('PATCH')
+  })
+
+  it('leaves the summary alone when it cannot comment, rather than failing', () => {
+    expect(step('Comment the summary on the pull request').run).toContain('::notice::')
   })
 
   it('leaves this build\'s report behind even when the comparison failed', () => {
     const upload = step('Keep this report as the next baseline')
     expect(upload.uses).toContain('actions/upload-artifact')
     expect(upload.if).toContain('!cancelled()')
+  })
+})
+
+/**
+ * GitHub runs `shell: bash` as `bash -e`, which a `set -uo pipefail` inside the script
+ * does not undo. A breach used to end the step on the failing command, so the named
+ * status was never written and `fail-on-breach: false` could not hold.
+ */
+describe('compare step under a -e shell', () => {
+  it('reaches its named status when the CLI reports a breach', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'nuxt-dx-action-'))
+    const cli = join(directory, 'fake-cli')
+    writeFileSync(cli, '#!/usr/bin/env bash\necho "### breach"\nexit 1\n', { mode: 0o755 })
+    const script = join(directory, 'compare.sh')
+    writeFileSync(script, step('Compare against the baseline').run!)
+
+    const output = join(directory, 'output')
+    writeFileSync(output, '')
+    execFileSync('bash', ['-e', script], {
+      env: {
+        ...process.env,
+        CLI: cli,
+        BASE_REPORT: 'base.json',
+        HEAD_REPORT: 'head.json',
+        THRESHOLD_KB: '10',
+        SUMMARY_FILE: join(directory, 'summary.md'),
+        GITHUB_STEP_SUMMARY: join(directory, 'step-summary.md'),
+        GITHUB_OUTPUT: output,
+      },
+    })
+
+    expect(readFileSync(output, 'utf-8')).toContain('status=breach')
   })
 })

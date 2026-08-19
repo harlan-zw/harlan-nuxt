@@ -7,6 +7,7 @@ export default defineBuildConfig({
     'src/bindings',
     'src/cache',
     'src/d1',
+    'src/d1-stats',
     'src/deploy',
     'src/storage',
     'src/wrangler',

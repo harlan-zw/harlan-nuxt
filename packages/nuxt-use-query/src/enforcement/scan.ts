@@ -11,6 +11,13 @@ import { extractScriptSource, parseSourceAst } from './parse'
 import { readSourceFilesFromDisk } from './read'
 import { contractRules } from './rules'
 
+/**
+ * Server code is exempt from the client-side API literal rule. A route
+ * handler, a middleware, and a server util all read or call internal API
+ * paths by design.
+ */
+const SERVER_DIRS = ['server']
+
 export function createContractQueryEnforcer(options: ContractQueryEnforcerOptions = {}) {
   const readSourceFiles = options.readSourceFiles ?? readSourceFilesFromDisk
 
@@ -22,6 +29,7 @@ export function createContractQueryEnforcer(options: ContractQueryEnforcerOption
       const analyzeAst = createSourceAstAnalyzer(resolved.apiPrefixes, resolved.contractDirs)
       const isQueryFile = createDirectoryMatcher(resolved.queryDirs)
       const isServerApiFile = createDirectoryMatcher(resolved.serverApiDirs)
+      const isServerFile = createDirectoryMatcher(SERVER_DIRS)
 
       for (const sourceFile of files) {
         const file = normalize(sourceFile.file)
@@ -30,13 +38,15 @@ export function createContractQueryEnforcer(options: ContractQueryEnforcerOption
           continue
 
         const ast = parseSourceAst(file, source)
+        const queryFile = isQueryFile(file)
         const ctx: RuleContext = {
-          analysis: analyzeAst(ast),
+          analysis: analyzeAst(ast, { isQueryFile: queryFile }),
           file,
           ast,
           options: resolved,
-          isQueryFile: isQueryFile(file),
+          isQueryFile: queryFile,
           isServerApiFile: isServerApiFile(file),
+          isServerFile: isServerFile(file),
         }
 
         runRulesForFile(ctx, violations)

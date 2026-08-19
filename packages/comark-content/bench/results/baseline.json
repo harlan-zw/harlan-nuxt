@@ -1,0 +1,852 @@
+{
+  "schemaVersion": 1,
+  "variant": "baseline",
+  "status": "complete",
+  "createdAt": "2026-08-13T14:03:28.707Z",
+  "environment": {
+    "node": "v24.17.0",
+    "pnpm": "11.2.1",
+    "samples": 10
+  },
+  "source": {
+    "root": "/home/harlan/sites/harlanzw.com",
+    "canary": "harlanzw.com",
+    "incrementalFile": "content/blog/modern-package-development.md"
+  },
+  "classifier": {
+    "contentMarkers": [
+      "__nuxt_content",
+      "@nuxt/content",
+      "ContentRenderer",
+      "queryCollection",
+      "minimark",
+      "sqlite3"
+    ]
+  },
+  "samples": [
+    {
+      "sample": 1,
+      "prepareMs": 3275.181094999999,
+      "productionBuildMs": 37627.310754000006,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1150.79ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1150.79,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 31687.186901999994,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 284.93ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 284.93,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 17.282076000003144,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 2,
+      "prepareMs": 3782.469637000002,
+      "productionBuildMs": 41277.664884,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1166.58ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1166.58,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 30870.666402999996,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 295.30ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 295.3,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 17.77154800000426,
+        "status": 200,
+        "bytes": 23297
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 3,
+      "prepareMs": 3304.3848690000013,
+      "productionBuildMs": 35486.67339600003,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1147.10ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1147.1,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 32192.49137100001,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 303.83ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 303.83,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 21.633059999992838,
+        "status": 200,
+        "bytes": 23300
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 4,
+      "prepareMs": 3350.7533549999935,
+      "productionBuildMs": 35568.855834000016,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1146.92ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1146.92,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 32390.214949999994,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 327.29ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 327.29,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 19.110781999945175,
+        "status": 200,
+        "bytes": 23299
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 5,
+      "prepareMs": 3320.5701339999796,
+      "productionBuildMs": 39596.14610900002,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1112.61ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1112.61,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 31565.79415500001,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 289.78ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 289.78,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 20.810754999984056,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525230,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159028,
+          "contentFiles": [
+            {
+              "path": "_nuxt/Bx1sNP4y.js",
+              "bytes": 1242,
+              "gzipBytes": 649,
+              "sha256": "2c4b0b8c79c11af889e56c496624a362dbd0392b854a27c1ea99763b0a501154"
+            },
+            {
+              "path": "_nuxt/CFN1Xu--.js",
+              "bytes": 45457,
+              "gzipBytes": 15353,
+              "sha256": "f0f4693be1de1097bda7ee71f749f3890f80d138e7a0181cfe3400beda5f76ba"
+            },
+            {
+              "path": "_nuxt/D1KBZTIK.js",
+              "bytes": 2763,
+              "gzipBytes": 1322,
+              "sha256": "c6604b531bbdc8a745d1033e80b0c3b3bdc150db3722bc765266c7a4b769455a"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021605,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 6,
+      "prepareMs": 3407.4010549999657,
+      "productionBuildMs": 36653.98674100003,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1110.16ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1110.16,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 32397.76504800003,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 319.87ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 319.87,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 20.131475000001956,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 7,
+      "prepareMs": 3848.0451020000037,
+      "productionBuildMs": 40700.127475999994,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1187.72ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1187.72,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 34369.56972999993,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 288.10ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 288.1,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 17.362976000003982,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 8,
+      "prepareMs": 3406.828576000058,
+      "productionBuildMs": 36698.93115399999,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1149.04ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1149.04,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 32352.86269800004,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 305.10ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 305.1,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 19.62834799999837,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 9,
+      "prepareMs": 3260.4301069999347,
+      "productionBuildMs": 35177.45320800005,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1099.96ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1099.96,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 32979.047002000036,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 296.72ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 296.72,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 22.239019999979064,
+        "status": 200,
+        "bytes": 23298
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    },
+    {
+      "sample": 10,
+      "prepareMs": 3773.5641349999933,
+      "productionBuildMs": 41294.713995,
+      "coldParseIndex": {
+        "line": "Processed 3 collections and 22 files in 1241.35ms (0 cached, 22 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 1241.35,
+        "cachedFiles": 0,
+        "parsedFiles": 22
+      },
+      "incrementalBuildMs": 36695.43356500007,
+      "incrementalParseIndex": {
+        "line": "Processed 3 collections and 22 files in 393.10ms (21 cached, 1 parsed)",
+        "collections": 3,
+        "files": 22,
+        "durationMs": 393.1,
+        "cachedFiles": 21,
+        "parsedFiles": 1
+      },
+      "ssr": {
+        "durationMs": 34.63170699996408,
+        "status": 200,
+        "bytes": 23299
+      },
+      "sizes": {
+        "clientJavaScript": {
+          "totalBytes": 1552202,
+          "totalGzipBytes": 525235,
+          "contentBytes": 519855,
+          "contentGzipBytes": 159029,
+          "contentFiles": [
+            {
+              "path": "_nuxt/D34VdBtw.js",
+              "bytes": 45457,
+              "gzipBytes": 15356,
+              "sha256": "c3ed0dcc10d92969a073beb153c8604463ca976867e41368fbb3292945eb4a6e"
+            },
+            {
+              "path": "_nuxt/DBFCaieT.js",
+              "bytes": 2763,
+              "gzipBytes": 1321,
+              "sha256": "a96c294013c40cd9099be1caa710c944ffe0708dfc897fb6b77a64b946c59e03"
+            },
+            {
+              "path": "_nuxt/DEGFhMmg.js",
+              "bytes": 211303,
+              "gzipBytes": 62612,
+              "sha256": "e35d6a62d49aff3ba66fec32cc1bbc4d459537b4e4146a195a746985a4acb140"
+            },
+            {
+              "path": "_nuxt/Dh_khgtW.js",
+              "bytes": 1242,
+              "gzipBytes": 648,
+              "sha256": "50a616387055e51468f6741693efc637cade312899492029e96670abf21ce0f3"
+            },
+            {
+              "path": "_nuxt/lBQWvshd.js",
+              "bytes": 16080,
+              "gzipBytes": 5982,
+              "sha256": "44e75938c0fea580c55a16114c5875c34e0b0d1699229abc49fa8abfbcee0644"
+            },
+            {
+              "path": "_nuxt/sqlite3-opfs-async-proxy.D_xnb1D8.js",
+              "bytes": 32289,
+              "gzipBytes": 10430,
+              "sha256": "502762db7bd24130f345df6a42883166ec0a91815207940328c9739bb0f5ec2f"
+            },
+            {
+              "path": "_nuxt/sqlite3-worker1-Dla_zcLf.js",
+              "bytes": 210721,
+              "gzipBytes": 62680,
+              "sha256": "f9f4bf5fa9ad9e4c36f77db3f30a9c2cd86853c96302d653261b520edbe2bee0"
+            }
+          ]
+        },
+        "nitroServerBytes": 7021610,
+        "installedDependencyBytes": 974969330
+      }
+    }
+  ],
+  "medians": {
+    "prepareMs": 3378.790965500026,
+    "productionBuildMs": 37163.120954,
+    "coldParseIndex.durationMs": 1148.07,
+    "incrementalBuildMs": 32371.538824000017,
+    "incrementalParseIndex.durationMs": 300.275,
+    "ssr.durationMs": 19.879911500000162,
+    "sizes.clientJavaScript.totalBytes": 1552202,
+    "sizes.clientJavaScript.totalGzipBytes": 525235,
+    "sizes.clientJavaScript.contentBytes": 519855,
+    "sizes.clientJavaScript.contentGzipBytes": 159029,
+    "sizes.nitroServerBytes": 7021610,
+    "sizes.installedDependencyBytes": 974969330
+  }
+}

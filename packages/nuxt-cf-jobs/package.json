@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cf-jobs",
   "type": "module",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "description": "Experimental Nuxt module for typed Cloudflare queue jobs.",
   "author": {
     "name": "Harlan Wilton",
@@ -67,6 +67,11 @@
       "import": "./dist/runtime/server/schema.js",
       "default": "./dist/runtime/server/schema.js"
     },
+    "./sentry": {
+      "types": "./dist/runtime/server/sentry.d.ts",
+      "import": "./dist/runtime/server/sentry.js",
+      "default": "./dist/runtime/server/sentry.js"
+    },
     "./testing": {
       "types": "./dist/runtime/server/testing.d.ts",
       "import": "./dist/runtime/server/testing.js",
@@ -98,6 +103,9 @@
       "schema": [
         "dist/runtime/server/schema.d.ts"
       ],
+      "sentry": [
+        "dist/runtime/server/sentry.d.ts"
+      ],
       "testing": [
         "dist/runtime/server/testing.d.ts"
       ]
@@ -128,14 +136,21 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=4.5.0 <5.0.0"
+    "@sentry/cloudflare": "catalog:",
+    "nuxt": ">=4.5.0 <5.0.0",
+    "vite": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@sentry/cloudflare": {
+      "optional": true
+    }
   },
   "dependencies": {
+    "@harlan-zw/nuxt-cloudflare": "workspace:^",
     "@nuxt/kit": "catalog:",
     "@nuxt/schema": "catalog:",
     "citty": "catalog:",
-    "drizzle-orm": "catalog:",
-    "magicast": "catalog:"
+    "drizzle-orm": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
@@ -143,6 +158,7 @@
     "@cloudflare/workers-types": "catalog:",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/test-utils": "catalog:",
+    "@sentry/cloudflare": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-v8": "catalog:",
     "eslint": "catalog:",
@@ -154,6 +170,7 @@
     "nuxt": "catalog:",
     "typescript": "catalog:",
     "unbuild": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:",
     "vue-tsc": "catalog:",
