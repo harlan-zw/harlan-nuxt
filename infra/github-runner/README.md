@@ -102,6 +102,16 @@ Stop local CI before shutting down or doing CPU-heavy local work:
 systemctl --user stop harlan-desktop-github-runner.service
 ```
 
+Stopping and restarting both drain. Idle listeners go immediately, so nothing
+new is claimed, and the containers holding a job are left to finish. On a busy
+host the command can therefore sit for minutes. Follow the journal to watch it:
+the supervisor logs `Draining: N job(s) still running` every ten seconds.
+
+Past `HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS` the remaining jobs are killed,
+and GitHub reports those as `the self-hosted runner lost communication with the
+server`. Raise the variable above the longest job timeout in any consuming
+workflow, and keep the unit's `TimeoutStopSec` above it.
+
 Queued jobs wait up to 24 hours for a matching online runner, so starting the
 service drains the queue.
 
@@ -114,6 +124,7 @@ service drains the queue.
 | `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
 | `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
+| `HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS` | `1800` | Time a stop waits for jobs in flight before it kills them. Keep the unit's `TimeoutStopSec` above it. |
 | `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
 | `HARLAN_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
 

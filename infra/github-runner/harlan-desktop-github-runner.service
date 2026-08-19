@@ -28,7 +28,12 @@ ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
 Restart=always
 RestartSec=10
 KillMode=mixed
-TimeoutStopSec=60
+# Long enough for the supervisor to drain the jobs in flight before systemd
+# reaches for SIGKILL. It must stay above HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS
+# (1800) or systemd kills the drain it is waiting on, which is the failure this
+# whole path exists to stop. A quiet host still restarts in seconds; the drain
+# returns as soon as the last job ends.
+TimeoutStopSec=1860
 NoNewPrivileges=true
 PrivateTmp=true
 
