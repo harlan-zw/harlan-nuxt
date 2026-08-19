@@ -4,6 +4,7 @@ import {
   resolveHtmlCacheGuarantee,
   responseCacheDecision,
   sharedCacheSeconds,
+  staleDirectivesAreDisabled,
   varyIsSatisfiable,
 } from '../src/runtime/server/utils/workers-cache'
 
@@ -146,9 +147,16 @@ describe('lowering the whole served lifetime', () => {
     expect(clampSharedCacheSeconds('public, s-maxage=60', 600)).toBe('public, s-maxage=60')
   })
 
-  it('adds a shared lifetime when the app only set a browser one', () => {
+  // Cloudflare reads `s-maxage` as implying `proxy-revalidate`, which disables
+  // stale serving. Appending one to guarantee an edge bound would convert a
+  // working stale-serving policy into blocking revalidation, and `max-age`
+  // already bounds the edge when `s-maxage` is absent.
+  it('never invents an s-maxage, which would disable stale serving', () => {
     expect(clampSharedCacheSeconds('public, max-age=99999', 600))
-      .toBe('public, max-age=600, s-maxage=600')
+      .toBe('public, max-age=600')
+    expect(clampSharedCacheSeconds('public, max-age=99999, stale-while-revalidate=99999', 600))
+      .not
+      .toContain('s-maxage')
   })
 
   it('never lets a clamped header exceed the ceiling', () => {
@@ -275,5 +283,27 @@ describe('vary', () => {
 
   it('refuses even when the app owns the risk, because this one is not theirs to own', () => {
     expect(decide({ vary: 'Cookie', mode: 'app' })).toMatchObject({ _tag: 'override' })
+  })
+})
+
+describe('the s-maxage trap', () => {
+  // Every site that hand-wrote this policy left a comment about it, which is a
+  // good sign it deserves a warning rather than a comment.
+  it.each([
+    'public, s-maxage=300, stale-while-revalidate=600',
+    'public, s-maxage=300, stale-if-error=600',
+    'public, max-age=300, must-revalidate, stale-while-revalidate=600',
+    'public, max-age=300, proxy-revalidate, stale-if-error=600',
+  ])('spots that %s disables its own stale serving', (value) => {
+    expect(staleDirectivesAreDisabled(value)).toBe(true)
+  })
+
+  it.each([
+    'public, max-age=300, stale-while-revalidate=600',
+    'public, s-maxage=300',
+    'public, max-age=300',
+    'private, no-store',
+  ])('leaves %s alone', (value) => {
+    expect(staleDirectivesAreDisabled(value)).toBe(false)
   })
 })

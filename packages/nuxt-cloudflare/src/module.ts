@@ -11,7 +11,7 @@ import {
   evaluateWranglerDiagnostics,
 } from './diagnostics'
 import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
-import { resolveHtmlCacheGuarantee } from './runtime/server/utils/workers-cache'
+import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -232,6 +232,21 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     // does not negotiate and hides the bug on the ones that do.
     if (mode === 'app' || guarantee._tag === 'bounded')
       logger.info('A shared cache keys on the URL. If a page changes with a request header, set `Vary` on it. Responses varying on Cookie or Authorization are never shared.')
+
+    // The trap every site that hand-wrote this policy left a comment about.
+    // Cloudflare reads `s-maxage` as implying `proxy-revalidate`, so pairing it
+    // with a stale directive silently does nothing.
+    for (const [route, rule] of Object.entries(nitroConfig.routeRules ?? {})) {
+      const headers = (rule as { headers?: Record<string, string> } | undefined)?.headers
+      if (!headers)
+        continue
+      for (const [name, value] of Object.entries(headers)) {
+        if (!name.toLowerCase().endsWith('cache-control'))
+          continue
+        if (staleDirectivesAreDisabled(value))
+          logger.warn(`routeRules['${route}'] sets \`${name}: ${value}\`. Cloudflare disables stale serving when \`s-maxage\`, \`must-revalidate\` or \`proxy-revalidate\` is present. Use \`max-age\` for the edge freshness window instead.`)
+      }
+    }
 
     // A guarantee answers one hazard: a cached document naming chunks a deploy
     // deleted. It does not answer the others, so the validator still runs.

@@ -345,5 +345,32 @@ export function clampSharedCacheSeconds(cacheControl: string, seconds: number): 
   // share the freshness budget, but it still must not outlive the chunks.
   out = lower('stale-if-error', seconds, out)
 
-  return /s-maxage\s*=/i.test(out) ? out : `${out}, s-maxage=${freshness}`
+  // Deliberately no `s-maxage` is appended when the header lacks one.
+  // Cloudflare treats `s-maxage` as implying `proxy-revalidate`, which disables
+  // `stale-while-revalidate` and `stale-if-error` outright: "use `max-age` for
+  // the freshness window, not `s-maxage`". Adding one to guarantee an edge
+  // bound would silently convert a working stale-serving policy into blocking
+  // revalidation. `max-age` already bounds the edge when `s-maxage` is absent,
+  // and it is clamped above.
+  return out
+}
+
+/**
+ * Whether this header asks for stale serving that Cloudflare will ignore.
+ *
+ * `s-maxage`, `must-revalidate` and `proxy-revalidate` each forbid serving
+ * stale content, so pairing any of them with `stale-while-revalidate` or
+ * `stale-if-error` means those directives do nothing. All three sites that
+ * hand-wrote this policy left a comment about the trap, which is a good sign it
+ * deserves a warning rather than a comment.
+ */
+export function staleDirectivesAreDisabled(cacheControl: unknown): boolean {
+  const raw = Array.isArray(cacheControl) ? cacheControl.join(', ') : cacheControl
+  if (typeof raw !== 'string')
+    return false
+  const value = unqualify(raw.toLowerCase())
+  const wantsStale = /stale-while-revalidate\s*=|stale-if-error\s*=/.test(value)
+  if (!wantsStale)
+    return false
+  return /(?:^|,)\s*(?:s-maxage\s*=|must-revalidate|proxy-revalidate)/.test(value)
 }
