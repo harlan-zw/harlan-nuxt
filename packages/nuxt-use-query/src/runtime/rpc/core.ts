@@ -301,7 +301,10 @@ export interface NuxtRpcValidationIssue {
   path: string
 }
 
-export type NuxtRpcError
+/**
+ * The payload of one RPC failure. Discriminate on `type`.
+ */
+export type NuxtRpcErrorData
   = | {
     type: 'fetch'
     message: string
@@ -330,6 +333,60 @@ export type NuxtRpcError
     message: string
     cause: unknown
   }
+
+type AsRpcError<TData> = TData extends unknown ? Error & TData : never
+
+/**
+ * A tagged RPC failure. It is a real `Error`, so a reporter (Sentry, a log
+ * drain) keeps the message and the stack instead of stringifying a plain
+ * object, and it still carries the `type` discriminant and the payload of its
+ * variant. `name` is always `NuxtRpcError`.
+ */
+export type NuxtRpcError = AsRpcError<NuxtRpcErrorData>
+
+/**
+ * Build a tagged RPC failure from its payload. The only place a
+ * `NuxtRpcError` is constructed.
+ */
+export function createNuxtRpcError<TData extends NuxtRpcErrorData>(data: TData): Error & TData {
+  const error = new Error(data.message, { cause: data.cause }) as Error & TData
+  Object.assign(error, data)
+  error.name = 'NuxtRpcError'
+  return error
+}
+
+/**
+ * Reduce a failure to the fields that survive the server-rendered payload.
+ *
+ * `cause` and `response` hold runtime objects, a `FetchError` and a `Response`.
+ * Neither can be serialized, and neither means anything in the other runtime.
+ * The tag, the message, and the diagnosis fields do survive.
+ */
+export function toSerializableNuxtRpcError(error: NuxtRpcError): NuxtRpcErrorData {
+  if (error.type === 'request-validation' || error.type === 'response-validation') {
+    return {
+      type: error.type,
+      message: error.message,
+      issues: error.issues,
+      cause: undefined as unknown as ZodError,
+    }
+  }
+  if (error.type === 'fetch') {
+    return {
+      type: 'fetch',
+      message: error.message,
+      status: error.status,
+      statusMessage: error.statusMessage,
+      data: error.data,
+      cause: undefined,
+    }
+  }
+  return {
+    type: error.type,
+    message: error.message,
+    cause: undefined,
+  }
+}
 
 /**
  * Tagged outcome of an RPC call. The `*Safe` client methods return this
@@ -537,15 +594,20 @@ export function isAuthRpcError(error: NuxtRpcError): boolean {
 export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validation' | 'response-validation' = 'response-validation'): NuxtRpcError {
   if (isNuxtRpcError(error))
     return error
+  // A tagged failure that crossed the SSR payload arrives as a plain object:
+  // devalue keeps the fields and drops the prototype. Rebuild it so the client
+  // sees the same `Error` the server threw.
+  if (isNuxtRpcErrorData(error))
+    return createNuxtRpcError(error)
   if (error instanceof ZodError) {
-    return {
+    return createNuxtRpcError({
       type: zodType,
       message: zodType === 'request-validation'
         ? 'Request validation failed.'
         : 'Response validation failed.',
       issues: formatNuxtRpcValidationIssues(error),
       cause: error,
-    }
+    })
   }
   const fetchLike = error as {
     message?: string
@@ -563,15 +625,15 @@ export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validati
   if (status == null && fetchLike.response == null) {
     const transient = detectTransientErrorType(error)
     if (transient != null) {
-      return {
+      return createNuxtRpcError({
         type: transient,
         message: fetchLike.message || transient,
         cause: error,
-      }
+      })
     }
   }
   if (status != null || fetchLike.response != null || fetchLike.data !== undefined) {
-    return {
+    return createNuxtRpcError({
       type: 'fetch',
       message: fetchLike.message || fetchLike.statusMessage || 'Request failed.',
       status,
@@ -579,13 +641,13 @@ export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validati
       data: fetchLike.data ?? fetchLike.response?._data,
       response: fetchLike.response,
       cause: error,
-    }
+    })
   }
-  return {
+  return createNuxtRpcError({
     type: 'unknown',
     message: fetchLike.message || 'Unknown RPC error.',
     cause: error,
-  }
+  })
 }
 
 // Classifies a responseless thrown error into a transient transport tag.
@@ -633,11 +695,18 @@ export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schem
   }
 }
 
-function isNuxtRpcError(error: unknown): error is NuxtRpcError {
+const NUXT_RPC_ERROR_TYPES = ['fetch', 'request-validation', 'response-validation', 'timeout', 'connection', 'aborted', 'unknown']
+
+function isNuxtRpcErrorData(error: unknown): error is NuxtRpcErrorData {
   return typeof error === 'object'
     && error != null
     && 'type' in error
-    && ['fetch', 'request-validation', 'response-validation', 'timeout', 'connection', 'aborted', 'unknown'].includes((error as { type?: string }).type || '')
+    && NUXT_RPC_ERROR_TYPES.includes((error as { type?: string }).type || '')
+}
+
+/** True for a tagged RPC failure built by {@link createNuxtRpcError}. */
+export function isNuxtRpcError(error: unknown): error is NuxtRpcError {
+  return error instanceof Error && isNuxtRpcErrorData(error)
 }
 
 function formatNuxtRpcValidationIssue(issue: ZodIssue): NuxtRpcValidationIssue {

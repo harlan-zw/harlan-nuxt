@@ -9,6 +9,8 @@ catalog:
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
   '@cloudflare/workers-types': ^5.20260811.1
+  '@sentry/cloudflare': ^10.70.0
+  '@sentry/nuxt': ^10.70.0
   '@nuxt/kit': ^4.5.2
   '@nuxt/module-builder': ^1.0.2
   '@nuxt/schema': ^4.5.2
@@ -18,23 +20,27 @@ catalog:
   '@vue/test-utils': ^2.4.11
   '@vueuse/core': ^14.4.0
   citty: ^0.2.2
+  comark: 0.6.2
+  confbox: ^0.2.4
   consola: ^3.4.2
   drizzle-orm: 1.0.0-rc.4
   eslint: ^10.8.1
   eslint-plugin-harlanzw: ^0.17.1
   eslint-plugin-vue: ^10.10.0
+  evlog: ^2.26.0
   h3: 2.0.1-rc.25
   happy-dom: ^20.11.1
-  magicast: ^0.5.3
+  jiti: ^2.7.0
   nitropack: ^2.13.4
   nuxt: ^4.5.2
-  oxc-parser: 0.140.0
-  oxc-walker: 1.0.0
   pathe: ^2.0.3
+  pino: ^10.3.1
+  rangi: ^2.2.0
   rollup: ^4.62.4
   typescript: ^5.9.3
   unbuild: ^3.6.1
   unstorage: ^1.17.5
+  vite: ^8.0.0
   vitest: ^4.1.10
   vue: ^3.5.40
   vue-router: ^5.2.0
@@ -48,6 +54,7 @@ ignoredBuiltDependencies:
 
 allowBuilds:
   '@parcel/watcher': true
+  '@sentry/cli': true
   esbuild: true
   sharp: true
   vue-demi: true

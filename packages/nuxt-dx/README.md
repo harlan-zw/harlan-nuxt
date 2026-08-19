@@ -53,6 +53,21 @@ export default defineNuxtConfig({
 })
 ```
 
+Other modules can send errors and warnings to the same overlay through the typed `nuxt-dx:issue` runtime hook. The DX plugin runs first, so module plugins can report during setup without losing the issue.
+
+```ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('nuxt-use-query:telemetry:query:finish', (event) => {
+    if (event.status === 'error') {
+      return nuxtApp.callHook('nuxt-dx:issue', {
+        kind: 'error',
+        message: `Query failed: ${event.request}`,
+      })
+    }
+  })
+})
+```
+
 ## Hydration mismatches
 
 Hydration mismatches get their own count on the badge and their own section in the report. Vue hands them to `warnHandler` with the DOM nodes already flattened into the message, so the overlay parses that string back apart and pairs it with the component that was hydrating and its source file.
@@ -129,7 +144,7 @@ export default defineNuxtConfig({
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "entries": [
     {
       "scope": "client",
@@ -170,21 +185,36 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 ```
 
 ```md
-### Bundle size budget
+### 📦 Runtime size budget
 
-- **Client runtime entries** 47.2 kB to 65.7 kB, **+18.5 kB**
-  - Nuxt plugins: 34.7 kB to 61.8 kB, +27.1 kB
-  - Nuxt middleware: 12.5 kB to 3.9 kB, -8.6 kB
-- **Server runtime entries** 6.4 kB to 6.4 kB, **+0 B**
-  - Nitro plugins: 6.4 kB to 6.4 kB, +0 B
+⚠️ **1 target past the 10 kB threshold** · net +27.2 kB · 🆕 1 new target
 
-**1 target grew past the 10 kB threshold:** `app/plugins/analytics.client.ts` +35.7 kB.
+| Target | Scope | Size | Δ |
+| --- | --- | --- | --- |
+| `app/plugins/analytics.client.ts` | Nuxt plugin | 7.6 kB → 43.3 kB | 🔴 +35.6 kB (+467.9%) |
+| `runtime/consent.client.ts`<br><sub>fixture-consent</sub> | Nuxt plugin | 0 B → 170 B | 🆕 new |
+| `app/middleware/legacy.global.ts` | Nuxt middleware | 12.5 kB → 3.9 kB | 🟢 -8.6 kB (-68.8%) |
 
-| Target | Module | Scope | Base | Head | Change |
-| --- | --- | --- | --- | --- | --- |
-| `app/plugins/analytics.client.ts` |  | Nuxt plugin | 7.6 kB | 43.3 kB | +35.7 kB |
-| `runtime/consent.client.ts` | `fixture-consent` | Nuxt plugin | 0 B | 170 B | +170 B (new) |
-| `app/middleware/legacy.global.ts` |  | Nuxt middleware | 12.5 kB | 3.9 kB | -8.6 kB |
+<details><summary>Bundle totals</summary>
+
+| Bundle | Size | Δ |
+| --- | --- | --- |
+| **Client** | 23.1 kB → 50.4 kB | +27.2 kB |
+| <sub>Nuxt plugins</sub> | <sub>10.6 kB → 46.5 kB</sub> | <sub>+35.8 kB</sub> |
+| <sub>Nuxt middleware</sub> | <sub>12.5 kB → 3.9 kB</sub> | <sub>-8.6 kB</sub> |
+| **Server** | 6.4 kB → 6.4 kB | +0 B |
+| <sub>Nitro plugins</sub> | <sub>6.4 kB → 6.4 kB</sub> | <sub>+0 B</sub> |
+</details>
+
+<details><summary>2 unchanged targets</summary>
+
+| Target | Scope | Size | Δ |
+| --- | --- | --- | --- |
+| `app/plugins/theme.client.ts` | Nuxt plugin | 3 kB → 3 kB | — |
+| `server/plugins/audit.ts` | Nitro plugin | 6.4 kB → 6.4 kB | — |
+</details>
+
+<sub>Each target is charged its own bundled bytes plus every module it alone pulls in. The threshold applies to each target on its own, not to the total.</sub>
 ```
 
 Markdown goes to stdout for job summaries. The local verdict goes to stderr. Client and server totals combine their disjoint runtime entries.
@@ -221,6 +251,8 @@ permissions:
   contents: read
   # the action lists workflow runs and downloads the baseline report from one
   actions: read
+  # the action posts the diff as a pull request comment, and replaces its own
+  pull-requests: write
 
 jobs:
   build:
@@ -246,7 +278,11 @@ The baseline is the report left behind by the last successful run of the same wo
 
 A run with no baseline says so in the job summary and passes. That covers the first ever run, a branch whose artifact has passed its retention window, and a workflow that has never been green on the base branch. A missing baseline never fails a pull request.
 
-The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and works on pull requests from forks. The step fails only when a target grew past the threshold.
+On a pull request the diff lands twice: in `$GITHUB_STEP_SUMMARY`, and as one comment on the pull request. The comment is keyed to the action, so every push edits the same comment rather than adding another. Turn it off with `comment: false`.
+
+The comment needs `pull-requests: write`. Without it, and on pull requests from forks, the comment step logs a notice and the summary carries the diff on its own.
+
+The step reports growth, it does not block. Set `fail-on-breach: true` to fail the job when a target grows past the threshold. The step still fails when the two reports could not be compared at all, since that leaves nothing measured.
 
 | Input | Default | |
 | --- | --- | --- |
@@ -255,7 +291,9 @@ The diff goes to `$GITHUB_STEP_SUMMARY`, which needs no write permissions and wo
 | `artifact-name` | `nuxt-dx-size-budget-v2` | Artifact the report is uploaded to and read back from |
 | `base-branch` | pull request base, then the default branch | Branch the baseline comes from |
 | `working-directory` | `.` | Directory the app was built in |
-| `github-token` | `${{ github.token }}` | Needs `actions: read` |
+| `comment` | `true` | Post the diff as a pull request comment, replacing this action's previous one |
+| `fail-on-breach` | `false` | Fail the job when a target grew past the threshold |
+| `github-token` | `${{ github.token }}` | Needs `actions: read`, plus `pull-requests: write` to comment |
 
 ## Configuring budgets
 
@@ -271,7 +309,7 @@ export default defineNuxtConfig({
       nitroPluginsKb: 75,
       // kB budget per Nitro middleware in the server bundle
       nitroMiddlewareKb: 20,
-      // keyed by plugin name or any fragment of an entry path
+      // keyed by plugin name, Nuxt module name, or any fragment of an entry path
       overridesKb: {
         'analytics': 60,
         'server/plugins/queue': 120,
@@ -287,6 +325,15 @@ export default defineNuxtConfig({
 ```
 
 Set `sizeBudget: false` to turn the check off entirely.
+
+A key in `overridesKb` must match a plugin name, a Nuxt module name, or a fragment of an entry path. A key that matches nothing changes no budget, so the build lists every key that matched no runtime entry:
+
+```
+[nuxt-dx]  WARN  1 `sizeBudget.overridesKb` key matched no runtime entry: `server/plugins/sentry.ts`.
+                 Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.
+```
+
+Some modules ship a runtime entry that no app can make smaller. Those carry their own budget, so you do not write the same override in every app that installs them. `@sentry/nuxt` gets 400 kB for its Nitro plugin. A known budget only raises the budget for the scope, so a lower `nitroPluginsKb`, or an override you write yourself, still wins.
 
 Budgets are measured whenever a bundle is produced. Nitro entries report during development and builds. Client entries only report during builds.
 

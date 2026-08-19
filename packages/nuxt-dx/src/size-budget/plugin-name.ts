@@ -1,5 +1,4 @@
-import { parseSync } from 'oxc-parser'
-import { walk } from 'oxc-walker'
+import { parseSync, Visitor } from 'vite'
 
 const DEFINE_NAMES = new Set(['defineNuxtPlugin', 'definePayloadPlugin'])
 
@@ -27,13 +26,13 @@ export function extractPluginName(file: string, source: string): string | undefi
       lang: file.endsWith('.tsx') ? 'tsx' : file.endsWith('.jsx') ? 'jsx' : 'ts',
       sourceType: 'module',
     })
-    walk(ast.program, {
-      enter(node: any) {
-        if (name || node.type !== 'CallExpression' || !DEFINE_NAMES.has(node.callee?.name))
+    new Visitor({
+      CallExpression(node) {
+        if (name || node.callee.type !== 'Identifier' || !DEFINE_NAMES.has(node.callee.name))
           return
         name = literalName(node.arguments[0]) ?? literalName(node.arguments[1])
       },
-    })
+    }).visit(ast.program)
   }
   catch {
     // A plugin that does not parse is Nuxt's problem to report; fall back to the file path label.

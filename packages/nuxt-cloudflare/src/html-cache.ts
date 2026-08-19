@@ -5,9 +5,6 @@ export type HtmlCacheRouteRuleViolation
 const NON_HTML_ROUTE_PREFIXES = [
   '/.well-known',
   '/api',
-  '/_ipx',
-  '/_nuxt',
-  '/_og',
   '/assets',
   '/fonts',
   '/images',
@@ -48,7 +45,7 @@ function hasHtmlContentType(headers: Record<string, unknown> | undefined): boole
 }
 
 function isHtmlCapableRoute(route: string, value: Record<string, unknown>): boolean {
-  if (NON_HTML_EXTENSION_RE.test(route) || hasExplicitNonHtmlContentType(value))
+  if (route.startsWith('/_') || NON_HTML_EXTENSION_RE.test(route) || hasExplicitNonHtmlContentType(value))
     return false
   return !NON_HTML_ROUTE_PREFIXES.some(prefix => route === prefix || route.startsWith(`${prefix}/`))
 }

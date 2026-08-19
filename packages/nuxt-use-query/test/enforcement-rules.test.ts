@@ -19,13 +19,15 @@ import { parseSourceAst } from '../src/enforcement/parse'
 function makeCtx(file: string, source: string, overrides: Partial<RuleContext['options']> = {}): RuleContext {
   const options = resolveContractQueryEnforcementOptions(overrides)
   const ast = parseSourceAst(file, source)
+  const isQueryFile = matchesAnyDirectory(file, options.queryDirs)
   return {
-    analysis: createSourceAstAnalyzer(options.apiPrefixes, options.contractDirs)(ast),
+    analysis: createSourceAstAnalyzer(options.apiPrefixes, options.contractDirs)(ast, { isQueryFile }),
     file,
     ast,
     options,
-    isQueryFile: matchesAnyDirectory(file, options.queryDirs),
+    isQueryFile,
     isServerApiFile: matchesAnyDirectory(file, options.serverApiDirs),
+    isServerFile: matchesAnyDirectory(file, ['server']),
   }
 }
 

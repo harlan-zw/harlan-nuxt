@@ -1,0 +1,143 @@
+name: Harlan Desktop site CI
+
+# NOT GENERAL PURPOSE. This is Harlan's own gate for Harlan's own sites, and its
+# default is to dispatch to ephemeral containers on Harlan's desktop. Nothing here
+# is supported for anyone else, which is why every name in this family carries the
+# `harlan-desktop-` prefix.
+#
+# The pull request gate shared by every Harlan site. A calling repository keeps a
+# ten line workflow and gets lint, typecheck, and test as three separate,
+# separately required checks.
+#
+# Build is deliberately absent. A build needs that site's own production secrets,
+# and a reusable workflow cannot take an open-ended env block, so build stays in
+# the site's deploy workflow where those secrets already live. The same split
+# holds on nuxtseo.com, where the deploy workflow builds and the PR gate does not.
+#
+# Moving a site between GitHub-hosted and the workstation pool is one input:
+#
+#   runs-on: '["self-hosted", "linux", "x64", "harlan-desktop-ci"]'
+#
+# WHY THE SETUP STEPS ARE INLINE
+#
+# `.github/actions/setup` holds the same three steps, and a deploy workflow
+# should use that action rather than copy them. This workflow cannot. A `uses:`
+# reference inside a reusable workflow resolves against THIS repository's default
+# branch, not against the ref the caller pinned, and `uses:` accepts no
+# expression, so the ref cannot be threaded through. Referencing the action here
+# would mean a change to it could never be proved by a pull request in a
+# consuming repository: the caller would pin `@my-branch` and still get `@main`'s
+# action. Inline steps make a caller's ref pin the whole gate.
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: JSON array of runner labels. Self-hosted pools are private repositories only.
+        type: string
+        required: false
+        default: '["ubuntu-24.04-arm"]'
+      node-version:
+        type: string
+        required: false
+        default: '24'
+      install-args:
+        description: >-
+          Extra `pnpm install` flags, on top of `--frozen-lockfile`.
+          `--ignore-scripts` is the default because a Nuxt workspace's postinstall
+          cascade can cost minutes that most jobs never use. Pass `''` for a
+          repository whose checks depend on a `postinstall: nuxt prepare`.
+        type: string
+        required: false
+        default: '--ignore-scripts'
+      prepare-command:
+        description: >-
+          Runs before typecheck and test, for generated output those checks need.
+          Usually `pnpm nuxt:prepare` or a filtered form of it. Empty runs nothing.
+        type: string
+        required: false
+        default: ''
+      lint-command:
+        description: Empty skips the lint job.
+        type: string
+        required: false
+        default: 'pnpm lint'
+      typecheck-command:
+        description: Empty skips the typecheck job.
+        type: string
+        required: false
+        default: 'pnpm typecheck'
+      test-command:
+        description: Empty skips the test job.
+        type: string
+        required: false
+        default: 'pnpm test:run'
+      typecheck-node-options:
+        description: vue-tsc on a large workspace needs a raised heap.
+        type: string
+        required: false
+        default: '--max-old-space-size=8192'
+      timeout-minutes:
+        type: number
+        required: false
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    if: inputs.lint-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      # ESLint does no type-aware linting on these sites, so it never reads a
+      # `.nuxt` directory and `prepare-command` is pure cost here.
+      - run: ${{ inputs.lint-command }}
+
+  typecheck:
+    if: inputs.typecheck-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      - if: inputs.prepare-command != ''
+        run: ${{ inputs.prepare-command }}
+      - run: ${{ inputs.typecheck-command }}
+        env:
+          NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
+
+  test:
+    if: inputs.test-command != ''
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      - if: inputs.prepare-command != ''
+        run: ${{ inputs.prepare-command }}
+      - run: ${{ inputs.test-command }}

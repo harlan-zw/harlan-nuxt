@@ -85,6 +85,7 @@ export default defineNuxtConfig({
 The module auto-imports:
 
 - `useNuxtQuery`
+- `useNuxtAsyncQuery`
 - `useNuxtMutation`
 - `useNuxtRpc`
 - `useNuxtRpcQuery`
@@ -96,6 +97,8 @@ The module auto-imports:
 - `serializeNuxtRpcKey`
 - `useQueryCache`
 - `invalidateNuxtQueries`
+- `invalidateNuxtRpc`
+- `removeNuxtQueries`
 - `getQueryData`
 - `setQueryData`
 
@@ -403,6 +406,22 @@ await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
 })
 ```
 
+`useNuxtRpcQuery` takes its own `onError`. The client hook above covers `rpc.query` / `rpc.execute` only, so a reactive query needs this one:
+
+```ts
+const sites = useNuxtRpcQuery(siteQueries.list(), {
+  onError({ error, operation, durationMs }) {
+    console.error(operation.path, toHumanNuxtRpcError(error), durationMs)
+  },
+})
+```
+
+It fires once per failure, in the browser only. A failure raised during SSR is transferred in the payload and reported on hydration, so it is never reported twice.
+
+A `NuxtRpcError` is a real `Error` named `NuxtRpcError`. It carries the `type` discriminant and its variant payload, so `captureException` keeps the message and stack instead of stringifying a plain object.
+
+The module registers a payload reducer and reviver for it, so a failure raised during SSR crosses into the browser with its tag intact. The `cause` and `response` fields do not cross: they hold a `FetchError` and a `Response`, which cannot be serialized.
+
 ## Server Fetch Telemetry
 
 Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
@@ -410,8 +429,8 @@ Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. I
 - `slow fetch` when a completed server fetch exceeds `slowFetchThreshold`.
 - `large HTTP payload` when a completed server fetch's response `Content-Length` exceeds `largePayloadThreshold` (default `300_000` bytes).
 - `fetch timeout` when a server fetch is aborted by the configured timeout.
-- `fetch waterfall` when one incoming request performs multiple sequential fetches and the request fetch span exceeds `waterfallThreshold`. The warning includes request metrics and an aligned timeline of tracked `$fetch` calls.
-- `duplicate fetch` when one incoming request repeats the same internal GET at least `duplicateFetchThreshold` times.
+- `fetch waterfall` when one incoming request runs a chain of dependent fetches. The rule measures chain depth, not parallelism: a render can be six levels deep and seven fetches wide at each level, which is a waterfall even though it looks highly parallel. A chain is reported when the fetch span exceeds `waterfallThreshold`, the chain holds at least `waterfallMinChainDepth` serial levels, it explains at least `waterfallMinCriticalPathShare` of the wall time, and it costs at least `waterfallMinChainBeyondSlowestMs` more than its slowest single link. The warning lists the critical path plus an aligned timeline of tracked `$fetch` calls.
+- `duplicate fetch` when one incoming request repeats the same internal GET **path** at least `duplicateFetchThreshold` times. The query string is collected as a variant, not used as part of the key, because the query cache already coalesces identical urls. The repeat that costs real time is one handler entered once per filtered slice.
 - `nested fetch` when internal Nitro fetches chain at least `nestedFetchDepthThreshold` levels deep.
 - `recursive fetch` when an internal Nitro fetch calls a route already in its request stack.
 
@@ -429,6 +448,9 @@ export default defineNuxtConfig({
       largePayloadThreshold: 300_000,
       waterfallMinFetches: 2,
       waterfallThreshold: 3_000,
+      waterfallMinChainDepth: 2,
+      waterfallMinCriticalPathShare: 0.75,
+      waterfallMinChainBeyondSlowestMs: 1_000,
       console: true,
       debug: false,
     },
@@ -437,6 +459,8 @@ export default defineNuxtConfig({
 ```
 
 Use `telemetry: true` for the defaults. Set `timeout: false` to disable the default timeout, or pass `timeout` per `$fetch` call to override it. Set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false` to disable those specific internal-fetch warnings. Set `debug: true` to also log per-fetch timing and per-request summaries, including the per-request timeline. Set `console: false` to keep hook events enabled while suppressing package console output, including slow fetch, large payload, timeout, waterfall, duplicate, nested, and recursive warnings.
+
+Keep every `slowFetchThreshold` below `timeout`. A fetch is aborted at the timeout, so a threshold at or above it can never be reached and the signal is dead. The module warns at build time when a default or per-host threshold breaks this rule. To turn slow detection off, set the threshold to `false`; do not raise it above the timeout.
 
 `largePayloadThreshold` defaults to `300_000` bytes (mirroring Sentry's Large HTTP Payload detector). Like `slowFetchThreshold`, it accepts a per-host map so you can mute an upstream whose big responses are expected while keeping detection everywhere else, a plain `false`/`0` to turn it off globally, or a per-`$fetch`-call override:
 
@@ -529,11 +553,17 @@ export default defineNuxtConfig({
   nuxtUseQuery: {
     contracts: {
       enabled: true,
+      // 'error' fails the build (default); 'warn' logs and continues.
+      severity: 'error',
       apiPrefixes: ['/api/pro'],
       queryDirs: ['app/queries', 'layers/*/app/queries'],
       contractDirs: ['shared/contracts', 'layers/*/shared/contracts'],
       requireServerContracts: true,
       serverApiDirs: ['server/api', 'layers/*/server/api'],
+      // Directories the scanner walks, relative to the project root.
+      scanDirs: ['app', 'server', 'shared', 'modules', 'layers/**/app', 'layers/**/server', 'layers/**/shared'],
+      // Paths to skip, on top of the built-in ones (node_modules, .nuxt, ...).
+      ignore: ['app/generated'],
     },
   },
 })
@@ -544,6 +574,19 @@ With enforcement enabled:
 - API path literals must live in configured query directories.
 - Query files must define Zod-backed RPC operations.
 - Server API routes can be required to import shared contracts.
+
+### Path Patterns
+
+`queryDirs`, `contractDirs`, `serverApiDirs`, `scanDirs`, and `ignore` share one pattern syntax:
+
+- `*` matches one path segment, `**` matches any number of segments, `?` matches one character.
+- A pattern matches anywhere in the path, not only at the project root. `app/queries` therefore also covers `layers/pro/site/app/queries`, which is where a layered site keeps them.
+
+### What The Scanner Accepts
+
+- Server code is exempt from `api-literal-outside-query`. A route, a middleware, and a server util all read or call internal API paths by design. `server-route-missing-contract` still polices the routes.
+- Operation factories resolve through aliases. `import { defineNuxtRpcQuery as defineProQuery }`, `export { defineNuxtRpcQuery as defineProQuery }`, and `const defineProQuery = defineNuxtRpcQuery` all count as operations.
+- Inside a query directory, any factory call whose first argument is an operation object counts as an operation. The object must name a `path` plus a `key` (query) or a `method` (mutation). This covers a layer's own scoped factory, whose name cannot be resolved across files.
 
 Start without enforcement while migrating an existing site, then enable it once queries and contracts have been moved into the recommended directories.
 

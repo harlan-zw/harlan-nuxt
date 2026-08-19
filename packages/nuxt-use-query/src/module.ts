@@ -7,9 +7,11 @@ import { setupFetchTelemetryModule } from './module/telemetry'
 // `useAsyncData`. Built on Nuxt primitives (refreshNuxtData, clearNuxtData,
 // `_asyncData`); cache state lives on the Nuxt app instance for SSR safety.
 //
-// Exposes auto-imports: useNuxtQuery, useNuxtMutation, useNuxtRpc,
-// useNuxtRpcQuery, useNuxtSubscription, useQueryCache, invalidateNuxtQueries,
-// removeNuxtQueries, getQueryData, setQueryData.
+// Exposes auto-imports: useNuxtQuery, useNuxtAsyncQuery, useNuxtMutation,
+// useNuxtRpc, useNuxtRpcQuery, useNuxtSubscription, nuxtWebSocketSource,
+// useQueryCache, invalidateNuxtQueries, invalidateNuxtRpc, removeNuxtQueries,
+// getQueryData, setQueryData, defineNuxtQueryGroup, defineNuxtRpcQuery,
+// defineNuxtRpcMutation, serializeNuxtRpcKey.
 
 export interface ModuleOptions {
   /**
@@ -30,6 +32,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-use-query',
     configKey: 'nuxtUseQuery',
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
     contracts: {
@@ -87,6 +90,10 @@ export {}
     // Server-only: serializes the per-request `lastFetched` map into the
     // payload so the client seeds exact fetch timestamps.
     addPlugin({ mode: 'server', src: resolver.resolve('./runtime/plugin.server') })
+
+    // Both runtimes: the reducer runs on the server, the reviver on the
+    // client, so a `NuxtRpcError` survives the payload with its tag.
+    addPlugin({ src: resolver.resolve('./runtime/plugin-rpc-payload') })
 
     setupFetchTelemetryModule(
       options.telemetry,

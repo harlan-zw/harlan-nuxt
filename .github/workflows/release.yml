@@ -9,6 +9,9 @@ on:
       - 'nuxt-dx-v*'
       - 'nuxt-github-sponsors-v*'
       - 'nuxt-cloudflare-v*'
+      - 'nuxt-wide-events-v*'
+      - 'nuxt-sentry-v*'
+      - 'comark-content-v*'
 
 permissions:
   contents: read
@@ -42,26 +45,40 @@ jobs:
 
       - run: pnpm test:pack
 
+      - run: pnpm test:attw
+
       - name: Publish nuxt-cf-jobs
         if: startsWith(github.ref_name, 'nuxt-cf-jobs-v')
-        run: npm publish packages/nuxt-cf-jobs/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-cf-jobs/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-use-query
         if: startsWith(github.ref_name, 'nuxt-use-query-v')
-        run: npm publish packages/nuxt-use-query/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-use-query/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-domain-events
         if: startsWith(github.ref_name, 'nuxt-domain-events-v')
-        run: npm publish packages/nuxt-domain-events/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-domain-events/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-dx
         if: startsWith(github.ref_name, 'nuxt-dx-v')
-        run: npm publish packages/nuxt-dx/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-dx/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-github-sponsors
         if: startsWith(github.ref_name, 'nuxt-github-sponsors-v')
-        run: npm publish packages/nuxt-github-sponsors/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-github-sponsors/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-cloudflare
         if: startsWith(github.ref_name, 'nuxt-cloudflare-v')
-        run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public
+        run: npm publish packages/nuxt-cloudflare/.pack/*.tgz --access public --provenance
+
+      - name: Publish nuxt-wide-events
+        if: startsWith(github.ref_name, 'nuxt-wide-events-v')
+        run: npm publish packages/nuxt-wide-events/.pack/*.tgz --access public --provenance
+
+      - name: Publish nuxt-sentry
+        if: startsWith(github.ref_name, 'nuxt-sentry-v')
+        run: npm publish packages/nuxt-sentry/.pack/*.tgz --access public --provenance
+
+      - name: Publish comark-content
+        if: startsWith(github.ref_name, 'comark-content-v')
+        run: npm publish packages/comark-content/.pack/*.tgz --access public --provenance

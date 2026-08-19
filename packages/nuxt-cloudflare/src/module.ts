@@ -3,7 +3,7 @@ import type { Nitro } from 'nitropack/types'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
 import process from 'node:process'
-import { defineNuxtModule, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, defineNuxtModule, hasNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -16,10 +16,12 @@ import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
   formatWranglerDiagnostics,
+  readAuthoredWranglerConfig,
   readWranglerJsonFile,
 } from './wrangler'
 
 export interface ModuleOptions {
+  bindingTypes?: boolean
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
@@ -61,6 +63,38 @@ const workersCachePluginPath = resolve(
     ? 'runtime/server/plugins/workers-cache.ts'
     : 'runtime/server/plugins/workers-cache.js',
 )
+const wideEventsPluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/wide-events.ts'
+    : 'runtime/server/plugins/wide-events.js',
+)
+const runtimeConfigPluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/runtime-config.ts'
+    : 'runtime/server/plugins/runtime-config.js',
+)
+
+/**
+ * Cloudflare context worth one flat record per request.
+ *
+ * Declared here so the consuming application never hand-lists them: this module
+ * knows what it populates, and `addWideEventFields` is what lets it say so.
+ * Deliberately excludes everything in `request.cf` that describes a PERSON —
+ * city, region, postal code, ASN — see the plugin.
+ */
+const WIDE_EVENT_FIELDS = [
+  'cf.colo',
+  'cf.country',
+  'cf.httpProtocol',
+  'd1.durationMs',
+  'd1.primaryQueries',
+  'd1.queries',
+  'd1.recoveries',
+  'd1.region',
+  'd1.unrecovered',
+] as const
 const BUILD_SECRET_ENV_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?|ENCRYPTION_KEY|PASSWORD|PRIVATE_KEY|SECRET|SIGNING_KEY|TOKEN|SALT)(?:_|$)/i
 // Nuxt Scripts must resolve this value during setup to register its signed proxy plugin.
 const REQUIRED_BUILD_SECRET_NAMES = new Set(['NUXT_SCRIPTS_PROXY_SECRET'])
@@ -101,11 +135,28 @@ export function findPopulatedRuntimeSecretPaths(
   return paths
 }
 
+export interface NitroCloudflareContext {
+  /** The project directory Wrangler and Nitro read the authored config from. */
+  rootDir?: string
+  /** Whether Nuxt emits server source maps. */
+  serverSourceMaps?: boolean
+}
+
+function addNitroPlugin(nitro: NitroCloudflareShape, path: string): void {
+  nitro.plugins ??= []
+  if (!nitro.plugins.includes(path))
+    nitro.plugins.push(path)
+}
+
 export function configureNitroCloudflare(
   nitro: NitroCloudflareShape,
   options: ModuleOptions,
-  nuxtServerSourceMaps?: boolean,
+  context: NitroCloudflareContext = {},
 ): void {
+  const authored = readAuthoredWranglerConfig(context.rootDir)
+  if (authored._tag === 'invalid')
+    throw new Error(`[nuxt-cloudflare] Wrangler config "${authored.path}" cannot be parsed: ${authored.reason}`)
+
   nitro.preset ??= 'cloudflare-module'
   nitro.cloudflare ??= {}
   nitro.cloudflare.deployConfig = true
@@ -115,16 +166,15 @@ export function configureNitroCloudflare(
     logsSampleRate: options.logsSampleRate,
     requiredSecrets: options.requiredSecrets,
     tracesSampleRate: options.tracesSampleRate,
-    uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? nuxtServerSourceMaps ?? false,
+    uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? context.serverSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
     workersCache: resolveModuleWorkersCachePolicy(options),
-  })
+  }, authored._tag === 'authored' ? authored.config : {})
 
-  if (nitro.cloudflare.wrangler.cache?.enabled) {
-    nitro.plugins ??= []
-    if (!nitro.plugins.includes(workersCachePluginPath))
-      nitro.plugins.push(workersCachePluginPath)
-  }
+  addNitroPlugin(nitro, runtimeConfigPluginPath)
+
+  if (nitro.cloudflare.wrangler.cache?.enabled)
+    addNitroPlugin(nitro, workersCachePluginPath)
 
   if (options.kvCache === false)
     return
@@ -143,7 +193,35 @@ export function configureNitroCloudflare(
   }
 }
 
-async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions, rootDir: string): Promise<void> {
+export type BindingTypeAudit
+  = | { _tag: 'compare', signature: string }
+    | { _tag: 'missing' }
+    | { _tag: 'skipped' }
+
+/**
+ * Decides whether the build compares generated binding types with the final
+ * Wrangler config.
+ *
+ * The signature exists only after the type template regenerates. A build that
+ * reuses a cached template must fail, not skip: a skipped comparison reports a
+ * clean build for types that no longer match the deployed config.
+ */
+export function resolveBindingTypeAudit(
+  bindingTypes: boolean | undefined,
+  signature: string | undefined,
+): BindingTypeAudit {
+  if (bindingTypes === false)
+    return { _tag: 'skipped' }
+  return signature ? { _tag: 'compare', signature } : { _tag: 'missing' }
+}
+
+async function auditGeneratedWranglerConfig(
+  nitro: Nitro,
+  options: ModuleOptions,
+  buildDir: string,
+  rootDir: string,
+  bindingTypeSignature?: string,
+): Promise<void> {
   const path = resolve(nitro.options.output.serverDir, 'wrangler.json')
   const result = await readWranglerJsonFile(path)
   if (result._tag === 'missing')
@@ -155,6 +233,23 @@ async function auditGeneratedWranglerConfig(nitro: Nitro, options: ModuleOptions
   const validated = readProjectWranglerConfig({ config: path, cwd: rootDir })
   if (validated._tag === 'invalid')
     throw new Error('[nuxt-cloudflare] Generated Wrangler config fails Wrangler schema validation. Run Wrangler locally for validation details.')
+
+  const audit = resolveBindingTypeAudit(options.bindingTypes, bindingTypeSignature)
+  if (audit._tag === 'missing') {
+    throw new Error(
+      '[nuxt-cloudflare] Cloudflare binding types were not generated during this build, so the drift check could not run. Run `nuxt prepare`, or set `bindingTypes: false` when another tool owns the declaration.',
+    )
+  }
+  if (audit._tag === 'compare') {
+    const { assertCloudflareBindingTypesCurrent } = await import('./binding-types')
+    await assertCloudflareBindingTypesCurrent({
+      buildDir,
+      compatibilityDate: result.config.compatibility_date,
+      config: result.config,
+      expectedSignature: audit.signature,
+      nodeCompat: Boolean(nitro.options.cloudflare?.nodeCompat),
+    })
+  }
 
   const diagnostics = [
     ...diagnoseWranglerConfig(result.config, {
@@ -184,8 +279,67 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   const configure = () => configureNitroCloudflare(
     nuxt.options.nitro as NitroCloudflareShape,
     options,
-    Boolean(nuxt.options.sourcemap.server),
+    {
+      rootDir: nuxt.options.rootDir,
+      serverSourceMaps: Boolean(nuxt.options.sourcemap.server),
+    },
   )
+
+  // Optional integration with `@harlan-zw/nuxt-wide-events`. Declaring the
+  // fields is not optional decoration: that module's build plugin rejects any
+  // `addWideEventFields` call naming a field the allowlist does not carry, so
+  // without this the server plugin below would fail the application's build.
+  //
+  // A hook, so this module needs no import from and no dependency on that one.
+  // When it is absent the hook never fires and this is inert.
+  // The hook name and this registry shape are the contract with that module.
+  // Typed structurally and called through a narrow cast rather than importing
+  // its `@nuxt/schema` augmentation: that augmentation is the one place the
+  // hook may be declared — two packages declaring the same hook key must give
+  // it an identical type or TypeScript rejects the merge — and importing it
+  // would give this module the dependency the hook exists to avoid.
+  const registerWideEventFields = nuxt.hook as unknown as (
+    name: 'wide-events:fields',
+    callback: (registry: { add: (moduleName: string, fields: readonly string[]) => void }) => void,
+  ) => void
+  registerWideEventFields('wide-events:fields', (registry) => {
+    registry.add('@harlan-zw/nuxt-cloudflare', [...WIDE_EVENT_FIELDS])
+  })
+
+  // The plugin itself only resolves `addWideEventFields` when that module is
+  // installed, so it is registered only then.
+  // `hasNuxtModule` reads `nuxt.options.modules` without checking it, so guard
+  // the array first: this function is exported and called directly with partial
+  // Nuxt objects, and a detection helper must not be the thing that throws.
+  if (Array.isArray(nuxt.options.modules) && hasNuxtModule('@harlan-zw/nuxt-wide-events', nuxt)) {
+    addNitroPlugin(nuxt.options.nitro as NitroCloudflareShape, wideEventsPluginPath)
+  }
+
+  let bindingTypeSignature: string | undefined
+
+  if (options.bindingTypes !== false) {
+    const bindingTypesTemplate = addTypeTemplate({
+      filename: 'types/cloudflare-bindings.d.ts',
+      getContents: async () => {
+        const { prepareCloudflareBindingTypes } = await import('./binding-types')
+        const compatibilityDate = nuxt.options.compatibilityDate
+        const artifact = await prepareCloudflareBindingTypes({
+          buildDir: nuxt.options.buildDir,
+          compatibilityDate: typeof compatibilityDate === 'string'
+            ? compatibilityDate || undefined
+            : compatibilityDate.cloudflare ?? compatibilityDate.default,
+          nodeCompat: Boolean((nuxt.options.nitro as NitroCloudflareShape).cloudflare?.nodeCompat),
+          rootDir: nuxt.options.rootDir,
+          wrangler: (nuxt.options.nitro as NitroCloudflareShape).cloudflare?.wrangler ?? {},
+        })
+        bindingTypeSignature = artifact.signature
+        return artifact.content
+      },
+    }, { nitro: true })
+    nuxt.hook('prepare:types', ({ references }) => {
+      references.push({ path: bindingTypesTemplate.dst })
+    })
+  }
 
   configure()
   nuxt.hook('modules:done', () => {
@@ -280,7 +434,13 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       // fails a build that is otherwise fine.
       if (!nitro.options.preset?.includes('cloudflare'))
         return
-      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options, nuxt.options.rootDir))
+      nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(
+        nitro,
+        options,
+        nuxt.options.buildDir,
+        nuxt.options.rootDir,
+        bindingTypeSignature,
+      ))
     })
   }
 }
@@ -289,13 +449,14 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-cloudflare',
     configKey: 'nuxtCloudflare',
-    compatibility: { nuxt: '>=4.5.0' },
+    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
   },
   defaults: {
+    bindingTypes: true,
     enabled: true,
     compatibilityMaxAgeDays: 90,
     doctor: { _tag: 'advisory' },
-    logsSampleRate: 0.1,
+    logsSampleRate: 0.01,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
     workersCache: { _tag: 'enabled', crossVersion: false },

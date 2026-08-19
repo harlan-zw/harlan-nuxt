@@ -459,6 +459,26 @@ describe('consumeBatch', () => {
     expect(message.retry).not.toHaveBeenCalled()
   })
 
+  it('writes the trace marker through the durable runtime, not just the queue consumer', async () => {
+    // 0.0.6 wired `traceMarker` into ONE of four dispatch call sites. Every
+    // application using `createDurableJobsRuntime` — the documented entry point —
+    // got the option and no marker. This is that path.
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => void lines.push(a.join(' ')))
+    const registry = createRegistry({ light: async () => {} })
+    const message = { id: 'm-marker', body: { _task: 'light' }, attempts: 1, ack: vi.fn(), retry: vi.fn() }
+
+    await runLightweightMessage({
+      message,
+      registry,
+      createJobContext: ({ control }) => ctxFactory(control),
+      traceMarker: true,
+    })
+
+    expect(lines).toContain('cfjob:light')
+    log.mockRestore()
+  })
+
   it('settles a durable member off a DLQ batch so it cannot hang', async () => {
     const { d1, runtime } = await setup({ work: async () => {}, finish: async () => {} })
     const { jobIds } = await runtime.createBatch({

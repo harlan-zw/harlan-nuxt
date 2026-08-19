@@ -1,0 +1,3 @@
+.dark pre.rangi span[style*='--shiki-dark'] {
+  color: var(--shiki-dark) !important;
+}

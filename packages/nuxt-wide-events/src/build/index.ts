@@ -1,0 +1,7 @@
+export { createWideEventFieldRegistry } from './contributed-fields'
+export type { CollectedWideEventFields, WideEventFieldRegistry } from './contributed-fields'
+export { BUILT_IN_WIDE_EVENT_FIELDS, formatWideEventFieldIssues, resolveWideEventFields } from './fields'
+export type { ResolveWideEventFieldsResult, WideEventFieldIssue } from './fields'
+export { createWideEventValidationPlugin } from './source-scan'
+export { formatWideEventSourceIssues, validateWideEventSource } from './source-validation'
+export type { ValidateWideEventSourceResult, WideEventSourceIssue } from './source-validation'

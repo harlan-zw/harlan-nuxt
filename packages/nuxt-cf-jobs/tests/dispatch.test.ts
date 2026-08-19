@@ -25,6 +25,7 @@ import {
   findDispatchableDurableJobs,
   getDurableJobContinuationsForStage,
   groupQueueJobMessagesByQueue,
+  jobNameFromTraceLogs,
   parseDurableJobContinuation,
   prepareDurableJob,
   prepareRegisteredDurableJob,
@@ -95,6 +96,57 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
 
     expect(result).toEqual({ success: true, control: undefined })
     expect(seen).toEqual(['hello'])
+  })
+
+  it('names the job in a trace marker before the handler runs, so a killed invocation still reports it', async () => {
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => void lines.push(args.join(' ')))
+    const registry = defineJobRegistry([
+      defineJob({
+        name: 'crawl/slice',
+        queue: 'default',
+        // A handler the runtime kills partway through writes nothing itself.
+        async handle() {},
+      }),
+    ])
+    const job = {
+      id: 'job_marker',
+      queue: 'default',
+      attempts: 1,
+      batchId: null,
+      payload: buildJobPayload('crawl/slice', {}),
+    }
+    const context = () => ({
+      env: {},
+      db: {},
+      log: [],
+      jobId: 'job_marker',
+      batchId: null,
+      attempt: 1,
+      release: vi.fn(),
+      fail: vi.fn(),
+    })
+
+    await dispatchRegisteredJob({ registry, job, createContext: context, traceMarker: true })
+    expect(lines).toEqual(['cfjob:crawl/slice'])
+    expect(jobNameFromTraceLogs([{ message: lines }])).toBe('crawl/slice')
+
+    // Off by default: an app that consumes no traces pays nothing.
+    lines.length = 0
+    await dispatchRegisteredJob({ registry, job, createContext: context })
+    expect(lines).toEqual([])
+    log.mockRestore()
+  })
+
+  it('recovers the job that was running from a batch that logged several markers', () => {
+    // A batch delivers many messages to one invocation; the kill belongs to the last.
+    expect(jobNameFromTraceLogs([
+      { message: ['cfjob:crawl/slice'] },
+      { message: ['some job output'] },
+      { message: ['cfjob:assess/generate'] },
+    ])).toBe('assess/generate')
+    expect(jobNameFromTraceLogs([{ message: ['nothing to see'] }])).toBeNull()
+    expect(jobNameFromTraceLogs(undefined)).toBeNull()
   })
 
   it('reports missing or unknown task names without calling a context factory', async () => {
@@ -973,8 +1025,9 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
   })
 
   it('supports Laravel-style job policy aliases', () => {
-    expect(resolveJobMaxAttempts({ tries: 3, maxAttempts: 5 })).toBe(3)
-    expect(resolveJobMaxAttempts({ maxAttempts: 5 })).toBe(5)
+    // `tries` is the only attempt cap. The `maxAttempts` alias is gone.
+    expect(resolveJobMaxAttempts({ tries: 3 })).toBe(3)
+    expect(resolveJobMaxAttempts({})).toBeUndefined()
     expect(resolveJobBackoff(30, 2)).toBe(30)
     expect(resolveJobBackoff([10, 30, 90], 2)).toBe(30)
     expect(resolveJobBackoff([10, 30, 90], 10)).toBe(90)
@@ -2218,20 +2271,6 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     })
     expect(job.name).toBe('demo/no-queue')
     expect((job as { queue?: string }).queue).toBeUndefined()
-  })
-
-  it('resolveNitroTaskEnv reads globalThis.__env__', async () => {
-    const { resolveNitroTaskEnv } = await import('#cf-jobs/server')
-    const prev = (globalThis as { __env__?: unknown }).__env__
-    ;(globalThis as { __env__?: unknown }).__env__ = { QUEUE_FOO: { send: () => {}, sendBatch: () => {} } }
-    try {
-      const env = resolveNitroTaskEnv()
-      expect(env).toBeDefined()
-      expect((env as { QUEUE_FOO: unknown }).QUEUE_FOO).toBeDefined()
-    }
-    finally {
-      ;(globalThis as { __env__?: unknown }).__env__ = prev
-    }
   })
 })
 

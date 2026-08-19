@@ -11,14 +11,14 @@ describe('extractJobMeta', () => {
     })
   })
 
-  it('reads from named-const form with numeric maxAttempts', () => {
+  it('reads from named-const form and reports the removed maxAttempts key', () => {
     const code = `const j = defineJob({ queue: 'sync-standard', maxAttempts: 5 }); export default j`
     const meta = extractJobMeta(code)
     expect(meta).toEqual({
       queue: 'sync-standard',
-      maxAttempts: 5,
       hasInput: false,
       hasUniqueId: false,
+      unreadable: ['maxAttempts'],
     })
   })
 
@@ -43,7 +43,9 @@ describe('extractJobMeta', () => {
     })
     // Non-literal (computed/identifier) name is ignored, so the registry falls
     // back to the file-path name.
-    expect(extractJobMeta(`export default defineJob({ name: NAME, queue: 'q' })`).name).toBeUndefined()
+    const computed = extractJobMeta(`export default defineJob({ name: NAME, queue: 'q' })`)
+    expect(computed.name).toBeUndefined()
+    expect(computed.unreadable).toEqual(['name'])
   })
 
   it('reads static template literal strings', () => {
@@ -66,11 +68,12 @@ describe('extractJobMeta', () => {
     expect(meta.queue).toBeUndefined()
   })
 
-  it('leaves queue undefined when value is a non-literal identifier', () => {
+  it('reports queue as unreadable when the value is a non-literal identifier', () => {
     const meta = extractJobMeta(`export default defineJob({ queue: someVar })`)
     expect(meta).toEqual({
       hasInput: false,
       hasUniqueId: false,
+      unreadable: ['queue'],
     })
     expect(meta.queue).toBeUndefined()
   })
@@ -83,13 +86,12 @@ describe('extractJobMeta', () => {
     })
   })
 
-  it('reads tries and all literal fields together', () => {
-    const code = `export default defineJob({ queue: 'q', jobType: 'jt', tries: 3, maxAttempts: 7, unique: false })`
+  it('reads every literal field together', () => {
+    const code = `export default defineJob({ queue: 'q', jobType: 'jt', tries: 3, unique: false })`
     expect(extractJobMeta(code)).toEqual({
       queue: 'q',
       jobType: 'jt',
       tries: 3,
-      maxAttempts: 7,
       unique: false,
       hasInput: false,
       hasUniqueId: false,
@@ -103,12 +105,13 @@ describe('extractJobMeta', () => {
     })
   })
 
-  it('ignores non-literal numeric and boolean values', () => {
-    const code = `export default defineJob({ queue: 'q', maxAttempts: COUNT, unique: flag })`
+  it('reports non-literal numeric and boolean values instead of dropping them silently', () => {
+    const code = `export default defineJob({ queue: 'q', tries: COUNT, unique: flag })`
     expect(extractJobMeta(code)).toEqual({
       queue: 'q',
       hasInput: false,
       hasUniqueId: false,
+      unreadable: ['tries', 'unique'],
     })
   })
 })

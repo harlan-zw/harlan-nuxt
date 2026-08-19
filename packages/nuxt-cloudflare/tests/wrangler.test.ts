@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { applyCloudflareDefaults, diagnoseWranglerConfig } from '../src/wrangler'
 
 describe('applyCloudflareDefaults', () => {
+  it('samples routine Workers Logs at one percent by default', () => {
+    expect(applyCloudflareDefaults({}).observability?.logs?.head_sampling_rate).toBe(0.01)
+  })
+
   it('adds the proven Nuxt SEO and gscdump baseline without replacing user sampling', () => {
     expect(applyCloudflareDefaults({
       compatibility_flags: ['global_fetch_strictly_public'],
@@ -12,7 +16,7 @@ describe('applyCloudflareDefaults', () => {
     }, {
       requiredSecrets: ['API_TOKEN'],
     })).toMatchObject({
-      compatibility_flags: ['global_fetch_strictly_public', 'nodejs_compat'],
+      compatibility_flags: ['global_fetch_strictly_public', 'nodejs_compat', 'no_nodejs_compat_v2'],
       env: {
         production: { secrets: { required: ['PRODUCTION_ONLY_SECRET', 'API_TOKEN'] } },
       },
@@ -70,6 +74,80 @@ describe('applyCloudflareDefaults', () => {
     ]))
   })
 
+  describe('authored root Wrangler config', () => {
+    it('keeps the authored log sampling rate over the module default', () => {
+      const config = applyCloudflareDefaults({}, { logsSampleRate: 0.01 }, {
+        observability: { logs: { head_sampling_rate: 1 } },
+      })
+
+      expect(config.observability?.logs?.head_sampling_rate).toBe(1)
+      expect(config.observability?.traces?.head_sampling_rate).toBe(0.01)
+    })
+
+    it('keeps authored source-map upload over the Nitro source-map policy', () => {
+      expect(applyCloudflareDefaults({}, { uploadSourceMaps: false }, { upload_source_maps: true }))
+        .toMatchObject({ upload_source_maps: true })
+    })
+
+    it('keeps authored placement, preview URLs, and version metadata', () => {
+      const config = applyCloudflareDefaults({}, {}, {
+        placement: { region: 'gcp:us-east4' },
+        preview_urls: true,
+        version_metadata: { binding: 'BUILD_METADATA' },
+      })
+
+      expect(config.placement).toEqual({ region: 'gcp:us-east4' })
+      expect(config.preview_urls).toBe(true)
+      expect(config.version_metadata).toEqual({ binding: 'BUILD_METADATA' })
+    })
+
+    it('skips version metadata when an authored binding already owns the name', () => {
+      expect(applyCloudflareDefaults({}, {}, { vars: { CF_VERSION_METADATA: 'occupied' } }).version_metadata)
+        .toBeUndefined()
+    })
+
+    it('disables the workers.dev endpoint when the authored config carries a route', () => {
+      expect(applyCloudflareDefaults({}, {}, { routes: ['example.com/*'] }).workers_dev).toBe(false)
+    })
+
+    it('leaves authored required secrets to the authored config', () => {
+      const config = applyCloudflareDefaults({}, { requiredSecrets: ['SHARED_SECRET', 'MODULE_SECRET'] }, {
+        secrets: { required: ['SHARED_SECRET'] },
+      })
+
+      expect(config.secrets?.required).toEqual(['MODULE_SECRET'])
+    })
+
+    it('applies authored environment values to that environment only', () => {
+      const config = applyCloudflareDefaults({ env: { production: {} } }, { logsSampleRate: 0.01 }, {
+        env: { production: { observability: { logs: { head_sampling_rate: 0.5 } } } },
+      })
+
+      expect(config.env?.production?.observability?.logs?.head_sampling_rate).toBe(0.5)
+      expect(config.observability?.logs?.head_sampling_rate).toBe(0.01)
+    })
+  })
+
+  describe('node compatibility flags', () => {
+    it('never pairs nodejs_compat with nodejs_compat_v2', () => {
+      expect(applyCloudflareDefaults({ compatibility_flags: ['nodejs_compat_v2'] }).compatibility_flags)
+        .toEqual(['nodejs_compat_v2'])
+      expect(applyCloudflareDefaults({}, {}, { compatibility_flags: ['nodejs_compat_v2'] }).compatibility_flags)
+        .toEqual(['nodejs_compat_v2'])
+    })
+
+    it('resolves an authored opt-out of nodejs_compat_v2 the way Wrangler does', () => {
+      expect(applyCloudflareDefaults({}, {}, {
+        compatibility_flags: ['nodejs_compat_v2', 'no_nodejs_compat_v2'],
+      }).compatibility_flags).toEqual(['no_nodejs_compat_v2', 'nodejs_compat'])
+    })
+
+    it('adds the Nitro Node compatibility pair when no flag is authored', () => {
+      expect(applyCloudflareDefaults({}).compatibility_flags)
+        .toEqual(['nodejs_compat', 'no_nodejs_compat_v2'])
+    })
+  })
+
   it('preserves an explicit source-map opt-out', () => {
     expect(applyCloudflareDefaults({ upload_source_maps: false })).toMatchObject({ upload_source_maps: false })
   })
@@ -117,7 +195,7 @@ describe('applyCloudflareDefaults', () => {
 
     expect(config.env?.production).toMatchObject({
       compatibility_date: '2026-08-11',
-      compatibility_flags: ['global_fetch_strictly_public', 'nodejs_compat'],
+      compatibility_flags: ['global_fetch_strictly_public', 'nodejs_compat', 'no_nodejs_compat_v2'],
       observability: { enabled: false },
       secrets: { required: ['PRODUCTION_ONLY_SECRET', 'MODULE_SECRET'] },
       version_metadata: { binding: 'CF_VERSION_METADATA' },
@@ -207,6 +285,69 @@ describe('applyCloudflareDefaults', () => {
 })
 
 describe('diagnoseWranglerConfig', () => {
+  it('warns when log sampling exceeds the routine one-percent budget', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: {
+        enabled: true,
+        logs: { enabled: true, head_sampling_rate: 0.1 },
+        traces: { enabled: true, head_sampling_rate: 0.01 },
+      },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'observability-log-sampling-high',
+      }))
+  })
+
+  it('warns when trace sampling exceeds the routine one-percent budget', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: {
+        enabled: true,
+        logs: { enabled: true, head_sampling_rate: 0.01 },
+        traces: { enabled: true, head_sampling_rate: 0.1 },
+      },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'observability-trace-sampling-high',
+      }))
+  })
+
+  it('warns when Workers Caching makes static asset requests billable', () => {
+    expect(diagnoseWranglerConfig({
+      assets: { directory: '.output/public' },
+      cache: { enabled: true, cross_version_cache: false },
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'workers-cache-assets-billable',
+      }))
+  })
+
+  it('warns when a raised CPU limit increases runaway-cost exposure', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      limits: { cpu_ms: 60_000 },
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .toContainEqual(expect.objectContaining({
+        _tag: 'warning',
+        code: 'cpu-limit-raised',
+      }))
+  })
+
   it('warns when Workers Caching policy is implicit', () => {
     expect(diagnoseWranglerConfig({
       compatibility_date: '2026-08-11',
@@ -694,6 +835,17 @@ describe('diagnoseWranglerConfig', () => {
     }, { now: new Date('2024-09-22T00:00:00Z') }))
       .not
       .toContainEqual(expect.objectContaining({ code: 'nodejs-compat-version-implicit' }))
+  })
+
+  it('accepts nodejs_compat_v2 as the Node compatibility choice', () => {
+    expect(diagnoseWranglerConfig({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat_v2'],
+      observability: { enabled: true },
+      workers_dev: false,
+    }, { now: new Date('2026-08-11T00:00:00Z') }))
+      .not
+      .toContainEqual(expect.objectContaining({ code: 'missing-nodejs-compat' }))
   })
 
   it('rejects named environments left in a generated deployment config', () => {

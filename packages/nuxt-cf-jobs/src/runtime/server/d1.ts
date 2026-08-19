@@ -311,12 +311,16 @@ export function createD1DurableJobRepository<Queue extends string = string>(
   const failedJobsTable = opts.failedJobsTable ?? 'failed_jobs'
   const batchesTable = opts.batchesTable ?? 'job_batches'
 
+  // The legacy immediate insert asserts publication (`published_at`), so it must
+  // stamp the dispatch columns too. `findDispatchableJobs` reads
+  // `last_dispatched_at` to tell "never dispatched" from "dispatched, still
+  // queued"; a published row with a null stamp reads as the former.
   const insertJobSql = `
     INSERT OR IGNORE INTO ${jobsTable} (
       id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
-      attempts, max_attempts, backoff, available_at, created_at, published_at
+      attempts, max_attempts, backoff, available_at, created_at, published_at, last_dispatched_at, dispatch_attempts
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `
   const stageJobSql = `
     INSERT INTO ${jobsTable} (
@@ -344,7 +348,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       record.backoff ? JSON.stringify(record.backoff) : null,
       record.availableAt,
       record.createdAt,
-      ...(sql === insertJobSql ? [record.createdAt] : []),
+      ...(sql === insertJobSql ? [record.createdAt, record.createdAt] : []),
     )
   }
 
@@ -640,13 +644,22 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         return 0
       const at = opts?.at ?? currentUnixSeconds()
       const evidence = JSON.stringify(orphanRedispatchEvidence(at))
+      // `last_dispatched_at` + `dispatch_attempts` are the damping record; the
+      // evidence entry is only for a human reading the row. The evidence log is
+      // capped at eight shared entries, so a busy row evicts its own
+      // orphan-redispatch marker and the sweep goes memoryless again. Columns
+      // cannot be evicted, and `findDispatchableJobs` reads them.
       const result = await db.prepare(`
         UPDATE ${jobsTable}
-        SET retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
+        SET last_dispatched_at = ?,
+            dispatch_attempts = dispatch_attempts + 1,
+            last_dispatch_error = NULL,
+            retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
         WHERE id IN (SELECT value FROM json_each(?))
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        at,
         DURABLE_JOB_FAILURE_EVIDENCE_LIMIT,
         evidence,
         JSON.stringify(ids),
@@ -723,12 +736,9 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           )
           AND (
             ? IS NULL
-            OR NOT EXISTS (
-              SELECT 1
-              FROM json_each(${validEvidenceArraySql('retry_reasons')})
-              WHERE json_extract(value, '$._tag') = 'orphan-redispatch'
-                AND CAST(json_extract(value, '$.at') AS INTEGER) > ?
-            )
+            OR last_dispatched_at IS NULL
+            OR last_dispatch_error IS NOT NULL
+            OR last_dispatched_at <= ?
           )
           AND completed_at IS NULL
           AND failed_at IS NULL

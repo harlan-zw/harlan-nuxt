@@ -1,6 +1,11 @@
 import type { FetchTelemetryRuntimeOptions } from '../runtime/telemetry'
 import { addServerPlugin } from '@nuxt/kit'
-import { DEFAULT_FETCH_TELEMETRY_OPTIONS } from '../runtime/telemetry'
+import { consola } from 'consola'
+import {
+  collectFetchTelemetryOptionWarnings,
+  DEFAULT_FETCH_TELEMETRY_OPTIONS,
+  normalizeFetchTelemetryOptions,
+} from '../runtime/telemetry'
 
 export type ModuleTelemetryOptions = boolean | Partial<FetchTelemetryRuntimeOptions>
 
@@ -25,8 +30,19 @@ export function setupFetchTelemetryModule(
   if (!telemetry.enabled)
     return
 
+  reportTelemetryOptionWarnings(telemetry)
   setRuntimeTelemetryConfig(runtimeConfig, telemetry)
   addServerPlugin(serverPlugin)
+}
+
+/**
+ * Surface unreachable telemetry configuration at build time. A dead threshold
+ * looks identical to a healthy site: both report nothing.
+ */
+function reportTelemetryOptionWarnings(telemetry: FetchTelemetryRuntimeOptions): void {
+  const logger = consola.withTag('nuxt-use-query')
+  for (const warning of collectFetchTelemetryOptionWarnings(normalizeFetchTelemetryOptions(telemetry)))
+    logger.warn(warning.message)
 }
 
 function resolveModuleTelemetryOptions(input: ModuleTelemetryOptions | undefined): FetchTelemetryRuntimeOptions {

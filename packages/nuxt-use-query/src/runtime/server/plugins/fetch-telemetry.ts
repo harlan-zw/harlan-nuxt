@@ -2,6 +2,7 @@ import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTel
 import { consola } from 'consola'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from 'nitropack/runtime'
 import {
+  analyseFetchChain,
   callTelemetryHook,
   createFetchTelemetryState,
   endFetchTelemetry,
@@ -17,6 +18,7 @@ import {
   isFetchWaterfall,
   normalizeFetchTelemetryOptions,
   NUXT_USE_QUERY_TELEMETRY_HOOKS,
+  recordDuplicateFetch,
   recordFetchTelemetry,
   resolveLargePayloadThreshold,
   resolveSlowFetchThreshold,
@@ -118,9 +120,11 @@ export default defineNitroPlugin((nitroApp) => {
       logger.debug(formatFetchSummaryTelemetryEvent(summaryEvent))
     }
 
-    if (isFetchWaterfall(summary, options)) {
+    const chain = analyseFetchChain(summary.timeline)
+    if (isFetchWaterfall(summary, chain, options)) {
       const waterfallEvent: FetchWaterfallTelemetryEvent = {
         ...summaryEvent,
+        ...chain,
         minFetches: options.waterfallMinFetches,
         thresholdMs: options.waterfallThreshold,
       }
@@ -328,17 +332,18 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (target.method === 'GET' && options.duplicateFetchThreshold !== false) {
-      const count = (state.duplicateFetchCounts[target.key] ?? 0) + 1
-      state.duplicateFetchCounts[target.key] = count
-      if (count >= options.duplicateFetchThreshold && !state.reportedDuplicateFetches[target.key]) {
-        state.reportedDuplicateFetches[target.key] = true
+      const group = recordDuplicateFetch(state, target.method, target.path, target.query)
+      const groupKey = `${group.method} ${group.path}`
+      if (group.count >= options.duplicateFetchThreshold && !state.reportedDuplicateFetches[groupKey]) {
+        state.reportedDuplicateFetches[groupKey] = true
         const event: DuplicateFetchTelemetryEvent = {
-          count,
-          method: target.method,
+          count: group.count,
+          method: group.method,
+          path: group.path,
           request: state.request,
           server: true,
           threshold: options.duplicateFetchThreshold,
-          url: target.url,
+          variants: [...group.variants],
         }
         callTelemetryHook(nitroApp.hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchDuplicate, event)
         if (options.console)
@@ -478,16 +483,19 @@ function resolveInternalFetchTarget(
   request: unknown,
   opts: Record<string, unknown> | undefined,
   state: FetchTelemetryState,
-): { key: string, method: string, url: string } | undefined {
+): { key: string, method: string, path: string, query: string, url: string } | undefined {
   const rawUrl = describeRequest(request)
   const path = resolveInternalPath(rawUrl, state.origin)
   if (!path)
     return undefined
   const method = describeMethod(request, opts)
   const normalizedPath = normalizeInternalPath(withFetchQuery(path, opts?.query ?? opts?.params))
+  const queryIndex = normalizedPath.indexOf('?')
   return {
     key: `${method} ${normalizedPath}`,
     method,
+    path: queryIndex === -1 ? normalizedPath : normalizedPath.slice(0, queryIndex),
+    query: queryIndex === -1 ? '' : normalizedPath.slice(queryIndex),
     url: shortUrl(normalizedPath),
   }
 }

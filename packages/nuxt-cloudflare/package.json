@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cloudflare",
   "type": "module",
-  "version": "0.0.7",
+  "version": "0.1.0",
   "description": "Opinionated Cloudflare deployment defaults and diagnostics for Nuxt.",
   "author": {
     "name": "Harlan Wilton",
@@ -86,7 +86,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "pnpm run build && vitest run --exclude \"**/*.nitro.test.ts\" && pnpm run test:fixture && pnpm run test:contract",
-    "test:fixture": "nuxt build tests/fixtures/basic && node dist/cli/index.mjs doctor --cwd tests/fixtures/basic",
+    "test:fixture": "nuxi prepare tests/fixtures/basic && nuxt typecheck tests/fixtures/basic && nuxt build tests/fixtures/basic && node dist/cli/index.mjs doctor --cwd tests/fixtures/basic",
     "typecheck": "nuxt typecheck && tsc --noEmit -p tsconfig.check.json",
     "test:attw": "attw --pack",
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz",
@@ -99,6 +99,7 @@
   "dependencies": {
     "@nuxt/kit": "catalog:",
     "citty": "catalog:",
+    "confbox": "catalog:",
     "consola": "catalog:",
     "h3": "catalog:",
     "nitropack": "catalog:",
@@ -109,6 +110,7 @@
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@harlan-zw/nuxt-wide-events": "workspace:^",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",
     "@types/node": "catalog:",

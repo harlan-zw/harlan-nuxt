@@ -216,8 +216,9 @@ export interface DurableJobRecoveryQuery {
   /** Suppress rows reaped more recently than this timestamp so CF redelivery wins first. */
   staleReleasedBefore?: number
   /**
-   * Suppress rows the sweep itself already re-dispatched more recently than this
-   * timestamp.
+   * Suppress rows whose last SUCCESSFUL dispatch is more recent than this
+   * timestamp. A row that has never been dispatched, or whose last dispatch
+   * failed, always stays eligible.
    *
    * Without it the sweep has no memory: `findDispatchableJobs` orders oldest
    * candidates first, so on a queue whose consumer is slower than its producer
@@ -228,7 +229,7 @@ export interface DurableJobRecoveryQuery {
    *
    * Age alone cannot express this: `createdBefore` asks "is this row old?", which
    * is true of every row queued behind a backlog, whereas the question that
-   * matters is "did WE already re-send this one?".
+   * matters is "when was this one last sent?".
    */
   redispatchedBefore?: number
   limit?: number
@@ -251,6 +252,9 @@ export interface DurableJobRecoveryRepository<
    * Record that the orphan sweep re-dispatched these rows, so a later sweep can
    * exclude them via {@link DurableJobRecoveryQuery.redispatchedBefore}. Optional:
    * a repository without it degrades to the previous (memoryless) behaviour.
+   *
+   * Store this where it cannot be evicted. The D1 repository writes the
+   * `last_dispatched_at` and `dispatch_attempts` columns.
    */
   noteOrphanRedispatch?: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
   findStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Record[]>
@@ -352,7 +356,7 @@ export interface PrepareDurableJobOptions<
   payload: Payload
   route?: DurableJobRoute<Queue>
   registry?: DurableJobRegistryLike
-  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'>
+  definition?: Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'backoff' | 'unique' | 'uniqueId'>
   id?: string
   batchId?: string
   userId?: number
@@ -378,7 +382,7 @@ export async function prepareDurableJobResult<
   Queue extends string,
 >(opts: PrepareDurableJobOptions<Name, Payload, Queue>): Promise<Result<DurableJobRecord<Queue>, JobError>> {
   const now = opts.now ?? Math.floor(Date.now() / 1000)
-  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'maxAttempts' | 'backoff' | 'unique' | 'uniqueId'> | undefined
+  const definition = opts.definition ?? opts.registry?.getJobDefinition?.(opts.name) as Pick<JobDefinition<Name, Payload, Queue, unknown, unknown, unknown>, 'name' | 'queue' | 'jobType' | 'input' | 'tries' | 'backoff' | 'unique' | 'uniqueId'> | undefined
 
   const route = resolveDurableJobRoute(opts.name, opts.route, definition, opts.registry)
   if (!route)
@@ -897,6 +901,86 @@ export async function publishDurableJobBatch<Queue extends string>(
   }))
 }
 
+/**
+ * Conservative ceiling for a `retry({ delaySeconds })`.
+ *
+ * Cloudflare documents `delaySeconds` on SEND as 0 to 86400, which is what
+ * `queue.ts` exports as `CF_QUEUE_MAX_DELAY_SECONDS`. It documents the RETRY
+ * option only as "a positive integer" and states no ceiling, so the real limit
+ * is unknown. A consumer reported a redelivery that never arrived above 12
+ * hours, so this clamp sits there. It stays below the documented send limit,
+ * so it is safe whichever ceiling applies.
+ *
+ * Do not raise it to match `CF_QUEUE_MAX_DELAY_SECONDS` without evidence. A
+ * delay the platform refuses loses the redelivery the backoff scheduled, and
+ * that failure is silent.
+ */
+export const CF_QUEUE_MAX_RETRY_DELAY_SECONDS = 43_200
+
+/** First in-flight backoff step. Later deliveries double it. */
+const DEFAULT_IN_FLIGHT_BASE_DELAY_SECONDS = 60
+
+/**
+ * Retries spent on a held row before the message acks. Kept low on purpose: a
+ * queue counts deliveries, not time, so a high bound still burns `max_retries`.
+ */
+const DEFAULT_MAX_IN_FLIGHT_RETRIES = 2
+
+export type InFlightRetryDelaySeconds = number | ((input: { jobId: string, deliveries: number }) => number)
+
+/**
+ * What the runtime did with a message whose row another run holds.
+ * - `retried`: one more delivery is scheduled.
+ * - `handed-to-recovery`: the message acked with its retry budget spent, so the
+ *   row keeps its reservation and the recovery sweep owns it from there.
+ * - `obsolete-delivery`: this run held the row, then lost it to another owner
+ *   mid-settlement. The new owner settles it, so the message acked.
+ */
+export type DurableJobInFlightOutcome
+  = | { _tag: 'retried', deliveries: number, delaySeconds: number }
+    | { _tag: 'handed-to-recovery', deliveries: number }
+    | { _tag: 'obsolete-delivery' }
+
+/** A delivery count below 1, or no count at all, reads as the first delivery. */
+function normalizeDeliveries(value: number | undefined): number {
+  return typeof value === 'number' && value >= 1 ? Math.trunc(value) : 1
+}
+
+function clampRetryDelaySeconds(seconds: number): number {
+  if (Number.isNaN(seconds) || seconds < 0)
+    return 0
+  return Math.min(Math.trunc(seconds), CF_QUEUE_MAX_RETRY_DELAY_SECONDS)
+}
+
+/**
+ * Decide what to do with a claim miss on a reserved row. Pure, so the policy is
+ * testable without a queue.
+ *
+ * `resolveClaimMiss` reports `in-flight` for any unsettled row. It cannot tell a
+ * live reservation from an abandoned one, and it does not need to. A live holder
+ * settles the row itself. An abandoned reservation belongs to the recovery
+ * sweep, which releases it after `staleSeconds` and re-dispatches it. Retrying
+ * helps only while `reclaimAfterSeconds` has not yet elapsed, because until then
+ * no redelivery can take the row. So retry a few times, then hand the row over.
+ */
+export function resolveInFlightClaimMiss(input: {
+  jobId: string
+  deliveries: number | undefined
+  delaySeconds?: InFlightRetryDelaySeconds
+  maxRetries?: number
+}): DurableJobInFlightOutcome {
+  const deliveries = normalizeDeliveries(input.deliveries)
+  const maxRetries = input.maxRetries ?? DEFAULT_MAX_IN_FLIGHT_RETRIES
+  if (deliveries > maxRetries)
+    return { _tag: 'handed-to-recovery', deliveries }
+
+  const configured = typeof input.delaySeconds === 'function'
+    ? input.delaySeconds({ jobId: input.jobId, deliveries })
+    : input.delaySeconds
+  const requested = configured ?? DEFAULT_IN_FLIGHT_BASE_DELAY_SECONDS * 2 ** (deliveries - 1)
+  return { _tag: 'retried', deliveries, delaySeconds: clampRetryDelaySeconds(requested) }
+}
+
 export type DurableJobMessageStatus
   = | 'invalid-message'
     | DurableJobClaimMiss
@@ -917,7 +1001,11 @@ export interface RunDurableJobMessageOptions<
   Logger = unknown,
   CompleteResult = unknown,
 > {
-  message: Pick<QueueMessage<Message>, 'body' | 'ack' | 'retry'>
+  /** Write a `cfjob:<name>` trace marker before the handler runs. See `trace-marker.ts`. */
+  traceMarker?: boolean
+  // `attempts` is Cloudflare's delivery count for this message. Optional so a
+  // hand-built message still type-checks; absent reads as the first delivery.
+  message: Pick<QueueMessage<Message>, 'body' | 'ack' | 'retry'> & Partial<Pick<QueueMessage<Message>, 'attempts'>>
   // The runtime never has bespoke fail options — it settles a terminal failure with a
   // `cause` and nothing else. A repository's own `FailOptions` stays on
   // `DurableJobLifecycle` / `failDurableJob` for callers that drive `failJob` directly.
@@ -946,6 +1034,22 @@ export interface RunDurableJobMessageOptions<
    * redelivering it (which re-claims and amplifies the overload). Default 10.
    */
   claimRetryDelaySeconds?: number | ((input: { error: unknown }) => number)
+  /**
+   * Backoff (s) when the row is reserved by another run ("in-flight"). Default:
+   * 60s, doubled per delivery, clamped to Cloudflare's 43200s ceiling. The old
+   * flat 60s burned the queue's `max_retries` in minutes, so a held row
+   * dead-lettered with `attempts = 0` and its handler never ran (2026-08-18:
+   * ~93 phantom `failed_jobs` rows behind one day of duplicate enqueues).
+   */
+  inFlightRetryDelaySeconds?: InFlightRetryDelaySeconds
+  /**
+   * Retries to spend on a held row before the message acks. Default 2. Backoff
+   * alone cannot fix this: a queue counts deliveries, not time. On the ack the
+   * row keeps its reservation, so the recovery sweep still owns it. Set 0 to
+   * ack the first time a row is held, which spends no delivery at all. Raise it
+   * only when the app runs no recovery sweep.
+   */
+  maxInFlightRetries?: number
   failDispatchFailure?: boolean
   completeResult?: (input: { job: StoredJob, dispatch: DispatchResult }) => unknown | Promise<unknown>
   /**
@@ -1025,7 +1129,8 @@ export interface DurableJobContinuationFailure {
  */
 export type RunDurableJobMessageResult
   = | { status: 'invalid-message' }
-    | { status: DurableJobClaimMiss }
+    | { status: 'already-resolved' | 'not-found' }
+    | { status: 'in-flight', inFlight: DurableJobInFlightOutcome }
     | { status: 'dispatch-failed', dispatch: DispatchResult, error?: JobError, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'failed', dispatch: DispatchResult, terminalFailureCause?: unknown, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'released', dispatch: DispatchResult }
@@ -1069,11 +1174,22 @@ export async function runDurableJobMessage<
     opts.message.retry({ delaySeconds })
     return { status: 'claim-error', error: jobErrors.claimThrew(error) }
   }
-  if (claimed.status !== 'claimed') {
-    if (claimed.status === 'in-flight')
-      opts.message.retry({ delaySeconds: 60 })
+  if (claimed.status === 'in-flight') {
+    const inFlight = resolveInFlightClaimMiss({
+      jobId,
+      deliveries: opts.message.attempts,
+      delaySeconds: opts.inFlightRetryDelaySeconds,
+      maxRetries: opts.maxInFlightRetries,
+    })
+    if (inFlight._tag === 'retried')
+      opts.message.retry({ delaySeconds: inFlight.delaySeconds })
     else
       opts.message.ack()
+    return { status: 'in-flight', inFlight }
+  }
+  if (claimed.status !== 'claimed') {
+    // `already-resolved` and `not-found` are settled or gone. Ack them.
+    opts.message.ack()
     return { status: claimed.status }
   }
 
@@ -1126,13 +1242,14 @@ export async function runDurableJobMessage<
     if (!isDurableJobOwnershipError(error))
       return null
     opts.message.ack()
-    return { status: 'in-flight' }
+    return { status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } }
   }
 
   try {
     const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
       registry: opts.registry,
       job,
+      traceMarker: opts.traceMarker,
       createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
     })
     const dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())
