@@ -1,5 +1,5 @@
 name: Harlan Desktop setup
-description: Install pnpm, Node, and the workspace, with the store cached and lifecycle scripts off.
+description: Install pnpm, Node, and the workspace from the shared store, with lifecycle scripts off.
 
 # NOT GENERAL PURPOSE. Harlan's own sites only; the pinned versions track what
 # those sites run and change without notice.
@@ -30,13 +30,22 @@ runs:
   steps:
     - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
 
-    # `cache: pnpm` keys the pnpm store on pnpm-lock.yaml. Without it a job
-    # re-downloads the whole dependency set; on nuxtseo.com that measured about
-    # 56s of every job.
+    # No `cache: pnpm` on purpose. This action only ever runs on the desktop
+    # pool, where every container mounts one shared pnpm store, so a job already
+    # resolves packages from local disk.
+    #
+    # Caching on top of that was not merely redundant, it was slower than no
+    # cache at all. GitHub's cache service measured 1.3-4.3 MB/s from here,
+    # because all the containers share one uplink: 66s on nuxtseo.com to replace
+    # a 14s warm install, and on gscdump.com five jobs each pulling the SAME
+    # 340 MB tarball, 1.79 GB per run and half of that repo's CI wall time. A run
+    # whose cache came back empty reinstalled from npm in 19s and beat it.
+    #
+    # A GitHub-hosted job has no shared store and should still cache. Set it up
+    # in that workflow, not here.
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: ${{ inputs.node-version }}
-        cache: pnpm
 
     - if: inputs.install == 'true'
       shell: bash
