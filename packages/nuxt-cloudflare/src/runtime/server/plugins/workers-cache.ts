@@ -38,8 +38,17 @@ export default defineNitroPlugin((nitroApp) => {
   // `send()` directly, which marks the event handled and skips that hook
   // entirely. A floor set here is the only thing an error response inherits.
   nitroApp.hooks.hook('request', (event: H3Event) => {
+    // Only the browser header. Cloudflare reads
+    // `Cloudflare-CDN-Cache-Control` ahead of `Cache-Control` and falls back to
+    // it when absent, so `private, no-store` here already closes the edge.
+    //
+    // Setting the edge header too would defeat the whole change: an app that
+    // writes `cache-control: public, s-maxage=300` and nothing else would be
+    // honoured, then overruled by our own floor sitting in the
+    // higher-precedence header, and the route rule would still do nothing.
+    // Leaving that header untouched also means its presence later can only
+    // mean the app set it, so there is no need to tell our value from theirs.
     setResponseHeader(event, 'cache-control', NO_STORE_BROWSER)
-    setResponseHeader(event, 'cloudflare-cdn-cache-control', NO_STORE_EDGE)
   })
 
   // Deliberately no `render:response` hook. That hook is handed a plain headers
@@ -55,10 +64,10 @@ export default defineNitroPlugin((nitroApp) => {
     // real lifetime on `cloudflare-cdn-cache-control` and `max-age=0` on
     // `cache-control` has still asked for shared caching, and reading only the
     // browser header would discard that as a refusal.
-    const edgeHeader = getResponseHeader(event, 'cloudflare-cdn-cache-control')
+    // Present only if the app set it, because the floor no longer writes here.
+    const stated = getResponseHeader(event, 'cloudflare-cdn-cache-control')
       ?? getResponseHeader(event, 'cdn-cache-control')
     const browserHeader = getResponseHeader(event, 'cache-control')
-    const stated = edgeHeader === NO_STORE_EDGE ? undefined : edgeHeader
     const cacheControl = stated
       ?? (browserHeader === NO_STORE_BROWSER ? undefined : browserHeader)
 
