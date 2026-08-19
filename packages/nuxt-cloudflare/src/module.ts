@@ -11,6 +11,7 @@ import {
   evaluateWranglerDiagnostics,
 } from './diagnostics'
 import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
+import { resolveHtmlCacheGuarantee } from './runtime/server/utils/workers-cache'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -197,8 +198,40 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     }
   })
   nuxt.hook('nitro:config', (nitroConfig) => {
-    if (resolveModuleWorkersCachePolicy(options)._tag === 'disabled')
+    const policy = resolveModuleWorkersCachePolicy(options)
+    if (policy._tag === 'disabled')
       return
+
+    const mode = policy.html ?? 'auto'
+    // Read at `nitro:config`, which runs after `modules:done`, so every module
+    // that publishes a capability during its own `setup` has already done so.
+    const guarantee = resolveHtmlCacheGuarantee(nuxt.options.runtimeConfig.htmlCacheCapabilities)
+
+    nuxt.options.runtimeConfig.nuxtCloudflare = {
+      ...(typeof nuxt.options.runtimeConfig.nuxtCloudflare === 'object'
+        ? nuxt.options.runtimeConfig.nuxtCloudflare
+        : {}),
+      htmlCacheMode: mode,
+    }
+
+    // The single highest-value line here. The default is invisible until it
+    // costs someone an afternoon, so state it before that happens.
+    if (mode === 'app') {
+      logger.info('Workers Cache honours your HTML cache rules. You own the version-skew risk.')
+    }
+    else if (guarantee._tag === 'bounded' && mode === 'auto') {
+      logger.info(`${guarantee.by} guarantees chunks for ${guarantee.ceilingSeconds}s. Workers Cache honours your HTML cache rules up to that limit.`)
+    }
+    else {
+      logger.info('Workers Cache is on. HTML documents get `private, no-store`. A module must guarantee chunk retention to change this.')
+    }
+
+    // A route rule that asks for shared caching is a real conflict only while
+    // nothing covers the skew hazard. Once something does, the rule is the
+    // point, so downgrade the build failure to nothing.
+    if (mode !== 'no-store' && (mode === 'app' || guarantee._tag === 'bounded'))
+      return
+
     const violations = findHtmlCacheRouteRuleViolations(nitroConfig.routeRules)
     const warnings = violations.filter(violation => violation.severity === 'warning')
     const errors = violations.filter(violation => violation.severity === 'error')
@@ -206,7 +239,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       logger.warn(formatHtmlCacheRouteRuleViolations(warnings))
     if (errors.length > 0) {
       throw new Error(
-        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}`,
+        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}\nIf a module guarantees chunk retention, set \`skewProtection.htmlCache: true\`. Otherwise set \`nuxtCloudflare.workersCache.html: 'app'\` to own the risk.`,
       )
     }
   })

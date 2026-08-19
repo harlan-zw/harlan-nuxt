@@ -30,7 +30,28 @@ export interface WranglerContainerInput extends Record<string, unknown> {
 
 export type WorkersCachePolicy
   = | { _tag: 'disabled' }
-    | { _tag: 'enabled', crossVersion: boolean }
+    | {
+      _tag: 'enabled'
+      crossVersion: boolean
+      /**
+       * How `Cache-Control` on an HTML document is resolved.
+       *
+       * - `no-store` always overwrite it. The behaviour before the contract.
+       * - `auto` honour the app when a module guarantees chunk retention,
+       *   clamped to what that module promises. Falls back to `no-store` when
+       *   nothing publishes a guarantee, so an app without skew protection
+       *   behaves exactly as it does today.
+       * - `app` always honour the app. You own the version-skew risk.
+       *
+       * This governs `Cache-Control` only. `Cloudflare-CDN-Cache-Control` is
+       * always honoured, because Workers Cache keys on the Worker version at
+       * `cross_version_cache: false`, so a deploy already makes every stored
+       * response unreachable and no document can outlive its chunks there.
+       *
+       * @default 'auto'
+       */
+      html?: 'no-store' | 'auto' | 'app'
+    }
 
 export interface WranglerObservabilityInput {
   enabled?: boolean

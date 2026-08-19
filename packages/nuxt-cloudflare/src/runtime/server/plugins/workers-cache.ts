@@ -1,16 +1,94 @@
 import type { H3Event } from 'h3'
-import { getResponseHeader, setResponseHeader } from 'h3'
-import { defineNitroPlugin } from 'nitropack/runtime'
-import { hasExplicitCachePolicy, withHtmlNoStoreHeaders } from '../utils/workers-cache'
+import type { DocumentCacheDecision, HtmlCacheMode } from '../utils/workers-cache'
+import { getHeader, getResponseHeader, getResponseStatus, setResponseHeader } from 'h3'
+import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import {
+  clampSharedCacheSeconds,
+  documentCacheDecision,
+  NO_STORE_BROWSER,
+  NO_STORE_EDGE,
+  resolveHtmlCacheGuarantee,
+} from '../utils/workers-cache'
+
+/**
+ * One line per route per isolate. A cache decision repeats on every request,
+ * and a warning that repeats is a warning nobody reads.
+ */
+const warned = new Set<string>()
+
+function warnOnce(route: string, message: string): void {
+  if (warned.has(route))
+    return
+  warned.add(route)
+  console.warn(`[nuxt-cloudflare] ${message}`)
+}
+
+function isAuthenticated(event: H3Event): boolean {
+  return Boolean(
+    getHeader(event, 'cookie')
+    || getHeader(event, 'authorization')
+    || getHeader(event, 'proxy-authorization'),
+  )
+}
 
 export default defineNitroPlugin((nitroApp) => {
-  nitroApp.hooks.hook('render:response', (response) => {
-    response.headers = withHtmlNoStoreHeaders(response.headers)
+  // The floor, before routing. Workers Cache treats a headerless 200 as
+  // cacheable for two hours, so every response needs a policy, including the
+  // ones that never reach `beforeResponse`: nitro's error renderer calls
+  // `send()` directly, which marks the event handled and skips that hook
+  // entirely. A floor set here is the only thing an error response inherits.
+  nitroApp.hooks.hook('request', (event: H3Event) => {
+    setResponseHeader(event, 'cache-control', NO_STORE_BROWSER)
+    setResponseHeader(event, 'cloudflare-cdn-cache-control', NO_STORE_EDGE)
   })
+
+  // Deliberately no `render:response` hook. That hook is handed a plain headers
+  // object with no event, so it cannot see what a route rule set, and the
+  // previous version overwrote unconditionally for exactly that reason.
+
   nitroApp.hooks.hook('beforeResponse', (event: H3Event) => {
-    if (hasExplicitCachePolicy(name => getResponseHeader(event, name)))
+    const config = useRuntimeConfig(event)
+    const mode = (config.nuxtCloudflare?.htmlCacheMode ?? 'auto') as HtmlCacheMode
+    const guarantee = resolveHtmlCacheGuarantee(config.htmlCacheCapabilities)
+    const cacheControl = getResponseHeader(event, 'cache-control')
+
+    // The floor is already on the response, so anything that still reads as
+    // no-store is either ours or the app agreeing with us.
+    const decision: DocumentCacheDecision = documentCacheDecision({
+      mode,
+      guarantee,
+      cacheControl: cacheControl === NO_STORE_BROWSER ? undefined : cacheControl,
+      status: getResponseStatus(event),
+      authenticated: isAuthenticated(event),
+    })
+
+    if (decision._tag === 'honour')
       return
-    setResponseHeader(event, 'cache-control', 'private, no-store')
-    setResponseHeader(event, 'cloudflare-cdn-cache-control', 'no-store')
+
+    if (decision._tag === 'floor') {
+      setResponseHeader(event, 'cache-control', NO_STORE_BROWSER)
+      setResponseHeader(event, 'cloudflare-cdn-cache-control', NO_STORE_EDGE)
+      return
+    }
+
+    if (decision._tag === 'clamp') {
+      const clamped = clampSharedCacheSeconds(String(cacheControl), decision.toSeconds)
+      setResponseHeader(event, 'cache-control', clamped)
+      setResponseHeader(event, 'cloudflare-cdn-cache-control', clamped)
+      warnOnce(
+        `clamp:${event.path}`,
+        `Route ${event.path} asked to be cached for ${decision.fromSeconds}s. ${decision.by} covers ${decision.toSeconds}s. The value was lowered.`,
+      )
+      return
+    }
+
+    // The only outcome that took something the app asked for. Say what was
+    // taken, and say how to keep it.
+    warnOnce(
+      `override:${event.path}`,
+      `The response for ${event.path} set \`cache-control: ${String(cacheControl)}\`. Workers Cache replaced it because ${decision.reason}. To keep your value, set \`nuxtCloudflare.workersCache.html: 'app'\`.`,
+    )
+    setResponseHeader(event, 'cache-control', NO_STORE_BROWSER)
+    setResponseHeader(event, 'cloudflare-cdn-cache-control', NO_STORE_EDGE)
   })
 })
