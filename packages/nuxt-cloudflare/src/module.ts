@@ -226,6 +226,13 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       logger.info('Workers Cache is on. HTML documents get `private, no-store`. A module must guarantee chunk retention to change this.')
     }
 
+    // The assertion the app is making by writing a shared-cache rule on a
+    // document route, said out loud once so it is an informed one. This module
+    // will not invent a `Vary`, because inventing one costs every route that
+    // does not negotiate and hides the bug on the ones that do.
+    if (mode === 'app' || guarantee._tag === 'bounded')
+      logger.info('A shared cache keys on the URL. If a page changes with a request header, set `Vary` on it. Responses varying on Cookie or Authorization are never shared.')
+
     // A guarantee answers one hazard: a cached document naming chunks a deploy
     // deleted. It does not answer the others, so the validator still runs.
     //
@@ -253,6 +260,11 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
   })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
+      // Only nitro's Cloudflare presets write the config this audits. On any
+      // other preset there is nothing to check, and throwing over its absence
+      // fails a build that is otherwise fine.
+      if (!nitro.options.preset?.includes('cloudflare'))
+        return
       nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(nitro, options, nuxt.options.rootDir))
     })
   }

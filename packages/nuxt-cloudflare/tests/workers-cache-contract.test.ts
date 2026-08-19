@@ -4,6 +4,7 @@ import {
   resolveHtmlCacheGuarantee,
   responseCacheDecision,
   sharedCacheSeconds,
+  varyIsSatisfiable,
 } from '../src/runtime/server/utils/workers-cache'
 
 const skew = {
@@ -27,6 +28,7 @@ function decide(over: Partial<Parameters<typeof responseCacheDecision>[0]> = {})
     status: 200,
     authenticated: false,
     setsCookie: false,
+    vary: undefined,
     ...over,
   })
 }
@@ -244,5 +246,34 @@ describe('the parser', () => {
 
   it('bounds an absurd number', () => {
     expect(sharedCacheSeconds('public, max-age=99999999999999999999')).toBe(31_536_000)
+  })
+})
+
+describe('vary', () => {
+  // Deliberately not invented where the app set none. Injecting `Accept` or
+  // `Accept-Language` would collapse the hit rate on every route that does not
+  // negotiate, and hide the app's bug on the ones that do.
+  it('does not stand in the way when the app set none', () => {
+    expect(varyIsSatisfiable(undefined)).toBe(true)
+    expect(decide({ vary: undefined })).toEqual({ _tag: 'leave' })
+  })
+
+  it('accepts a header a URL-keyed cache can honour', () => {
+    expect(varyIsSatisfiable('Accept-Language')).toBe(true)
+    expect(varyIsSatisfiable('Accept-Encoding, Accept-Language')).toBe(true)
+  })
+
+  // A shared cache does not key on these, so storing the response anyway
+  // serves one person's copy to everyone.
+  it.each(['*', 'Cookie', 'Accept, Cookie', 'authorization', 'Accept-Encoding, AUTHORIZATION'])(
+    'refuses a response varying on %s',
+    (vary) => {
+      expect(varyIsSatisfiable(vary)).toBe(false)
+      expect(decide({ vary })).toMatchObject({ _tag: 'override' })
+    },
+  )
+
+  it('refuses even when the app owns the risk, because this one is not theirs to own', () => {
+    expect(decide({ vary: 'Cookie', mode: 'app' })).toMatchObject({ _tag: 'override' })
   })
 })

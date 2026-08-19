@@ -101,6 +101,7 @@ export default defineNitroPlugin((nitroApp) => {
       status: getResponseStatus(event),
       authenticated: isAuthenticated(event),
       setsCookie: Boolean(getResponseHeader(event, 'set-cookie')),
+      vary: getResponseHeader(event, 'vary') as string | undefined,
     })
 
     if (decision._tag === 'leave')

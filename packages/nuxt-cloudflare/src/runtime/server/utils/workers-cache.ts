@@ -209,6 +209,30 @@ export interface CacheDecisionInput {
   authenticated: boolean
   /** The response mints a cookie, so it carries state a shared copy must not. */
   setsCookie: boolean
+  /** The response's own `Vary`, if it set one. */
+  vary: string | undefined
+}
+
+/**
+ * Whether a `Vary` can be satisfied by a cache keyed on the URL.
+ *
+ * A shared cache does not key on `Cookie` or `Authorization`, so a response
+ * asking it to vary on either is asking for something it cannot do, and storing
+ * it anyway serves one person's copy to everyone. `*` means never store.
+ *
+ * This module deliberately does not invent a `Vary` where the app set none.
+ * Injecting `Accept` or `Accept-Language` would collapse the hit rate for every
+ * route that does not negotiate, and would hide the app's own bug on the ones
+ * that do. The route rule asking for shared caching is the app's assertion that
+ * the route does not vary, and the build log says so out loud.
+ */
+export function varyIsSatisfiable(vary: string | undefined): boolean {
+  if (!vary)
+    return true
+  const fields = vary.toLowerCase().split(',').map(field => field.trim())
+  if (fields.includes('*'))
+    return false
+  return !fields.includes('cookie') && !fields.includes('authorization')
 }
 
 /**
@@ -257,6 +281,8 @@ export function responseCacheDecision(input: CacheDecisionInput): CacheDecision 
     return { _tag: 'override', reason: 'the request carried credentials' }
   if (input.setsCookie)
     return { _tag: 'override', reason: 'the response set a cookie' }
+  if (!varyIsSatisfiable(input.vary))
+    return { _tag: 'override', reason: `the response varies on \`${input.vary}\`, which a shared cache cannot key on` }
   if (input.status !== 200)
     return { _tag: 'override', reason: `the response status was ${input.status}` }
 
