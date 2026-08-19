@@ -24,7 +24,13 @@ async function runPlugin(options: {
   const plugin = (await import('../src/runtime/server/plugins/workers-cache')).default as unknown as
     (app: { hooks: { hook: (name: string, fn: Hook) => void } }) => void
 
-  plugin({ hooks: { hook: (name, fn) => { hooks[name] = fn } } })
+  plugin({
+    hooks: {
+      hook: (name, fn) => {
+        hooks[name] = fn
+      },
+    },
+  })
 
   const event = new H3Event(new Request('https://x.test/gh/a/b', {
     headers: { 'sec-fetch-dest': 'document', ...options.requestHeaders },
