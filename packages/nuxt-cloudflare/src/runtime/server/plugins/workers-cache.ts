@@ -50,14 +50,24 @@ export default defineNitroPlugin((nitroApp) => {
     const config = useRuntimeConfig(event)
     const mode = (config.nuxtCloudflare?.htmlCacheMode ?? 'auto') as HtmlCacheMode
     const guarantee = resolveHtmlCacheGuarantee(config.htmlCacheCapabilities)
-    const cacheControl = getResponseHeader(event, 'cache-control')
+    // The edge header outranks the browser one for this decision, because it is
+    // the one addressed to the cache doing the storing. An app that puts the
+    // real lifetime on `cloudflare-cdn-cache-control` and `max-age=0` on
+    // `cache-control` has still asked for shared caching, and reading only the
+    // browser header would discard that as a refusal.
+    const edgeHeader = getResponseHeader(event, 'cloudflare-cdn-cache-control')
+      ?? getResponseHeader(event, 'cdn-cache-control')
+    const browserHeader = getResponseHeader(event, 'cache-control')
+    const stated = edgeHeader === NO_STORE_EDGE ? undefined : edgeHeader
+    const cacheControl = stated
+      ?? (browserHeader === NO_STORE_BROWSER ? undefined : browserHeader)
 
     // The floor is already on the response, so anything that still reads as
     // no-store is either ours or the app agreeing with us.
     const decision: DocumentCacheDecision = documentCacheDecision({
       mode,
       guarantee,
-      cacheControl: cacheControl === NO_STORE_BROWSER ? undefined : cacheControl,
+      cacheControl,
       status: getResponseStatus(event),
       authenticated: isAuthenticated(event),
     })
@@ -72,9 +82,11 @@ export default defineNitroPlugin((nitroApp) => {
     }
 
     if (decision._tag === 'clamp') {
-      const clamped = clampSharedCacheSeconds(String(cacheControl), decision.toSeconds)
-      setResponseHeader(event, 'cache-control', clamped)
-      setResponseHeader(event, 'cloudflare-cdn-cache-control', clamped)
+      // Lower whichever header carried the lifetime and leave the other as the
+      // app wrote it. Rewriting both would invent a browser policy the app
+      // never asked for.
+      const target = stated ? 'cloudflare-cdn-cache-control' : 'cache-control'
+      setResponseHeader(event, target, clampSharedCacheSeconds(String(cacheControl), decision.toSeconds))
       warnOnce(
         `clamp:${event.path}`,
         `Route ${event.path} asked to be cached for ${decision.fromSeconds}s. ${decision.by} covers ${decision.toSeconds}s. The value was lowered.`,

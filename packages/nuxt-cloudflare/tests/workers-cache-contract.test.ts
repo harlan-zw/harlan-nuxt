@@ -123,3 +123,28 @@ describe('reading a cache-control', () => {
     expect(sharedCacheSeconds(value)).toBeNull()
   })
 })
+
+describe('the qualified private directive', () => {
+  // `private="set-cookie"` names the fields a shared cache must drop. It is
+  // how gscdump.com keeps a Set-Cookie response storable, and reading it as a
+  // blanket refusal would discard exactly that pattern.
+  it('is not a refusal', () => {
+    expect(sharedCacheSeconds('public, max-age=3600, private="set-cookie"')).toBe(3600)
+  })
+
+  it('still refuses bare private', () => {
+    expect(sharedCacheSeconds('private, max-age=3600')).toBeNull()
+    expect(sharedCacheSeconds('max-age=3600, private')).toBeNull()
+  })
+
+  it('is not fooled by no-store inside a quoted argument', () => {
+    expect(sharedCacheSeconds('public, max-age=60, private="x-no-store"')).toBe(60)
+  })
+
+  // The browser copy revalidates every time while the edge holds the real TTL.
+  // Read on its own, `max-age=0` looks like a refusal.
+  it('reads the edge header when the browser one is deliberately zero', () => {
+    expect(sharedCacheSeconds('public, max-age=0, private="set-cookie"')).toBeNull()
+    expect(sharedCacheSeconds('public, max-age=3600, stale-while-revalidate=86400, private="set-cookie"')).toBe(90_000)
+  })
+})

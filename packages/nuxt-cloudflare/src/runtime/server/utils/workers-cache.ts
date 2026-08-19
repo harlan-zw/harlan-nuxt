@@ -110,7 +110,13 @@ export function sharedCacheSeconds(cacheControl: unknown): number | null {
   if (typeof raw !== 'string' || !raw)
     return null
   const value = raw.toLowerCase()
-  if (value.includes('no-store') || value.includes('private'))
+  // A qualified `private="set-cookie"` names the fields a shared cache must
+  // drop. It is not a refusal, and reading it as one would discard the very
+  // pattern that makes a Set-Cookie response storable. Only bare `private`
+  // takes the whole response out of shared caches, so the arguments are
+  // removed before the check rather than matched inside it.
+  const unqualified = value.replace(/=\s*"[^"]*"/g, '=""')
+  if (unqualified.includes('no-store') || /(?:^|,)\s*private\s*(?:,|$)/.test(unqualified))
     return null
   const shared = directive(value, 's-maxage') ?? directive(value, 'max-age')
   if (shared === undefined || shared <= 0)
