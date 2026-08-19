@@ -5,6 +5,7 @@ export default defineBuildConfig({
   entries: [
     'src/module',
     'src/bindings',
+    'src/cache',
     'src/d1',
     'src/deploy',
     'src/storage',

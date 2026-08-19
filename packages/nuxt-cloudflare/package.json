@@ -47,6 +47,10 @@
     "./wrangler": {
       "types": "./dist/wrangler.d.mts",
       "import": "./dist/wrangler.mjs"
+    },
+    "./cache": {
+      "types": "./dist/cache.d.mts",
+      "import": "./dist/cache.mjs"
     }
   },
   "main": "./dist/module.mjs",
