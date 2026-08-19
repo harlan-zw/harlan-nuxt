@@ -69,6 +69,21 @@ readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
 # row, so a dead registration clears after twice this long at worst.
 readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
+# One pnpm store shared by every container, so an ephemeral job resolves packages
+# from local disk instead of refetching them.
+#
+# Without it each job restores the store from GitHub's cache service, which
+# measured 1.3-4.3 MB/s on this host: 66s on nuxtseo to replace a 14s warm
+# install, and on gscdump five jobs pulling the SAME 340 MB tarball, 1.79 GB per
+# run and 50% of that repo's CI wall time. The cache was slower than not caching
+# at all -- a job whose cache came back empty reinstalled from npm in 19s.
+#
+# The store is content-addressed and safe for concurrent readers and writers, so
+# containers may share it. It lives on a different device from `_work`, so pnpm
+# copies where it would otherwise hardlink; that costs a few seconds against the
+# minute it saves. It grows without bound, so prune it on a timer, never during
+# a job.
+readonly pnpm_store_volume="${HARLAN_DESKTOP_RUNNER_PNPM_VOLUME:-harlan-runner-pnpm-store}"
 # Readable by the status command, unlike /tmp under this unit's PrivateTmp.
 readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
 # Copied here at startup so the status command can size pools without reading a
@@ -219,6 +234,28 @@ count_markers() {
   printf '%s' "$total"
 }
 
+# The store volume must exist and belong to the container's `runner` user before
+# any job starts. Docker creates a named volume owned by root, and the runner is
+# uid 1001, so a fresh machine would fail every install until someone noticed.
+ensure_pnpm_store() {
+  if ! docker volume inspect "$pnpm_store_volume" >/dev/null 2>&1; then
+    docker volume create "$pnpm_store_volume" >/dev/null || {
+      log "Could not create the pnpm store volume $pnpm_store_volume; jobs will fall back to their own store"
+      return 0
+    }
+    log "Created pnpm store volume $pnpm_store_volume"
+  fi
+
+  # Cheap and idempotent, and it repairs a volume restored from a backup as the
+  # wrong owner. Failure here is not fatal: pnpm would still work, just slower.
+  # `--entrypoint` is required: the image's entrypoint expects a registration
+  # token on stdin and exits without one.
+  docker run --rm --user 0 --entrypoint chown \
+    --volume "$pnpm_store_volume:/pnpm-store" \
+    "$runner_image" --recursive 1001:1001 /pnpm-store >/dev/null 2>&1 \
+    || log "Could not set ownership on $pnpm_store_volume; check it is writable by uid 1001"
+}
+
 reserve() {
   local container_name="$1"
   local cpus="$2"
@@ -292,6 +329,8 @@ run_container() {
     --cpus "${pool_cpus[$pool_index]}" \
     --memory "${pool_memory[$pool_index]}" \
     --memory-swap "${pool_memory_swap[$pool_index]}" \
+    --volume "$pnpm_store_volume:/pnpm-store" \
+    --env npm_config_store_dir=/pnpm-store \
     --pids-limit 4096 \
     --cap-drop ALL \
     --security-opt no-new-privileges \
@@ -581,6 +620,8 @@ main() {
   if (( widest_pool_memory > memory_budget_gib )); then
     log "A pool asks for ${widest_pool_memory}g against a ${memory_budget_gib}g budget, so it can never burst. Raise HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB above it."
   fi
+
+  ensure_pnpm_store
 
   run_scaler &
   run_pruner &
