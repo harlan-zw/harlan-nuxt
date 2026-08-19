@@ -8,9 +8,19 @@ Type=simple
 Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner/runners.conf
 # 24 physical cores, modestly oversubscribed; runner work is IO-heavy.
 Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=48
-# 60g host. Leaves ~24g for the desktop session, and lets the 32g deploy pool
-# run while holding CI back.
-Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=36
+# 60g host. Sized from MEASURED usage, not from the container limits it sums.
+#
+# A CI container is capped at 12g but measured 0.02-4.2g resident all afternoon:
+# eight live containers held 104g of limits against 3g of real use. Budgeting the
+# limits starved the one repository that had a backlog, because the budget is
+# global and first-come, so idle warm slots elsewhere held it while 50 jobs
+# queued. 80g of promises maps to roughly 15-25g of real memory against the ~30g
+# this host has spare.
+#
+# Re-read `memory.peak` from a busy container before moving this again. The two
+# earlier values, 36 and 52, were both derived from limits rather than
+# measurement, and both throttled the queue.
+Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=80
 ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
 Restart=always
 RestartSec=10
