@@ -25,4 +25,10 @@ describe('collection queries', () => {
     await expect(createCollectionQuery(pages).where('score', 'IS NULL').all()).resolves.toEqual([pages[1]])
     await expect(createCollectionQuery([]).first()).resolves.toBeNull()
   })
+
+  it('keeps only rows that have a value for IS NOT NULL', async () => {
+    const result = await createCollectionQuery(pages).where('score', 'IS NOT NULL').select('path').all()
+
+    expect(result).toEqual([{ path: '/beta' }, { path: '/gamma' }])
+  })
 })

@@ -24,7 +24,7 @@ Comark produces the canonical body. `body.nodes` contains the node list. `body.m
 
 Collections store only the Comark AST. Raw Markdown exists only while ingestion and file hooks run. The module discards it before writing generated assets. Consumers that need text derive it from the AST.
 
-The build emits a compact metadata index per collection and one compressed AST asset per document. Queries filter metadata first, then hydrate only matched documents. Navigation, surroundings, sitemap, and search use generated projections and never decode document ASTs. Browser queries use constrained Nitro endpoints. The browser never receives the parser or a complete AST collection.
+The build emits a compact metadata index per collection and one compressed AST asset per document. Queries filter metadata first, then hydrate only matched documents. Navigation, surroundings, and search use generated projections and never decode document ASTs. Browser queries use constrained Nitro endpoints. The browser never receives the parser or a complete AST collection.
 
 Navigation, surroundings, and search endpoints include a SHA-256 content revision in their path. The revision covers the Nuxt build ID and every projected content document, excluding local source paths. Their browser and Cloudflare cache policies are immutable for one year. A production deployment registers only its current revision, so stale URLs return 404 instead of new data. Cloudflare presets require `@harlan-zw/nuxt-cloudflare` with Workers Caching enabled. Other presets keep normal HTTP immutable caching. Development uses a stable route with `no-store`.
 

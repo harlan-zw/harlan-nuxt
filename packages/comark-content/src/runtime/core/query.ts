@@ -1,6 +1,6 @@
 import type { IndexedContentDocument, PageCollectionItemBase } from '../types'
 
-export type QueryOperator = '=' | '<>' | 'LIKE' | 'IS NULL'
+export type QueryOperator = '=' | '<>' | 'LIKE' | 'IS NULL' | 'IS NOT NULL'
 export type QueryDirection = 'ASC' | 'DESC'
 
 export type QueryOperation
@@ -34,6 +34,8 @@ function matches(item: Record<string, unknown>, operation: Extract<QueryOperatio
     return value !== operation.value
   if (operation.operator === 'IS NULL')
     return value === null || value === undefined
+  if (operation.operator === 'IS NOT NULL')
+    return value !== null && value !== undefined
   return likePattern(operation.value).test(String(value ?? ''))
 }
 

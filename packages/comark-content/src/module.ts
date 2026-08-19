@@ -11,7 +11,6 @@ import {
   addComponent,
   addImports,
   addServerHandler,
-  addServerPlugin,
   addTemplate,
   createResolver,
   defineNuxtModule,
@@ -26,7 +25,6 @@ import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSou
 import { createContentAssetPlan, createContentRevision, syncContentAssets } from './core/asset'
 import { ingestCollections } from './core/ingest'
 import { isMarkdownWatchEvent } from './core/source'
-import { excludeNuxtContentSitemapSource } from './sitemap'
 
 export * from './config'
 export { contentRangiLanguages, contentRangiTheme } from './core/rangi'
@@ -88,10 +86,13 @@ export default defineNuxtModule<ModuleOptions>({
       optional: true,
       defaults: { content: true, prose: true },
     },
+    // 8.4 is the first @nuxtjs/sitemap that registers its own comark source and
+    // serves it from `/__sitemap__/comark-content-urls.json`. Before that this module
+    // pushed URLs onto `sitemap:input` itself, so allowing an older sitemap here would
+    // list every page twice.
     '@nuxtjs/sitemap': {
-      version: '>=8.0.0',
+      version: '>=8.4.0',
       optional: true,
-      defaults: { excludeAppSources: ['@nuxt/content@v3:urls'] },
     },
     '@harlan-zw/nuxt-cloudflare': {
       version: '>=0.0.14',
@@ -101,8 +102,6 @@ export default defineNuxtModule<ModuleOptions>({
   defaults: { highlight: true },
   async setup(options, nuxt) {
     assertSupportedOptions(options as Record<string, unknown>, join(nuxt.options.rootDir, 'nuxt.config.ts'))
-    const nuxtOptions = nuxt.options as typeof nuxt.options & { sitemap?: Parameters<typeof excludeNuxtContentSitemapSource>[0] }
-    nuxtOptions.sitemap = excludeNuxtContentSitemapSource(nuxtOptions.sitemap)
     const resolver = createResolver(import.meta.url)
     if (options.highlight)
       nuxt.options.css.push(resolver.resolve('./runtime/rangi.css'))
@@ -143,7 +142,6 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'queryCollectionSearchSections', from: resolver.resolve('./runtime/client') },
     ])
     addServerHandler({ route: '/__comark_content/query', method: 'post', handler: resolver.resolve('./runtime/server/api/query.post') })
-    addServerPlugin(resolver.resolve('./runtime/server/plugins/sitemap'))
 
     nuxt.hook('nitro:config', (config: NitroConfig) => {
       config.serverAssets ||= []
