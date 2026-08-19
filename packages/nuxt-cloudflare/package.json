@@ -60,6 +60,9 @@
       "bindings": [
         "dist/bindings.d.mts"
       ],
+      "cache": [
+        "dist/cache.d.mts"
+      ],
       "d1": [
         "dist/d1.d.mts"
       ],
