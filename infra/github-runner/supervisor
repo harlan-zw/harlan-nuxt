@@ -48,6 +48,9 @@ readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
 readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
+# How often the offline registrations are swept. A delete needs two sweeps in a
+# row, so a dead registration clears after twice this long at worst.
+readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
 # Readable by the status command, unlike /tmp under this unit's PrivateTmp.
 readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
@@ -68,6 +71,10 @@ declare -a pool_cpus=()
 declare -a pool_memory=()
 declare -a pool_memory_swap=()
 declare -a pool_slug=()
+
+# One entry per repository, however many pools it owns. Pruning is per
+# repository, so a repository with two pools must not be pruned twice.
+declare -a pool_repository_unique=()
 
 log() {
   printf '%s %s\n' "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -93,6 +100,19 @@ pool_slug_for() {
   local label="${2%%,*}"
 
   printf '%s-%s' "${repository##*/}" "${label#harlan-desktop-}" \
+    | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+# `harlan-zw/nuxtseo.com` -> `harlan-zw-nuxtseo-com`. Names the marker directory
+# that remembers offline registrations, which rejects `/` and `.`.
+#
+# The owner stays in the slug. Two owners can hold a repository of the same
+# name, and their markers must not share a directory.
+repository_slug_for() {
+  local repository="$1"
+
+  printf '%s' "$repository" \
     | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
     | tr '[:upper:]' '[:lower:]'
 }
@@ -336,27 +356,86 @@ run_scaler() {
 # An ephemeral runner deregisters itself when it exits cleanly, but a host that
 # lost power, or a `docker kill`, leaves the registration behind. They accumulate
 # against the repository's runner limit and make `gh api ... /runners` unreadable,
-# so clear them once at startup. Only offline runners are touched, and a runner
-# this supervisor is about to create is not registered yet.
+# so clear them at startup and on a timer after that. Only offline runners are
+# touched. A busy runner reports `online`, so it is never removed.
+#
+# WHY A DELETE NEEDS TWO SWEEPS
+#
+# A container registers before its listener connects. GitHub reports it offline
+# for a second or two in that gap, and it is very much alive. So the first sweep
+# that sees a registration offline only remembers it, in a marker file named
+# after the runner id. The next sweep deletes it, but only if it is still
+# offline. A registration that came back online loses its marker instead.
+#
+# Markers live under `state_dir`, which is cleared on every start. An empty
+# state means the first sweep after a restart confirms nothing, which is safe.
 prune_offline_runners() {
   local repository="$1"
+  local marker_dir="$state_dir/offline/$(repository_slug_for "$repository")"
+  local listing
   local -a runner_ids=()
-  local runner_id
+  local -a confirmed_ids=()
+  local runner_id marker
 
-  if ! mapfile -t runner_ids < <(gh api --paginate \
+  # The listing is captured before it is split, so a failed call is told apart
+  # from a repository with nothing offline. On failure the markers must survive.
+  if ! listing="$(gh api --paginate \
     "repos/$repository/actions/runners" \
-    --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null); then
+    --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null)"; then
     return 0
   fi
 
+  mapfile -t runner_ids < <(printf '%s' "$listing")
+  mkdir --parents "$marker_dir"
+
+  # Second sighting confirms. First sighting is only recorded.
   for runner_id in "${runner_ids[@]}"; do
     [[ -n "$runner_id" ]] || continue
-    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    if [[ -f "$marker_dir/$runner_id" ]]; then
+      confirmed_ids+=("$runner_id")
+    else
+      : >"$marker_dir/$runner_id"
+    fi
   done
 
-  if (( ${#runner_ids[@]} > 0 )); then
-    log "Pruned ${#runner_ids[@]} offline runner registrations from $repository"
+  # A runner that answered this time is online again. Drop its mark, so it needs
+  # two fresh sightings before anything deletes it.
+  for marker in "$marker_dir"/*; do
+    [[ -f "$marker" ]] || continue
+    runner_id="${marker##*/}"
+    if [[ " ${runner_ids[*]} " != *" $runner_id "* ]]; then
+      rm --force "$marker"
+    fi
+  done
+
+  for runner_id in "${confirmed_ids[@]}"; do
+    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    rm --force "$marker_dir/$runner_id"
+  done
+
+  if (( ${#confirmed_ids[@]} > 0 )); then
+    log "Pruned ${#confirmed_ids[@]} offline runner registrations from $repository"
   fi
+}
+
+# The startup prune clears what the last supervisor left behind, but stale
+# registrations keep arriving while this one runs. A warm slot that loses its
+# container leaves one behind every time it restarts, so the list grows all day
+# and only a restart used to clear it. This repeats the same prune on a timer.
+#
+# It sleeps first, because main has already swept every repository by the time
+# this starts. That startup sweep counts as the first of the two.
+run_pruner() {
+  local repository
+
+  while true; do
+    sleep "$prune_interval_seconds"
+
+    for repository in "${pool_repository_unique[@]}"; do
+      # One bad repository must not end the sweep. The next pass tries again.
+      prune_offline_runners "$repository" || log "Prune pass failed for $repository"
+    done
+  done
 }
 
 stop_all_containers() {
@@ -391,7 +470,7 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/claimed" "$state_dir/burst"
+  mkdir --parents "$state_dir/spend" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"
   mkfifo --mode 0600 "$scale_pipe"
@@ -409,6 +488,7 @@ main() {
     # A repository can own several pools. Prune it once.
     if [[ -z "${pruned_repositories[${pool_repository[$pool_index]}]:-}" ]]; then
       pruned_repositories[${pool_repository[$pool_index]}]=done
+      pool_repository_unique+=("${pool_repository[$pool_index]}")
       prune_offline_runners "${pool_repository[$pool_index]}"
     fi
   done
@@ -424,6 +504,7 @@ main() {
   fi
 
   run_scaler &
+  run_pruner &
 
   # Hold the pipe open for writing for this process's lifetime, so the scaler's
   # read loop never sees end-of-file between bursts.
