@@ -112,6 +112,7 @@ service drains the queue.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
+| `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
 | `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
 | `HARLAN_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
@@ -119,6 +120,36 @@ service drains the queue.
 Idle warm containers cost about 60 MB each and no CPU, so they do not spend
 against the threshold. Only a warm container holding a job, and a burst container
 from the moment it launches, do.
+
+## Why memory is budgeted separately
+
+CPU oversubscribes safely. A container over its quota is throttled and its job
+takes longer. Memory does not behave that way, and the difference has already
+cost a production deploy.
+
+`--memory` is a limit, not a reservation. Docker admits containers whose limits
+sum well past physical RAM, and nothing reserves anything. On this host that
+reached 164g of limits committed against 60g of RAM. The kernel resolves the
+overcommit by killing the largest resident process, which is always a build, so
+the symptom is a deploy dying at `nuxt build` with exit 129 while comfortably
+inside its own 32g limit. It was not killed for exceeding its cap. It was the
+biggest thing alive when the CI containers admitted beside it ran the host out.
+
+So bursts now spend a memory budget as well as a CPU one, and both must clear.
+A pool that fits the CPU threshold but not the memory budget is held.
+
+**The budget gates bursts, not warm slots.** A warm slot claims a job without
+asking, so the sum of `warm * memory` across pools is capacity this host has
+promised unconditionally, and no admission decision can take it back. A busy
+warm slot does spend, which keeps later bursts honest, but nothing can refuse
+the warm job itself. The supervisor logs that floor at startup when it exceeds
+host RAM.
+
+`warm` is not the lever for it. **Every pool needs `warm` of at least 1 or it is
+inert.** The only demand signal in this system is a running container claiming a
+job, so a pool with no warm slot never spawns a container, never claims, and
+never bursts. That puts a hard floor under the promised total of one container
+per pool, and the levers are the pools' `memory` values and the number of pools.
 
 `CPU_BUDGET` holds back **bursts**; it cannot cap total load. A warm container
 claims its job straight from GitHub and the supervisor has no say in it, so the

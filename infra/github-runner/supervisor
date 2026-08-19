@@ -36,6 +36,16 @@
 # job, and a burst container spends from the moment it is launched, because it
 # was launched to take one. Idle warm listeners cost about 60 MB and no CPU, so
 # charging for them would block every burst on an otherwise idle host.
+#
+# CPU and memory are both budgeted, and for different reasons. CPU oversubscribes
+# safely: a container over its quota is throttled and its job just runs slower.
+# Memory does not. `--memory` is a LIMIT, not a RESERVATION, so Docker will
+# happily admit containers whose limits sum past physical RAM. Nothing reserves
+# anything, and the kernel resolves the overcommit by killing the largest RSS in
+# the cgroup that loses, which is always a build. That is how a 32g deploy
+# container gets OOM-killed on a 60g host: not by exceeding its own limit, but by
+# being the biggest thing alive when CI containers admitted beside it exhausted
+# the host. Budgeting memory the same way CPU is budgeted is what stops it.
 
 set -euo pipefail
 
@@ -45,9 +55,19 @@ readonly config_file="${HARLAN_DESKTOP_RUNNER_CONFIG:-/etc/harlan-desktop-github
 # modest oversubscription keeps a wide matrix moving without starving
 # interactive work on the workstation.
 readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
+# Gibibytes of container memory limit that in-flight work may hold at once. This
+# is a ceiling on what is PROMISED, not on what is used, so it must leave room
+# for the workstation itself: a desktop session with an IDE, a browser and a few
+# language servers holds 30g here without trying. On a 60g host, 36g of budget
+# keeps the deploy pool (32g) able to run alone while holding CI back, and lets
+# three CI containers (12g each) share the host when no deploy is in flight.
+readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
 readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
+# How often the offline registrations are swept. A delete needs two sweeps in a
+# row, so a dead registration clears after twice this long at worst.
+readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
 readonly container_label='com.harlanzw.desktop-runner'
 # Readable by the status command, unlike /tmp under this unit's PrivateTmp.
 readonly state_root="${XDG_RUNTIME_DIR:-/tmp}/harlan-desktop-github-runner"
@@ -67,7 +87,14 @@ declare -a pool_max=()
 declare -a pool_cpus=()
 declare -a pool_memory=()
 declare -a pool_memory_swap=()
+# `pool_memory` as a plain integer of gibibytes, for the budget arithmetic. The
+# unsuffixed string goes to Docker; only this one is summed.
+declare -a pool_memory_gib=()
 declare -a pool_slug=()
+
+# One entry per repository, however many pools it owns. Pruning is per
+# repository, so a repository with two pools must not be pruned twice.
+declare -a pool_repository_unique=()
 
 log() {
   printf '%s %s\n' "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -93,6 +120,19 @@ pool_slug_for() {
   local label="${2%%,*}"
 
   printf '%s-%s' "${repository##*/}" "${label#harlan-desktop-}" \
+    | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+# `harlan-zw/nuxtseo.com` -> `harlan-zw-nuxtseo-com`. Names the marker directory
+# that remembers offline registrations, which rejects `/` and `.`.
+#
+# The owner stays in the slug. Two owners can hold a repository of the same
+# name, and their markers must not share a directory.
+repository_slug_for() {
+  local repository="$1"
+
+  printf '%s' "$repository" \
     | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
     | tr '[:upper:]' '[:lower:]'
 }
@@ -123,6 +163,7 @@ read_config() {
     pool_cpus+=("$cpus")
     pool_memory+=("$memory")
     pool_memory_swap+=("$memory_swap")
+    pool_memory_gib+=("$(memory_gib_for "$memory")")
     pool_slug+=("$(pool_slug_for "$repository" "$label")")
   done <"$config_file"
 
@@ -130,6 +171,24 @@ read_config() {
     log "No runner pools are defined in $config_file"
     return 1
   fi
+}
+
+# `12g` -> `12`. Docker's suffixes are accepted so the config stays in Docker's
+# own units, and anything else is refused rather than guessed at: a pool silently
+# read as 0 would spend nothing and defeat the budget entirely.
+memory_gib_for() {
+  local value="$1"
+  local number="${value%[gGmM]}"
+
+  case "$value" in
+    *[gG]) printf '%s' "$number" ;;
+    # Rounded up, so a sub-gibibyte pool still spends a whole unit.
+    *[mM]) printf '%s' "$(( (number + 1023) / 1024 ))" ;;
+    *)
+      log "Pool memory '$value' has no g or m suffix; treating it as gibibytes"
+      printf '%s' "$value"
+      ;;
+  esac
 }
 
 # Sum of a marker directory's contents. Each file is named after its container,
@@ -163,14 +222,17 @@ count_markers() {
 reserve() {
   local container_name="$1"
   local cpus="$2"
+  local memory_gib="$3"
 
   printf '%s\n' "$cpus" >"$state_dir/spend/$container_name"
+  printf '%s\n' "$memory_gib" >"$state_dir/spend-memory/$container_name"
 }
 
 release() {
   local container_name="$1"
 
   rm --force "$state_dir/spend/$container_name"
+  rm --force "$state_dir/spend-memory/$container_name"
 }
 
 # Stops a burst container that registered but never claimed anything. The runner
@@ -247,7 +309,7 @@ run_container() {
           # A burst container reserved its CPU when the scaler launched it.
           # Charging again here would double count it.
           if [[ "$slot_kind" == warm ]]; then
-            reserve "$container_name" "${pool_cpus[$pool_index]}"
+            reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
           fi
           printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
         fi
@@ -301,7 +363,7 @@ run_burst_slot() {
 run_scaler() {
   local request pool_index container_name
   local burst_counter=0
-  local slug live spent
+  local slug live spent spent_memory
 
   while true; do
     while IFS=' ' read -r request pool_index; do
@@ -319,12 +381,20 @@ run_scaler() {
         continue
       fi
 
+      # Checked after CPU and never merged with it. A host can have cores to
+      # spare and no memory to back them, which is the case this exists for.
+      spent_memory="$(sum_markers "$state_dir/spend-memory")"
+      if (( spent_memory + pool_memory_gib[pool_index] > memory_budget_gib )); then
+        log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
+        continue
+      fi
+
       burst_counter=$(( burst_counter + 1 ))
       container_name="harlan-desktop-$slug-burst-$burst_counter"
       # Both reservations are written before the fork, so the next request in
       # this loop already sees this container.
       printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
-      reserve "$container_name" "${pool_cpus[$pool_index]}"
+      reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
 
       log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pool_index]}"
       run_burst_slot "$pool_index" "$container_name" &
@@ -336,27 +406,86 @@ run_scaler() {
 # An ephemeral runner deregisters itself when it exits cleanly, but a host that
 # lost power, or a `docker kill`, leaves the registration behind. They accumulate
 # against the repository's runner limit and make `gh api ... /runners` unreadable,
-# so clear them once at startup. Only offline runners are touched, and a runner
-# this supervisor is about to create is not registered yet.
+# so clear them at startup and on a timer after that. Only offline runners are
+# touched. A busy runner reports `online`, so it is never removed.
+#
+# WHY A DELETE NEEDS TWO SWEEPS
+#
+# A container registers before its listener connects. GitHub reports it offline
+# for a second or two in that gap, and it is very much alive. So the first sweep
+# that sees a registration offline only remembers it, in a marker file named
+# after the runner id. The next sweep deletes it, but only if it is still
+# offline. A registration that came back online loses its marker instead.
+#
+# Markers live under `state_dir`, which is cleared on every start. An empty
+# state means the first sweep after a restart confirms nothing, which is safe.
 prune_offline_runners() {
   local repository="$1"
+  local marker_dir="$state_dir/offline/$(repository_slug_for "$repository")"
+  local listing
   local -a runner_ids=()
-  local runner_id
+  local -a confirmed_ids=()
+  local runner_id marker
 
-  if ! mapfile -t runner_ids < <(gh api --paginate \
+  # The listing is captured before it is split, so a failed call is told apart
+  # from a repository with nothing offline. On failure the markers must survive.
+  if ! listing="$(gh api --paginate \
     "repos/$repository/actions/runners" \
-    --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null); then
+    --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null)"; then
     return 0
   fi
 
+  mapfile -t runner_ids < <(printf '%s' "$listing")
+  mkdir --parents "$marker_dir"
+
+  # Second sighting confirms. First sighting is only recorded.
   for runner_id in "${runner_ids[@]}"; do
     [[ -n "$runner_id" ]] || continue
-    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    if [[ -f "$marker_dir/$runner_id" ]]; then
+      confirmed_ids+=("$runner_id")
+    else
+      : >"$marker_dir/$runner_id"
+    fi
   done
 
-  if (( ${#runner_ids[@]} > 0 )); then
-    log "Pruned ${#runner_ids[@]} offline runner registrations from $repository"
+  # A runner that answered this time is online again. Drop its mark, so it needs
+  # two fresh sightings before anything deletes it.
+  for marker in "$marker_dir"/*; do
+    [[ -f "$marker" ]] || continue
+    runner_id="${marker##*/}"
+    if [[ " ${runner_ids[*]} " != *" $runner_id "* ]]; then
+      rm --force "$marker"
+    fi
+  done
+
+  for runner_id in "${confirmed_ids[@]}"; do
+    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    rm --force "$marker_dir/$runner_id"
+  done
+
+  if (( ${#confirmed_ids[@]} > 0 )); then
+    log "Pruned ${#confirmed_ids[@]} offline runner registrations from $repository"
   fi
+}
+
+# The startup prune clears what the last supervisor left behind, but stale
+# registrations keep arriving while this one runs. A warm slot that loses its
+# container leaves one behind every time it restarts, so the list grows all day
+# and only a restart used to clear it. This repeats the same prune on a timer.
+#
+# It sleeps first, because main has already swept every repository by the time
+# this starts. That startup sweep counts as the first of the two.
+run_pruner() {
+  local repository
+
+  while true; do
+    sleep "$prune_interval_seconds"
+
+    for repository in "${pool_repository_unique[@]}"; do
+      # One bad repository must not end the sweep. The next pass tries again.
+      prune_offline_runners "$repository" || log "Prune pass failed for $repository"
+    done
+  done
 }
 
 stop_all_containers() {
@@ -391,7 +520,7 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/claimed" "$state_dir/burst"
+  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"
   mkfifo --mode 0600 "$scale_pipe"
@@ -409,6 +538,7 @@ main() {
     # A repository can own several pools. Prune it once.
     if [[ -z "${pruned_repositories[${pool_repository[$pool_index]}]:-}" ]]; then
       pruned_repositories[${pool_repository[$pool_index]}]=done
+      pool_repository_unique+=("${pool_repository[$pool_index]}")
       prune_offline_runners "${pool_repository[$pool_index]}"
     fi
   done
@@ -416,21 +546,51 @@ main() {
   # Sizing mistakes here are silent otherwise: the pool simply stops bursting and
   # every wide matrix serialises behind its warm slots for no visible reason.
   local warm_floor=0
+  local warm_memory_floor=0
+  local widest_pool_memory=0
   for pool_index in "${!pool_repository[@]}"; do
     warm_floor=$(( warm_floor + pool_warm[pool_index] * pool_cpus[pool_index] ))
+    warm_memory_floor=$(( warm_memory_floor + pool_warm[pool_index] * pool_memory_gib[pool_index] ))
+    if (( pool_memory_gib[pool_index] > widest_pool_memory )); then
+      widest_pool_memory="${pool_memory_gib[$pool_index]}"
+    fi
   done
   if (( warm_floor >= cpu_budget )); then
     log "Warm floor is $warm_floor CPU against a burst threshold of $cpu_budget, so bursting is off whenever most pools are busy. Lower warm, or raise HARLAN_DESKTOP_RUNNER_CPU_BUDGET."
   fi
 
+  # The memory budget gates BURSTS. A warm slot claims a job without asking, so
+  # the warm floor is capacity this host has already promised unconditionally.
+  # A busy warm slot does spend, which keeps later bursts honest, but nothing can
+  # refuse the warm job itself.
+  #
+  # This is reported against host RAM, not against the budget. Every pool needs
+  # `warm` of at least 1 or it is inert -- the only demand signal in this system
+  # is a running container claiming a job, so a pool with no warm slot never
+  # spawns, never claims, and never bursts. That puts a hard floor under this
+  # number, so comparing it to the budget would print a warning that no
+  # configuration could ever clear. The levers are the pools' `memory` values and
+  # the number of pools, never `warm`.
+  local host_ram_gib
+  host_ram_gib="$(free --gibi | awk '/^Mem:/ { print $2 }')"
+  if [[ -n "$host_ram_gib" ]] && (( warm_memory_floor > host_ram_gib )); then
+    log "Warm slots can promise ${warm_memory_floor}g at once against ${host_ram_gib}g of RAM, and a warm job cannot be refused. Only every pool building at the same instant reaches that, but nothing prevents it. Lower the pools' memory values, or run fewer pools."
+  fi
+
+  # A pool whose single container cannot fit the budget would be held forever.
+  if (( widest_pool_memory > memory_budget_gib )); then
+    log "A pool asks for ${widest_pool_memory}g against a ${memory_budget_gib}g budget, so it can never burst. Raise HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB above it."
+  fi
+
   run_scaler &
+  run_pruner &
 
   # Hold the pipe open for writing for this process's lifetime, so the scaler's
   # read loop never sees end-of-file between bursts.
   exec {scale_pipe_holder}>"$scale_pipe"
 
   for pool_index in "${!pool_repository[@]}"; do
-    log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]}"
+    log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]} memory ${pool_memory[$pool_index]}"
     for slot_number in $(seq 1 "${pool_warm[$pool_index]}"); do
       run_warm_slot "$pool_index" "$slot_number" &
     done
