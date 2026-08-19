@@ -591,6 +591,8 @@ drain_containers() {
   local -a container_ids=()
   local id waiting
 
+  log 'Draining before shutdown'
+
   # The marker stops the warm slots and the scaler replacing what is drained.
   # Without it a stopped idle listener is rebuilt within seconds and the drain
   # never converges.
