@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampSharedCacheSeconds,
-  documentCacheDecision,
   resolveHtmlCacheGuarantee,
+  responseCacheDecision,
   sharedCacheSeconds,
 } from '../src/runtime/server/utils/workers-cache'
 
@@ -17,13 +17,16 @@ const skew = {
 const bounded = resolveHtmlCacheGuarantee([skew])
 const none = resolveHtmlCacheGuarantee([])
 
-function decide(over: Partial<Parameters<typeof documentCacheDecision>[0]> = {}) {
-  return documentCacheDecision({
+function decide(over: Partial<Parameters<typeof responseCacheDecision>[0]> = {}) {
+  return responseCacheDecision({
     mode: 'auto',
     guarantee: bounded,
-    cacheControl: 'public, s-maxage=300',
+    isDocument: true,
+    stated: true,
+    requestedSeconds: 300,
     status: 200,
     authenticated: false,
+    setsCookie: false,
     ...over,
   })
 }
@@ -53,24 +56,39 @@ describe('reading what a module can promise', () => {
   })
 })
 
-describe('deciding one document', () => {
+describe('deciding one response', () => {
   it('honours a rule inside the guaranteed window', () => {
-    expect(decide()).toEqual({ _tag: 'honour' })
+    expect(decide()).toEqual({ _tag: 'leave' })
   })
 
   it('lowers a rule that outlives the guarantee instead of discarding it', () => {
-    expect(decide({ cacheControl: 'public, s-maxage=31536000' }))
+    expect(decide({ requestedSeconds: 31_536_000 }))
       .toMatchObject({ _tag: 'clamp', toSeconds: 2_592_000, fromSeconds: 31_536_000 })
   })
 
-  // Nobody stated a policy, so the floor applies and nothing was taken. This
-  // is the common case and it must never warn.
-  it('falls to the floor when the app said nothing', () => {
-    expect(decide({ cacheControl: undefined })).toMatchObject({ _tag: 'floor' })
+  // The failure that made this worse than doing nothing: nitro's own
+  // `/_nuxt/**` immutable rule, and every API route, went through the document
+  // policy and came out `private, no-store`.
+  it('never touches a response that is not a document', () => {
+    expect(decide({ isDocument: false, requestedSeconds: 31_536_000, mode: 'no-store' }))
+      .toEqual({ _tag: 'leave' })
+    expect(decide({ isDocument: false, authenticated: true })).toEqual({ _tag: 'leave' })
+    expect(decide({ isDocument: false, status: 503 })).toEqual({ _tag: 'leave' })
   })
 
-  it('falls to the floor when the app already said private', () => {
-    expect(decide({ cacheControl: 'private, no-store' })).toMatchObject({ _tag: 'floor' })
+  it('still floors a response nobody described, so Workers Cache cannot guess', () => {
+    expect(decide({ stated: false })).toEqual({ _tag: 'floor' })
+    expect(decide({ stated: false, isDocument: false })).toEqual({ _tag: 'floor' })
+  })
+
+  it('leaves a stated policy that does not ask for sharing', () => {
+    expect(decide({ requestedSeconds: null })).toEqual({ _tag: 'leave' })
+  })
+
+  // A 304 updates the stored response's headers, so forcing no-store onto one
+  // evicts the entry it just validated.
+  it.each([301, 304, 308])('never rewrites a %i', (status) => {
+    expect(decide({ status, mode: 'no-store', authenticated: true })).toEqual({ _tag: 'leave' })
   })
 
   // Shared caches key on the URL, so one stored personalised document is
@@ -80,9 +98,13 @@ describe('deciding one document', () => {
       .toMatchObject({ _tag: 'override', reason: 'the request carried credentials' })
   })
 
-  it('overrides a non-200 however the app configured it', () => {
-    expect(decide({ status: 503, mode: 'app' }))
-      .toMatchObject({ _tag: 'override' })
+  it('overrides a response that mints a cookie', () => {
+    expect(decide({ setsCookie: true, mode: 'app' }))
+      .toMatchObject({ _tag: 'override', reason: 'the response set a cookie' })
+  })
+
+  it('overrides a transient error however the app configured it', () => {
+    expect(decide({ status: 503, mode: 'app' })).toMatchObject({ _tag: 'override' })
   })
 
   it('overrides when nothing guarantees retention', () => {
@@ -90,7 +112,7 @@ describe('deciding one document', () => {
   })
 
   it('honours the app outright when told to', () => {
-    expect(decide({ guarantee: none, mode: 'app' })).toEqual({ _tag: 'honour' })
+    expect(decide({ guarantee: none, mode: 'app' })).toEqual({ _tag: 'leave' })
   })
 
   it('keeps the old behaviour when told to', () => {
@@ -98,10 +120,24 @@ describe('deciding one document', () => {
   })
 })
 
-describe('lowering a lifetime without discarding the rest', () => {
+describe('lowering the whole served lifetime', () => {
   it('rewrites the number and keeps every other directive', () => {
     expect(clampSharedCacheSeconds('public, s-maxage=31536000, stale-if-error=86400', 600))
-      .toBe('public, s-maxage=600, stale-if-error=86400')
+      .toBe('public, s-maxage=600, stale-if-error=600')
+  })
+
+  // The stale window is served time too. Clamping only `s-maxage` returned a
+  // byte-identical header while logging "the value was lowered".
+  it('lowers the stale window, which used to escape entirely', () => {
+    const out = clampSharedCacheSeconds('public, s-maxage=300, stale-while-revalidate=86400', 600)
+
+    expect(sharedCacheSeconds(out)).toBeLessThanOrEqual(600)
+    expect(out).not.toContain('86400')
+  })
+
+  it('lowers the browser directive even when a shared one is present', () => {
+    expect(clampSharedCacheSeconds('public, max-age=31536000, s-maxage=100', 600))
+      .toBe('public, max-age=600, s-maxage=100')
   })
 
   it('leaves a value already inside the window alone', () => {
@@ -111,6 +147,18 @@ describe('lowering a lifetime without discarding the rest', () => {
   it('adds a shared lifetime when the app only set a browser one', () => {
     expect(clampSharedCacheSeconds('public, max-age=99999', 600))
       .toBe('public, max-age=600, s-maxage=600')
+  })
+
+  it('never lets a clamped header exceed the ceiling', () => {
+    const cases = [
+      'public, s-maxage=300, stale-while-revalidate=100000',
+      'public, s-maxage=31536000, stale-while-revalidate=31536000',
+      'public, max-age=100, stale-while-revalidate=86400',
+      'public, max-age=3600, stale-while-revalidate=86400, private="set-cookie"',
+    ]
+
+    for (const input of cases)
+      expect(sharedCacheSeconds(clampSharedCacheSeconds(input, 600))).toBeLessThanOrEqual(600)
   })
 })
 
@@ -146,5 +194,55 @@ describe('the qualified private directive', () => {
   it('reads the edge header when the browser one is deliberately zero', () => {
     expect(sharedCacheSeconds('public, max-age=0, private="set-cookie"')).toBeNull()
     expect(sharedCacheSeconds('public, max-age=3600, stale-while-revalidate=86400, private="set-cookie"')).toBe(90_000)
+  })
+})
+
+describe('a capability crossing a package boundary is parsed, not trusted', () => {
+  // `htmlCacheCapabilities` is an unnamespaced runtime-config key, so anything
+  // can write to it. Coercing a string or a boolean into `Math.min` would let a
+  // one-line config publish a thousand-year guarantee.
+  it.each([
+    ['a string ceiling', { documentTtlCeilingSeconds: '1e12' }],
+    ['an array ceiling', { documentTtlCeilingSeconds: [7200] }],
+    ['a boolean ceiling', { documentTtlCeilingSeconds: true }],
+    ['a fractional ceiling', { documentTtlCeilingSeconds: 1.5 }],
+    ['a truthy string for assetRecovery', { assetRecovery: 'false' }],
+    ['an object author', { by: { a: 1 } }],
+    ['an empty author', { by: '' }],
+    ['an invented basis', { basis: 'vibes' }],
+  ])('refuses %s', (_label, override) => {
+    expect(resolveHtmlCacheGuarantee([{ ...skew, ...override }]))
+      .toMatchObject({ _tag: 'none' })
+  })
+
+  it('still accepts a well-formed one', () => {
+    expect(resolveHtmlCacheGuarantee([skew])).toMatchObject({ _tag: 'bounded' })
+  })
+})
+
+describe('the parser', () => {
+  it('tolerates whitespace around the equals sign', () => {
+    expect(sharedCacheSeconds('public,   max-age = 60')).toBe(60)
+  })
+
+  it('takes the most restrictive of a duplicated directive', () => {
+    expect(sharedCacheSeconds('max-age=99999, max-age=60')).toBe(60)
+    expect(sharedCacheSeconds('max-age=60, max-age=99999')).toBe(60)
+  })
+
+  it('does not read no-store out of another token', () => {
+    expect(sharedCacheSeconds('public, max-age=60, x-no-store-test')).toBe(60)
+  })
+
+  it('treats no-cache as a refusal, since it forbids reuse without revalidating', () => {
+    expect(sharedCacheSeconds('public, max-age=60, no-cache')).toBeNull()
+  })
+
+  it('cannot have a lifetime smuggled through a quoted argument', () => {
+    expect(sharedCacheSeconds('private="x, s-maxage=99999"')).toBeNull()
+  })
+
+  it('bounds an absurd number', () => {
+    expect(sharedCacheSeconds('public, max-age=99999999999999999999')).toBe(31_536_000)
   })
 })

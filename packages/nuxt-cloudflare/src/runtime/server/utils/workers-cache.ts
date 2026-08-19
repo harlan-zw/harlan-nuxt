@@ -70,133 +70,254 @@ export type HtmlCacheGuarantee
  * able to keep it, and one publisher without asset recovery means a retired
  * chunk 404s no matter what the others retain.
  */
+function parseCapability(entry: unknown): HtmlCacheCapability | null {
+  if (!entry || typeof entry !== 'object')
+    return null
+  const candidate = entry as Record<string, unknown>
+  if (candidate.v !== 1)
+    return null
+  // Every field checked, not just the version. This value crosses a package
+  // boundary and decides whether a document is published to a shared cache, so
+  // a string, an array or a boolean in the ceiling must not be coerced into a
+  // number by `Math.min`. Parse it once here and trust it afterwards.
+  if (typeof candidate.documentTtlCeilingSeconds !== 'number')
+    return null
+  if (!Number.isInteger(candidate.documentTtlCeilingSeconds) || candidate.documentTtlCeilingSeconds <= 0)
+    return null
+  if (typeof candidate.assetRecovery !== 'boolean')
+    return null
+  if (typeof candidate.by !== 'string' || !candidate.by)
+    return null
+  if (candidate.basis !== 'observed-retained-builds' && candidate.basis !== 'retention-days')
+    return null
+  return {
+    v: 1,
+    by: candidate.by,
+    documentTtlCeilingSeconds: candidate.documentTtlCeilingSeconds,
+    basis: candidate.basis,
+    assetRecovery: candidate.assetRecovery,
+  }
+}
+
+/**
+ * The weakest promise across every publisher.
+ *
+ * Minimum rather than maximum: a guarantee is only as good as the module least
+ * able to keep it, and one publisher without asset recovery means a retired
+ * chunk 404s whatever the others retain.
+ */
 export function resolveHtmlCacheGuarantee(
   capabilities: unknown,
 ): HtmlCacheGuarantee {
   if (!Array.isArray(capabilities) || capabilities.length === 0)
     return { _tag: 'none', reason: 'no-capability' }
 
-  const known = capabilities.filter((entry): entry is HtmlCacheCapability =>
-    Boolean(entry) && typeof entry === 'object' && (entry as HtmlCacheCapability).v === 1)
-  if (known.length !== capabilities.length)
+  const known = capabilities.map(parseCapability)
+  if (known.includes(null))
     return { _tag: 'none', reason: 'unknown-version' }
 
-  if (known.some(entry => !entry.assetRecovery))
+  const parsed = known as HtmlCacheCapability[]
+  // Checked after parsing, not during, so a well-formed publisher that simply
+  // cannot recover assets is reported as such rather than as malformed.
+  if (parsed.some(entry => !entry.assetRecovery))
     return { _tag: 'none', reason: 'no-asset-recovery' }
 
-  const ceiling = Math.min(...known.map(entry => entry.documentTtlCeilingSeconds))
+  const ceiling = Math.min(...parsed.map(entry => entry.documentTtlCeilingSeconds))
   if (!Number.isFinite(ceiling) || ceiling <= 0)
     return { _tag: 'none', reason: 'zero-ceiling' }
 
-  return { _tag: 'bounded', ceilingSeconds: ceiling, by: known.map(entry => entry.by).join(', ') }
-}
-
-export function hasExplicitCachePolicy(
-  getHeader: (name: string) => unknown,
-): boolean {
-  return CACHE_POLICY_HEADER_NAMES.some(name => Boolean(getHeader(name)))
+  return { _tag: 'bounded', ceilingSeconds: ceiling, by: parsed.map(entry => entry.by).join(', ') }
 }
 
 function directive(value: string, name: string): number | undefined {
-  const match = value.match(new RegExp(`(?:^|[,\\s])${name}=(\\d+)`, 'i'))
-  return match ? Number(match[1]) : undefined
+  // `\s*` around `=` because RFC 9110 allows optional whitespace there, and a
+  // header written by hand often has it.
+  const match = value.match(new RegExp(`(?:^|[,\\s])${name}\\s*=\\s*(\\d+)`, 'gi'))
+  if (!match)
+    return undefined
+  // Most restrictive wins. A duplicated directive is malformed, and reading the
+  // first one makes the answer depend on the order it was written in.
+  return Math.min(...match.map(part => Number(part.replace(/\D+/g, ''))))
+}
+
+/** A year. Longer than any retention window, and past this the number is noise. */
+const MAX_SANE_SECONDS = 31_536_000
+
+/**
+ * The header with every quoted argument emptied.
+ *
+ * `private="set-cookie"` names the fields a shared cache must drop; it is not a
+ * refusal. Emptying the arguments means neither the refusal test nor the
+ * lifetime test can read anything out of them, so a header like
+ * `private="x, s-maxage=99999"` cannot smuggle a lifetime past either.
+ */
+function unqualify(value: string): string {
+  return value.replace(/=\s*"[^"]*"/g, '=""')
 }
 
 /**
- * Seconds a shared cache may hold this response, or null if it was refused.
+ * Seconds a shared cache may serve this response, or null if it was refused.
+ *
+ * Counts the stale window, because a stale response is still served. `no-cache`
+ * counts as a refusal: it permits storage but forbids reuse without
+ * revalidation, which is not what "the app asked for shared caching" means.
  */
 export function sharedCacheSeconds(cacheControl: unknown): number | null {
   const raw = Array.isArray(cacheControl) ? cacheControl.join(', ') : cacheControl
   if (typeof raw !== 'string' || !raw)
     return null
-  const value = raw.toLowerCase()
-  // A qualified `private="set-cookie"` names the fields a shared cache must
-  // drop. It is not a refusal, and reading it as one would discard the very
-  // pattern that makes a Set-Cookie response storable. Only bare `private`
-  // takes the whole response out of shared caches, so the arguments are
-  // removed before the check rather than matched inside it.
-  const unqualified = value.replace(/=\s*"[^"]*"/g, '=""')
-  if (unqualified.includes('no-store') || /(?:^|,)\s*private\s*(?:,|$)/.test(unqualified))
+  const value = unqualify(raw.toLowerCase())
+
+  if (/(?:^|,)\s*no-store\s*(?:,|$)/.test(value))
     return null
+  if (/(?:^|,)\s*no-cache\s*(?:,|$)/.test(value))
+    return null
+  if (/(?:^|,)\s*private\s*(?:,|$)/.test(value))
+    return null
+
   const shared = directive(value, 's-maxage') ?? directive(value, 'max-age')
   if (shared === undefined || shared <= 0)
     return null
-  return shared + (directive(value, 'stale-while-revalidate') ?? 0)
+
+  return Math.min(shared + (directive(value, 'stale-while-revalidate') ?? 0), MAX_SANE_SECONDS)
 }
 
-export type DocumentCacheDecision
-  = | { _tag: 'floor', reason: string }
-    | { _tag: 'honour' }
+/** Whether the app stated any cache policy at all, however restrictive. */
+export function statedPolicy(
+  getHeader: (name: string) => unknown,
+): boolean {
+  return CACHE_POLICY_HEADER_NAMES.some(name => Boolean(getHeader(name)))
+}
+
+export type CacheDecision
+  = | { _tag: 'leave' }
+    | { _tag: 'floor' }
     | { _tag: 'clamp', toSeconds: number, fromSeconds: number, by: string }
     | { _tag: 'override', reason: string }
 
-export interface DocumentCacheInput {
+export interface CacheDecisionInput {
   mode: HtmlCacheMode
   guarantee: HtmlCacheGuarantee
-  /** What the app set, if anything. */
-  cacheControl: unknown
+  /** True only for a rendered HTML document, from the response content type. */
+  isDocument: boolean
+  /** Whether the app set any cache header at all. */
+  stated: boolean
+  /** The lifetime the app asked a shared cache for, if any. */
+  requestedSeconds: number | null
   status: number
-  /** Any credential on the request that could personalise the document. */
+  /** A credential on the request that could personalise the response. */
   authenticated: boolean
+  /** The response mints a cookie, so it carries state a shared copy must not. */
+  setsCookie: boolean
 }
 
 /**
- * What to do with one document response.
+ * Statuses whose cache headers must never be rewritten.
  *
- * `floor` means nobody stated a policy, so the safe default applies and nothing
- * was taken from anyone. `override` means the app stated one and this module
- * replaced it, which is the only outcome that owes the developer a warning.
+ * A 304 carries no body and its headers *update* the stored response (RFC 9111
+ * 4.3.4), so forcing `no-store` onto one evicts the entry it just validated.
+ * Permanent redirects are ordinarily cacheable and say nothing about a user.
  */
-export function documentCacheDecision(input: DocumentCacheInput): DocumentCacheDecision {
-  const requested = sharedCacheSeconds(input.cacheControl)
+const PRESERVED_STATUSES = new Set([301, 304, 308])
 
-  if (requested === null) {
-    // Either nothing was set, or the app already said private/no-store. Both
-    // end at the floor, and neither is a conflict.
-    return { _tag: 'floor', reason: 'no shared-cache directive' }
-  }
+/**
+ * What to do with one response.
+ *
+ * Only rendered documents are subject to the version-skew policy, because only
+ * a document names build chunks. Everything else, assets, API payloads,
+ * sitemaps, is the app's business and is left exactly as the app wrote it. An
+ * earlier revision of this applied the document rules to every response and
+ * rewrote nitro's own `/_nuxt/**` immutable rule to `private, no-store`.
+ *
+ * `leave` means untouched. `floor` means nobody stated a policy, so the safe
+ * default applies and nothing was taken. `override` means the app stated one
+ * and this module replaced it, which is the only outcome that owes a warning.
+ */
+export function responseCacheDecision(input: CacheDecisionInput): CacheDecision {
+  // Workers Cache treats a headerless 200 as cacheable for two hours, so a
+  // response nobody described still needs the floor. This is the only rule that
+  // applies to non-documents.
+  if (!input.stated)
+    return { _tag: 'floor' }
+
+  if (!input.isDocument)
+    return { _tag: 'leave' }
+
+  if (PRESERVED_STATUSES.has(input.status))
+    return { _tag: 'leave' }
+
+  // The app said something, but not something that puts this in a shared cache.
+  if (input.requestedSeconds === null)
+    return { _tag: 'leave' }
 
   // Proven properties of this response, not guesses about intent. A shared
   // cache keys on the URL, so a personalised document stored once is served to
   // everyone, and a transient error is pinned for the whole window.
   if (input.authenticated)
     return { _tag: 'override', reason: 'the request carried credentials' }
+  if (input.setsCookie)
+    return { _tag: 'override', reason: 'the response set a cookie' }
   if (input.status !== 200)
     return { _tag: 'override', reason: `the response status was ${input.status}` }
 
   if (input.mode === 'no-store')
     return { _tag: 'override', reason: 'workersCache.html is set to no-store' }
   if (input.mode === 'app')
-    return { _tag: 'honour' }
+    return { _tag: 'leave' }
 
   if (input.guarantee._tag === 'none')
     return { _tag: 'override', reason: `no module guarantees chunk retention (${input.guarantee.reason})` }
 
-  if (requested > input.guarantee.ceilingSeconds) {
+  if (input.requestedSeconds > input.guarantee.ceilingSeconds) {
     return {
       _tag: 'clamp',
       toSeconds: input.guarantee.ceilingSeconds,
-      fromSeconds: requested,
+      fromSeconds: input.requestedSeconds,
       by: input.guarantee.by,
     }
   }
 
-  return { _tag: 'honour' }
+  return { _tag: 'leave' }
 }
 
 /**
- * The same header with its shared-cache lifetime lowered.
+ * The header with its total served lifetime brought inside the ceiling.
  *
- * Rewrites the number and nothing else, so an app's `stale-if-error` or
- * `must-revalidate` survives a clamp. Clamping rather than replacing keeps this
- * strictly more permissive than the old behaviour, which could not regress
- * anyone on upgrade.
+ * Every directive that keeps a response servable is lowered, not just the
+ * freshness one. An earlier version rewrote `s-maxage` alone, so
+ * `s-maxage=300, stale-while-revalidate=86400` came back byte-identical while
+ * the code logged "the value was lowered": a shared cache would still serve
+ * that document for a day past the window the ceiling promises.
+ *
+ * `max-age` is lowered even when `s-maxage` is present. `s-maxage` decides what
+ * a shared cache does, but `max-age` still governs browsers and any cache that
+ * does not implement `s-maxage`, and those are the caches with no notion of a
+ * deploy.
+ *
+ * The stale window gets whatever budget is left after freshness, so
+ * `freshness + stale` can never exceed the ceiling.
  */
 export function clampSharedCacheSeconds(cacheControl: string, seconds: number): string {
-  const replaced = cacheControl.replace(
-    /(^|[,\s])(s-maxage|max-age)=(\d+)/gi,
-    (whole, lead: string, name: string, value: string) =>
-      Number(value) > seconds ? `${lead}${name}=${seconds}` : whole,
+  const lower = (name: string, limit: number, source: string): string =>
+    source.replace(
+      new RegExp(`((?:^|[,\\s])${name}\\s*=\\s*)(\\d+)`, 'gi'),
+      (whole, lead: string, value: string) => (Number(value) > limit ? `${lead}${limit}` : whole),
+    )
+
+  let out = lower('s-maxage', seconds, cacheControl)
+  out = lower('max-age', seconds, out)
+
+  const freshness = Math.min(
+    directive(unqualify(out.toLowerCase()), 's-maxage')
+    ?? directive(unqualify(out.toLowerCase()), 'max-age')
+    ?? seconds,
+    seconds,
   )
-  return /s-maxage=/i.test(replaced) ? replaced : `${replaced}, s-maxage=${seconds}`
+  const staleBudget = Math.max(0, seconds - freshness)
+  out = lower('stale-while-revalidate', staleBudget, out)
+  // `stale-if-error` only applies when the origin is failing, so it does not
+  // share the freshness budget, but it still must not outlive the chunks.
+  out = lower('stale-if-error', seconds, out)
+
+  return /s-maxage\s*=/i.test(out) ? out : `${out}, s-maxage=${freshness}`
 }

@@ -37,6 +37,9 @@ async function runPlugin(options: {
   }))
 
   hooks.request?.(event)
+  // A rendered document. The policy applies to documents only, so without this
+  // the plugin correctly leaves everything alone.
+  event.res.headers.set('content-type', 'text/html; charset=utf-8')
   // Nitro's route-rule handler runs after the request hook and replaces per key.
   for (const [name, value] of Object.entries(options.routeRuleHeaders ?? {}))
     event.res.headers.set(name, value)
@@ -119,5 +122,36 @@ describe('the floor must not overrule the app', () => {
     })
 
     expect(headers.browser).toBe('private, no-store')
+  })
+})
+
+describe('responses that are not documents', () => {
+  // The regression this guards: nitro's own `/_nuxt/**` immutable rule went
+  // through the document policy and came out `private, no-store`.
+  it('leaves an immutable asset policy exactly as nitro wrote it', async () => {
+    const hooks: Record<string, Hook> = {}
+    vi.resetModules()
+    vi.doMock('nitropack/runtime', () => ({
+      defineNitroPlugin: (fn: (app: unknown) => void) => fn,
+      useRuntimeConfig: () => ({ nuxtCloudflare: { htmlCacheMode: 'auto' } }),
+    }))
+    const plugin = (await import('../src/runtime/server/plugins/workers-cache')).default as unknown as
+      (app: { hooks: { hook: (name: string, fn: Hook) => void } }) => void
+
+    plugin({
+      hooks: {
+        hook: (name, fn) => {
+          hooks[name] = fn
+        },
+      },
+    })
+
+    const event = new H3Event(new Request('https://x.test/_nuxt/entry.abc.js'))
+    hooks.request?.(event)
+    event.res.headers.set('content-type', 'text/javascript')
+    event.res.headers.set('cache-control', 'public, max-age=31536000, immutable')
+    hooks.beforeResponse?.(event)
+
+    expect(event.res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
   })
 })

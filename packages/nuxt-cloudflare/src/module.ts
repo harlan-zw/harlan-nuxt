@@ -226,20 +226,28 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       logger.info('Workers Cache is on. HTML documents get `private, no-store`. A module must guarantee chunk retention to change this.')
     }
 
-    // A route rule that asks for shared caching is a real conflict only while
-    // nothing covers the skew hazard. Once something does, the rule is the
-    // point, so downgrade the build failure to nothing.
-    if (mode !== 'no-store' && (mode === 'app' || guarantee._tag === 'bounded'))
-      return
-
+    // A guarantee answers one hazard: a cached document naming chunks a deploy
+    // deleted. It does not answer the others, so the validator still runs.
+    //
+    // What a guarantee does change is the severity of a plain header rule,
+    // because the runtime can clamp that one. Everything the runtime cannot
+    // reach stays an error however good the guarantee is:
+    //
+    // - `prerender: true` routes have their headers written into `_headers` and
+    //   are served by Workers Assets, so the Worker never runs and never clamps.
+    // - `cache` / `swr` / `isr` wrap the handler in nitro's own cache, which
+    //   keys on the path alone and replays a stored `Set-Cookie` to everyone.
+    //   No header policy can undo that.
+    const relaxable = mode === 'app' || guarantee._tag === 'bounded'
     const violations = findHtmlCacheRouteRuleViolations(nitroConfig.routeRules)
+      .filter(violation => !(relaxable && violation._tag === 'html-cache-header'))
     const warnings = violations.filter(violation => violation.severity === 'warning')
     const errors = violations.filter(violation => violation.severity === 'error')
     if (warnings.length > 0)
       logger.warn(formatHtmlCacheRouteRuleViolations(warnings))
     if (errors.length > 0) {
       throw new Error(
-        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}\nIf a module guarantees chunk retention, set \`skewProtection.htmlCache: true\`. Otherwise set \`nuxtCloudflare.workersCache.html: 'app'\` to own the risk.`,
+        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}\nA chunk-retention guarantee does not cover these. A prerendered route is served by Workers Assets, and a cache/swr/isr rule stores the response in nitro's own path-keyed cache. Use a plain \`cache-control\` header rule instead, or set \`nuxtCloudflare.workersCache.html: 'app'\` to own the risk.`,
       )
     }
   })
