@@ -6,8 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner/runners.conf
-# 24 physical cores, modestly oversubscribed; runner work is IO-heavy.
-Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=48
+# 24 physical cores. Sized from measured load, not from the quotas it sums: a
+# busy CI container holds 6 cores of quota and used about 1 percent of one, and
+# load sat near 8 with 46 cores committed. 48 was below the 58-core warm floor,
+# so bursting switched off whenever most pools were busy and the queue stalled.
+Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=72
 # 60g host. Sized from MEASURED usage, not from the container limits it sums.
 #
 # A CI container is capped at 12g but measured 0.02-4.2g resident all afternoon:
