@@ -401,6 +401,34 @@ that is still running, and the losing copy is terminalized without settling its
 batch. Pass `reclaimAfterSeconds` to `createDurableRuntime()` only to override
 that on purpose.
 
+### Held rows
+
+A redelivery cannot claim a row that another run holds. The consumer retries
+that message with backoff: 60s on the first delivery, doubled on each later one,
+clamped to Cloudflare's 43200s ceiling. After two retries the message is acked.
+
+Cloudflare counts deliveries, not elapsed time. A message that keeps retrying
+spends the queue's `max_retries` and dead-letters with `attempts = 0`. The
+handler never runs. The ack stops that burn. The row keeps its reservation, so
+the reconcile sweep still owns it: the sweep releases the reservation after
+`staleSeconds`, then re-dispatches the row.
+
+```ts
+createDurableRuntime({
+  // A number, or a function of `{ jobId, deliveries }`.
+  // Pass 60 to restore the old flat delay.
+  inFlightRetryDelaySeconds: 60,
+  // Raise this only when the app runs no recovery sweep.
+  maxInFlightRetries: 2,
+})
+```
+
+Set `maxInFlightRetries: 0` to ack the first time a row is held. That spends no
+delivery at all, so a held row can never reach the dead-letter queue.
+
+If you set `reconcile: false`, no sweep runs. Then raise `maxInFlightRetries`,
+or run recovery from the app.
+
 `terminalFailureContext` points to an application module exporting
 `createReconcileJobContext`. Configure it when job definitions have `failed`
 callbacks: an isolate may terminate on its final claim, so the stale reaper must
