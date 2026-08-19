@@ -65,7 +65,39 @@ Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises sho
 
 Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
 
-Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Rendered HTML always stays private. API and asset responses keep explicit cache policies. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+
+The module writes a fail-closed `private, no-store` before routing, so a response nobody described is never cached. It never rewrites a policy you set on a response that is not a rendered document, so asset and API route rules are yours.
+
+For a rendered document it applies `workersCache.html`:
+
+| Value | Behaviour |
+| --- | --- |
+| `auto` (default) | Honour your `cache-control`, clamped to a retention window another module publishes. Falls back to `no-store` when nothing publishes one. |
+| `app` | Always honour your `cache-control`. You own the version-skew risk. |
+| `no-store` | Always overwrite it. |
+
+A cached document can name build chunks a later deploy deleted, which is why `auto` needs a guarantee. [`nuxt-skew-protection`](https://github.com/harlan-zw/nuxt-skew-protection) publishes one when you set `skewProtection: { htmlCache: true }`.
+
+Four things are refused whatever you configure, because a shared cache keys on the URL: a request carrying credentials, a response setting a cookie, a status other than 200, and a response varying on `Cookie` or `Authorization`.
+
+### Writing cache rules
+
+`edgeCache` builds the headers for a route rule:
+
+```ts
+import { edgeCache, NO_STORE } from '@harlan-zw/nuxt-cloudflare/cache'
+
+export default defineNuxtConfig({
+  routeRules: {
+    '/api/feed': edgeCache({ maxAge: 60 }),
+    '/api/reports': edgeCache({ maxAge: 3600, staleWhileRevalidate: 86400, browser: 'revalidate' }),
+    '/api/private': NO_STORE,
+  },
+})
+```
+
+It emits `max-age`, never `s-maxage`. Cloudflare reads `s-maxage` as implying `proxy-revalidate`, which disables `stale-while-revalidate` and `stale-if-error`, so a policy that looks like it serves stale blocks on revalidation instead. The module warns at build if a route rule you wrote by hand hits that.
 
 ## Cost controls
 

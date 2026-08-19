@@ -3,7 +3,7 @@ import {
   findHtmlCacheRouteRuleViolations,
   formatHtmlCacheRouteRuleViolations,
 } from '../src/html-cache'
-import { hasExplicitCachePolicy, withHtmlNoStoreHeaders } from '../src/runtime/server/utils/workers-cache'
+import { statedPolicy } from '../src/runtime/server/utils/workers-cache'
 
 describe('html cache route rules', () => {
   it('warns for ambiguous routes and rejects only explicit HTML routes', () => {
@@ -69,21 +69,8 @@ describe('html cache route rules', () => {
 describe('html response cache safety', () => {
   it('distinguishes explicit response policies from heuristic caching', () => {
     const headers = new Map<string, string>()
-    expect(hasExplicitCachePolicy(name => headers.get(name))).toBe(false)
+    expect(statedPolicy(name => headers.get(name))).toBe(false)
     headers.set('cloudflare-cdn-cache-control', 'public, max-age=60')
-    expect(hasExplicitCachePolicy(name => headers.get(name))).toBe(true)
-  })
-
-  it('replaces every cache header with an explicit no-store policy', () => {
-    expect(withHtmlNoStoreHeaders({
-      'Cache-Control': 'public, max-age=3600',
-      'CDN-Cache-Control': 'public, max-age=3600',
-      'Cloudflare-CDN-Cache-Control': 'public, max-age=3600',
-      'x-test': 'preserved',
-    })).toEqual({
-      'cache-control': 'private, no-store',
-      'cloudflare-cdn-cache-control': 'no-store',
-      'x-test': 'preserved',
-    })
+    expect(statedPolicy(name => headers.get(name))).toBe(true)
   })
 })

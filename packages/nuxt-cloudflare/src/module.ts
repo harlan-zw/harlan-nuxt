@@ -11,6 +11,7 @@ import {
   evaluateWranglerDiagnostics,
 } from './diagnostics'
 import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
+import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -351,21 +352,88 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     }
   })
   nuxt.hook('nitro:config', (nitroConfig) => {
-    if (resolveModuleWorkersCachePolicy(options)._tag === 'disabled')
+    const policy = resolveModuleWorkersCachePolicy(options)
+    if (policy._tag === 'disabled')
       return
+
+    const mode = policy.html ?? 'auto'
+    // Read at `nitro:config`, which runs after `modules:done`, so every module
+    // that publishes a capability during its own `setup` has already done so.
+    const guarantee = resolveHtmlCacheGuarantee(nuxt.options.runtimeConfig.htmlCacheCapabilities)
+
+    nuxt.options.runtimeConfig.nuxtCloudflare = {
+      ...(typeof nuxt.options.runtimeConfig.nuxtCloudflare === 'object'
+        ? nuxt.options.runtimeConfig.nuxtCloudflare
+        : {}),
+      htmlCacheMode: mode,
+    }
+
+    // The single highest-value line here. The default is invisible until it
+    // costs someone an afternoon, so state it before that happens.
+    if (mode === 'app') {
+      logger.info('Workers Cache honours your HTML cache rules. You own the version-skew risk.')
+    }
+    else if (guarantee._tag === 'bounded' && mode === 'auto') {
+      logger.info(`${guarantee.by} guarantees chunks for ${guarantee.ceilingSeconds}s. Workers Cache honours your HTML cache rules up to that limit.`)
+    }
+    else {
+      logger.info('Workers Cache is on. HTML documents get `private, no-store`. A module must guarantee chunk retention to change this.')
+    }
+
+    // The assertion the app is making by writing a shared-cache rule on a
+    // document route, said out loud once so it is an informed one. This module
+    // will not invent a `Vary`, because inventing one costs every route that
+    // does not negotiate and hides the bug on the ones that do.
+    if (mode === 'app' || guarantee._tag === 'bounded')
+      logger.info('A shared cache keys on the URL. If a page changes with a request header, set `Vary` on it. Responses varying on Cookie or Authorization are never shared.')
+
+    // The trap every site that hand-wrote this policy left a comment about.
+    // Cloudflare reads `s-maxage` as implying `proxy-revalidate`, so pairing it
+    // with a stale directive silently does nothing.
+    for (const [route, rule] of Object.entries(nitroConfig.routeRules ?? {})) {
+      const headers = (rule as { headers?: Record<string, string> } | undefined)?.headers
+      if (!headers)
+        continue
+      for (const [name, value] of Object.entries(headers)) {
+        if (!name.toLowerCase().endsWith('cache-control'))
+          continue
+        if (staleDirectivesAreDisabled(value))
+          logger.warn(`routeRules['${route}'] sets \`${name}: ${value}\`. Cloudflare disables stale serving when \`s-maxage\`, \`must-revalidate\` or \`proxy-revalidate\` is present. Use \`max-age\` for the edge freshness window instead.`)
+      }
+    }
+
+    // A guarantee answers one hazard: a cached document naming chunks a deploy
+    // deleted. It does not answer the others, so the validator still runs.
+    //
+    // What a guarantee does change is the severity of a plain header rule,
+    // because the runtime can clamp that one. Everything the runtime cannot
+    // reach stays an error however good the guarantee is:
+    //
+    // - `prerender: true` routes have their headers written into `_headers` and
+    //   are served by Workers Assets, so the Worker never runs and never clamps.
+    // - `cache` / `swr` / `isr` wrap the handler in nitro's own cache, which
+    //   keys on the path alone and replays a stored `Set-Cookie` to everyone.
+    //   No header policy can undo that.
+    const relaxable = mode === 'app' || guarantee._tag === 'bounded'
     const violations = findHtmlCacheRouteRuleViolations(nitroConfig.routeRules)
+      .filter(violation => !(relaxable && violation._tag === 'html-cache-header'))
     const warnings = violations.filter(violation => violation.severity === 'warning')
     const errors = violations.filter(violation => violation.severity === 'error')
     if (warnings.length > 0)
       logger.warn(formatHtmlCacheRouteRuleViolations(warnings))
     if (errors.length > 0) {
       throw new Error(
-        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}`,
+        `[nuxt-cloudflare] HTML route rules conflict with Workers Caching:\n${formatHtmlCacheRouteRuleViolations(errors)}\nA chunk-retention guarantee does not cover these. A prerendered route is served by Workers Assets, and a cache/swr/isr rule stores the response in nitro's own path-keyed cache. Use a plain \`cache-control\` header rule instead, or set \`nuxtCloudflare.workersCache.html: 'app'\` to own the risk.`,
       )
     }
   })
   if (!nuxt.options.dev) {
     nuxt.hook('nitro:init', (nitro) => {
+      // Only nitro's Cloudflare presets write the config this audits. On any
+      // other preset there is nothing to check, and throwing over its absence
+      // fails a build that is otherwise fine.
+      if (!nitro.options.preset?.includes('cloudflare'))
+        return
       nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(
         nitro,
         options,
