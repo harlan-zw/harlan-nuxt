@@ -65,6 +65,11 @@ readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
 readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
+# How long a shutdown waits for in-flight jobs before it stops signalling them.
+# A job that outruns this is killed, so keep it above the longest job timeout any
+# consuming workflow sets. The unit's `TimeoutStopSec` has to clear it too, or
+# systemd sends SIGKILL while the drain is still waiting.
+readonly drain_timeout_seconds="${HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS:-1800}"
 # How often the offline registrations are swept. A delete needs two sweeps in a
 # row, so a dead registration clears after twice this long at worst.
 readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
@@ -373,8 +378,26 @@ run_warm_slot() {
   local container_name="harlan-desktop-${pool_slug[$pool_index]}-$slot_number"
 
   while true; do
+    # A warm slot outlives the container it is holding, so it has to be told
+    # that a drain started. Otherwise it rebuilds every listener the drain
+    # stops and the shutdown never finishes.
+    if [[ -f "$state_dir/shutdown" ]]; then
+      return 0
+    fi
+    # A restart spares this slot's previous container while it finishes its job,
+    # and that container keeps the name. Wait for it. Taking the name back would
+    # fail `docker run`, and the failure path below would then force-remove the
+    # very job the startup drain just spared.
+    while container_holds_job "$container_name"; do
+      sleep 10
+      if [[ -f "$state_dir/shutdown" ]]; then
+        return 0
+      fi
+    done
     if ! run_container "$pool_index" warm "$container_name"; then
-      docker rm --force "$container_name" >/dev/null 2>&1 || true
+      if ! container_holds_job "$container_name"; then
+        docker rm --force "$container_name" >/dev/null 2>&1 || true
+      fi
       sleep 10
     fi
   done
@@ -392,7 +415,9 @@ run_burst_slot() {
   run_container "$pool_index" burst "$container_name" || true
 
   kill "$reaper_pid" >/dev/null 2>&1 || true
-  docker rm --force "$container_name" >/dev/null 2>&1 || true
+  if ! container_holds_job "$container_name"; then
+    docker rm --force "$container_name" >/dev/null 2>&1 || true
+  fi
   rm --force "$state_dir/burst/${pool_slug[$pool_index]}/$container_name"
   release "$container_name"
 }
@@ -407,6 +432,7 @@ run_scaler() {
   while true; do
     while IFS=' ' read -r request pool_index; do
       [[ "$request" == spawn ]] || continue
+      [[ -f "$state_dir/shutdown" ]] && continue
 
       slug="${pool_slug[$pool_index]}"
       live=$(( pool_warm[pool_index] + $(count_markers "$state_dir/burst/$slug") ))
@@ -428,8 +454,14 @@ run_scaler() {
         continue
       fi
 
+      # A restart resets this counter while a spared burst container from the
+      # previous generation may still hold one of these names. Skip past it.
       burst_counter=$(( burst_counter + 1 ))
       container_name="harlan-desktop-$slug-burst-$burst_counter"
+      while docker container inspect "$container_name" >/dev/null 2>&1; do
+        burst_counter=$(( burst_counter + 1 ))
+        container_name="harlan-desktop-$slug-burst-$burst_counter"
+      done
       # Both reservations are written before the fork, so the next request in
       # this loop already sees this container.
       printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
@@ -536,8 +568,78 @@ stop_all_containers() {
   fi
 }
 
-cleanup() {
+# True while the container runs a job. The runner forks `Runner.Worker` for the
+# job and reaps it when the job ends, so this reads the same for a container
+# this process started and for one a previous supervisor left behind. It is read
+# from the container, never from `state_dir`, because a restart wipes that.
+container_holds_job() {
+  docker top "$1" 2>/dev/null | grep --quiet 'Runner\.Worker'
+}
+
+# Stops idle listeners now, then waits for the containers that hold a job.
+#
+# Every container here is ephemeral: it runs at most one job and exits on its
+# own. Stopping one mid-job drops its connection, and GitHub reports that
+# against the job as "the self-hosted runner lost communication with the
+# server". The job had not failed and its run is red anyway.
+#
+# That is what a restart used to do to every job in flight, so a session spent
+# tuning a budget failed the CI it was being tuned for. Six restarts on
+# 19 Aug 2026 took out four otherwise green runs across skilld.dev.
+drain_containers() {
+  local deadline=$(( SECONDS + drain_timeout_seconds ))
+  local -a container_ids=()
+  local id waiting
+
+  log 'Draining before shutdown'
+
+  # The marker stops the warm slots and the scaler replacing what is drained.
+  # Without it a stopped idle listener is rebuilt within seconds and the drain
+  # never converges.
+  [[ -n "$state_dir" && -d "$state_dir" ]] && : >"$state_dir/shutdown"
+
+  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
+  for id in ${container_ids[@]+"${container_ids[@]}"}; do
+    if ! container_holds_job "$id"; then
+      docker stop --time 20 "$id" >/dev/null 2>&1 || true
+    fi
+  done
+
+  while (( SECONDS < deadline )); do
+    waiting=0
+    mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
+    for id in ${container_ids[@]+"${container_ids[@]}"}; do
+      if container_holds_job "$id"; then
+        waiting=$(( waiting + 1 ))
+      fi
+    done
+    if (( waiting == 0 )); then
+      return 0
+    fi
+    log "Draining: $waiting job(s) still running"
+    sleep 10
+  done
+
+  log "Drain gave up after ${drain_timeout_seconds}s; stopping the rest"
   stop_all_containers
+}
+
+# The startup half of the drain: clear idle leftovers, leave busy ones alone.
+# There is nothing to wait for here, because this process has not started yet.
+drain_leftover_containers() {
+  local -a container_ids=()
+  local id
+
+  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
+  for id in ${container_ids[@]+"${container_ids[@]}"}; do
+    if ! container_holds_job "$id"; then
+      docker stop --time 20 "$id" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+cleanup() {
+  drain_containers
   [[ -n "$state_dir" && -d "$state_dir" ]] && rm --recursive --force "$state_dir"
   return 0
 }
@@ -565,8 +667,11 @@ main() {
   mkfifo --mode 0600 "$scale_pipe"
 
   # Leftovers from a previous supervisor hold registrations this process cannot
-  # track.
-  stop_all_containers
+  # track. An idle one is cleared, because it would claim a job this process has
+  # no accounting for. One that already holds a job is left to finish and exit,
+  # so a restart does not fail the run it was in the middle of. That leaves its
+  # memory and CPU unbudgeted for the rest of that one job.
+  drain_leftover_containers
   trap cleanup EXIT INT TERM
 
   local pool_index slot_number
