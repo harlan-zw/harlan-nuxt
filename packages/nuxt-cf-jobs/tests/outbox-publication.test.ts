@@ -277,6 +277,52 @@ describe('durable publication state', () => {
     await expect(repository.claimJob(job.id)).resolves.toMatchObject({ id: job.id })
   })
 
+  it('re-publishes a retryable stale claim when its transport message reached the DLQ', async () => {
+    const db = createSqliteD1()
+    const repository = createD1DurableJobRepository(db)
+    await repository.migrate()
+    const job = await record('transport-exhausted')
+    expect((await stagePreparedDurableJobs(repository, [job])).status).toBe('staged')
+    await publishDurableJobBatch(repository, { sendBatch: async () => true }, [job], { now: 100 })
+    await expect(repository.claimJob(job.id)).resolves.toMatchObject({ id: job.id })
+    db._db.prepare('UPDATE jobs SET reserved_at = 100 WHERE id = ?').run(job.id)
+    await repository.noteDlqArrival(job.id, { messageAttempts: 5, at: 200 })
+    const publisher = { sendBatch: vi.fn(async () => true) }
+
+    const recovered = await recoverDurableJobs(repository, publisher, {
+      now: 1_000,
+      staleSeconds: 300,
+      orphanedSeconds: 21_600,
+      redeliveryGraceSeconds: 120,
+    })
+
+    expect(recovered).toMatchObject({ released: 1, dispatched: 1 })
+    expect(publisher.sendBatch).toHaveBeenCalledWith('events', [{ jobId: job.id, queue: 'events' }], { delaySeconds: undefined })
+    expect(db._db.prepare('SELECT published_at FROM jobs WHERE id = ?').get(job.id)).toEqual({ published_at: 1_000 })
+  })
+
+  it('terminalizes a stale claim when its durable attempts were exhausted before the DLQ', async () => {
+    const db = createSqliteD1()
+    const repository = createD1DurableJobRepository(db)
+    await repository.migrate()
+    const job = await record('durable-exhausted')
+    expect((await stagePreparedDurableJobs(repository, [job])).status).toBe('staged')
+    await publishDurableJobBatch(repository, { sendBatch: async () => true }, [job], { now: 100 })
+    db._db.prepare('UPDATE jobs SET reserved_at = 100, attempts = max_attempts WHERE id = ?').run(job.id)
+    await repository.noteDlqArrival(job.id, { messageAttempts: 5, at: 200 })
+    const publisher = { sendBatch: vi.fn(async () => true) }
+
+    const recovered = await recoverDurableJobs(repository, publisher, {
+      now: 1_000,
+      staleSeconds: 300,
+      orphanedSeconds: 21_600,
+    })
+
+    expect(recovered).toMatchObject({ released: 0, dispatched: 0 })
+    expect(publisher.sendBatch).not.toHaveBeenCalled()
+    expect(db._db.prepare('SELECT id FROM failed_jobs WHERE id = ?').get(job.id)).toEqual({ id: job.id })
+  })
+
   it('never selects already-published backlog rows for recovery', async () => {
     const db = createSqliteD1()
     const repository = createD1DurableJobRepository(db)

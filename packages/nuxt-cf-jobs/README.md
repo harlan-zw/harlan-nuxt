@@ -362,6 +362,8 @@ The generated `prepareJob()` loads the full job definition, validates the payloa
 
 The module registers `cf-jobs:reconcile` by default. Every two minutes it reclaims stale reservations, re-dispatches older due rows that have no queue message, and closes orphaned batches when it has enough terminal evidence.
 
+If a transport message reaches its DLQ during a live reservation, the row becomes unpublished when durable attempts remain. Reconcile sends a replacement as soon as it releases the stale reservation. Rows with exhausted durable attempts become terminal failures instead.
+
 ```ts
 export default defineNuxtConfig({
   cfJobs: {

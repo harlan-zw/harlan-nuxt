@@ -672,7 +672,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       const evidence = dlqArrivalEvidence(at, input.messageAttempts)
       const row = await db.prepare<{ id: string }>(`
         UPDATE ${jobsTable}
-        SET retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
+        SET published_at = CASE
+              WHEN max_attempts IS NULL OR attempts < max_attempts THEN NULL
+              ELSE published_at
+            END,
+            retry_reasons = ${appendFailureEvidenceSql('retry_reasons')}
         WHERE id = ?
           AND completed_at IS NULL
           AND failed_at IS NULL
