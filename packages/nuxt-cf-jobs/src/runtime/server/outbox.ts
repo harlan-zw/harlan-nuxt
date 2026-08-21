@@ -171,7 +171,9 @@ export type NoteDurableJobDlqArrivalResult
 export interface DurableJobFailureEvidenceRepository {
   /**
    * Record that Cloudflare exhausted a durable message while its row could not
-   * be claimed. This must not take ownership of the row.
+   * be claimed. Retriable rows become unpublished so recovery can replace the
+   * exhausted transport message after releasing its stale reservation. This
+   * must not take ownership of the row.
    */
   noteDlqArrival: (id: string, input: NoteDurableJobDlqArrivalInput) => Promise<NoteDurableJobDlqArrivalResult>
 }

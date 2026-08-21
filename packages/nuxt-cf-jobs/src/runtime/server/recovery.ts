@@ -101,19 +101,32 @@ export async function recoverDurableJobs<
   // every tick (oldest candidates first) and becomes a producer instead
   // of a repair. See `DurableJobRecoveryQuery.redispatchedBefore`.
   const redispatchGraceSeconds = Math.max(0, opts.redispatchGraceSeconds ?? orphanedSeconds)
-  const orphaned = await findDispatchableDurableJobs(repository, {
+  // Unpublished rows have no live transport message. This includes an outbox
+  // send failure and a retriable message whose DLQ arrival cleared its
+  // publication marker. Recover them as soon as they are due and unreserved;
+  // the orphan age and redelivery grace apply only to published rows whose
+  // original message may still arrive.
+  const unpublished = await findDispatchableDurableJobs(repository, {
     now: nowSeconds,
-    createdBefore: nowSeconds - orphanedSeconds,
-    ...(redeliveryGraceSeconds > 0 ? { staleReleasedBefore: nowSeconds - redeliveryGraceSeconds } : {}),
-    ...(redispatchGraceSeconds > 0 ? { redispatchedBefore: nowSeconds - redispatchGraceSeconds } : {}),
-    publication: 'all',
+    publication: 'unpublished',
     limit,
   })
+  const remainingLimit = Math.max(0, limit - unpublished.length)
+  const orphaned = remainingLimit > 0
+    ? await findDispatchableDurableJobs(repository, {
+        now: nowSeconds,
+        createdBefore: nowSeconds - orphanedSeconds,
+        ...(redeliveryGraceSeconds > 0 ? { staleReleasedBefore: nowSeconds - redeliveryGraceSeconds } : {}),
+        ...(redispatchGraceSeconds > 0 ? { redispatchedBefore: nowSeconds - redispatchGraceSeconds } : {}),
+        publication: 'published',
+        limit: remainingLimit,
+      })
+    : []
 
   const releasedIds = new Set(stale.slice(0, released).map(job => job.id))
   const dispatchable = uniqueJobs(redeliveryGraceSeconds > 0
-    ? orphaned.filter(job => !releasedIds.has(job.id))
-    : [...stale.slice(0, released), ...orphaned])
+    ? [...unpublished, ...orphaned.filter(job => !releasedIds.has(job.id))]
+    : [...unpublished, ...stale.slice(0, released), ...orphaned])
   const publicationRepository = repository as DurableJobRecoveryRepository<Queue, Record> & Partial<DurableJobPublicationRepository>
   const dispatchResults: Array<DispatchDurableJobBatchResult<Queue>> = publicationRepository.markJobsPublished && publicationRepository.noteJobsDispatchFailure
     ? (await publishDurableJobBatch(

@@ -1,3 +1,4 @@
+import type { DurableJobRecoveryQuery } from '#cf-jobs/server'
 import { describe, expect, it, vi } from 'vitest'
 import { recoverDurableJobs } from '#cf-jobs/server'
 
@@ -10,10 +11,12 @@ describe('recoverDurableJobs', () => {
         { id: 'dupe', queue: 'q' },
       ]),
       releaseStaleReservedJobs: vi.fn(async () => 2),
-      findDispatchableJobs: vi.fn(async () => [
-        { id: 'dupe', queue: 'q' },
-        { id: 'orphaned', queue: 'q' },
-      ]),
+      findDispatchableJobs: vi.fn(async (query?: DurableJobRecoveryQuery) => query?.publication === 'unpublished'
+        ? []
+        : [
+            { id: 'dupe', queue: 'q' },
+            { id: 'orphaned', queue: 'q' },
+          ]),
     }
     const publisher = {
       sendBatch: vi.fn(async (queue: string, messages: Array<{ jobId: string }>) => {
@@ -37,13 +40,18 @@ describe('recoverDurableJobs', () => {
       error: 'stale-reservation',
       limit: 10,
     })
-    expect(repository.findDispatchableJobs).toHaveBeenCalledWith({
+    expect(repository.findDispatchableJobs).toHaveBeenNthCalledWith(1, {
+      now: 1_000,
+      publication: 'unpublished',
+      limit: 10,
+    })
+    expect(repository.findDispatchableJobs).toHaveBeenNthCalledWith(2, {
       now: 1_000,
       createdBefore: 400,
       staleReleasedBefore: 880,
       // Defaults to orphanedSeconds: a row is re-sent at most once per window.
       redispatchedBefore: 400,
-      publication: 'all',
+      publication: 'published',
       limit: 10,
     })
     expect(sent).toEqual([{ queue: 'q', ids: ['orphaned'] }])
@@ -124,7 +132,7 @@ describe('recoverDurableJobs orphan re-dispatch damping', () => {
         findStaleReservedJobs: vi.fn(async () => []),
         releaseStaleReservedJobs: vi.fn(async () => 0),
         // A backlog: every row is old, due and unreserved on every tick.
-        findDispatchableJobs: vi.fn(async () => rows),
+        findDispatchableJobs: vi.fn(async (query?: DurableJobRecoveryQuery) => query?.publication === 'unpublished' ? [] : rows),
         noteOrphanRedispatch: vi.fn(async (ids: readonly string[]) => {
           noted.push([...ids])
           return ids.length
