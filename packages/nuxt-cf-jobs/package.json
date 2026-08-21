@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cf-jobs",
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Experimental Nuxt module for typed Cloudflare queue jobs.",
   "author": {
     "name": "Harlan Wilton",
