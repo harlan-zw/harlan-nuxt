@@ -15,6 +15,7 @@ Every default below yields to a value you wrote. The root `wrangler.jsonc`, `wra
 - `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
 - Version metadata binding at `CF_VERSION_METADATA`
 - Smart Placement enabled unless the project chooses a placement
+- Partial bundling: `find_additional_modules` plus a fallthrough `ESModule` rule for `**/*.mjs`, unless a rule already covers mjs or `no_bundle` is set
 - Workers Caching enabled with version isolation
 - Rendered HTML forced to `private, no-store`; explicit non-HTML cache policies remain intact
 - Source-map upload when the Nitro build emits maps; an authored value is preserved
@@ -66,6 +67,8 @@ Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises sho
 Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
 
 Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+
+Partial bundling is on by default. Wrangler's default bundling inlines every lazy chunk into one module the isolate parses at startup; on the Nuxt SEO Pro Worker that was a 26.3MB bundle, and partial bundling cut `wrangler check startup` active CPU from 118ms to 81ms by deploying chunks as separate modules. The generated config gains `find_additional_modules: true` and a fallthrough `ESModule` rule for `**/*.mjs`; rules you wrote are kept, and one that already covers mjs wins. Configs with `no_bundle` inject neither key, because Wrangler already defaults `find_additional_modules` to true there and applies your rules as written. Set `partialBundles: false` to keep single-bundle deploys.
 
 The module writes a fail-closed `private, no-store` before routing, so a response nobody described is never cached. It never rewrites a policy you set on a response that is not a rendered document, so asset and API route rules are yours.
 
