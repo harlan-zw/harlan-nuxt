@@ -31,6 +31,7 @@ export interface ModuleOptions {
     defaultTtl?: number
   }
   logsSampleRate?: number
+  partialBundles?: boolean
   publicVarNames?: string[]
   requiredSecrets?: string[]
   sourceMaps?: boolean
@@ -164,6 +165,7 @@ export function configureNitroCloudflare(
   nitro.cloudflare.wrangler = applyCloudflareDefaults(nitro.cloudflare.wrangler ?? {}, {
     compatibilityDate: options.compatibilityDate,
     logsSampleRate: options.logsSampleRate,
+    partialBundles: options.partialBundles,
     requiredSecrets: options.requiredSecrets,
     tracesSampleRate: options.tracesSampleRate,
     uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? context.serverSourceMaps ?? false,
@@ -457,6 +459,7 @@ export default defineNuxtModule<ModuleOptions>({
     compatibilityMaxAgeDays: 90,
     doctor: { _tag: 'advisory' },
     logsSampleRate: 0.01,
+    partialBundles: true,
     tracesSampleRate: 0.01,
     versionMetadataBinding: 'CF_VERSION_METADATA',
     workersCache: { _tag: 'enabled', crossVersion: false },

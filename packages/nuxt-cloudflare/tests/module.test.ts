@@ -90,6 +90,26 @@ describe('configureNitroCloudflare', () => {
     expect(nitro.cloudflare?.wrangler?.placement).toEqual({ mode: 'smart' })
   })
 
+  it('enables partial bundling by default', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.cloudflare?.wrangler?.find_additional_modules).toBe(true)
+    expect(nitro.cloudflare?.wrangler?.rules).toEqual([
+      { type: 'ESModule', globs: ['**/*.mjs'], fallthrough: true },
+    ])
+  })
+
+  it('supports an explicit partial bundling opt-out', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, { partialBundles: false })
+
+    expect(nitro.cloudflare?.wrangler?.find_additional_modules).toBeUndefined()
+    expect(nitro.cloudflare?.wrangler?.rules).toBeUndefined()
+  })
+
   it('supports version-isolated Workers Caching as an explicit policy', () => {
     const nitro: NitroCloudflareShape = {}
 

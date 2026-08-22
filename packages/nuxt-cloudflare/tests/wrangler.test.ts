@@ -128,6 +128,92 @@ describe('applyCloudflareDefaults', () => {
     })
   })
 
+  describe('partial bundling', () => {
+    it('enables find_additional_modules with a fallthrough ESModule mjs rule by default', () => {
+      expect(applyCloudflareDefaults({})).toMatchObject({
+        find_additional_modules: true,
+        rules: [{ type: 'ESModule', globs: ['**/*.mjs'], fallthrough: true }],
+      })
+    })
+
+    it('keeps an explicit find_additional_modules choice', () => {
+      expect(applyCloudflareDefaults({ find_additional_modules: false }).find_additional_modules).toBe(false)
+    })
+
+    it('keeps an authored find_additional_modules choice', () => {
+      expect(applyCloudflareDefaults({}, {}, { find_additional_modules: false }).find_additional_modules)
+        .toBe(false)
+    })
+
+    it('prepends the mjs rule to consumer rules', () => {
+      expect(applyCloudflareDefaults({
+        rules: [{ type: 'Text', globs: ['**/*.sql'] }],
+      }).rules).toEqual([
+        { type: 'ESModule', globs: ['**/*.mjs'], fallthrough: true },
+        { type: 'Text', globs: ['**/*.sql'] },
+      ])
+    })
+
+    it.each([
+      ['the exact mjs glob', ['**/*.mjs']],
+      ['mjs beside other globs', ['**/*.js', '**/*.mjs']],
+      ['a catch-all glob', ['**/*']],
+    ])('does not duplicate a consumer rule that already covers mjs via %s', (_, globs) => {
+      expect(applyCloudflareDefaults({
+        rules: [{ type: 'ESModule', globs }],
+      }).rules).toEqual([{ type: 'ESModule', globs }])
+    })
+
+    it('leaves authored rules to the authored config', () => {
+      expect(applyCloudflareDefaults({}, {}, {
+        rules: [{ type: 'ESModule', globs: ['**/*.mjs', '**/*.js'] }],
+      }).rules).toBeUndefined()
+    })
+
+    it('injects neither key when the module opts out', () => {
+      const config = applyCloudflareDefaults({}, { partialBundles: false })
+
+      expect(config.find_additional_modules).toBeUndefined()
+      expect(config.rules).toBeUndefined()
+    })
+
+    it.each([
+      ['the generated config', applyCloudflareDefaults({ no_bundle: true })],
+      ['the authored config', applyCloudflareDefaults({}, {}, { no_bundle: true })],
+    ])('injects neither key when no_bundle is set in %s', (_, config) => {
+      expect(config.find_additional_modules).toBeUndefined()
+      expect(config.rules).toBeUndefined()
+    })
+
+    it('applies partial bundling to named environments without restating the root rule', () => {
+      const config = applyCloudflareDefaults({ env: { production: {} } })
+
+      expect(config.find_additional_modules).toBe(true)
+      expect(config.rules).toEqual([{ type: 'ESModule', globs: ['**/*.mjs'], fallthrough: true }])
+      expect(config.env?.production?.find_additional_modules).toBe(true)
+      expect(config.env?.production?.rules).toBeUndefined()
+    })
+
+    it('injects into a named environment that declares its own rules', () => {
+      expect(applyCloudflareDefaults({
+        rules: [{ type: 'Text', globs: ['**/*.sql'] }],
+        env: { production: { rules: [{ type: 'Data', globs: ['**/*.bin'] }] } },
+      }).env?.production?.rules).toEqual([
+        { type: 'ESModule', globs: ['**/*.mjs'], fallthrough: true },
+        { type: 'Data', globs: ['**/*.bin'] },
+      ])
+    })
+
+    it('honours an authored root mjs rule for named environments', () => {
+      const config = applyCloudflareDefaults({ env: { production: {} } }, {}, {
+        rules: [{ type: 'ESModule', globs: ['**/*.mjs'] }],
+      })
+
+      expect(config.rules).toBeUndefined()
+      expect(config.env?.production?.rules).toBeUndefined()
+    })
+  })
+
   describe('node compatibility flags', () => {
     it('never pairs nodejs_compat with nodejs_compat_v2', () => {
       expect(applyCloudflareDefaults({ compatibility_flags: ['nodejs_compat_v2'] }).compatibility_flags)

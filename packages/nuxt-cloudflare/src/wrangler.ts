@@ -20,6 +20,21 @@ export type WranglerPlacementInput
     | { hostname: string, host?: never, mode?: never, region?: never }
     | { region: string, host?: never, hostname?: never, mode?: never }
 
+export type WranglerModuleRuleType
+  = | 'CommonJS'
+    | 'CompiledWasm'
+    | 'Data'
+    | 'ESModule'
+    | 'PythonModule'
+    | 'PythonRequirement'
+    | 'Text'
+
+export interface WranglerModuleRuleInput {
+  type: WranglerModuleRuleType
+  globs: string[]
+  fallthrough?: boolean
+}
+
 export interface WranglerRemoteBindingInput extends Record<string, unknown> {
   binding?: string
   remote?: boolean
@@ -79,6 +94,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   compatibility_flags?: string[]
   containers?: WranglerContainerInput[]
   env?: Record<string, WranglerConfigInput>
+  find_additional_modules?: boolean
   images?: WranglerRemoteBindingInput
   keep_vars?: boolean
   limits?: {
@@ -86,6 +102,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
     subrequests?: number
   }
   mtls_certificates?: WranglerRemoteBindingInput[]
+  no_bundle?: boolean
   observability?: WranglerObservabilityInput
   placement?: WranglerPlacementInput
   preview_urls?: boolean
@@ -95,6 +112,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   }
   route?: string | Record<string, unknown>
   routes?: Array<string | Record<string, unknown>>
+  rules?: WranglerModuleRuleInput[]
   secrets?: {
     required?: string[]
   }
@@ -110,6 +128,7 @@ export interface WranglerConfigInput extends Record<string, unknown> {
 export interface CloudflareDefaultOptions {
   compatibilityDate?: string
   logsSampleRate?: number
+  partialBundles?: boolean
   requiredSecrets?: readonly string[]
   tracesSampleRate?: number
   uploadSourceMaps?: boolean
@@ -194,6 +213,20 @@ const SECRET_NAME_RE = /(?:^|_)(?:API_?KEY|AUTH_TOKEN|CLIENT_SECRET|CREDENTIALS?
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 const NODEJS_COMPAT_V2_DATE = new Date('2024-09-23T00:00:00.000Z')
+const MJS_COVERING_GLOBS = new Set(['**/*.mjs', '**/*'])
+const PARTIAL_BUNDLES_MODULE_RULE: WranglerModuleRuleInput = {
+  type: 'ESModule',
+  globs: ['**/*.mjs'],
+  // Wrangler keeps only the first rule per module type unless it falls
+  // through, and Nitro's `defu` merge places generated rules before authored
+  // ones. Without this a consumer ESModule rule for other globs would be
+  // dropped as redundant.
+  fallthrough: true,
+}
+
+function moduleRuleCoversMjs(rule: WranglerModuleRuleInput): boolean {
+  return rule.type === 'ESModule' && rule.globs.some(glob => MJS_COVERING_GLOBS.has(glob))
+}
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)]
@@ -421,6 +454,7 @@ export function applyCloudflareDefaults(
       // Named Wrangler environments inherit the authored root for the keys
       // Wrangler itself inherits, and nothing else.
       authored: resolveEnvironmentPolicy(authored, authored.env?.[name] ?? {}),
+      authoredEnvironment: authored.env?.[name] ?? {},
       inherited: root,
     })]),
   )
@@ -448,6 +482,12 @@ function withNodeCompatibilityFlags(flags: readonly string[]): string[] {
 interface CloudflareEnvironmentLayers {
   /** The root Wrangler file. Outranks every module default. */
   authored?: WranglerConfigInput
+  /**
+   * The named environment's own authored block. Wrangler replaces inherited
+   * keys wholesale, so an environment that declares `rules` never sees the
+   * root's.
+   */
+  authoredEnvironment?: WranglerConfigInput
   /** The resolved root environment, for named Wrangler environments. */
   inherited?: WranglerConfigInput
 }
@@ -507,12 +547,39 @@ function applyEnvironmentDefaults(
       ? inherited.version_metadata
       : undefined)
     ?? (localBindingNames.has(versionMetadataBinding) ? undefined : { binding: versionMetadataBinding })
+  // Wrangler's default esbuild bundling inlines every lazy chunk into one
+  // module the isolate parses at startup. Partial bundling keeps them as
+  // separate uploaded modules: `find_additional_modules` discovers them and
+  // the ESModule rule types them. `no_bundle` skips the bundler, and Wrangler
+  // already defaults `find_additional_modules` to true there, so rules the
+  // consumer wrote apply as written and the module injects nothing.
+  const partialBundles = options.partialBundles ?? true
+  const noBundle = config.no_bundle ?? authored.no_bundle ?? inherited.no_bundle
+  const findAdditionalModules = config.find_additional_modules
+    ?? authored.find_additional_modules
+    ?? inherited.find_additional_modules
+  // Rules the final environment block will carry. Nitro's `defu` merge
+  // concatenates the generated and authored arrays within one environment,
+  // so both count; anything else only reaches this environment through
+  // Wrangler's root inheritance, which applies when the block declares none.
+  const environmentRules = [...(config.rules ?? []), ...(layers.authoredEnvironment?.rules ?? [])]
+  const mjsCovered = environmentRules.length > 0
+    ? environmentRules.some(moduleRuleCoversMjs)
+    : [...(authored.rules ?? []), ...(inherited.rules ?? [])].some(moduleRuleCoversMjs)
 
   return {
     ...config,
     cache,
     ...(compatibilityDate === undefined ? {} : { compatibility_date: compatibilityDate }),
     compatibility_flags: compatibilityFlags,
+    ...(partialBundles && !noBundle
+      ? {
+          find_additional_modules: findAdditionalModules ?? true,
+          // Authored rules stay in the authored config: Nitro's `defu` merge
+          // concatenates arrays, so restating them here would duplicate them.
+          ...(!mjsCovered ? { rules: [PARTIAL_BUNDLES_MODULE_RULE, ...(config.rules ?? [])] } : {}),
+        }
+      : {}),
     observability: {
       ...inherited.observability,
       ...authored.observability,
@@ -1089,11 +1156,14 @@ function resolveEnvironmentPolicy(
     cache: environment.cache ?? root.cache,
     compatibility_date: environment.compatibility_date ?? root.compatibility_date,
     compatibility_flags: environment.compatibility_flags ?? root.compatibility_flags,
+    find_additional_modules: environment.find_additional_modules ?? root.find_additional_modules,
     ...(exports === undefined ? {} : { exports }),
     ...(migrations === undefined ? {} : { migrations }),
+    no_bundle: environment.no_bundle ?? root.no_bundle,
     observability: mergeObservability(root.observability, environment.observability),
     placement: environment.placement ?? root.placement,
     preview_urls: environment.preview_urls ?? root.preview_urls,
+    rules: environment.rules ?? root.rules,
     upload_source_maps: environment.upload_source_maps ?? root.upload_source_maps,
     workers_dev: environment.workers_dev ?? root.workers_dev,
   }
