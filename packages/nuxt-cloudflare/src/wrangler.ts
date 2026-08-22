@@ -14,8 +14,12 @@ export interface WranglerWorkersCacheInput {
   cross_version_cache?: boolean
 }
 
+// `mode: 'off'` is Wrangler's explicit opt-out of Smart Placement. It exists
+// so a consumer can pin near-user execution instead of relying on the smart
+// default injected below — omitting the key entirely means smart.
 export type WranglerPlacementInput
   = | { mode: 'smart', host?: never, hostname?: never, region?: never }
+    | { mode: 'off', host?: never, hostname?: never, region?: never }
     | { host: string, hostname?: never, mode?: never, region?: never }
     | { hostname: string, host?: never, mode?: never, region?: never }
     | { region: string, host?: never, hostname?: never, mode?: never }
