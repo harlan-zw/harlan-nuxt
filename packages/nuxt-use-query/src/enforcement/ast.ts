@@ -92,6 +92,11 @@ export function createSourceAstAnalyzer(apiPrefixes: string[], contractDirs: str
     }
 
     new Visitor({
+      ImportExpression(node) {
+        const source = (node.source as { value?: unknown })?.value
+        if (!hasContractImport && typeof source === 'string' && contractPatterns.some(pattern => pattern.test(source)))
+          hasContractImport = true
+      },
       Literal(node) {
         if (!hasApiLiteral && isApiLiteralNode(node, normalizedApiPrefixes))
           hasApiLiteral = true

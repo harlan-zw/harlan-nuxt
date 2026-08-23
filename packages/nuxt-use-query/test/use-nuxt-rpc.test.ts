@@ -26,6 +26,7 @@ const {
   createNuxtRpcClient,
   defineNuxtRpcMutation,
   defineNuxtRpcQuery,
+  defineNuxtRpcSchemaGroup,
   isAuthRpcError,
   isRetryableRpcError,
   normalizeNuxtRpcError,
@@ -50,6 +51,81 @@ describe('defineNuxtRpcQuery', () => {
 
     expect(operation.key).toBe('site:1')
     expect(operation.path).toBe('/api/sites/1')
+  })
+})
+
+describe('defineNuxtRpcSchemaGroup', () => {
+  it('loads one schema module once and parses every selected schema', async () => {
+    const load = vi.fn(async () => ({
+      mutationBody: z.object({ name: z.string().trim() }),
+      mutationResponse: z.object({ ok: z.boolean() }),
+      queryResponse: z.object({ id: z.string() }),
+    }))
+    const schemas = defineNuxtRpcSchemaGroup(load)
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ id: 'abc' })
+      .mockResolvedValueOnce({ ok: true })
+    const rpc = createNuxtRpcClient({ fetch: fetch as any })
+
+    await expect(rpc.query(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: schemas('queryResponse'),
+    }))).resolves.toEqual({ id: 'abc' })
+    await expect(rpc.execute(defineNuxtRpcMutation({
+      body: schemas('mutationBody'),
+      method: 'PATCH',
+      path: '/api/sites/1',
+      response: schemas('mutationResponse'),
+    }), { name: ' Example ' })).resolves.toEqual({ ok: true })
+
+    expect(fetch).toHaveBeenLastCalledWith('/api/sites/1', {
+      method: 'PATCH',
+      body: { name: 'Example' },
+    })
+    expect(load).toHaveBeenCalledOnce()
+  })
+
+  it('waits for the schema and never returns an unparsed response', async () => {
+    let resolveSchema!: (value: { response: z.ZodTypeAny }) => void
+    const schemas = defineNuxtRpcSchemaGroup(() => new Promise(resolve => void (resolveSchema = resolve)))
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 123 })) as any })
+    const pending = rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: schemas('response'),
+    }))
+    let settled = false
+    void pending.then(() => void (settled = true))
+
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    resolveSchema({ response: z.object({ id: z.string() }) })
+
+    await expect(pending).resolves.toMatchObject({
+      _tag: 'err',
+      error: { type: 'response-validation' },
+    })
+  })
+
+  it('tags a schema load failure and retries the module on the next call', async () => {
+    const load = vi.fn()
+      .mockRejectedValueOnce(new Error('chunk unavailable'))
+      .mockResolvedValueOnce({ response: z.object({ id: z.string() }) })
+    const schemas = defineNuxtRpcSchemaGroup(load)
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 'abc' })) as any })
+    const operation = defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: schemas('response'),
+    })
+
+    await expect(rpc.querySafe(operation)).resolves.toMatchObject({
+      _tag: 'err',
+      error: { phase: 'response', type: 'schema-load' },
+    })
+    await expect(rpc.query(operation)).resolves.toEqual({ id: 'abc' })
+    expect(load).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -128,6 +204,20 @@ describe('serializeNuxtRpcKey', () => {
 })
 
 describe('useNuxtRpcQuery', () => {
+  it('awaits a deferred response schema in the query transform', async () => {
+    const schemas = defineNuxtRpcSchemaGroup(async () => ({
+      response: z.object({ id: z.string() }),
+    }))
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: schemas('response'),
+    })) as any
+
+    await expect(result.opts.transform({ id: 'abc' })).resolves.toEqual({ id: 'abc' })
+    await expect(result.opts.transform({ id: 123 })).rejects.toMatchObject({ type: 'response-validation' })
+  })
+
   it('passes key/query options through and parses responses with the operation schema', () => {
     const operation = defineNuxtRpcQuery({
       key: 'site:1',
@@ -689,10 +779,12 @@ describe('rpc error predicates', () => {
   const connection = normalizeNuxtRpcError(new TypeError('Failed to fetch'))
   const aborted = normalizeNuxtRpcError(Object.assign(new Error('a'), { name: 'AbortError' }))
   const validation = normalizeNuxtRpcError(z.object({ a: z.string() }).safeParse({}).error!, 'request-validation')
+  const schemaLoad = normalizeNuxtRpcError({ type: 'schema-load', phase: 'response', message: 'load failed', cause: new Error('load failed') })
 
   it('isRetryableRpcError: timeout/connection/5xx/429 retry, abort/4xx/validation do not', () => {
     expect(isRetryableRpcError(timeout)).toBe(true)
     expect(isRetryableRpcError(connection)).toBe(true)
+    expect(isRetryableRpcError(schemaLoad)).toBe(true)
     expect(isRetryableRpcError(httpError(503))).toBe(true)
     expect(isRetryableRpcError(httpError(429))).toBe(true)
     expect(isRetryableRpcError(aborted)).toBe(false)
@@ -711,6 +803,7 @@ describe('rpc error predicates', () => {
     expect(rpcErrorCategory(timeout)).toBe('transient')
     expect(rpcErrorCategory(connection)).toBe('transient')
     expect(rpcErrorCategory(aborted)).toBe('transient')
+    expect(rpcErrorCategory(schemaLoad)).toBe('transient')
     expect(rpcErrorCategory(validation)).toBe('validation')
     expect(rpcErrorCategory(httpError(401))).toBe('auth')
     expect(rpcErrorCategory(httpError(404))).toBe('client')

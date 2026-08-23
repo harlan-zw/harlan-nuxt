@@ -31,10 +31,22 @@ await setup({
 interface Probe {
   a: { value: string, call: number } | null
   appContextFetch: { source: string }
+  asyncDeadlineQuery: {
+    data: unknown
+    isPending: boolean
+    status: string
+  }
   b: { value: string, call: number } | null
   cachedManualWrite: { ok: boolean } | undefined
   cacheKeys: string[]
   cacheSameInstance: boolean
+  deadlineQuery: {
+    data: unknown
+    isPending: boolean
+    status: string
+  }
+  deadlineCachedData: unknown
+  deferredQueries: Array<{ deadline: number, key: string, reason: string, status: string }>
   hasAutoImports: boolean
   mutationMethod: string
   rpcDefault: { value: string, call: number }
@@ -81,6 +93,25 @@ describe('nuxt-use-query · e2e', () => {
     expect(probe.b?.value).toBe('b')
     expect(probe.a?.call).toBeGreaterThan(0)
     expect(probe.b?.call).toBeGreaterThan(0)
+  })
+
+  it('defers a slow query after its server deadline', async () => {
+    const probe = await readProbe()
+    expect(probe.deadlineQuery).toEqual({
+      data: null,
+      isPending: true,
+      status: 'idle',
+    })
+    expect(probe.deadlineCachedData).toBeNull()
+    expect(probe.asyncDeadlineQuery).toEqual({
+      data: null,
+      isPending: true,
+      status: 'idle',
+    })
+    expect(probe.deferredQueries).toEqual(expect.arrayContaining([
+      { deadline: 20, key: 'async-deadline', reason: 'ssr-deadline', status: 'deferred' },
+      { deadline: 20, key: 'deadline-delay', reason: 'ssr-deadline', status: 'deferred' },
+    ]))
   })
 
   it('useQueryCache returns a single mutable instance per Nuxt app', async () => {

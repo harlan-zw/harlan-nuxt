@@ -94,6 +94,7 @@ The module auto-imports:
 - `defineNuxtQueryGroup`
 - `defineNuxtRpcQuery`
 - `defineNuxtRpcMutation`
+- `defineNuxtRpcSchemaGroup`
 - `serializeNuxtRpcKey`
 - `useQueryCache`
 - `invalidateNuxtQueries`
@@ -110,6 +111,7 @@ import { useNuxtQuery } from '@harlan-zw/nuxt-use-query/query'
 import { getQueryData, invalidateNuxtQueries, setQueryData } from '@harlan-zw/nuxt-use-query/query-cache'
 import {
   defineNuxtRpcQuery,
+  defineNuxtRpcSchemaGroup,
   toHumanNuxtRpcError,
   useNuxtRpcQuery,
 } from '@harlan-zw/nuxt-use-query/rpc'
@@ -185,6 +187,36 @@ export const siteQueries = defineNuxtQueryGroup('sites', {
 ```
 
 Keep the operation object as the single owner of the API path, cache key, method, body schema, and response schema.
+
+#### Defer Large Schema Groups
+
+Load a schema group when its Zod code adds too much to the first client chunk:
+
+```ts
+const siteSchemas = defineNuxtRpcSchemaGroup(
+  () => import('~~/shared/contracts/sites'),
+)
+
+export const siteQueries = defineNuxtQueryGroup('sites', {
+  detail: (siteId: string) => defineNuxtRpcQuery({
+    key: ['sites', siteId],
+    path: `/api/sites/${siteId}`,
+    response: siteSchemas('siteSchema'),
+  }),
+  update: (siteId: string) => defineNuxtRpcMutation({
+    body: siteSchemas('sitePatchSchema'),
+    method: 'PATCH',
+    path: `/api/sites/${siteId}`,
+    response: siteSchemas('siteSchema'),
+  }),
+})
+```
+
+The module loads once. Every selected schema keeps exact input and output types.
+
+Parsing always waits for the schema group. A load failure returns a retryable `schema-load` RPC error.
+
+Cached POST query bodies stay eager. Their parsed value forms the synchronous cache key.
 
 ### 3. Use Queries In Components
 
@@ -291,6 +323,22 @@ const { displayData, error, isFetching, refresh } = useNuxtQuery('/api/sites', {
 - `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect`: pass `true`, `false`, or `'always'`.
 
 Reads from `useNuxtQuery` live in the same cache as RPC queries, so an `invalidateNuxtQueries('sites:')` call from either layer refreshes both.
+
+### Server Deadline
+
+Set a server deadline for data that should not delay the whole render:
+
+```ts
+const siteQuery = useNuxtRpcQuery(siteQueries.detail(siteId), {
+  server: { deadline: 800 },
+})
+```
+
+After 800ms, SSR renders the pending state. Hydration starts the query again in the browser.
+
+`isPending` stays true. Query telemetry reports `status: 'deferred'` and `reason: 'ssr-deadline'`.
+
+The same option works with `useNuxtQuery` and `useNuxtAsyncQuery`.
 
 ## Cache Keys And Invalidation
 

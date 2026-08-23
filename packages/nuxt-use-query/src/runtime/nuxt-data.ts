@@ -4,6 +4,8 @@
 // our optimistic writes need both `_asyncData[key].data.value` (live consumers)
 // and `payload.data[key]` (next mount's `getCachedData` fallback).
 
+import { isQuerySsrDeferredPayload } from './query-server-option'
+
 interface AsyncDataEntry {
   /** Nuxt's live consumer count. Missing on older supported Nuxt internals. */
   _deps?: number
@@ -29,12 +31,13 @@ function internals(nuxt: unknown): NuxtDataInternals {
 export function readNuxtData<T = unknown>(nuxt: unknown, key: string): T | undefined {
   const n = internals(nuxt)
   const live = n._asyncData?.[key]?.data.value as T | undefined
-  if (live !== undefined)
+  if (live !== undefined && !isQuerySsrDeferredPayload(live))
     return live
   const payload = n.payload.data?.[key] as T | undefined
-  if (payload !== undefined)
+  if (payload !== undefined && !isQuerySsrDeferredPayload(payload))
     return payload
-  return n.static?.data?.[key] as T | undefined
+  const staticData = n.static?.data?.[key] as T | undefined
+  return isQuerySsrDeferredPayload(staticData) ? undefined : staticData
 }
 
 /**

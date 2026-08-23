@@ -72,6 +72,12 @@ async function tick() {
 }
 
 describe('useNuxtQuery keepPreviousData', () => {
+  it('treats an enabled idle query without data as pending', () => {
+    const query = useNuxtQuery('/api/x', { key: 'q' })
+
+    expect(query.isPending.value).toBe(true)
+  })
+
   it('holds the previous result while a new key loads, flagging isPlaceholderData', async () => {
     const { displayData, isPlaceholderData } = useNuxtQuery<{ n: number }>('/api/x', { key: 'q' })
 
@@ -114,6 +120,19 @@ describe('useNuxtQuery keepPreviousData', () => {
     expect(query.isPlaceholderData.value).toBe(false)
     expect(query.isPending.value).toBe(false)
     expect(query.isFetching.value).toBe(true)
+  })
+})
+
+describe('useNuxtQuery server deadline', () => {
+  it('enables server fetching when a server deadline is configured', () => {
+    useNuxtQuery('/api/x', { key: 'q', server: { deadline: 50 } })
+
+    expect(lastUseFetchOpts.server).toBe(true)
+  })
+
+  it('rejects an invalid server deadline', () => {
+    expect(() => useNuxtQuery('/api/x', { key: 'q', server: { deadline: 0 } }))
+      .toThrow('Query server deadline must be a positive number.')
   })
 })
 

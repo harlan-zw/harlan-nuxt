@@ -22,10 +22,15 @@ export interface QueryTelemetryState extends QueryTelemetryDescriptor {
   startedAt: number
 }
 
-type QueryTelemetryFinish = {
+type QueryTelemetryFinish = ({
   error?: unknown
   status: 'error' | 'success'
-} & (
+} | {
+  deadline: number
+  error: unknown
+  reason: 'ssr-deadline'
+  status: 'deferred'
+}) & (
   | { _tag: 'started', state: QueryTelemetryState }
   | { _tag: 'unstarted', descriptor: QueryTelemetryDescriptor }
 )
@@ -72,7 +77,7 @@ export function useQueryTelemetry(): QueryTelemetry {
       const descriptor = input._tag === 'started' ? input.state : input.descriptor
       const endedAt = Date.now()
       const startedAt = state?.startedAt ?? endedAt
-      const event: QueryTelemetryFinishEvent = {
+      const eventBase = {
         client: import.meta.client,
         durationMs: Math.max(0, endedAt - startedAt),
         endedAt,
@@ -81,8 +86,10 @@ export function useQueryTelemetry(): QueryTelemetry {
         request: descriptor.request,
         server: import.meta.server,
         startedAt,
-        status: input.status,
       }
+      const event: QueryTelemetryFinishEvent = input.status === 'deferred'
+        ? { ...eventBase, deadline: input.deadline, reason: input.reason, status: input.status }
+        : { ...eventBase, status: input.status }
       callTelemetryHook(hooks, NUXT_USE_QUERY_TELEMETRY_HOOKS.queryFinish, event)
     },
   }

@@ -6,7 +6,29 @@ import { runIsolatedHooks, toOutcome } from '../lifecycle'
 
 export type NuxtRpcKey = string | readonly [string, ...unknown[]]
 
-export interface NuxtRpcGetQueryOperation<TResponseSchema extends z.ZodTypeAny, TQuery = undefined> {
+export interface NuxtRpcDeferredSchema<TSchema extends z.ZodTypeAny> {
+  readonly _tag: 'deferred-schema'
+  readonly load: () => Promise<TSchema>
+}
+
+export type NuxtRpcSchema<TSchema extends z.ZodTypeAny = z.ZodTypeAny>
+  = TSchema | NuxtRpcDeferredSchema<TSchema>
+
+export type NuxtRpcSchemaInput<TSchema extends NuxtRpcSchema>
+  = TSchema extends NuxtRpcDeferredSchema<infer TDeferredSchema>
+    ? z.input<TDeferredSchema>
+    : TSchema extends z.ZodTypeAny
+      ? z.input<TSchema>
+      : never
+
+export type NuxtRpcSchemaOutput<TSchema extends NuxtRpcSchema>
+  = TSchema extends NuxtRpcDeferredSchema<infer TDeferredSchema>
+    ? z.output<TDeferredSchema>
+    : TSchema extends z.ZodTypeAny
+      ? z.output<TSchema>
+      : never
+
+export interface NuxtRpcGetQueryOperation<TResponseSchema extends NuxtRpcSchema, TQuery = undefined> {
   /** Stable cache key. Keep helpers beside operations for shared invalidation. */
   key: NuxtRpcKey
   /** GET remains the default for existing query definitions. */
@@ -27,7 +49,7 @@ export interface NuxtRpcQueryBody<TBodySchema extends z.ZodTypeAny> {
 }
 
 export interface NuxtRpcPostQueryOperation<
-  TResponseSchema extends z.ZodTypeAny,
+  TResponseSchema extends NuxtRpcSchema,
   TQuery = undefined,
   TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
 > {
@@ -48,7 +70,7 @@ export interface NuxtRpcPostQueryOperation<
  * meaning while also accepting generated cached-POST operations.
  */
 export type NuxtRpcQueryOperation<
-  TResponseSchema extends z.ZodTypeAny,
+  TResponseSchema extends NuxtRpcSchema,
   TQuery = undefined,
   TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
 > = NuxtRpcGetQueryOperation<TResponseSchema, TQuery>
@@ -57,7 +79,7 @@ export type NuxtRpcQueryOperation<
 type NuxtRpcBodyMethod = 'PATCH' | 'POST' | 'PUT'
 type NuxtRpcBodylessMethod = 'DELETE'
 
-export interface NuxtRpcBodyMutationOperation<TBodySchema extends z.ZodTypeAny | null, TResponseSchema extends z.ZodTypeAny> {
+export interface NuxtRpcBodyMutationOperation<TBodySchema extends NuxtRpcSchema | null, TResponseSchema extends NuxtRpcSchema> {
   /** Optional Zod request body contract. Required for writes with payloads. */
   body: TBodySchema
   method: NuxtRpcBodyMethod
@@ -67,7 +89,7 @@ export interface NuxtRpcBodyMutationOperation<TBodySchema extends z.ZodTypeAny |
   response: TResponseSchema
 }
 
-export interface NuxtRpcBodylessMutationOperation<TResponseSchema extends z.ZodTypeAny> {
+export interface NuxtRpcBodylessMutationOperation<TResponseSchema extends NuxtRpcSchema> {
   body?: undefined
   method: NuxtRpcBodylessMethod
   /** API endpoint owned by this operation. Consumers should not hardcode it at call sites. */
@@ -76,15 +98,15 @@ export interface NuxtRpcBodylessMutationOperation<TResponseSchema extends z.ZodT
   response: TResponseSchema
 }
 
-export type NuxtRpcMutationOperation<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>
-  = TBodySchema extends z.ZodTypeAny | null
+export type NuxtRpcMutationOperation<TBodySchema extends NuxtRpcSchema | null | undefined, TResponseSchema extends NuxtRpcSchema>
+  = TBodySchema extends NuxtRpcSchema | null
     ? NuxtRpcBodyMutationOperation<TBodySchema, TResponseSchema>
     : NuxtRpcBodylessMutationOperation<TResponseSchema>
 
 export type NuxtRpcOperationDefinition
-  = NuxtRpcQueryOperation<z.ZodTypeAny, any>
-    | NuxtRpcMutationOperation<z.ZodTypeAny | null | undefined, z.ZodTypeAny>
-    | ((...args: any[]) => NuxtRpcQueryOperation<z.ZodTypeAny, any> | NuxtRpcMutationOperation<z.ZodTypeAny | null | undefined, z.ZodTypeAny>)
+  = NuxtRpcQueryOperation<NuxtRpcSchema, any>
+    | NuxtRpcMutationOperation<NuxtRpcSchema | null | undefined, NuxtRpcSchema>
+    | ((...args: any[]) => NuxtRpcQueryOperation<NuxtRpcSchema, any> | NuxtRpcMutationOperation<NuxtRpcSchema | null | undefined, NuxtRpcSchema>)
 
 export function serializeNuxtRpcKey(key: NuxtRpcKey): string {
   return typeof key === 'string'
@@ -127,7 +149,7 @@ export interface ResolvedNuxtRpcQueryRequest {
  * semantically identical objects cannot diverge because of insertion order.
  */
 export function resolveNuxtRpcQueryRequest(
-  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown, z.ZodTypeAny>,
+  operation: NuxtRpcQueryOperation<NuxtRpcSchema, unknown, z.ZodTypeAny>,
 ): ResolvedNuxtRpcQueryRequest {
   const base = serializeNuxtRpcKey(operation.key)
   if (operation.method !== 'POST') {
@@ -139,7 +161,7 @@ export function resolveNuxtRpcQueryRequest(
     }
   }
 
-  const body = parseNuxtRpcBody(operation.body.schema, operation.body.value)
+  const body = parseEagerNuxtRpcBody(operation.body.schema, operation.body.value)
   const canonicalBody = serializeCanonicalJson(body)
   return {
     body,
@@ -152,7 +174,7 @@ export function resolveNuxtRpcQueryRequest(
 
 /** Exact key used by `useNuxtRpcQuery`, including a cached POST's body suffix. */
 export function serializeNuxtRpcQueryKey(
-  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown, z.ZodTypeAny>,
+  operation: NuxtRpcQueryOperation<NuxtRpcSchema, unknown, z.ZodTypeAny>,
 ): string {
   return resolveNuxtRpcQueryRequest(operation).key
 }
@@ -245,18 +267,48 @@ export function defineNuxtQueryGroup<TGroup extends Record<string, NuxtRpcOperat
   return group
 }
 
-export function defineNuxtRpcQuery<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+/** Load a group of RPC schemas as one cached module chunk. */
+export function defineNuxtRpcSchemaGroup<TGroup extends Record<string, z.ZodTypeAny>>(
+  loader: () => Promise<TGroup>,
+) {
+  let modulePromise: Promise<TGroup> | undefined
+
+  function loadModule(): Promise<TGroup> {
+    if (modulePromise)
+      return modulePromise
+    const pending = loader().catch((error) => {
+      if (modulePromise === pending)
+        modulePromise = undefined
+      throw error
+    })
+    modulePromise = pending
+    return pending
+  }
+
+  return <TKey extends Extract<keyof TGroup, string>>(key: TKey): NuxtRpcDeferredSchema<TGroup[TKey]> => ({
+    _tag: 'deferred-schema',
+    async load() {
+      const group = await loadModule()
+      const schema = group[key]
+      if (!schema || typeof schema.parse !== 'function')
+        throw new TypeError(`RPC schema group does not export "${key}".`)
+      return schema
+    },
+  })
+}
+
+export function defineNuxtRpcQuery<TResponseSchema extends NuxtRpcSchema, TQuery = undefined>(
   operation: NuxtRpcGetQueryOperation<TResponseSchema, TQuery>,
 ): NuxtRpcGetQueryOperation<TResponseSchema, TQuery>
 export function defineNuxtRpcQuery<
-  TResponseSchema extends z.ZodTypeAny,
+  TResponseSchema extends NuxtRpcSchema,
   TQuery = undefined,
   TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   operation: NuxtRpcPostQueryOperation<TResponseSchema, TQuery, TBodySchema>,
 ): NuxtRpcPostQueryOperation<TResponseSchema, TQuery, TBodySchema>
 export function defineNuxtRpcQuery<
-  TResponseSchema extends z.ZodTypeAny,
+  TResponseSchema extends NuxtRpcSchema,
   TQuery = undefined,
   TBodySchema extends z.ZodTypeAny = z.ZodTypeAny,
 >(
@@ -265,13 +317,13 @@ export function defineNuxtRpcQuery<
   return operation
 }
 
-export function defineNuxtRpcMutation<TBodySchema extends z.ZodTypeAny | null, TResponseSchema extends z.ZodTypeAny>(
+export function defineNuxtRpcMutation<TBodySchema extends NuxtRpcSchema | null, TResponseSchema extends NuxtRpcSchema>(
   operation: NuxtRpcBodyMutationOperation<TBodySchema, TResponseSchema>,
 ): NuxtRpcBodyMutationOperation<TBodySchema, TResponseSchema>
-export function defineNuxtRpcMutation<TResponseSchema extends z.ZodTypeAny>(
+export function defineNuxtRpcMutation<TResponseSchema extends NuxtRpcSchema>(
   operation: NuxtRpcBodylessMutationOperation<TResponseSchema>,
 ): NuxtRpcBodylessMutationOperation<TResponseSchema>
-export function defineNuxtRpcMutation<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
+export function defineNuxtRpcMutation<TBodySchema extends NuxtRpcSchema | null | undefined, TResponseSchema extends NuxtRpcSchema>(
   operation: NuxtRpcMutationOperation<TBodySchema, TResponseSchema>,
 ) {
   return operation
@@ -319,6 +371,12 @@ export type NuxtRpcErrorData
     message: string
     issues: NuxtRpcValidationIssue[]
     cause: ZodError
+  }
+  | {
+    type: 'schema-load'
+    phase: 'request' | 'response'
+    message: string
+    cause: unknown
   }
   | {
     // Transient transport failures with no HTTP response — all retryable
@@ -369,6 +427,14 @@ export function toSerializableNuxtRpcError(error: NuxtRpcError): NuxtRpcErrorDat
       message: error.message,
       issues: error.issues,
       cause: undefined as unknown as ZodError,
+    }
+  }
+  if (error.type === 'schema-load') {
+    return {
+      type: 'schema-load',
+      phase: error.phase,
+      message: error.message,
+      cause: undefined,
     }
   }
   if (error.type === 'fetch') {
@@ -446,10 +512,10 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     return outcome
   }
 
-  function querySafe<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+  function querySafe<TResponseSchema extends NuxtRpcSchema, TQuery = undefined>(
     operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
     callOptions: NuxtRpcCallOptions = {},
-  ): Promise<NuxtRpcResult<z.output<TResponseSchema>>> {
+  ): Promise<NuxtRpcResult<NuxtRpcSchemaOutput<TResponseSchema>>> {
     const method = operation.method === 'POST' ? 'POST' : 'GET'
     const context: NuxtRpcOperationContext = {
       kind: 'query',
@@ -459,7 +525,7 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     }
     return run(context, callOptions.silent, async () => {
       const request = resolveNuxtRpcQueryRequest(operation)
-      const response = await fetch<z.output<TResponseSchema>>(request.path, {
+      const response = await fetch<NuxtRpcSchemaOutput<TResponseSchema>>(request.path, {
         ...(request.method === 'GET' ? {} : { method: request.method }),
         ...(request.query === undefined ? {} : { query: request.query }),
         ...(request.body === undefined ? {} : { body: request.body }),
@@ -468,12 +534,12 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     })
   }
 
-  function executeSafe<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
+  function executeSafe<TBodySchema extends NuxtRpcSchema | null | undefined, TResponseSchema extends NuxtRpcSchema>(
     operation: NuxtRpcMutationOperation<TBodySchema, TResponseSchema>,
-    ...args: TBodySchema extends z.ZodTypeAny
-      ? [body: z.input<TBodySchema>, options?: NuxtRpcCallOptions]
+    ...args: TBodySchema extends NuxtRpcSchema
+      ? [body: NuxtRpcSchemaInput<TBodySchema>, options?: NuxtRpcCallOptions]
       : [options?: NuxtRpcCallOptions]
-  ): Promise<NuxtRpcResult<z.output<TResponseSchema>>> {
+  ): Promise<NuxtRpcResult<NuxtRpcSchemaOutput<TResponseSchema>>> {
     const context: NuxtRpcOperationContext = {
       kind: 'mutation',
       method: operation.method,
@@ -482,8 +548,8 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     const body = operation.body ? args[0] : undefined
     const callOptions = (operation.body ? args[1] : args[0]) as NuxtRpcCallOptions | undefined
     return run(context, callOptions?.silent, async () => {
-      const parsedBody = operation.body ? parseNuxtRpcBody(operation.body, body) : undefined
-      const response = await fetch<z.output<TResponseSchema>>(operation.path, {
+      const parsedBody = operation.body ? await parseNuxtRpcBody(operation.body, body) : undefined
+      const response = await fetch<NuxtRpcSchemaOutput<TResponseSchema>>(operation.path, {
         method: operation.method,
         ...(operation.body == null ? {} : { body: parsedBody }),
       } as any)
@@ -491,22 +557,22 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     })
   }
 
-  async function query<TResponseSchema extends z.ZodTypeAny, TQuery = undefined>(
+  async function query<TResponseSchema extends NuxtRpcSchema, TQuery = undefined>(
     operation: NuxtRpcQueryOperation<TResponseSchema, TQuery>,
     callOptions: NuxtRpcCallOptions = {},
-  ): Promise<z.output<TResponseSchema>> {
+  ): Promise<NuxtRpcSchemaOutput<TResponseSchema>> {
     const result = await querySafe(operation, callOptions)
     if (result._tag === 'err')
       throw result.error
     return result.data
   }
 
-  async function execute<TBodySchema extends z.ZodTypeAny | null | undefined, TResponseSchema extends z.ZodTypeAny>(
+  async function execute<TBodySchema extends NuxtRpcSchema | null | undefined, TResponseSchema extends NuxtRpcSchema>(
     operation: NuxtRpcMutationOperation<TBodySchema, TResponseSchema>,
-    ...args: TBodySchema extends z.ZodTypeAny
-      ? [body: z.input<TBodySchema>, options?: NuxtRpcCallOptions]
+    ...args: TBodySchema extends NuxtRpcSchema
+      ? [body: NuxtRpcSchemaInput<TBodySchema>, options?: NuxtRpcCallOptions]
       : [options?: NuxtRpcCallOptions]
-  ): Promise<z.output<TResponseSchema>> {
+  ): Promise<NuxtRpcSchemaOutput<TResponseSchema>> {
     const result = await executeSafe(operation, ...args)
     if (result._tag === 'err')
       throw result.error
@@ -526,6 +592,8 @@ export function toHumanNuxtRpcError(error: unknown): string {
     return firstIssueMessage(normalized.issues) ?? 'Some fields need attention.'
   if (normalized.type === 'response-validation')
     return 'The server returned data in an unexpected format.'
+  if (normalized.type === 'schema-load')
+    return 'Could not load the RPC schema. Try again.'
   if (normalized.type === 'timeout')
     return 'The request took too long. Try again.'
   if (normalized.type === 'connection')
@@ -558,6 +626,7 @@ export function rpcErrorCategory(error: NuxtRpcError): NuxtRpcErrorCategory {
     case 'timeout':
     case 'connection':
     case 'aborted':
+    case 'schema-load':
       return 'transient'
     case 'request-validation':
     case 'response-validation':
@@ -579,7 +648,7 @@ export function rpcErrorCategory(error: NuxtRpcError): NuxtRpcErrorCategory {
  * Client `4xx` and validation failures are terminal — retrying won't help.
  */
 export function isRetryableRpcError(error: NuxtRpcError): boolean {
-  if (error.type === 'timeout' || error.type === 'connection')
+  if (error.type === 'timeout' || error.type === 'connection' || error.type === 'schema-load')
     return true
   if (error.type === 'fetch')
     return error.status === 429 || (error.status != null && error.status >= 500)
@@ -677,7 +746,7 @@ function detectTransientErrorType(error: unknown): 'timeout' | 'connection' | 'a
   return undefined
 }
 
-function parseNuxtRpcBody<TBodySchema extends z.ZodTypeAny>(schema: TBodySchema, body: unknown): z.output<TBodySchema> {
+function parseEagerNuxtRpcBody<TBodySchema extends z.ZodTypeAny>(schema: TBodySchema, body: unknown): z.output<TBodySchema> {
   try {
     return schema.parse(body)
   }
@@ -686,7 +755,21 @@ function parseNuxtRpcBody<TBodySchema extends z.ZodTypeAny>(schema: TBodySchema,
   }
 }
 
-export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema> {
+async function parseNuxtRpcBody<TBodySchema extends NuxtRpcSchema>(schema: TBodySchema, body: unknown): Promise<NuxtRpcSchemaOutput<TBodySchema>> {
+  const resolved = await resolveNuxtRpcSchema(schema, 'request')
+  return parseEagerNuxtRpcBody(resolved, body) as NuxtRpcSchemaOutput<TBodySchema>
+}
+
+export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema>
+export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: NuxtRpcDeferredSchema<TResponseSchema>, response: unknown): Promise<z.output<TResponseSchema>>
+export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>>
+export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>> {
+  if (isNuxtRpcDeferredSchema(schema))
+    return parseDeferredNuxtRpcResponse(schema, response) as Promise<NuxtRpcSchemaOutput<TResponseSchema>>
+  return parseEagerNuxtRpcResponse(schema, response) as NuxtRpcSchemaOutput<TResponseSchema>
+}
+
+function parseEagerNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema> {
   try {
     return schema.parse(response)
   }
@@ -695,7 +778,32 @@ export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schem
   }
 }
 
-const NUXT_RPC_ERROR_TYPES = ['fetch', 'request-validation', 'response-validation', 'timeout', 'connection', 'aborted', 'unknown']
+async function parseDeferredNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: NuxtRpcDeferredSchema<TResponseSchema>, response: unknown): Promise<z.output<TResponseSchema>> {
+  const resolved = await resolveNuxtRpcSchema(schema, 'response')
+  return parseEagerNuxtRpcResponse(resolved, response)
+}
+
+async function resolveNuxtRpcSchema<TSchema extends NuxtRpcSchema>(
+  schema: TSchema,
+  phase: 'request' | 'response',
+): Promise<TSchema extends NuxtRpcDeferredSchema<infer TDeferredSchema> ? TDeferredSchema : TSchema> {
+  if (!isNuxtRpcDeferredSchema(schema))
+    return schema as any
+  return schema.load().catch((cause) => {
+    throw createNuxtRpcError({
+      type: 'schema-load',
+      phase,
+      message: `RPC ${phase} schema could not load.`,
+      cause,
+    })
+  }) as any
+}
+
+function isNuxtRpcDeferredSchema(schema: NuxtRpcSchema): schema is NuxtRpcDeferredSchema<z.ZodTypeAny> {
+  return '_tag' in schema && schema._tag === 'deferred-schema'
+}
+
+const NUXT_RPC_ERROR_TYPES = ['fetch', 'request-validation', 'response-validation', 'schema-load', 'timeout', 'connection', 'aborted', 'unknown']
 
 function isNuxtRpcErrorData(error: unknown): error is NuxtRpcErrorData {
   return typeof error === 'object'

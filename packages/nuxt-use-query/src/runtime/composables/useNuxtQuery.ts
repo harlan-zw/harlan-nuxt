@@ -1,3 +1,4 @@
+import type { $Fetch } from 'nitropack'
 import type { InternalApi, NitroFetchRequest } from 'nitropack/types'
 import type {
   AsyncData,
@@ -5,14 +6,18 @@ import type {
 } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
+import type { QueryServerOption } from '../query-server-option'
 import type { QueryTelemetryState } from '../query-telemetry'
-import { computed, toValue } from 'vue'
-import { useFetch } from '#app'
+import { computed, ref, toValue } from 'vue'
+import { useFetch, useRequestFetch } from '#app'
 import { isQueryStale } from '../cache'
 import { readNuxtData } from '../nuxt-data'
 import { applyQueryLifecycle } from '../query-lifecycle'
+import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredPayload, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
+
+export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
 export type KeysOf<T> = Array<T extends T ? keyof T extends string ? keyof T : never : never>
 type PickFrom<T, K extends Array<string>> = T extends Array<any>
@@ -40,7 +45,7 @@ export interface UseNuxtQueryOptions<
   DataT = ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
   DefaultT = undefined,
-> extends Omit<UseFetchOptions<ResT, DataT, PickKeys, DefaultT, LooseFetchRequest, any>, 'transform'> {
+> extends Omit<UseFetchOptions<ResT, DataT, PickKeys, DefaultT, LooseFetchRequest, any>, 'server' | 'transform'> {
   key: MaybeRefOrGetter<string>
   transform?: (input: unknown) => DataT | Promise<DataT>
   enabled?: MaybeRefOrGetter<boolean>
@@ -51,6 +56,7 @@ export interface UseNuxtQueryOptions<
   refetchOnMount?: boolean | 'always'
   refetchOnWindowFocus?: boolean | 'always'
   refetchOnReconnect?: boolean | 'always'
+  server?: QueryServerOption
 }
 
 export type NuxtQuery<DataT, ErrorT> = AsyncData<DataT, ErrorT> & {
@@ -98,14 +104,18 @@ export function useNuxtQuery(
     refetchOnMount = true,
     refetchOnReconnect = true,
     refetchOnWindowFocus = true,
+    server: serverOption = true,
     staleTime = 0,
     ...fetchOptions
   } = opts
 
   const cache = useQueryCache()
   const telemetry = useQueryTelemetry()
+  const resolvedServerOption = resolveQueryServerOption(serverOption)
+  const ssrDeferred = ref(false)
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
+  const activeTelemetryStates = new Set<QueryTelemetryState>()
 
   function emitQueryStart(context: unknown): void {
     if (telemetry._tag === 'disabled')
@@ -114,6 +124,7 @@ export function useNuxtQuery(
       key: key.value,
       request: describeQueryRequest(request),
     })
+    activeTelemetryStates.add(state)
     setQueryTelemetryState(context, state)
   }
 
@@ -121,16 +132,42 @@ export function useNuxtQuery(
     if (telemetry._tag === 'disabled')
       return
     const state = getQueryTelemetryState(context)
+    if (state)
+      activeTelemetryStates.delete(state)
+    const deadline = getQuerySsrDeadline(error)
+    const finish = deadline == null
+      ? { error, status }
+      : { deadline, error, reason: 'ssr-deadline' as const, status: 'deferred' as const }
     telemetry.finish(state
-      ? { _tag: 'started', error, state, status }
+      ? { _tag: 'started', state, ...finish }
       : {
           _tag: 'unstarted',
           descriptor: {
             key: key.value,
             request: describeQueryRequest(request),
           },
+          ...finish,
+        })
+  }
+
+  function emitQueryDeferred(deadline: number, error: unknown): void {
+    if (telemetry._tag === 'disabled')
+      return
+    const state = activeTelemetryStates.values().next().value
+    if (state)
+      activeTelemetryStates.delete(state)
+    telemetry.finish(state
+      ? { _tag: 'started', deadline, error, reason: 'ssr-deadline', state, status: 'deferred' }
+      : {
+          _tag: 'unstarted',
+          deadline,
+          descriptor: {
+            key: key.value,
+            request: describeQueryRequest(request),
+          },
           error,
-          status,
+          reason: 'ssr-deadline',
+          status: 'deferred',
         })
   }
 
@@ -176,11 +213,27 @@ export function useNuxtQuery(
       }
     : undefined
 
+  const deadlineFetch = import.meta.server && resolvedServerOption.deadline != null
+    ? createQueryDeadlineFetch(
+        (fetchOptions.$fetch as unknown as QueryFetch | undefined) ?? (useRequestFetch() as unknown as QueryFetch),
+        resolvedServerOption.deadline,
+        (error) => {
+          ssrDeferred.value = true
+          emitQueryDeferred(resolvedServerOption.deadline!, error)
+        },
+      )
+    : fetchOptions.$fetch
+
   const query = useFetch(request as any, {
     ...fetchOptions,
+    ...(deadlineFetch == null ? {} : { $fetch: deadlineFetch }),
     enabled,
     key,
     immediate: fetchOptions.immediate ?? enabled.value,
+    server: resolvedServerOption.server,
+    transform: (input: unknown) => isQuerySsrDeferredValue(input)
+      ? createQuerySsrDeferredPayload()
+      : fetchOptions.transform ? fetchOptions.transform(input) : input,
     // Nuxt's default dedupe is 'cancel' which aborts the in-flight request on
     // a concurrent same-key call — the server has usually already received
     // the cancelled request, so two sibling components mounting the same
@@ -190,12 +243,13 @@ export function useNuxtQuery(
     getCachedData: (cacheKey: string, nuxtApp: any, context: any) => {
       if (fetchOptions.getCachedData) {
         const cached = fetchOptions.getCachedData(cacheKey, nuxtApp, context)
-        if (cached !== undefined)
+        if (cached !== undefined && !isQuerySsrDeferredPayload(cached))
           return cached
       }
       if (isQueryStale(cache, cacheKey, staleTime))
         return undefined
-      return readNuxtData(nuxtApp, cacheKey)
+      const cached = readNuxtData(nuxtApp, cacheKey)
+      return isQuerySsrDeferredPayload(cached) ? undefined : cached
     },
     ...telemetryFetchOptions,
   } as any) as NuxtQuery<any, any>
@@ -211,7 +265,22 @@ export function useNuxtQuery(
     refetchOnReconnect,
     refetchOnWindowFocus,
     staleTime,
+    ssrDeferred,
   }) as NuxtQuery<any, any>
+}
+
+type QueryFetch = (request: unknown, options?: Record<string, any>) => Promise<unknown>
+
+function createQueryDeadlineFetch(fetch: QueryFetch, deadline: number, onDeferred: (error: unknown) => void): $Fetch {
+  return (async (request: unknown, options: Record<string, any> = {}) => {
+    const { $fetch: _ignored, signal = new AbortController().signal, ...fetchOptions } = options
+    return runWithQuerySsrDeadline({
+      deadline,
+      onDeferred,
+      run: deadlineSignal => fetch(request as any, { ...fetchOptions, signal: deadlineSignal }),
+      signal,
+    })
+  }) as $Fetch
 }
 
 async function callFetchHook(hook: unknown, context: unknown): Promise<void> {

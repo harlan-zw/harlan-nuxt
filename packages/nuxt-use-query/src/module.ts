@@ -11,7 +11,7 @@ import { setupFetchTelemetryModule } from './module/telemetry'
 // useNuxtRpc, useNuxtRpcQuery, useNuxtSubscription, nuxtWebSocketSource,
 // useQueryCache, invalidateNuxtQueries, invalidateNuxtRpc, removeNuxtQueries,
 // getQueryData, setQueryData, defineNuxtQueryGroup, defineNuxtRpcQuery,
-// defineNuxtRpcMutation, serializeNuxtRpcKey.
+// defineNuxtRpcMutation, defineNuxtRpcSchemaGroup, serializeNuxtRpcKey.
 
 export interface ModuleOptions {
   /**
@@ -64,6 +64,7 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'defineNuxtQueryGroup', from: rpcCore },
       { name: 'defineNuxtRpcMutation', from: rpcCore },
       { name: 'defineNuxtRpcQuery', from: rpcCore },
+      { name: 'defineNuxtRpcSchemaGroup', from: rpcCore },
       { name: 'serializeNuxtRpcKey', from: rpcCore },
     ])
 

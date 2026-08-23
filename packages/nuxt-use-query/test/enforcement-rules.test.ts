@@ -114,6 +114,14 @@ describe('missingContractImportRule', () => {
     expect(runRule(missingContractImportRule, ctx)).toBe(false)
   })
 
+  it('skips when a schema group dynamically imports shared/contracts', () => {
+    const ctx = makeCtx(
+      'app/queries/sites.ts',
+      'const schemas = defineNuxtRpcSchemaGroup(() => import("@/shared/contracts/site")); export const s = defineNuxtRpcQuery({ key: "s", path: "/api/s", response: schemas("siteSchema") })',
+    )
+    expect(runRule(missingContractImportRule, ctx)).toBe(false)
+  })
+
   it('skips files without any operation call', () => {
     const ctx = makeCtx('app/queries/sites.ts', 'export const s = 1')
     expect(runRule(missingContractImportRule, ctx)).toBe(false)

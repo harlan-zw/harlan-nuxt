@@ -1,11 +1,12 @@
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
-import type { z } from 'zod'
 import type {
   NuxtRpcClientOptions,
   NuxtRpcError,
   NuxtRpcKey,
   NuxtRpcOperationContext,
   NuxtRpcQueryOperation,
+  NuxtRpcSchema,
+  NuxtRpcSchemaOutput,
 } from '../rpc/core'
 import type { KeysOf, NuxtQuery, UseNuxtQueryOptions } from './useNuxtQuery'
 import { computed, toValue, watch } from 'vue'
@@ -63,12 +64,12 @@ export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
 }
 
 export function useNuxtRpcQuery<
-  TResponseSchema extends z.ZodTypeAny,
+  TResponseSchema extends NuxtRpcSchema,
   TQuery = undefined,
   DefaultT = undefined,
 >(
   operation: MaybeRefOrGetter<NuxtRpcQueryOperation<TResponseSchema, TQuery>>,
-  options: UseNuxtRpcQueryOptions<z.output<TResponseSchema>, DefaultT> = {},
+  options: UseNuxtRpcQueryOptions<NuxtRpcSchemaOutput<TResponseSchema>, DefaultT> = {},
 ) {
   const resolved = () => toValue(operation)
   const request = computed(() => resolveQueryRequestState(resolved()))
@@ -92,7 +93,7 @@ export function useNuxtRpcQuery<
     // Same parse-and-normalize the imperative client uses, so a successful
     // payload that fails its schema surfaces an identical `NuxtRpcError`.
     transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload),
-  } as UseNuxtQueryOptions<z.output<TResponseSchema>>) as NuxtQuery<DefaultT | z.output<TResponseSchema>, NuxtRpcError | undefined>
+  } as UseNuxtQueryOptions<NuxtRpcSchemaOutput<TResponseSchema>>) as NuxtQuery<DefaultT | NuxtRpcSchemaOutput<TResponseSchema>, NuxtRpcError | undefined>
 
   // `transform` only runs on a successful payload, so on an HTTP / timeout /
   // network failure `useFetch` parks the *raw* `FetchError` in `error.value` —
@@ -138,7 +139,7 @@ export function useNuxtRpcQuery<
 function useQueryErrorReporter(
   query: { status?: { value: string } },
   rawError: { value: unknown },
-  resolved: () => NuxtRpcQueryOperation<z.ZodTypeAny, unknown>,
+  resolved: () => NuxtRpcQueryOperation<NuxtRpcSchema, unknown>,
   request: ComputedRef<ReturnType<typeof resolveQueryRequestState>>,
   onError: (event: NuxtRpcQueryErrorEvent) => void,
 ): void {
@@ -172,7 +173,7 @@ function useQueryErrorReporter(
   }, { immediate: true })
 }
 
-function describeQueryOperation(operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown>): NuxtRpcOperationContext {
+function describeQueryOperation(operation: NuxtRpcQueryOperation<NuxtRpcSchema, unknown>): NuxtRpcOperationContext {
   return {
     kind: 'query',
     key: operation.key,
@@ -213,7 +214,7 @@ function normalizeNuxtRpcQueryError(
 }
 
 function resolveQueryRequestState(
-  operation: NuxtRpcQueryOperation<z.ZodTypeAny, unknown>,
+  operation: NuxtRpcQueryOperation<NuxtRpcSchema, unknown>,
 ) {
   try {
     return {
