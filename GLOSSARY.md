@@ -10,6 +10,8 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 | Query | `@harlan-zw/nuxt-use-query/query` | published | Nuxt app code | "query" |
 | Mutation | `@harlan-zw/nuxt-use-query/mutation` | published | Nuxt app code | "mutation" |
 | Subscription | `@harlan-zw/nuxt-use-query/subscription` | published | Nuxt app code | "subscription" |
+| Schema Group | `@harlan-zw/nuxt-use-query/rpc` | planned | Nuxt app code | "schema group" |
+| Server Deadline | `@harlan-zw/nuxt-use-query/query` | planned | Nuxt app code | "server deadline" |
 | Domain Event | `@harlan-zw/nuxt-domain-events` | published | Nuxt server code | "domain event" |
 | Diagnostic | `@harlan-zw/nuxt-dx` | published | developers and CI | "diagnostic" |
 | Wide Event | `@harlan-zw/nuxt-wide-events` | planned | Nuxt server code | "wide event" |
@@ -70,6 +72,20 @@ Collisions
 **Use for:** subscription APIs and docs.
 **Never:** stream, watcher.
 **Casing:** `Subscription` in headings and `subscription` elsewhere.
+
+### Schema Group
+
+**Is:** one deferred module that exports related RPC schemas.
+**Use for:** RPC APIs and docs about deferred schema loading.
+**Never:** schema bundle, lazy schemas, schema chunk.
+**Casing:** `Schema Group` in headings, `schema group` in prose, and `SchemaGroup` in identifiers.
+
+### Server Deadline
+
+**Is:** the maximum time server rendering waits for one Query.
+**Use for:** Query options, docs, and deferred telemetry.
+**Never:** SSR timeout, query policy, render budget.
+**Casing:** `Server Deadline` in headings, `server deadline` in prose, and `ServerDeadline` in identifiers.
 
 ### Domain Event
 

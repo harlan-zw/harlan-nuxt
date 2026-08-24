@@ -192,12 +192,14 @@ export interface QueryTelemetryStartEvent {
   startedAt: number
 }
 
-export interface QueryTelemetryFinishEvent extends QueryTelemetryStartEvent {
+export type QueryTelemetryFinishEvent = QueryTelemetryStartEvent & {
   durationMs: number
   endedAt: number
   error?: unknown
-  status: 'error' | 'success'
-}
+} & (
+  | { status: 'error' | 'success' }
+  | { deadline: number, reason: 'ssr-deadline', status: 'deferred' }
+)
 
 type TelemetryHookResult = Promise<void> | void
 

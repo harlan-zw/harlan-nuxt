@@ -30,6 +30,7 @@ export interface QueryLifecycleOptions {
   enabled: ComputedRef<boolean>
   gcTime: number
   staleTime: QueryStaleTime
+  ssrDeferred: Ref<boolean>
   keepPreviousData: boolean
   refetchInterval?: import('vue').MaybeRefOrGetter<number | false | null | undefined>
   refetchOnMount: boolean | 'always'
@@ -52,11 +53,12 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
     refetchOnReconnect,
     refetchOnWindowFocus,
     staleTime,
+    ssrDeferred,
   } = opts
 
   const previousData = shallowRef()
   watch(query.data, (value) => {
-    if (value !== undefined)
+    if (!ssrDeferred.value && value !== undefined)
       previousData.value = value
   }, { immediate: true })
   const isPlaceholderData = computed(() => {
@@ -68,7 +70,14 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
 
   query.displayData = displayData
   query.isPlaceholderData = isPlaceholderData
-  query.isPending = computed(() => query.status.value === 'pending' && query.data.value === undefined)
+  watch([ssrDeferred, query.status], ([deferred, status]) => {
+    if (deferred && status === 'success') {
+      query.data.value = undefined
+      query.status.value = 'idle'
+    }
+  }, { flush: 'sync' })
+
+  query.isPending = computed(() => ssrDeferred.value || (enabled.value && query.data.value === undefined && query.status.value !== 'error' && query.status.value !== 'success'))
   query.isFetching = computed(() => query.status.value === 'pending')
 
   let release: (() => void) | undefined

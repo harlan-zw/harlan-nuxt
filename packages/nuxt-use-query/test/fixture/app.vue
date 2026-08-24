@@ -6,6 +6,18 @@ import { z } from 'zod'
 // (default `immediate: true`), so the data is present in the response body
 // before any client hydration is needed.
 
+const deferredQueries: Array<{ deadline: number, key: string, reason: string, status: string }> = []
+useNuxtApp().hook('nuxt-use-query:telemetry:query:finish', (event) => {
+  if (event.status === 'deferred') {
+    deferredQueries.push({
+      deadline: event.deadline,
+      key: event.key,
+      reason: event.reason,
+      status: event.status,
+    })
+  }
+})
+
 const echoSchema = z.object({
   call: z.number(),
   value: z.string(),
@@ -20,6 +32,27 @@ const { data: b } = await useNuxtQuery<{ value: string, call: number }>('/api/ec
   key: 'echo-b',
   query: { v: 'b' },
 })
+
+const deadlineQuery = useNuxtQuery<{ ok: boolean }>('/api/deadline-delay', {
+  key: 'deadline-delay',
+  server: { deadline: 20 },
+})
+await deadlineQuery
+
+const asyncDeadlineQuery = useNuxtAsyncQuery(
+  async (_app, { signal }) => {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(resolve, 200)
+      signal.addEventListener('abort', () => {
+        clearTimeout(timeout)
+        reject(signal.reason)
+      }, { once: true })
+    })
+    return { ok: true }
+  },
+  { key: 'async-deadline', server: { deadline: 20 } },
+)
+await asyncDeadlineQuery
 
 const echoQueries = defineNuxtQueryGroup('fixture', {
   detail: (value: string) => defineNuxtRpcQuery({
@@ -107,17 +140,30 @@ const importedFns = [
   defineNuxtQueryGroup,
   defineNuxtRpcQuery,
   defineNuxtRpcMutation,
+  defineNuxtRpcSchemaGroup,
   serializeNuxtRpcKey,
 ]
 
 const probe = {
   a: a.value,
   appContextFetch,
+  asyncDeadlineQuery: {
+    data: asyncDeadlineQuery.data.value ?? null,
+    isPending: asyncDeadlineQuery.isPending.value,
+    status: asyncDeadlineQuery.status.value,
+  },
   b: b.value,
   cacheKeys: Array.from(cache.lastFetched.keys()).sort(),
   cacheSameInstance,
   cachedManualWrite: getQueryData<{ ok: boolean }>('manual-write'),
   hasAutoImports: importedFns.every(fn => typeof fn === 'function'),
+  deadlineQuery: {
+    data: deadlineQuery.data.value ?? null,
+    isPending: deadlineQuery.isPending.value,
+    status: deadlineQuery.status.value,
+  },
+  deadlineCachedData: getQueryData('deadline-delay') ?? null,
+  deferredQueries,
   mutationMethod: mutationOperation.method,
   rpcDirect,
   rpcPostDirect,
@@ -129,11 +175,17 @@ const probe = {
     ? { isError: rpcQueryError.value instanceof Error, name: rpcQueryError.value.name, status: rpcQueryError.value.type === 'fetch' ? rpcQueryError.value.status : undefined, type: rpcQueryError.value.type }
     : null,
 }
+
+const hydrationProbe = computed(() => ({
+  asyncData: asyncDeadlineQuery.data.value ?? null,
+  fetchData: deadlineQuery.data.value ?? null,
+}))
 </script>
 
 <template>
   <div>
     <h1>nuxt-use-query fixture</h1>
     <pre id="probe">{{ JSON.stringify(probe) }}</pre>
+    <pre id="hydration-probe">{{ JSON.stringify(hydrationProbe) }}</pre>
   </div>
 </template>
