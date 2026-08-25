@@ -182,32 +182,104 @@ describe('formatDevelopmentWideEvent', () => {
 })
 
 describe('writeDevelopmentWideEvent', () => {
-  it('uses the app console so Nuxt can attribute the log to its request', () => {
-    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
-    let consoleCalls = 0
-    let stdoutCalls = 0
+  it('colors error output when stderr is a TTY even if stdout is not', () => {
+    vi.stubGlobal('process', {
+      env: {},
+      stdout: { isTTY: false, write: () => true },
+      stderr: { isTTY: true, write: () => true },
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     try {
       writeDevelopmentWideEvent({
         timestamp: '2026-08-14T08:28:15.225Z',
         kind: 'request',
-        level: 'info',
+        level: 'error',
+        method: 'GET',
+        path: '/api/cart',
+        status: 500,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('\u001B[38;2;243;139;168m500\u001B[0m'),
+      )
+    }
+    finally {
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps error output plain when stderr is not a TTY', () => {
+    vi.stubGlobal('process', {
+      env: {},
+      stdout: { isTTY: false, write: () => true },
+      stderr: { isTTY: false, write: () => true },
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level: 'error',
+        method: 'GET',
+        path: '/api/cart',
+        status: 500,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+        expect.not.stringContaining('\u001B['),
+      )
+    }
+    finally {
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it.each([
+    ['debug', 'debug'],
+    ['info', 'info'],
+    ['warn', 'warn'],
+    ['error', 'error'],
+  ] as const)('writes %s records through console.%s', (level, method) => {
+    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const consoleWrites = {
+      debug: vi.spyOn(console, 'debug').mockImplementation(() => {}),
+      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    }
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level,
+        service: 'shop',
         method: 'GET',
         path: '/api/cart',
         status: 200,
         durationMs: 1,
         requestId: 'req_1',
       })
+
+      expect(consoleWrites[method]).toHaveBeenCalledExactlyOnceWith(
+        '[shop] GET /api/cart 200 1ms · requestId: req_1',
+      )
+      expect(stdoutWrite).not.toHaveBeenCalled()
+      for (const [name, write] of Object.entries(consoleWrites)) {
+        if (name !== method)
+          expect(write).not.toHaveBeenCalled()
+      }
     }
     finally {
-      consoleCalls = consoleLog.mock.calls.length
-      stdoutCalls = stdoutWrite.mock.calls.length
-      consoleLog.mockRestore()
-      stdoutWrite.mockRestore()
+      vi.restoreAllMocks()
     }
-
-    expect(consoleCalls).toBe(1)
-    expect(stdoutCalls).toBe(0)
   })
 })
