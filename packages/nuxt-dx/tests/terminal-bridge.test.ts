@@ -72,4 +72,25 @@ describe('terminal bridge', () => {
       'stop:',
     ])
   })
+
+  it('adds the raw lightweight panel bridge when Kit does not expose it yet', () => {
+    const logger = createLogger()
+    const registerPanel = vi.fn(() => ({ update: vi.fn(), dispose: vi.fn() }))
+    globals[terminalHostKey] = {
+      version: 1,
+      withTerminal: async (work: () => Promise<unknown>) => work(),
+      startTask: () => ({ update: vi.fn(), stop: vi.fn() }),
+      registerPanel,
+    }
+    const upstream = vi.fn(() => ({
+      interactive: true,
+      notify: vi.fn(),
+      startTask: () => ({ update: vi.fn(), stop: vi.fn() }),
+    }))
+
+    const terminal = createTerminalAccess(logger, upstream)()
+    terminal.registerPanel!({ id: 'nuxt-dx:diagnostics', title: 'Nuxt DX Diagnostics' })
+
+    expect(registerPanel).toHaveBeenCalledOnce()
+  })
 })

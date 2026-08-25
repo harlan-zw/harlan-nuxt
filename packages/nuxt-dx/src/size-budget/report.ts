@@ -1,9 +1,17 @@
-import type { TreeItem } from 'consola/utils'
 import type { BudgetVerdict } from './budget'
 import type { BudgetScope } from './scope'
-import { colors, formatTree } from 'consola/utils'
+import { colors, formatTree, stripAnsi } from 'consola/utils'
 import { SCOPE } from './scope'
 import { formatBytes } from './size'
+
+export interface BudgetDiagnostic {
+  id: string
+  title: string
+  lines: readonly string[]
+  level: 'warn'
+  copy: string
+  file: { path: string }
+}
 
 /**
  * Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a
@@ -39,7 +47,7 @@ function overrideSnippet(over: readonly BudgetVerdict[], baseDir: string): strin
 }
 
 /** Every byte charged to the target, so the listed sizes always sum to the reported total. */
-function breakdown(scope: BudgetScope, verdict: BudgetVerdict, baseDir: string): TreeItem[] {
+function breakdown(scope: BudgetScope, verdict: BudgetVerdict, baseDir: string): Array<{ text: string }> {
   const { ownBytes, exclusiveBytes, exclusiveCount, heaviestDependencies } = verdict.measurement
   const rows: { bytes: number, label: string, muted: boolean }[] = [
     { bytes: ownBytes, label: SCOPE[scope].own, muted: true },
@@ -86,4 +94,25 @@ export function formatBudgetReport(scope: BudgetScope, over: readonly BudgetVerd
     `    ${colors.cyan(overrideSnippet(over, baseDir))}`,
   )
   return lines.join('\n')
+}
+
+export function formatBudgetDiagnostics(scope: BudgetScope, over: readonly BudgetVerdict[], baseDir: string): BudgetDiagnostic[] {
+  return over.map((verdict) => {
+    const { name, owner, path, budgetBytes, measurement } = verdict
+    const file = displayId(path, baseDir)
+    const label = name ?? file
+    const overshoot = formatBytes(measurement.totalBytes - budgetBytes)
+    return {
+      id: `${scope}:${path}`,
+      title: `${label} · ${overshoot} over budget`,
+      lines: [
+        `${formatBytes(measurement.totalBytes)} bundled · ${formatBytes(budgetBytes)} budget`,
+        ...owner ? [`Nuxt module: ${owner}`] : [],
+        ...breakdown(scope, verdict, baseDir).map(row => stripAnsi(row.text)),
+      ],
+      level: 'warn',
+      copy: overrideSnippet([verdict], baseDir),
+      file: { path },
+    }
+  })
 }

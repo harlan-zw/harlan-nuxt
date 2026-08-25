@@ -1,6 +1,6 @@
 import type { Nuxt, NuxtApp } from '@nuxt/schema'
 import type { ConsolaInstance } from 'consola'
-import type { DiagnosticOutput } from './diagnostic-output'
+import type { BudgetNoticeReport, DiagnosticOutput } from './diagnostic-output'
 import type { DiagnosticIssue } from './runtime/app/report'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
 import type { ModuleOwner } from './size-budget/module-owner'
@@ -16,7 +16,7 @@ import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { createOverrideUsage } from './size-budget/override-usage'
 import { extractPluginName } from './size-budget/plugin-name'
-import { formatBudgetReport } from './size-budget/report'
+import { formatBudgetDiagnostics, formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
 import { BUDGET_SCOPES } from './size-budget/scope'
 import { kilobytesToBytes } from './size-budget/size'
@@ -175,7 +175,7 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
     const report = formatBudgetReport(scope, over, reportBaseDir(nuxt))
     if (budgets.fail)
       throw new Error(`[nuxt-dx] ${report}`)
-    return report
+    return { message: report, entries: formatBudgetDiagnostics(scope, over, reportBaseDir(nuxt)) }
   }
 }
 
@@ -274,12 +274,12 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
       return [scope, reporter(scope, defaultBytes, budgets, nuxt, scope === 'client')] as const
     }))
     return async (measured: readonly MeasuredTarget[]) => {
-      output.updateBudgetNotice(bundle, [])
+      output.updateBudgetDiagnostics(bundle, [])
       return output.runTask({
         start: `Checking ${bundle} runtime size budgets`,
         failure: `Failed to check ${bundle} runtime size budgets`,
       }, async () => {
-        const overBudget: string[] = []
+        const overBudget: BudgetNoticeReport[] = []
         for (const scope of scopes) {
           const entries = measured.filter(target => target.scope === scope)
           await writeSnapshot?.(scope, entries)
@@ -288,7 +288,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
             overBudget.push(report)
         }
         await trackOverrides(measured)
-        output.updateBudgetNotice(bundle, overBudget)
+        output.updateBudgetDiagnostics(bundle, overBudget)
       })
     }
   }
@@ -366,6 +366,7 @@ export default defineNuxtModule<ModuleOptions>({
 
     const logger = useLogger('nuxt-dx')
     const output = createDiagnosticOutput(createTerminalAccess(logger), logger)
+    nuxt.hook('close', () => output.dispose())
     const reportPath = resolveReportPath(options.report)
     if (options.sizeBudget !== false)
       setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath, logger, output)

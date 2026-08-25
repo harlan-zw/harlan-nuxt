@@ -2,7 +2,7 @@ import type { BudgetVerdict } from '../src/size-budget/budget'
 import type { BudgetScope } from '../src/size-budget/scope'
 import { stripAnsi } from 'consola/utils'
 import { describe, expect, it } from 'vitest'
-import { displayId, formatBudgetReport } from '../src/size-budget/report'
+import { displayId, formatBudgetDiagnostics, formatBudgetReport } from '../src/size-budget/report'
 
 describe('displayId', () => {
   it('shortens project files to a root-relative path', () => {
@@ -119,5 +119,23 @@ describe('formatBudgetReport', () => {
 
   it('stays compact for a single offender', () => {
     expect(report([verdict]).split('\n')).toHaveLength(9)
+  })
+})
+
+describe('formatBudgetDiagnostics', () => {
+  it('returns one semantic and actionable entry per verdict', () => {
+    expect(formatBudgetDiagnostics('client', [{ ...verdict, name: 'analytics', owner: '@acme/analytics' }], '/app')).toEqual([{
+      id: 'client:/app/plugins/analytics.ts',
+      title: 'analytics · 61 kB over budget',
+      lines: [
+        '81 kB bundled · 20 kB budget',
+        'Nuxt module: @acme/analytics',
+        ' 1 kB  the plugin file',
+        '80 kB  chart/index.mjs',
+      ],
+      level: 'warn',
+      copy: 'nuxtDx.sizeBudget.overridesKb = { \'analytics\': 81 }',
+      file: { path: '/app/plugins/analytics.ts' },
+    }])
   })
 })

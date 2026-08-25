@@ -17,10 +17,32 @@ export interface DiagnosticTerminalNotice {
   dismissed: Promise<void>
 }
 
+export interface DiagnosticTerminalPanelEntry {
+  id: string
+  title: string
+  lines?: readonly string[]
+  level?: 'info' | 'warn' | 'error'
+  copy?: string
+  file?: { path: string, line?: number, column?: number }
+}
+
+export interface DiagnosticTerminalPanelDefinition {
+  id: string
+  title: string
+  empty?: string
+  shortcut?: { key: string, label: string, description: string }
+}
+
+export interface DiagnosticTerminalPanel {
+  update: (entries: readonly DiagnosticTerminalPanelEntry[]) => void
+  dispose: () => void
+}
+
 export interface DiagnosticTerminal {
   readonly interactive: boolean
   startTask: (label: string) => DiagnosticTerminalTask
   notify: (notification: DiagnosticTerminalNotification) => DiagnosticTerminalNotice
+  registerPanel?: (definition: DiagnosticTerminalPanelDefinition) => DiagnosticTerminalPanel
 }
 
 interface TerminalHostV1 {
@@ -28,6 +50,7 @@ interface TerminalHostV1 {
   withTerminal: <T>(work: () => Promise<T>) => Promise<T>
   startTask: (label: string) => DiagnosticTerminalTask
   notify?: (notification: DiagnosticTerminalNotification) => DiagnosticTerminalNotice
+  registerPanel?: (definition: DiagnosticTerminalPanelDefinition) => DiagnosticTerminalPanel
 }
 
 const terminalHostKey = Symbol.for('nuxt:terminal-host')
@@ -69,6 +92,7 @@ function useCompatibleTerminal(logger: ConsolaInstance): DiagnosticTerminal {
       logger.box([notification.title, notification.message].filter(Boolean).join('\n\n'))
       return { dismiss() {}, dismissed: Promise.resolve() }
     },
+    ...host?.registerPanel ? { registerPanel: host.registerPanel.bind(host) } : {},
   }
 }
 
@@ -81,5 +105,19 @@ export function createTerminalAccess(
   logger: ConsolaInstance,
   upstream: (() => DiagnosticTerminal) | undefined = (nuxtKit as UpstreamKit).useTerminal,
 ): () => DiagnosticTerminal {
-  return upstream ?? (() => useCompatibleTerminal(logger))
+  return () => {
+    const compatible = useCompatibleTerminal(logger)
+    if (!upstream)
+      return compatible
+    const terminal = upstream()
+    return {
+      ...terminal,
+      interactive: terminal.interactive || compatible.interactive,
+      ...terminal.registerPanel
+        ? { registerPanel: terminal.registerPanel }
+        : compatible.registerPanel
+          ? { registerPanel: compatible.registerPanel }
+          : {},
+    }
+  }
 }
