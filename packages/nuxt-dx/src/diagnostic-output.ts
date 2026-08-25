@@ -1,8 +1,9 @@
-import type { NuxtLogger, NuxtTerminal, NuxtTerminalNotice } from '@nuxt/kit'
+import type { ConsolaInstance } from 'consola'
+import type { DiagnosticTerminal, DiagnosticTerminalNotice } from './terminal-bridge'
 
 interface DiagnosticTaskLabels {
   start: string
-  success: string
+  failure: string
 }
 
 type SizeBudgetNoticeScope = 'client' | 'server'
@@ -12,8 +13,8 @@ export interface DiagnosticOutput {
   runTask: <T>(labels: DiagnosticTaskLabels, work: () => Promise<T>) => Promise<T>
 }
 
-export function createDiagnosticOutput(useTerminal: () => NuxtTerminal, logger: NuxtLogger): DiagnosticOutput {
-  const notices = new Map<SizeBudgetNoticeScope, NuxtTerminalNotice>()
+export function createDiagnosticOutput(useTerminal: () => DiagnosticTerminal, logger: ConsolaInstance): DiagnosticOutput {
+  const notices = new Map<SizeBudgetNoticeScope, DiagnosticTerminalNotice>()
 
   const dismissNotice = (scope: SizeBudgetNoticeScope) => {
     notices.get(scope)?.dismiss()
@@ -46,10 +47,10 @@ export function createDiagnosticOutput(useTerminal: () => NuxtTerminal, logger: 
       return Promise.resolve()
         .then(work)
         .then((result) => {
-          task.stop(labels.success)
+          task.stop()
           return result
         }, (error) => {
-          task.stop(undefined, 'failure')
+          task.stop(labels.failure, 'failure')
           throw error
         })
     },

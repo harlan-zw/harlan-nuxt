@@ -1,20 +1,19 @@
-import type { NuxtLogger, NuxtTerminal, NuxtTerminalNotice, NuxtTerminalNotification, NuxtTerminalTask } from '@nuxt/kit'
+import type { ConsolaInstance } from 'consola'
+import type { DiagnosticTerminal, DiagnosticTerminalNotice, DiagnosticTerminalNotification, DiagnosticTerminalTask } from '../src/terminal-bridge'
 import { describe, expect, it, vi } from 'vitest'
 import { createDiagnosticOutput } from '../src/diagnostic-output'
 
-function createLogger(): NuxtLogger {
-  return { warn: vi.fn() } as unknown as NuxtLogger
+function createLogger(): ConsolaInstance {
+  return { warn: vi.fn() } as unknown as ConsolaInstance
 }
 
 function createTerminal(options: {
   interactive?: boolean
-  notify?: (notification: NuxtTerminalNotification) => NuxtTerminalNotice
-  task?: NuxtTerminalTask
-} = {}): NuxtTerminal {
+  notify?: (notification: DiagnosticTerminalNotification) => DiagnosticTerminalNotice
+  task?: DiagnosticTerminalTask
+} = {}): DiagnosticTerminal {
   return {
     interactive: options.interactive ?? false,
-    withTerminal: work => work(),
-    prompt: vi.fn(),
     notify: options.notify ?? (() => ({ dismiss: vi.fn(), dismissed: Promise.resolve() })),
     startTask: () => options.task ?? { update: vi.fn(), stop: vi.fn() },
   }
@@ -22,7 +21,7 @@ function createTerminal(options: {
 
 describe('diagnostic output', () => {
   it('discovers a terminal host registered after the output was created', () => {
-    const notifications: NuxtTerminalNotification[] = []
+    const notifications: DiagnosticTerminalNotification[] = []
     const logger = createLogger()
     let terminal = createTerminal()
     const output = createDiagnosticOutput(() => terminal, logger)
@@ -76,7 +75,7 @@ describe('diagnostic output', () => {
     expect(logger.warn).toHaveBeenNthCalledWith(2, 'Middleware report')
   })
 
-  it('reports task completion to a host registered late', async () => {
+  it('removes a completed task without adding a history entry', async () => {
     const task = { update: vi.fn(), stop: vi.fn() }
     let terminal = createTerminal()
     const output = createDiagnosticOutput(() => terminal, createLogger())
@@ -84,10 +83,10 @@ describe('diagnostic output', () => {
 
     await expect(output.runTask({
       start: 'Checking runtime size budgets',
-      success: 'Checked runtime size budgets',
+      failure: 'Failed to check runtime size budgets',
     }, async () => 'done')).resolves.toBe('done')
 
-    expect(task.stop).toHaveBeenCalledExactlyOnceWith('Checked runtime size budgets')
+    expect(task.stop).toHaveBeenCalledExactlyOnceWith()
   })
 
   it('marks a failed terminal task before propagating the error', async () => {
@@ -100,10 +99,10 @@ describe('diagnostic output', () => {
 
     await expect(output.runTask({
       start: 'Checking runtime size budgets',
-      success: 'Checked runtime size budgets',
+      failure: 'Failed to check runtime size budgets',
     }, async () => { throw failure })).rejects.toBe(failure)
 
-    expect(task.stop).toHaveBeenCalledExactlyOnceWith(undefined, 'failure')
+    expect(task.stop).toHaveBeenCalledExactlyOnceWith('Failed to check runtime size budgets', 'failure')
   })
 
   it('does not add task logs without an interactive host', async () => {
@@ -112,7 +111,7 @@ describe('diagnostic output', () => {
 
     await output.runTask({
       start: 'Checking runtime size budgets',
-      success: 'Checked runtime size budgets',
+      failure: 'Failed to check runtime size budgets',
     }, async () => 'done')
 
     expect(task.stop).not.toHaveBeenCalled()

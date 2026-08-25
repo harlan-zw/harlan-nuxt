@@ -51,9 +51,9 @@ describe('runtime entry budgets', () => {
         message: expect.stringMatching(/Nitro plugins? over budget[\s\S]+Nitro middleware over budget/),
       }),
     ])
-    expect(terminal.filter(event => event.type === 'task:stop')).toEqual(expect.arrayContaining([
-      { type: 'task:stop', message: 'Checked client runtime size budgets' },
-      { type: 'task:stop', message: 'Checked server runtime size budgets' },
-    ]))
+    expect(terminal.filter(event => event.type === 'task:stop')).toEqual([
+      { type: 'task:stop' },
+      { type: 'task:stop' },
+    ])
   }, 60_000)
 })
