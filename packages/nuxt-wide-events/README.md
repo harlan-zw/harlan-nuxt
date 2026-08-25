@@ -1,22 +1,55 @@
 <h1>@harlan-zw/nuxt-wide-events</h1>
 
-Minimal Wide Events for Nuxt server routes.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-Production emits one flat JSON record per request. Development prints richer records with error details.
+Nuxt Wide Events emits one structured record per request from your Nuxt server routes.
 
-## Why
+Production writes one flat JSON line. Development prints a richer record with error details.
 
-Traditional request logging creates many disconnected lines. A Wide Event collects request context into one record.
+Status: experimental. APIs may change before the first release.
 
-This module removes runtime redaction. You configure every application Field before code can use it.
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
 
-The build parses each server file. It rejects unknown Fields, object spreads, computed names, and dynamic objects.
+## Why Nuxt Wide Events?
 
-## Install
+Traditional request logging scatters one request across many disconnected lines. A Wide Event collects that context into one record.
+
+This module drops runtime redaction entirely. You configure every application Field before any code can use it.
+
+The build parses each server file. It rejects unknown Fields, object spreads, computed names, and dynamic objects. So the boundary stays visible to reviewers and to coding agents.
+
+## Features
+
+- 📝 **One record per request:** method, path, status, duration, request ID, and your Fields on a single flat line.
+- 🚧 **Build-time Field enforcement:** an unapproved key stops the build, so no secret reaches a log by accident.
+- 🪶 **Small production runtime:** no stack formatting, deep redaction, regular expressions, or pretty printing.
+- 🎚️ **Levels that stick:** a record keeps the highest level it receives, even when the handler recovers.
+- ⚙️ **Background records:** `createWideEvent` covers Queue Jobs, scheduled work, and anything off the request path.
+- 🚰 **Drain hook:** send records to D1, Sentry, or your own adapter through one Nitro hook.
+- 📉 **Route exclusion and sampling:** the config shape matches evlog, so migration is a rename.
+
+## Installation
 
 ```bash
-pnpm add @harlan-zw/nuxt-wide-events
+npx nuxi@latest module add @harlan-zw/nuxt-wide-events
 ```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-wide-events
+> ```
 
 ```ts
 export default defineNuxtConfig({
@@ -49,7 +82,22 @@ export default defineEventHandler((event) => {
 
 Each value must be a string, number, boolean, or `null`. Nested objects cannot hide unapproved data.
 
-## Set the Level
+This code stops the build because `user.email` is not configured:
+
+```ts
+addWideEventFields(event, {
+  'user.email': user.email,
+})
+```
+
+Variables and spreads also stop the build:
+
+```ts
+addWideEventFields(event, fields)
+addWideEventFields(event, { ...fields })
+```
+
+## Set the level
 
 `setWideEventLevel` marks a request Wide Event as `debug`, `info`, `warn`, or `error`.
 
@@ -67,24 +115,7 @@ export default defineEventHandler(async (event) => {
 
 A record keeps the highest level it receives. If the request handler recovers from an error, the record stays an error. A drain and a sampling rate both see the real level.
 
-This code stops the build because `user.email` is not configured:
-
-```ts
-addWideEventFields(event, {
-  'user.email': user.email,
-})
-```
-
-Variables and spreads also stop the build:
-
-```ts
-addWideEventFields(event, fields)
-addWideEventFields(event, { ...fields })
-```
-
-This constraint keeps the Field boundary visible to reviewers and coding agents.
-
-## Production Output
+## Production output
 
 Default production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.
 
@@ -98,7 +129,7 @@ Production errors include status only. All error strings remain absent because t
 
 Development records include error messages and stacks. Development uses compact terminal blocks with request metadata in the header and configured Fields in a tree.
 
-## Background Operations
+## Background operations
 
 `createWideEvent` is available in server code for Queue Jobs, scheduled work, and other background operations.
 
@@ -138,7 +169,7 @@ For requests, replace `log.setLevel(level)` with `setWideEventLevel(event, level
 
 Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
 
-## Production Filtering
+## Production filtering
 
 The configuration shape matches evlog for direct migration:
 
@@ -160,7 +191,7 @@ Every level rate applies to every Wide Event. A background record has no status,
 
 The module compiles route patterns during the build. A pattern that ends with `/**` also matches the bare prefix, which is how Nitro matches routes. Default production uses a separate plugin without filtering code.
 
-## Drain Records
+## Drain records
 
 Use the Nitro hook when D1, Sentry, or another adapter owns the record:
 
@@ -214,6 +245,27 @@ The first version supports Nuxt server requests, flat primitive Fields, route ex
 
 It excludes browser logging, transports, audit logs, and production error presentation.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-MIT
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-wide-events/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-wide-events/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-wide-events
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-wide-events.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-wide-events
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-wide-events/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

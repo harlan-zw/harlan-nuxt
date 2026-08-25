@@ -34,6 +34,12 @@ Status: experimental. APIs may change before the first release.
 pnpm add @harlan-zw/nuxt-github-sponsors
 ```
 
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-github-sponsors
+> ```
+
 ```ts
 export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-github-sponsors'],
@@ -89,7 +95,7 @@ compile error.
 
 The module registers a public route and `useGitHubSponsors`. The server core fetches all active sponsorship pages, parses GitHub responses, filters private sponsors, projects a minimal public DTO, applies explicit profile overrides, and assigns configurable tiers.
 
-The package intentionally has no sponsor UI. Each site keeps control of its visual identity and calls `useGitHubSponsors()` for a typed response.
+There is no sponsor UI in this package. Each site keeps its own visual identity and calls `useGitHubSponsors()` for a typed response.
 
 ## Failure states
 

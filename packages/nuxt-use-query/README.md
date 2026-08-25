@@ -27,33 +27,6 @@ Status: experimental. APIs may change before the first scoped release.
 - ⚡ **Realtime bridge:** `useNuxtSubscription` pipes a WebSocket, SSE, or vendor SDK stream into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
 - 🧵 **SSR-safe by construction:** cache bookkeeping lives on the Nuxt app instance for per-request isolation.
 
-## Choosing A Layer
-
-This module ships two layers that share one cache. Pick by the contract you have:
-
-| Use this                                       | When                                                                                                                                       |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **RPC layer** (`defineNuxtRpc*` + `useNuxtRpcQuery` / `useNuxtRpc().execute`) | You own both sides of the call. Default for anything user-facing or imported in more than one place.                                       |
-| **Query layer** (`useNuxtQuery` / `useNuxtMutation` directly) | Escape hatch: third-party APIs you don't own, one-off internal calls, prototypes, file downloads / blobs where a Zod schema would be theatre. |
-
-The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache and respond to the same `invalidateNuxtQueries(prefix)` calls. You can mix them in one app.
-
-**Why the RPC default**: the operation object owns the API path, cache key, method, and Zod request/response schemas. Components import the operation, not the URL. Renaming an endpoint is a one-line change; the schema catches contract drift at the boundary instead of letting it propagate as `unknown` through the app.
-
-**Why the escape hatch exists**: writing a contract for a fetch you call once is overhead with no payoff. Reach for `useNuxtQuery` directly when there is no second caller to protect.
-
-**Mutations stay manual.** There is no `useNuxtRpcMutation` composable; `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
-
-## Query Defaults
-
-`useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow it:
-
-- `staleTime` defaults to `0`, so cached data is stale immediately and can refetch on mount, focus, or reconnect.
-- `gcTime` defaults to 5 minutes for inactive payload eviction.
-- `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect` default to `true`; pass `'always'` to bypass the stale check.
-- `staleTime: Infinity` and `staleTime: 'static'` opt into immutable data until explicit invalidation.
-- `isPlaceholderData`, `isPending`, and `isFetching` are exposed alongside the Nuxt `status` ref.
-
 ## Installation
 
 Install `@harlan-zw/nuxt-use-query` in the consuming Nuxt site:
@@ -61,6 +34,12 @@ Install `@harlan-zw/nuxt-use-query` in the consuming Nuxt site:
 ```bash
 npx nuxi@latest module add @harlan-zw/nuxt-use-query
 ```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-use-query
+> ```
 
 If the site will define RPC contracts, add Zod as a direct app dependency:
 
@@ -117,7 +96,34 @@ import {
 } from '@harlan-zw/nuxt-use-query/rpc'
 ```
 
-## Recommended Site Pattern
+## Choosing a layer
+
+This module ships two layers that share one cache. Pick by the contract you have:
+
+| Use this                                       | When                                                                                                                                       |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **RPC layer** (`defineNuxtRpc*` + `useNuxtRpcQuery` / `useNuxtRpc().execute`) | You own both sides of the call. Default for anything user-facing or imported in more than one place.                                       |
+| **Query layer** (`useNuxtQuery` / `useNuxtMutation` directly) | Escape hatch: third-party APIs you don't own, one-off internal calls, prototypes, file downloads / blobs where a Zod schema would be theatre. |
+
+The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache and respond to the same `invalidateNuxtQueries(prefix)` calls. You can mix them in one app.
+
+**Why the RPC default**: the operation object owns the API path, cache key, method, and Zod request/response schemas. Components import the operation, not the URL. Renaming an endpoint is a one-line change; the schema catches contract drift at the boundary instead of letting it propagate as `unknown` through the app.
+
+**Why the escape hatch exists**: writing a contract for a fetch you call once is overhead with no payoff. Reach for `useNuxtQuery` directly when there is no second caller to protect.
+
+**Mutations stay manual.** There is no `useNuxtRpcMutation` composable; `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
+
+## Query defaults
+
+`useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow it:
+
+- `staleTime` defaults to `0`, so cached data is stale immediately and can refetch on mount, focus, or reconnect.
+- `gcTime` defaults to 5 minutes for inactive payload eviction.
+- `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect` default to `true`; pass `'always'` to bypass the stale check.
+- `staleTime: Infinity` and `staleTime: 'static'` opt into immutable data until explicit invalidation.
+- `isPlaceholderData`, `isPending`, and `isFetching` are exposed alongside the Nuxt `status` ref.
+
+## Recommended site pattern
 
 For app code, prefer the RPC helpers over hardcoded API URLs in components:
 
@@ -296,7 +302,7 @@ const updateSite = useNuxtMutation<
 await updateSite.mutate({ name: 'Docs' })
 ```
 
-## Escape Hatch: `useNuxtQuery` Directly
+## Escape hatch: `useNuxtQuery` directly
 
 Skip the RPC layer when the contract isn't yours to define: third-party APIs, one-off internal calls, prototypes, file downloads, or any request where a Zod schema would be ceremony with no payoff:
 
@@ -340,7 +346,7 @@ After 800ms, SSR renders the pending state. Hydration starts the query again in 
 
 The same option works with `useNuxtQuery` and `useNuxtAsyncQuery`.
 
-## Cache Keys And Invalidation
+## Cache keys and invalidation
 
 RPC array keys are serialized with `:` separators:
 
@@ -409,7 +415,7 @@ useNuxtSubscription({
 })
 ```
 
-**Coalescing is yours.** Each `invalidateNuxtQueries` triggers a refresh, so a burst of progress events means a burst of refetches. For chatty channels, debounce inside `onMessage` (the package deliberately does not hide this decision):
+**Coalescing is yours.** Each `invalidateNuxtQueries` triggers a refresh, so a burst of progress events means a burst of refetches. For chatty channels, debounce inside `onMessage` (the package leaves this decision to you):
 
 ```ts
 import { useDebounceFn } from '@vueuse/core'
@@ -436,7 +442,7 @@ useNuxtSubscription({
 
 String frames are JSON-parsed by default (non-JSON frames pass through for `schema` to handle); pass `deserialize` to override. For other transports (SSE, a vendor SDK), write a `source` that calls `ctx.push` per message and returns a cleanup function.
 
-## RPC Error Handling
+## RPC error handling
 
 RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP failures and Zod request/response validation failures are normalized before they reach hooks or callers.
 
@@ -470,7 +476,7 @@ A `NuxtRpcError` is a real `Error` named `NuxtRpcError`. It carries the `type` d
 
 The module registers a payload reducer and reviver for it, so a failure raised during SSR crosses into the browser with its tag intact. The `cause` and `response` fields do not cross: they hold a `FetchError` and a `Response`, which cannot be serialized.
 
-## Server Fetch Telemetry
+## Server fetch telemetry
 
 Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
 
@@ -591,7 +597,7 @@ export default defineNuxtPlugin((nuxtApp) => {
 })
 ```
 
-## Contract Enforcement
+## Contract enforcement
 
 Enable build-time enforcement when a project is ready to make the pattern mandatory:
 
