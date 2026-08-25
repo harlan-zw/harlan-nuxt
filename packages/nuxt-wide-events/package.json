@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-wide-events",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Minimal Nuxt Wide Events with build-time field enforcement.",
   "author": {
     "name": "Harlan Wilton",
