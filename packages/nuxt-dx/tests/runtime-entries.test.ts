@@ -39,12 +39,18 @@ describe('runtime entry budgets', () => {
       'nitro',
       'nitro-middleware',
     ]))
-    expect(terminal.filter(event => event.type === 'notification')).toEqual(expect.arrayContaining([
-      expect.objectContaining({ level: 'warn', title: 'Nuxt DX diagnostic', message: expect.stringMatching(/Nuxt plugins? over budget/) }),
-      expect.objectContaining({ level: 'warn', title: 'Nuxt DX diagnostic', message: expect.stringContaining('Nuxt middleware over budget') }),
-      expect.objectContaining({ level: 'warn', title: 'Nuxt DX diagnostic', message: expect.stringMatching(/Nitro plugins? over budget/) }),
-      expect.objectContaining({ level: 'warn', title: 'Nuxt DX diagnostic', message: expect.stringContaining('Nitro middleware over budget') }),
-    ]))
+    expect(terminal.filter(event => event.type === 'notification')).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        title: 'Nuxt DX: client size budget',
+        message: expect.stringMatching(/Nuxt plugins? over budget[\s\S]+Nuxt middleware over budget/),
+      }),
+      expect.objectContaining({
+        level: 'warn',
+        title: 'Nuxt DX: server size budget',
+        message: expect.stringMatching(/Nitro plugins? over budget[\s\S]+Nitro middleware over budget/),
+      }),
+    ])
     expect(terminal.filter(event => event.type === 'task:stop')).toEqual(expect.arrayContaining([
       { type: 'task:stop', message: 'Checked client runtime size budgets' },
       { type: 'task:stop', message: 'Checked server runtime size budgets' },

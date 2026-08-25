@@ -1,29 +1,44 @@
-import type { NuxtLogger, NuxtTerminal } from '@nuxt/kit'
+import type { NuxtLogger, NuxtTerminal, NuxtTerminalNotice } from '@nuxt/kit'
 
 interface DiagnosticTaskLabels {
   start: string
   success: string
 }
 
+type SizeBudgetNoticeScope = 'client' | 'server'
+
 export interface DiagnosticOutput {
-  warn: (message: string) => void
+  updateBudgetNotice: (scope: SizeBudgetNoticeScope, reports: readonly string[]) => void
   runTask: <T>(labels: DiagnosticTaskLabels, work: () => Promise<T>) => Promise<T>
 }
 
-export function createDiagnosticOutput(terminal: NuxtTerminal, logger: NuxtLogger): DiagnosticOutput {
+export function createDiagnosticOutput(useTerminal: () => NuxtTerminal, logger: NuxtLogger): DiagnosticOutput {
+  const notices = new Map<SizeBudgetNoticeScope, NuxtTerminalNotice>()
+
+  const dismissNotice = (scope: SizeBudgetNoticeScope) => {
+    notices.get(scope)?.dismiss()
+    notices.delete(scope)
+  }
+
   return {
-    warn(message) {
+    updateBudgetNotice(scope, reports) {
+      const terminal = useTerminal()
+      dismissNotice(scope)
+      if (!reports.length)
+        return
       if (!terminal.interactive) {
-        logger.warn(message)
+        for (const report of reports)
+          logger.warn(report)
         return
       }
-      terminal.notify({
-        title: 'Nuxt DX diagnostic',
-        message,
+      notices.set(scope, terminal.notify({
+        title: `Nuxt DX: ${scope} size budget`,
+        message: reports.join('\n\n'),
         level: 'warn',
-      })
+      }))
     },
     runTask(labels, work) {
+      const terminal = useTerminal()
       if (!terminal.interactive)
         return Promise.resolve().then(work)
 
