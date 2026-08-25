@@ -36,6 +36,12 @@ Status: experimental. APIs may change before the first release.
 pnpm add @harlan-zw/nuxt-sentry @sentry/nuxt
 ```
 
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-sentry
+> ```
+
 On Cloudflare Workers, also add `@sentry/cloudflare`.
 
 ```ts
@@ -223,19 +229,27 @@ pnpm dev:prepare
 pnpm test
 ```
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/LICENSE.md).
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-sentry/LICENSE.md).
 
 <!-- Badges -->
-[npm-version-src]: https://img.shields.io/npm/v/@harlan-zw/nuxt-sentry/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-sentry/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-sentry
 
-[npm-downloads-src]: https://img.shields.io/npm/dm/@harlan-zw/nuxt-sentry.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-sentry.svg?style=flat&colorA=18181B&colorB=28CF8D
 [npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-sentry
 
 [license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
-[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/LICENSE.md
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-sentry/LICENSE.md
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com

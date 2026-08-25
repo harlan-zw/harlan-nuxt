@@ -34,6 +34,12 @@ Status: experimental. APIs may change before the first release.
 pnpm add @harlan-zw/nuxt-domain-events
 ```
 
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-domain-events
+> ```
+
 ```ts
 export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-domain-events'],
@@ -88,7 +94,7 @@ The caller-supplied unit of work stages the adapter's unpublished D1 statements 
 
 ## Cloudflare Jobs adapter
 
-The `./cf-jobs` adapter accepts the public `@harlan-zw/nuxt-cf-jobs/outbox` functions structurally. This keeps the event core runtime-neutral and the dependency one-way. Its generic delivery definition declares the static `maintenance` queue for `@harlan-zw/nuxt-cf-jobs` registry locality; the public outbox route override intentionally stores each listener job on the queue declared by that listener.
+The `./cf-jobs` adapter accepts the public `@harlan-zw/nuxt-cf-jobs/outbox` functions structurally. This keeps the event core runtime-neutral and the dependency one-way. Its generic delivery definition declares the static `maintenance` queue for `@harlan-zw/nuxt-cf-jobs` registry locality; the public outbox route override stores each listener job on the queue declared by that listener.
 
 ## Not in v1
 

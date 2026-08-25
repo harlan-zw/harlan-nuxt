@@ -1,8 +1,64 @@
-# @harlan-zw/nuxt-cloudflare
+<h1>@harlan-zw/nuxt-cloudflare</h1>
 
-Opinionated Cloudflare defaults and deploy diagnostics for Nuxt 4.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-The module extracts production patterns already proven in Nuxt SEO and gscdump. It intentionally owns platform policy, not application topology.
+Nuxt Cloudflare gives a Nuxt 4 app opinionated Cloudflare defaults, a generated Wrangler config, and diagnostics that fail a bad deploy before Cloudflare does.
+
+The defaults come from production patterns already running in Nuxt SEO and gscdump. The module owns platform policy. Your application topology stays yours.
+
+Status: experimental. APIs may change before the first release.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
+## Features
+
+- ⚙️ **Generated Wrangler config:** Cloudflare preset, Node compatibility, and sane observability, with anything you authored left alone.
+- 🩺 **Deploy doctor:** audits Wrangler's effective config, including generated redirects and every named environment.
+- 💰 **Cost controls:** 1% log and trace sampling, asset-first routing, and warnings when a setting turns free requests into billed ones.
+- 🗄️ **Workers Caching:** version-isolated by default, with a fail-closed `private, no-store` for rendered HTML.
+- 📦 **Partial bundling:** chunks deploy as separate modules, which cut startup CPU on the Nuxt SEO Pro Worker from 118ms to 81ms.
+- 🔑 **Exact binding types:** `nuxt prepare` runs Wrangler and writes a compatibility-aware declaration, then production builds fail on drift.
+- 🧰 **D1 primitives:** recovering sessions, safe write retries, and parameter plans that respect the 100-bind limit.
+
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/nuxt-cloudflare
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-cloudflare
+> ```
+
+```ts
+export default defineNuxtConfig({
+  modules: ['@harlan-zw/nuxt-cloudflare'],
+
+  nuxtCloudflare: {
+    requiredSecrets: ['NUXT_SESSION_PASSWORD'],
+  },
+
+  nitro: {
+    storage: {
+      cache: { driver: 'cloudflare-kv-binding', binding: 'CACHE' },
+      kv: { driver: 'cloudflare-kv-binding', binding: 'KV' },
+    },
+  },
+})
+```
 
 ## Defaults
 
@@ -30,24 +86,9 @@ Every default below yields to a value you wrote. The root `wrangler.jsonc`, `wra
 
 Persistent KV mounts are never wrapped. The expiry policy applies only to cache data.
 
-## Setup
+## Configuration
 
-```ts
-export default defineNuxtConfig({
-  modules: ['@harlan-zw/nuxt-cloudflare'],
-
-  nuxtCloudflare: {
-    requiredSecrets: ['NUXT_SESSION_PASSWORD'],
-  },
-
-  nitro: {
-    storage: {
-      cache: { driver: 'cloudflare-kv-binding', binding: 'CACHE' },
-      kv: { driver: 'cloudflare-kv-binding', binding: 'KV' },
-    },
-  },
-})
-```
+Everything below is optional. The defaults above already cover a plain deploy.
 
 To configure a cache mount when one does not already exist:
 
@@ -268,7 +309,7 @@ The helper owns a private temporary directory and creates the JSON file with mod
 
 The module does not choose Worker names, routes, domains, resource IDs, placement, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
 
-Next high-value extractions from Nuxt SEO and gscdump:
+Next extractions from Nuxt SEO and gscdump:
 
 1. Nuxt Content D1 sync plus readiness verification
 2. Expand-only D1 migration audit with protected-table rebuild detection
@@ -278,3 +319,28 @@ Next high-value extractions from Nuxt SEO and gscdump:
 6. R2 lifecycle declaration and read-only storage stocktake
 
 These remain separate adapters because their schemas, retention, and deployment ordering require explicit application policy.
+
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
+## License
+
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-cloudflare/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-cloudflare/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-cloudflare
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-cloudflare.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-cloudflare
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-cloudflare/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

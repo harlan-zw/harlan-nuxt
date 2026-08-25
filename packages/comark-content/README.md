@@ -1,8 +1,55 @@
-# @harlan-zw/comark-content
+<h1>@harlan-zw/comark-content</h1>
 
-Markdown-only Nuxt content powered by [Comark](https://github.com/harlan-zw/comark).
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-The module parses Markdown at build time and writes compressed server assets. No database runs, and no Markdown is parsed at request time.
+Comark Content is a Markdown-only content module for Nuxt, powered by [Comark](https://github.com/harlan-zw/comark).
+
+Markdown is parsed at build time and written as compressed server assets. No database runs, and no Markdown is parsed while a request is in flight.
+
+Status: experimental. APIs may change before the first release.
+
+<p align="center">
+<table>
+<tbody>
+<td align="center">
+<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
+</td>
+</tbody>
+</table>
+</p>
+
+## Features
+
+- 📄 **Build-time Markdown:** page Collections are parsed once and shipped as gzip server assets.
+- 🌍 **Local and remote sources:** globs from your `content` directory, or a Git repository pinned to a branch or tag.
+- 🔎 **One query API:** `queryCollection` and friends run the same way in the browser and inside Nitro.
+- 🗜️ **Lazy decompression:** a filtered query reads the metadata index only, then loads bodies for matched documents.
+- 🎨 **Rangi highlighting:** GitHub Light and Dark by default, with extra grammars bundled and your own themes accepted.
+- 🗺️ **Sitemap aware:** `@nuxtjs/sitemap` reads Collections through the manifest and lists them as its own data source.
+
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/comark-content
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/comark-content
+> ```
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['@harlan-zw/comark-content'],
+})
+```
+
+The module reads the `content` configuration key.
 
 ## Boundary
 
@@ -17,21 +64,6 @@ The module supports page collections of Markdown files only.
 | Rangi code highlighting | Shiki, MDC nodes, `@nuxtjs/mdc`, runtime Markdown parsing |
 
 If you configure `database`, the build fails with an explicit error.
-
-## Setup
-
-```bash
-pnpm add @harlan-zw/comark-content
-```
-
-```ts
-// nuxt.config.ts
-export default defineNuxtConfig({
-  modules: ['@harlan-zw/comark-content'],
-})
-```
-
-The module uses the `content` configuration key.
 
 ## Collections
 
@@ -191,7 +223,27 @@ snippets: defineCollection({
 Parsed collections are written as gzip server assets. Navigation, surroundings, and search use content-addressed GET routes. The route key hashes the parsed content only. A redeploy that changes no content keeps the same routes, so clients running the previous build keep working.
 
 Cloudflare presets require `@harlan-zw/nuxt-cloudflare` with Workers Caching enabled. The build fails otherwise.
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
 
 ## License
 
-[MIT](./LICENSE.md)
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/comark-content/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fcomark-content/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/comark-content
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fcomark-content.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/comark-content
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/comark-content/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

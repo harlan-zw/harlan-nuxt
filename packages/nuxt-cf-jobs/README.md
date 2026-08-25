@@ -27,15 +27,23 @@ Status: experimental. APIs may change before the first scoped release.
 - ⏰ **Scheduled tasks:** declare the cron beside the task and generate Nitro and Cloudflare scheduling config from it.
 - 📡 **Realtime progress:** publish job and batch events over Nitro WebSockets and a Durable Object.
 
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/nuxt-cf-jobs
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-cf-jobs
+> ```
+
 ## Quick start
 
 The basic path sends a typed message directly to Cloudflare Queues. D1 is optional and covered under [Durable jobs](#durable-jobs).
 
-### 1. Install the module
-
-```bash
-pnpm add @harlan-zw/nuxt-cf-jobs
-```
+### 1. Map your queues
 
 Map each logical queue name to the binding exposed by Cloudflare:
 

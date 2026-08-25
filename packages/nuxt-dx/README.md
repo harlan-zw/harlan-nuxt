@@ -33,6 +33,12 @@ Status: experimental. APIs may change before the first release.
 pnpm add -D @harlan-zw/nuxt-dx
 ```
 
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-dx
+> ```
+
 ```ts
 export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-dx'],
