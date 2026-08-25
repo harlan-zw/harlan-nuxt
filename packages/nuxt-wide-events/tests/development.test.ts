@@ -182,6 +182,66 @@ describe('formatDevelopmentWideEvent', () => {
 })
 
 describe('writeDevelopmentWideEvent', () => {
+  it('colors error output when stderr is a TTY even if stdout is not', () => {
+    vi.stubGlobal('process', {
+      env: {},
+      stdout: { isTTY: false, write: () => true },
+      stderr: { isTTY: true, write: () => true },
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level: 'error',
+        method: 'GET',
+        path: '/api/cart',
+        status: 500,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining('\u001B[38;2;243;139;168mERROR\u001B[0m'),
+      )
+    }
+    finally {
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('keeps error output plain when stderr is not a TTY', () => {
+    vi.stubGlobal('process', {
+      env: {},
+      stdout: { isTTY: false, write: () => true },
+      stderr: { isTTY: false, write: () => true },
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level: 'error',
+        method: 'GET',
+        path: '/api/cart',
+        status: 500,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+        expect.not.stringContaining('\u001B['),
+      )
+    }
+    finally {
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it.each([
     ['debug', 'debug'],
     ['info', 'info'],
