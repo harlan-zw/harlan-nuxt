@@ -14,6 +14,8 @@ export interface DevelopmentWideEventRecord extends Record<string, string | numb
 
 interface DevelopmentWideEventFormatOptions {
   colors?: boolean
+  target?: 'stdout' | 'stderr'
+  includeLevel?: boolean
 }
 
 interface DevelopmentValueField {
@@ -59,7 +61,7 @@ export function formatDevelopmentWideEvent(
   record: DevelopmentWideEventRecord,
   options: DevelopmentWideEventFormatOptions = {},
 ): string {
-  const colors = options.colors ?? supportsColor()
+  const colors = options.colors ?? supportsColor(options.target ?? 'stdout')
   const message = typeof record.devMessage === 'string'
     ? safeTerminalText(record.devMessage)
     : undefined
@@ -68,10 +70,9 @@ export function formatDevelopmentWideEvent(
   const tag = safeTerminalText(record.service ?? scope ?? 'Wide Event')
   const level = record.level.toUpperCase()
   const request = record.kind === 'request'
-  const header = [
-    paint(level, levelColor(record.level), colors),
-    paint(`[${tag}]`, ANSI.mauve, colors),
-  ]
+  const header = options.includeLevel === false
+    ? [paint(`[${tag}]`, ANSI.mauve, colors)]
+    : [paint(level, levelColor(record.level), colors), paint(`[${tag}]`, ANSI.mauve, colors)]
 
   if (request) {
     header.push(`${paint(safeTerminalText(record.method ?? ''), ANSI.blue, colors)} ${safeTerminalText(record.path ?? '')}`)
@@ -103,15 +104,23 @@ export function formatDevelopmentWideEvent(
   return lines.join('\n')
 }
 
-/** Write one development Wide Event without framework console decoration. */
+/** Write one development Wide Event through its matching Console level. */
 export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): void {
-  const output = formatDevelopmentWideEvent(record)
-  const stdout = runtimeProcess()?.stdout
-  if (stdout?.write) {
-    stdout.write(`${output}\n`)
-    return
+  const target: 'stdout' | 'stderr' = record.level === 'warn' || record.level === 'error' ? 'stderr' : 'stdout'
+  const output = formatDevelopmentWideEvent(record, { includeLevel: false, target })
+  switch (record.level) {
+    case 'debug':
+      console.debug(output)
+      return
+    case 'error':
+      console.error(output)
+      return
+    case 'info':
+      console.info(output)
+      return
+    case 'warn':
+      console.warn(output)
   }
-  console.log(output)
 }
 
 function formatField(field: DevelopmentField, last: boolean, colors: boolean): string[] {
@@ -233,20 +242,22 @@ function safeTerminalText(value: string): string {
   return output
 }
 
-function supportsColor(): boolean {
+function supportsColor(target: 'stdout' | 'stderr'): boolean {
   const process = runtimeProcess()
   if (process?.env.NO_COLOR !== undefined)
     return false
-  const stdout = process?.stdout
-  return stdout?.isTTY === true || stdout?.write === undefined
+  const stream = target === 'stderr' ? process?.stderr : process?.stdout
+  return stream?.isTTY === true || stream?.write === undefined
 }
 
 function runtimeProcess(): {
   env: Record<string, string | undefined>
   stdout?: { isTTY?: boolean, write?: (output: string) => unknown }
+  stderr?: { isTTY?: boolean, write?: (output: string) => unknown }
 } | undefined {
   return Reflect.get(globalThis, 'process') as {
     env: Record<string, string | undefined>
     stdout?: { isTTY?: boolean, write?: (output: string) => unknown }
+    stderr?: { isTTY?: boolean, write?: (output: string) => unknown }
   } | undefined
 }
