@@ -103,15 +103,22 @@ export function formatDevelopmentWideEvent(
   return lines.join('\n')
 }
 
-/** Write one development Wide Event without framework console decoration. */
+/** Write one development Wide Event through its matching Console level. */
 export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): void {
   const output = formatDevelopmentWideEvent(record)
-  const stdout = runtimeProcess()?.stdout
-  if (stdout?.write) {
-    stdout.write(`${output}\n`)
-    return
+  switch (record.level) {
+    case 'debug':
+      console.debug(output)
+      return
+    case 'error':
+      console.error(output)
+      return
+    case 'info':
+      console.info(output)
+      return
+    case 'warn':
+      console.warn(output)
   }
-  console.log(output)
 }
 
 function formatField(field: DevelopmentField, last: boolean, colors: boolean): string[] {

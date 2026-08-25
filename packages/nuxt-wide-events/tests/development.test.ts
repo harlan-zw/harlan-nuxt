@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { enrichDevelopmentWideEvent, formatDevelopmentWideEvent } from '../src/runtime/server/development'
+import { enrichDevelopmentWideEvent, formatDevelopmentWideEvent, writeDevelopmentWideEvent } from '../src/runtime/server/development'
 
 describe('enrichDevelopmentWideEvent', () => {
   it('adds error details only to a development record', () => {
@@ -178,5 +178,47 @@ describe('formatDevelopmentWideEvent', () => {
     }, { colors: false })).toBe([
       'INFO [Wide Event] UNKNOWN /webdav/files 405 2ms · requestId: req_3',
     ].join('\n'))
+  })
+})
+
+describe('writeDevelopmentWideEvent', () => {
+  it.each([
+    ['debug', 'debug'],
+    ['info', 'info'],
+    ['warn', 'warn'],
+    ['error', 'error'],
+  ] as const)('writes %s records through console.%s', (level, method) => {
+    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    const consoleWrites = {
+      debug: vi.spyOn(console, 'debug').mockImplementation(() => {}),
+      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+    }
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level,
+        method: 'GET',
+        path: '/api/cart',
+        status: 200,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+
+      expect(consoleWrites[method]).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`${level.toUpperCase()} [Wide Event] GET /api/cart 200 1ms`),
+      )
+      expect(stdoutWrite).not.toHaveBeenCalled()
+      for (const [name, write] of Object.entries(consoleWrites)) {
+        if (name !== method)
+          expect(write).not.toHaveBeenCalled()
+      }
+    }
+    finally {
+      vi.restoreAllMocks()
+    }
   })
 })
