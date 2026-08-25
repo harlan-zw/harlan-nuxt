@@ -24,6 +24,51 @@ describe('enrichDevelopmentWideEvent', () => {
 })
 
 describe('formatDevelopmentWideEvent', () => {
+  it('uses a subtle pastel palette for request syntax', () => {
+    const blue = '\u001B[38;2;137;180;250m'
+    const green = '\u001B[38;2;166;227;161m'
+    const mauve = '\u001B[38;2;203;166;247m'
+    const muted = '\u001B[38;2;147;153;178m'
+    const reset = '\u001B[0m'
+    const teal = '\u001B[38;2;148;226;213m'
+
+    expect(formatDevelopmentWideEvent({
+      'timestamp': '2026-08-14T08:28:15.225Z',
+      'kind': 'request',
+      'level': 'info',
+      'service': 'shop',
+      'method': 'GET',
+      'path': '/cart',
+      'status': 200,
+      'durationMs': 2,
+      'requestId': 'req_1',
+      'cf.colo': 'SYD',
+    }, { colors: true })).toBe(
+      `${blue}INFO${reset} ${mauve}[shop]${reset} ${blue}GET${reset} /cart ${green}200${reset} ${muted}2ms${reset} ${muted}·${reset} ${teal}cf:${reset} ${blue}colo${reset}${muted}=${reset}SYD ${muted}·${reset} ${teal}requestId:${reset} req_1`,
+    )
+  })
+
+  it('keeps successful request output compact', () => {
+    expect(formatDevelopmentWideEvent({
+      'timestamp': '2026-08-14T08:28:15.225Z',
+      'kind': 'request',
+      'level': 'info',
+      'service': 'nuxtseo-pro',
+      'method': 'GET',
+      'path': '/**',
+      'status': 200,
+      'durationMs': 144,
+      'requestId': '7d24a411-02f4-4a8d-b5b7-353d937cd0a4',
+      'cf.colo': 'SYD',
+      'cf.country': 'AU',
+      'cf.httpProtocol': 'HTTP/1.1',
+      'd1.queries': null,
+      'd1.durationMs': null,
+    }, { colors: false })).toBe([
+      'INFO [nuxtseo-pro] GET /** 200 144ms · cf: colo=SYD, country=AU, httpProtocol=HTTP/1.1 · requestId: 7d24a411-02f4-4a8d-b5b7-353d937cd0a4',
+    ].join('\n'))
+  })
+
   it('keeps redirected output free of terminal color codes', () => {
     const isTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
     const noColor = process.env.NO_COLOR
@@ -56,8 +101,7 @@ describe('formatDevelopmentWideEvent', () => {
     })()
 
     expect(output).toBe([
-      '08:28:15.225 INFO [Wide Event] GET /api/cart 200 in 1ms',
-      '  └─ requestId: req_1',
+      'INFO [Wide Event] GET /api/cart 200 1ms · requestId: req_1',
     ].join('\n'))
   })
 
@@ -71,11 +115,10 @@ describe('formatDevelopmentWideEvent', () => {
       durationMs: 0.155,
       requestId: 'req_1',
     }, { colors: false })).toBe([
-      '08:28:15.225 DEBUG [ssr] server fetch completed',
+      'DEBUG [ssr] server fetch completed · requestId: req_1',
       '  fetch   : GET /api/_auth/session',
       '  duration: 16ms',
       '  request : GET /',
-      '  └─ requestId: req_1',
     ].join('\n'))
   })
 
@@ -91,10 +134,10 @@ describe('formatDevelopmentWideEvent', () => {
       'durationMs': 16.4,
       'requestId': 'req_2',
       'cart.itemCount': 2,
+      'cart.total': 40,
     }, { colors: false })).toBe([
-      '08:28:15.225 WARN [shop] GET /api/cart 429 in 16ms',
-      '  ├─ cart.itemCount: 2',
-      '  └─ requestId: req_2',
+      'WARN [shop] GET /api/cart 429 16ms · requestId: req_2',
+      '  └─ cart: itemCount=2, total=40',
     ].join('\n'))
   })
 
@@ -109,8 +152,7 @@ describe('formatDevelopmentWideEvent', () => {
       durationMs: 2,
       requestId: 'req_3',
     }, { colors: false })).toBe([
-      '08:28:15.225 INFO [Wide Event] UNKNOWN /webdav/files 405 in 2ms',
-      '  └─ requestId: req_3',
+      'INFO [Wide Event] UNKNOWN /webdav/files 405 2ms · requestId: req_3',
     ].join('\n'))
   })
 })

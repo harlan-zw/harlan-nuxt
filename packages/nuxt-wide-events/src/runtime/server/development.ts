@@ -16,14 +16,29 @@ interface DevelopmentWideEventFormatOptions {
   colors?: boolean
 }
 
+interface DevelopmentValueField {
+  _tag: 'Value'
+  key: string
+  value: string | number | boolean
+}
+
+interface DevelopmentGroupField {
+  _tag: 'Group'
+  key: string
+  values: Array<{ key: string, value: string | number | boolean }>
+}
+
+type DevelopmentField = DevelopmentValueField | DevelopmentGroupField
+
 const ANSI = {
-  cyan: '\u001B[36m',
-  dim: '\u001B[2m',
-  gray: '\u001B[90m',
-  green: '\u001B[32m',
-  red: '\u001B[31m',
+  blue: '\u001B[38;2;137;180;250m',
+  green: '\u001B[38;2;166;227;161m',
+  mauve: '\u001B[38;2;203;166;247m',
+  muted: '\u001B[38;2;147;153;178m',
+  peach: '\u001B[38;2;250;179;135m',
+  red: '\u001B[38;2;243;139;168m',
   reset: '\u001B[0m',
-  yellow: '\u001B[33m',
+  teal: '\u001B[38;2;148;226;213m',
 } as const
 
 export function enrichDevelopmentWideEvent(record: WideEventRecord, error: unknown): DevelopmentWideEventRecord {
@@ -54,32 +69,35 @@ export function formatDevelopmentWideEvent(
   const level = record.level.toUpperCase()
   const request = record.kind === 'request'
   const header = [
-    paint(formatTimestamp(record.timestamp), ANSI.dim, colors),
     paint(level, levelColor(record.level), colors),
-    paint(`[${tag}]`, ANSI.cyan, colors),
+    paint(`[${tag}]`, ANSI.mauve, colors),
   ]
 
   if (request) {
-    header.push(`${safeTerminalText(record.method ?? '')} ${safeTerminalText(record.path ?? '')}`)
-    header.push(paint(String(record.status), (record.status ?? 0) >= 400 ? ANSI.red : ANSI.green, colors))
-    header.push(paint(`in ${formatDuration(record.durationMs)}`, ANSI.dim, colors))
+    header.push(`${paint(safeTerminalText(record.method ?? ''), ANSI.blue, colors)} ${safeTerminalText(record.path ?? '')}`)
+    header.push(paint(String(record.status), statusColor(record.status), colors))
+    header.push(paint(formatDuration(record.durationMs), ANSI.muted, colors))
   }
   if (messageLines?.[0])
     header.push(messageLines[0])
+
+  const fields = Object.entries(record)
+    .filter(([key, value]) => value !== undefined && value !== null && !isHeaderField(key))
+    .filter(([key]) => key !== 'devMessage' && !(key === 'scope' && scope !== undefined))
+  const groupedFields = groupFields(fields.filter(([key]) => key !== 'requestId'))
+  // Cloudflare context exists on every edge request, so keep it with the request metadata.
+  const cloudflare = groupedFields.find(field => field.key === 'cf')
+  if (cloudflare)
+    header.push(formatHeadlineField(cloudflare, colors))
+  header.push(formatHeadlineField({ _tag: 'Value', key: 'requestId', value: record.requestId }, colors))
 
   const lines = [header.join(' ')]
   if (messageLines && messageLines.length > 1)
     lines.push(...indentMessageLines(messageLines.slice(1)))
 
-  const fields = Object.entries(record)
-    .filter(([key, value]) => value !== undefined && !isHeaderField(key))
-    .filter(([key]) => key !== 'devMessage' && !(key === 'scope' && scope !== undefined))
-    .sort(([left], [right]) => Number(left === 'requestId') - Number(right === 'requestId'))
-
-  for (const [index, [key, value]] of fields.entries()) {
-    if (value === undefined)
-      continue
-    lines.push(...formatField(key, value, index === fields.length - 1, colors))
+  const detailFields = groupedFields.filter(field => field.key !== 'cf')
+  for (const [index, field] of detailFields.entries()) {
+    lines.push(...formatField(field, index === detailFields.length - 1, colors))
   }
 
   return lines.join('\n')
@@ -96,18 +114,50 @@ export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): v
   console.log(output)
 }
 
-function formatField(key: string, value: string | number | boolean | null, last: boolean, colors: boolean): string[] {
+function formatField(field: DevelopmentField, last: boolean, colors: boolean): string[] {
   const branch = last ? '└─' : '├─'
   const continuation = last ? '  ' : '│ '
-  const valueLines = safeTerminalText(String(value)).split('\n')
+  const valueLines = formatFieldValue(field, colors).split('\n')
   return [
-    `  ${paint(branch, ANSI.dim, colors)} ${paint(`${safeTerminalText(key)}:`, ANSI.cyan, colors)} ${valueLines[0] ?? ''}`,
-    ...valueLines.slice(1).map(line => `  ${paint(continuation, ANSI.dim, colors)}   ${line}`),
+    `  ${paint(branch, ANSI.muted, colors)} ${paint(`${safeTerminalText(field.key)}:`, ANSI.teal, colors)} ${valueLines[0] ?? ''}`,
+    ...valueLines.slice(1).map(line => `  ${paint(continuation, ANSI.muted, colors)}   ${line}`),
   ]
 }
 
-function formatTimestamp(timestamp: string): string {
-  return timestamp.length >= 23 ? timestamp.slice(11, 23) : safeTerminalText(timestamp)
+function formatHeadlineField(field: DevelopmentField, colors: boolean): string {
+  return `${paint('·', ANSI.muted, colors)} ${paint(`${field.key}:`, ANSI.teal, colors)} ${formatFieldValue(field, colors)}`
+}
+
+function formatFieldValue(field: DevelopmentField, colors: boolean): string {
+  if (field._tag === 'Value')
+    return safeTerminalText(String(field.value))
+  return field.values
+    .map(({ key, value }) => `${paint(safeTerminalText(key), ANSI.blue, colors)}${paint('=', ANSI.muted, colors)}${safeTerminalText(String(value))}`)
+    .join(paint(', ', ANSI.muted, colors))
+}
+
+function groupFields(fields: Array<[string, string | number | boolean | null | undefined]>): DevelopmentField[] {
+  const groups = new Map<string, DevelopmentGroupField>()
+  const values: DevelopmentValueField[] = []
+
+  for (const [key, value] of fields) {
+    if (value === null || value === undefined)
+      continue
+    const separator = key.indexOf('.')
+    if (separator < 1) {
+      values.push({ _tag: 'Value', key, value })
+      continue
+    }
+    const group = key.slice(0, separator)
+    const child = key.slice(separator + 1)
+    const grouped = groups.get(group)
+    if (grouped)
+      grouped.values.push({ key: child, value })
+    else
+      groups.set(group, { _tag: 'Group', key: group, values: [{ key: child, value }] })
+  }
+
+  return [...groups.values(), ...values]
 }
 
 function formatDuration(durationMs: number): string {
@@ -145,14 +195,26 @@ function isHeaderField(field: string): boolean {
 function levelColor(level: WideEventLevel): string {
   switch (level) {
     case 'debug':
-      return ANSI.gray
+      return ANSI.muted
     case 'error':
       return ANSI.red
     case 'warn':
-      return ANSI.yellow
+      return ANSI.peach
     default:
-      return ANSI.cyan
+      return ANSI.blue
   }
+}
+
+function statusColor(status: number | undefined): string {
+  if (status === undefined)
+    return ANSI.muted
+  if (status >= 500)
+    return ANSI.red
+  if (status >= 400)
+    return ANSI.peach
+  if (status >= 300)
+    return ANSI.blue
+  return ANSI.green
 }
 
 function paint(value: string, color: string, enabled: boolean): string {
