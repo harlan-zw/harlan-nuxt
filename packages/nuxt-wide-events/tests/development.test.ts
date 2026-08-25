@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { enrichDevelopmentWideEvent, formatDevelopmentWideEvent } from '../src/runtime/server/development'
 
 describe('enrichDevelopmentWideEvent', () => {
@@ -103,6 +103,30 @@ describe('formatDevelopmentWideEvent', () => {
     expect(output).toBe([
       'INFO [Wide Event] GET /api/cart 200 1ms · requestId: req_1',
     ].join('\n'))
+  })
+
+  it('keeps terminal colors through a worker console transport', () => {
+    vi.stubGlobal('process', { env: {}, stdout: undefined })
+
+    const output = (() => {
+      try {
+        return formatDevelopmentWideEvent({
+          timestamp: '2026-08-14T08:28:15.225Z',
+          kind: 'request',
+          level: 'info',
+          method: 'GET',
+          path: '/api/cart',
+          status: 200,
+          durationMs: 1,
+          requestId: 'req_1',
+        })
+      }
+      finally {
+        vi.unstubAllGlobals()
+      }
+    })()
+
+    expect(output).toContain('\u001B[38;2;137;180;250mINFO\u001B[0m')
   })
 
   it('renders a background developer message as a compact terminal block', () => {

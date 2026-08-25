@@ -235,7 +235,10 @@ function safeTerminalText(value: string): string {
 
 function supportsColor(): boolean {
   const process = runtimeProcess()
-  return process !== undefined && process.env.NO_COLOR === undefined && process.stdout?.isTTY === true
+  if (process?.env.NO_COLOR !== undefined)
+    return false
+  const stdout = process?.stdout
+  return stdout?.isTTY === true || stdout?.write === undefined
 }
 
 function runtimeProcess(): {
