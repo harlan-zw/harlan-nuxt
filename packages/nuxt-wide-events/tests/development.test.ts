@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { enrichDevelopmentWideEvent, formatDevelopmentWideEvent } from '../src/runtime/server/development'
+import { enrichDevelopmentWideEvent, formatDevelopmentWideEvent, writeDevelopmentWideEvent } from '../src/runtime/server/development'
 
 describe('enrichDevelopmentWideEvent', () => {
   it('adds error details only to a development record', () => {
@@ -178,5 +178,36 @@ describe('formatDevelopmentWideEvent', () => {
     }, { colors: false })).toBe([
       'INFO [Wide Event] UNKNOWN /webdav/files 405 2ms · requestId: req_3',
     ].join('\n'))
+  })
+})
+
+describe('writeDevelopmentWideEvent', () => {
+  it('uses the app console so Nuxt can attribute the log to its request', () => {
+    const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    let consoleCalls = 0
+    let stdoutCalls = 0
+
+    try {
+      writeDevelopmentWideEvent({
+        timestamp: '2026-08-14T08:28:15.225Z',
+        kind: 'request',
+        level: 'info',
+        method: 'GET',
+        path: '/api/cart',
+        status: 200,
+        durationMs: 1,
+        requestId: 'req_1',
+      })
+    }
+    finally {
+      consoleCalls = consoleLog.mock.calls.length
+      stdoutCalls = stdoutWrite.mock.calls.length
+      consoleLog.mockRestore()
+      stdoutWrite.mockRestore()
+    }
+
+    expect(consoleCalls).toBe(1)
+    expect(stdoutCalls).toBe(0)
   })
 })

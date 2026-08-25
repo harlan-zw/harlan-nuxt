@@ -103,15 +103,9 @@ export function formatDevelopmentWideEvent(
   return lines.join('\n')
 }
 
-/** Write one development Wide Event without framework console decoration. */
+/** Write through the app console so Nuxt can attribute the log to its request. */
 export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): void {
-  const output = formatDevelopmentWideEvent(record)
-  const stdout = runtimeProcess()?.stdout
-  if (stdout?.write) {
-    stdout.write(`${output}\n`)
-    return
-  }
-  console.log(output)
+  console.log(formatDevelopmentWideEvent(record))
 }
 
 function formatField(field: DevelopmentField, last: boolean, colors: boolean): string[] {
