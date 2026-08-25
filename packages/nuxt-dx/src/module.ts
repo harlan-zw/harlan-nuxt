@@ -1,4 +1,5 @@
 import type { Nuxt, NuxtApp } from '@nuxt/schema'
+import type { DiagnosticOutput } from './diagnostic-output'
 import type { DiagnosticIssue } from './runtime/app/report'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
 import type { ModuleOwner } from './size-budget/module-owner'
@@ -8,7 +9,8 @@ import type { RuntimeEntry } from './size-budget/targets'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
-import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
+import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger, useTerminal } from '@nuxt/kit'
+import { createDiagnosticOutput } from './diagnostic-output'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { createOverrideUsage } from './size-budget/override-usage'
@@ -92,9 +94,7 @@ interface ResolvedBudgets {
   fail: boolean
 }
 
-const logger = useLogger('nuxt-dx')
-
-function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
+function resolveBudgets(options: SizeBudgetOptions, output: DiagnosticOutput): ResolvedBudgets {
   const resolve = (kilobytes: number | false | undefined, fallback: number, label: string) => {
     if (kilobytes === false)
       return undefined
@@ -102,7 +102,7 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
       return kilobytesToBytes(fallback)
     // A negative or NaN budget would flag everything, so drop it rather than drown the build in warnings.
     if (!Number.isFinite(kilobytes) || kilobytes < 0) {
-      logger.warn(`Ignoring \`sizeBudget.${label}\`: expected a non-negative number of kilobytes, received ${kilobytes}`)
+      output.warn(`Ignoring \`sizeBudget.${label}\`: expected a non-negative number of kilobytes, received ${kilobytes}`)
       return undefined
     }
     return kilobytesToBytes(kilobytes)
@@ -111,7 +111,7 @@ function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
   const overrides: ResolvedBudgets['overrides'] = []
   for (const [fragment, kilobytes] of Object.entries(options.overridesKb ?? {})) {
     if (!Number.isFinite(kilobytes) || kilobytes < 0)
-      logger.warn(`Ignoring \`sizeBudget.overridesKb['${fragment}']\`: expected a non-negative number of kilobytes, received ${kilobytes}`)
+      output.warn(`Ignoring \`sizeBudget.overridesKb['${fragment}']\`: expected a non-negative number of kilobytes, received ${kilobytes}`)
     else overrides.push({ fragment, bytes: kilobytesToBytes(kilobytes) })
   }
 
@@ -151,7 +151,7 @@ async function readPluginName(src: string, nuxt: Nuxt): Promise<string | undefin
  * Measurement only knows paths. Plugin names are reconciled here, once, for the plugins big
  * enough to be at risk, so a build where everything fits parses no plugin sources at all.
  */
-function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBudgets, nuxt: Nuxt, named: boolean) {
+function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBudgets, nuxt: Nuxt, named: boolean, output: DiagnosticOutput) {
   const threshold = smallestBudget(defaultBytes, budgets.overrides)
   return async (measured: readonly MeasuredTarget[]) => {
     const candidates = measured.filter(entry => entry.measurement.totalBytes > threshold)
@@ -173,7 +173,7 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
     const report = formatBudgetReport(scope, over, reportBaseDir(nuxt))
     if (budgets.fail)
       throw new Error(`[nuxt-dx] ${report}`)
-    logger.warn(report)
+    output.warn(report)
   }
 }
 
@@ -218,12 +218,12 @@ function runtimeEntries(scope: BudgetScope, paths: readonly string[], owners: re
   return paths.map(path => ({ scope, path, owner: moduleOwnerOf(path, owners) }))
 }
 
-function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined): void {
-  const budgets = resolveBudgets(options)
+function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined, output: DiagnosticOutput): void {
+  const budgets = resolveBudgets(options, output)
   const enabledScopes = BUDGET_SCOPES.filter(scope => budgets.byScope[scope] !== undefined)
 
   if (reportPath !== undefined && !enabledScopes.length)
-    logger.warn('`nuxtDx.report` is on, but every size budget is disabled, so there is nothing to measure.')
+    output.warn('`nuxtDx.report` is on, but every size budget is disabled, so there is nothing to measure.')
 
   const writeSnapshot = reportPath === undefined
     ? undefined
@@ -257,7 +257,7 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
     if (!unused.length)
       return
     const keys = unused.map(fragment => `\`${fragment}\``).join(', ')
-    logger.warn(`${unused.length} \`sizeBudget.overridesKb\` key${unused.length === 1 ? '' : 's'} matched no runtime entry: ${keys}. Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.`)
+    output.warn(`${unused.length} \`sizeBudget.overridesKb\` key${unused.length === 1 ? '' : 's'} matched no runtime entry: ${keys}. Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.`)
   }
 
   /**
@@ -266,18 +266,22 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
    * still leaves the artifact behind.
    */
   const onMeasured = (scopes: readonly BudgetScope[]) => {
+    const bundle = scopes.some(scope => scope === 'client' || scope === 'client-middleware') ? 'client' : 'server'
     const reports = new Map(scopes.map((scope) => {
       const defaultBytes = budgets.byScope[scope]!
-      return [scope, reporter(scope, defaultBytes, budgets, nuxt, scope === 'client')] as const
+      return [scope, reporter(scope, defaultBytes, budgets, nuxt, scope === 'client', output)] as const
     }))
-    return async (measured: readonly MeasuredTarget[]) => {
+    return async (measured: readonly MeasuredTarget[]) => output.runTask({
+      start: `Checking ${bundle} runtime size budgets`,
+      success: `Checked ${bundle} runtime size budgets`,
+    }, async () => {
       for (const scope of scopes) {
         const entries = measured.filter(target => target.scope === scope)
         await writeSnapshot?.(scope, entries)
         await reports.get(scope)!(entries)
       }
       await trackOverrides(measured)
-    }
+    })
   }
 
   // `app:resolve` holds app and module registrations before the client build starts.
@@ -351,11 +355,12 @@ export default defineNuxtModule<ModuleOptions>({
     if (!options.enabled)
       return
 
+    const output = createDiagnosticOutput(useTerminal(), useLogger('nuxt-dx'))
     const reportPath = resolveReportPath(options.report)
     if (options.sizeBudget !== false)
-      setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath)
+      setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath, output)
     else if (reportPath !== undefined)
-      logger.warn('`nuxtDx.report` is on, but `nuxtDx.sizeBudget` is `false`, so there is nothing to measure.')
+      output.warn('`nuxtDx.report` is on, but `nuxtDx.sizeBudget` is `false`, so there is nothing to measure.')
 
     addTypeTemplate({
       filename: 'types/nuxt-dx.d.ts',

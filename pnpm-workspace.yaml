@@ -11,7 +11,7 @@ catalog:
   '@cloudflare/workers-types': ^5.20260811.1
   '@sentry/cloudflare': ^10.70.0
   '@sentry/nuxt': ^10.70.0
-  '@nuxt/kit': ^4.5.2
+  '@nuxt/kit': https://pkg.pr.new/@nuxt/kit@36162
   '@nuxt/module-builder': ^1.0.2
   '@nuxt/schema': ^4.5.2
   '@nuxt/test-utils': ^4.1.0
