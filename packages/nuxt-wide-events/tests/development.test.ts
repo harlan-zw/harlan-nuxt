@@ -203,7 +203,7 @@ describe('writeDevelopmentWideEvent', () => {
       })
 
       expect(consoleError).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('\u001B[38;2;243;139;168mERROR\u001B[0m'),
+        expect.stringContaining('\u001B[38;2;243;139;168m500\u001B[0m'),
       )
     }
     finally {
@@ -261,6 +261,7 @@ describe('writeDevelopmentWideEvent', () => {
         timestamp: '2026-08-14T08:28:15.225Z',
         kind: 'request',
         level,
+        service: 'shop',
         method: 'GET',
         path: '/api/cart',
         status: 200,
@@ -269,7 +270,7 @@ describe('writeDevelopmentWideEvent', () => {
       })
 
       expect(consoleWrites[method]).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(`${level.toUpperCase()} [Wide Event] GET /api/cart 200 1ms`),
+        '[shop] GET /api/cart 200 1ms · requestId: req_1',
       )
       expect(stdoutWrite).not.toHaveBeenCalled()
       for (const [name, write] of Object.entries(consoleWrites)) {

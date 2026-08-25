@@ -15,6 +15,7 @@ export interface DevelopmentWideEventRecord extends Record<string, string | numb
 interface DevelopmentWideEventFormatOptions {
   colors?: boolean
   target?: 'stdout' | 'stderr'
+  includeLevel?: boolean
 }
 
 interface DevelopmentValueField {
@@ -69,10 +70,9 @@ export function formatDevelopmentWideEvent(
   const tag = safeTerminalText(record.service ?? scope ?? 'Wide Event')
   const level = record.level.toUpperCase()
   const request = record.kind === 'request'
-  const header = [
-    paint(level, levelColor(record.level), colors),
-    paint(`[${tag}]`, ANSI.mauve, colors),
-  ]
+  const header = options.includeLevel === false
+    ? [paint(`[${tag}]`, ANSI.mauve, colors)]
+    : [paint(level, levelColor(record.level), colors), paint(`[${tag}]`, ANSI.mauve, colors)]
 
   if (request) {
     header.push(`${paint(safeTerminalText(record.method ?? ''), ANSI.blue, colors)} ${safeTerminalText(record.path ?? '')}`)
@@ -107,7 +107,7 @@ export function formatDevelopmentWideEvent(
 /** Write one development Wide Event through its matching Console level. */
 export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): void {
   const target: 'stdout' | 'stderr' = record.level === 'warn' || record.level === 'error' ? 'stderr' : 'stdout'
-  const output = formatDevelopmentWideEvent(record, { target })
+  const output = formatDevelopmentWideEvent(record, { includeLevel: false, target })
   switch (record.level) {
     case 'debug':
       console.debug(output)
