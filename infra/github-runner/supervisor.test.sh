@@ -5,7 +5,8 @@ set -euo pipefail
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 
-mkdir -p "$test_root/bin" "$test_root/runtime" "$test_root/calls"
+mkdir -p "$test_root/bin" "$test_root/runtime" "$test_root/calls" "$test_root/credentials"
+printf 'repository-token\n' >"$test_root/credentials/github-harlan-zw-token"
 
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|1|2|1|1g|2g
@@ -13,6 +14,10 @@ EOF
 
 cat >"$test_root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
+if [[ "${GH_TOKEN:-}" != repository-token ]]; then
+  printf 'Expected the repository credential.\n' >&2
+  exit 1
+fi
 if [[ "$*" == *registration-token* ]]; then
   printf 'test-token\n'
 fi
@@ -91,6 +96,7 @@ set +e
 TEST_CALLS="$test_root/calls" \
 PATH="$test_root/bin:$PATH" \
 XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
 HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \

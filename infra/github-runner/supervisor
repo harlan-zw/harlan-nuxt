@@ -129,6 +129,40 @@ require_command() {
   fi
 }
 
+# Use one repository-owner credential when systemd supplies scoped credentials.
+# The desktop user service keeps using its existing gh authentication.
+github_api() {
+  local argument endpoint='' repository owner credential
+
+  if [[ -z "${CREDENTIALS_DIRECTORY:-}" ]]; then
+    gh api "$@"
+    return
+  fi
+
+  for argument in "$@"; do
+    if [[ "$argument" == repos/*/actions/runners* ]]; then
+      endpoint="$argument"
+      break
+    fi
+  done
+
+  if [[ -z "$endpoint" ]]; then
+    log "GitHub API request has no runner repository endpoint"
+    return 1
+  fi
+
+  repository="${endpoint#repos/}"
+  owner="${repository%%/*}"
+  credential="$CREDENTIALS_DIRECTORY/github-$owner-token"
+
+  if [[ ! -r "$credential" ]]; then
+    log "GitHub credential is unavailable for owner: $owner"
+    return 1
+  fi
+
+  GH_TOKEN="$(<"$credential")" gh api "$@"
+}
+
 # `harlan-zw/nuxtseo.com` + `harlan-desktop-ci` -> `nuxtseo-com-ci`. Used for container
 # names and the Docker pool label, both of which reject `/` and `.`.
 #
@@ -312,7 +346,7 @@ run_container() {
   local line
   local -a pipe_status=()
 
-  if ! registration_token="$(gh api \
+  if ! registration_token="$(github_api \
     --method POST \
     "repos/$repository/actions/runners/registration-token" \
     --jq .token 2>/dev/null)"; then
@@ -528,7 +562,7 @@ prune_offline_runners() {
 
   # The listing is captured before it is split, so a failed call is told apart
   # from a repository with nothing offline. On failure the markers must survive.
-  if ! listing="$(gh api --paginate \
+  if ! listing="$(github_api --paginate \
     "repos/$repository/actions/runners" \
     --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null)"; then
     return 0
@@ -558,7 +592,7 @@ prune_offline_runners() {
   done
 
   for runner_id in "${confirmed_ids[@]}"; do
-    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    github_api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
     rm --force "$marker_dir/$runner_id"
   done
 
