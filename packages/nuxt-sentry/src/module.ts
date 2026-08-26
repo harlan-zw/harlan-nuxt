@@ -15,7 +15,7 @@ import {
 } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import { resolveReportPolicy } from './build/policy'
-import { checkSentryBuild, hasSentryAuthToken, resolveSentryBuildOptions } from './build/sentry-build'
+import { checkSentryBuild, hasSentryAuthToken, resolveSentryBuildOptions, uploadsSourceMaps } from './build/sentry-build'
 import { resolveRelease, resolveReportTarget } from './build/target'
 import { resolveWideEventDrain } from './build/wide-events'
 
@@ -169,7 +169,7 @@ export default defineNuxtModule<ModuleOptions>({
       ...nuxtOptions.sentry,
     }
 
-    if (sourceMaps && authTokenPresent) {
+    if (uploadsSourceMaps({ sourceMaps, hasAuthToken: authTokenPresent, release })) {
       // `hidden` emits the map and keeps the comment out of the served bundle.
       // `sourcemap.server` is left alone: `@harlan-zw/nuxt-cloudflare` derives
       // `upload_source_maps` from it, and turning it on here would change a
