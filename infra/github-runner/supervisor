@@ -734,7 +734,10 @@ main() {
   # so a restart does not fail the run it was in the middle of. That leaves its
   # memory and CPU unbudgeted for the rest of that one job.
   drain_leftover_containers
-  trap cleanup EXIT INT TERM
+  # A signal requests a normal shell exit. The EXIT trap owns the drain once,
+  # then the process ends instead of returning to its permanent `wait` below.
+  trap cleanup EXIT
+  trap 'exit 0' INT TERM
 
   local pool_index slot_number
   local -A pruned_repositories=()

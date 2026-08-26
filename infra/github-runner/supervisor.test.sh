@@ -101,13 +101,13 @@ HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
 HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS=30 \
-timeout 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
 status=$?
 set -e
 
-if (( status != 124 )); then
+if (( status != 0 )); then
   cat "$test_root/output"
-  printf 'Expected the supervisor test process to reach its timeout.\n' >&2
+  printf 'Expected SIGTERM to drain the supervisor and exit cleanly.\n' >&2
   exit 1
 fi
 
