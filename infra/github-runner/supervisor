@@ -129,6 +129,40 @@ require_command() {
   fi
 }
 
+# Use one repository-owner credential when systemd supplies scoped credentials.
+# The desktop user service keeps using its existing gh authentication.
+github_api() {
+  local argument endpoint='' repository owner credential
+
+  if [[ -z "${CREDENTIALS_DIRECTORY:-}" ]]; then
+    gh api "$@"
+    return
+  fi
+
+  for argument in "$@"; do
+    if [[ "$argument" == repos/*/actions/runners* ]]; then
+      endpoint="$argument"
+      break
+    fi
+  done
+
+  if [[ -z "$endpoint" ]]; then
+    log "GitHub API request has no runner repository endpoint"
+    return 1
+  fi
+
+  repository="${endpoint#repos/}"
+  owner="${repository%%/*}"
+  credential="$CREDENTIALS_DIRECTORY/github-$owner-token"
+
+  if [[ ! -r "$credential" ]]; then
+    log "GitHub credential is unavailable for owner: $owner"
+    return 1
+  fi
+
+  GH_TOKEN="$(<"$credential")" gh api "$@"
+}
+
 # `harlan-zw/nuxtseo.com` + `harlan-desktop-ci` -> `nuxtseo-com-ci`. Used for container
 # names and the Docker pool label, both of which reject `/` and `.`.
 #
@@ -275,6 +309,13 @@ release() {
 
   rm --force "$state_dir/spend/$container_name"
   rm --force "$state_dir/spend-memory/$container_name"
+
+  # A denied burst request stays pending. Wake the scaler when any job returns
+  # capacity, so another repository can use it without waiting for its current
+  # warm job to finish first.
+  if [[ -n "$scale_pipe" && -p "$scale_pipe" && ! -f "$state_dir/shutdown" ]]; then
+    printf 'capacity\n' >"$scale_pipe"
+  fi
 }
 
 # Stops a burst container that registered but never claimed anything. The runner
@@ -305,7 +346,7 @@ run_container() {
   local line
   local -a pipe_status=()
 
-  if ! registration_token="$(gh api \
+  if ! registration_token="$(github_api \
     --method POST \
     "repos/$repository/actions/runners/registration-token" \
     --jq .token 2>/dev/null)"; then
@@ -428,47 +469,68 @@ run_scaler() {
   local request pool_index container_name
   local burst_counter=0
   local slug live spent spent_memory
+  local pending_pool pending_count attempt
+  local -a pending_pools=()
+  local -A pool_is_pending=()
 
   while true; do
     while IFS=' ' read -r request pool_index; do
-      [[ "$request" == spawn ]] || continue
       [[ -f "$state_dir/shutdown" ]] && continue
 
-      slug="${pool_slug[$pool_index]}"
-      live=$(( pool_warm[pool_index] + $(count_markers "$state_dir/burst/$slug") ))
-      if (( live >= pool_max[pool_index] )); then
+      if [[ "$request" == spawn && -z "${pool_is_pending[$pool_index]:-}" ]]; then
+        pending_pools+=("$pool_index")
+        pool_is_pending[$pool_index]=true
+      elif [[ "$request" != capacity ]]; then
         continue
       fi
 
-      spent="$(sum_markers "$state_dir/spend")"
-      if (( spent + pool_cpus[pool_index] > cpu_budget )); then
-        log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
-        continue
-      fi
+      # Try each denied pool once. A pool that still cannot fit moves to the
+      # back, so repeated capacity changes distribute slots across repositories.
+      pending_count="${#pending_pools[@]}"
+      for (( attempt = 0; attempt < pending_count; attempt++ )); do
+        pending_pool="${pending_pools[0]}"
+        pending_pools=("${pending_pools[@]:1}")
+        slug="${pool_slug[$pending_pool]}"
+        live=$(( pool_warm[pending_pool] + $(count_markers "$state_dir/burst/$slug") ))
+        if (( live >= pool_max[pending_pool] )); then
+          unset 'pool_is_pending[$pending_pool]'
+          continue
+        fi
 
-      # Checked after CPU and never merged with it. A host can have cores to
-      # spare and no memory to back them, which is the case this exists for.
-      spent_memory="$(sum_markers "$state_dir/spend-memory")"
-      if (( spent_memory + pool_memory_gib[pool_index] > memory_budget_gib )); then
-        log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
-        continue
-      fi
+        spent="$(sum_markers "$state_dir/spend")"
+        if (( spent + pool_cpus[pending_pool] > cpu_budget )); then
+          log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
 
-      # A restart resets this counter while a spared burst container from the
-      # previous generation may still hold one of these names. Skip past it.
-      burst_counter=$(( burst_counter + 1 ))
-      container_name="harlan-desktop-$slug-burst-$burst_counter"
-      while docker container inspect "$container_name" >/dev/null 2>&1; do
+        # Checked after CPU and never merged with it. A host can have cores to
+        # spare and no memory to back them, which is the case this exists for.
+        spent_memory="$(sum_markers "$state_dir/spend-memory")"
+        if (( spent_memory + pool_memory_gib[pending_pool] > memory_budget_gib )); then
+          log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
+
+        unset 'pool_is_pending[$pending_pool]'
+
+        # A restart resets this counter while a spared burst container from the
+        # previous generation may still hold one of these names. Skip past it.
         burst_counter=$(( burst_counter + 1 ))
         container_name="harlan-desktop-$slug-burst-$burst_counter"
-      done
-      # Both reservations are written before the fork, so the next request in
-      # this loop already sees this container.
-      printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
-      reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
+        while docker container inspect "$container_name" >/dev/null 2>&1; do
+          burst_counter=$(( burst_counter + 1 ))
+          container_name="harlan-desktop-$slug-burst-$burst_counter"
+        done
+        # Both reservations are written before the fork, so the next request in
+        # this loop already sees this container.
+        printf '%s\n' "${pool_cpus[$pending_pool]}" >"$state_dir/burst/$slug/$container_name"
+        reserve "$container_name" "${pool_cpus[$pending_pool]}" "${pool_memory_gib[$pending_pool]}"
 
-      log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pool_index]}"
-      run_burst_slot "$pool_index" "$container_name" &
+        log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pending_pool]}"
+        run_burst_slot "$pending_pool" "$container_name" &
+      done
     done <"$scale_pipe"
     # The read loop ends only if every writer closes the pipe. Reopen it.
   done
@@ -500,7 +562,7 @@ prune_offline_runners() {
 
   # The listing is captured before it is split, so a failed call is told apart
   # from a repository with nothing offline. On failure the markers must survive.
-  if ! listing="$(gh api --paginate \
+  if ! listing="$(github_api --paginate \
     "repos/$repository/actions/runners" \
     --jq '.runners[] | select(.status == "offline") | .id' 2>/dev/null)"; then
     return 0
@@ -530,7 +592,7 @@ prune_offline_runners() {
   done
 
   for runner_id in "${confirmed_ids[@]}"; do
-    gh api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    github_api --method DELETE "repos/$repository/actions/runners/$runner_id" >/dev/null 2>&1 || true
     rm --force "$marker_dir/$runner_id"
   done
 
@@ -576,6 +638,26 @@ container_holds_job() {
   docker top "$1" 2>/dev/null | grep --quiet 'Runner\.Worker'
 }
 
+# Stop idle listeners together. Each runner can take Docker's full stop timeout,
+# so serial stops make startup and shutdown scale with the number of pools.
+stop_idle_containers() {
+  local -a container_ids=()
+  local -a stop_pids=()
+  local id stop_pid
+
+  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
+  for id in ${container_ids[@]+"${container_ids[@]}"}; do
+    if ! container_holds_job "$id"; then
+      docker stop --time 20 "$id" >/dev/null 2>&1 &
+      stop_pids+=("$!")
+    fi
+  done
+
+  for stop_pid in ${stop_pids[@]+"${stop_pids[@]}"}; do
+    wait "$stop_pid" || true
+  done
+}
+
 # Stops idle listeners now, then waits for the containers that hold a job.
 #
 # Every container here is ephemeral: it runs at most one job and exits on its
@@ -598,12 +680,7 @@ drain_containers() {
   # never converges.
   [[ -n "$state_dir" && -d "$state_dir" ]] && : >"$state_dir/shutdown"
 
-  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
-  for id in ${container_ids[@]+"${container_ids[@]}"}; do
-    if ! container_holds_job "$id"; then
-      docker stop --time 20 "$id" >/dev/null 2>&1 || true
-    fi
-  done
+  stop_idle_containers
 
   while (( SECONDS < deadline )); do
     waiting=0
@@ -627,15 +704,7 @@ drain_containers() {
 # The startup half of the drain: clear idle leftovers, leave busy ones alone.
 # There is nothing to wait for here, because this process has not started yet.
 drain_leftover_containers() {
-  local -a container_ids=()
-  local id
-
-  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
-  for id in ${container_ids[@]+"${container_ids[@]}"}; do
-    if ! container_holds_job "$id"; then
-      docker stop --time 20 "$id" >/dev/null 2>&1 || true
-    fi
-  done
+  stop_idle_containers
 }
 
 cleanup() {
@@ -672,7 +741,10 @@ main() {
   # so a restart does not fail the run it was in the middle of. That leaves its
   # memory and CPU unbudgeted for the rest of that one job.
   drain_leftover_containers
-  trap cleanup EXIT INT TERM
+  # A signal requests a normal shell exit. The EXIT trap owns the drain once,
+  # then the process ends instead of returning to its permanent `wait` below.
+  trap cleanup EXIT
+  trap 'exit 0' INT TERM
 
   local pool_index slot_number
   local -A pruned_repositories=()
