@@ -98,7 +98,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: pnpm
+          # Self-hosted containers share one persistent pnpm store. Restoring a
+          # GitHub cache over it adds network work and can stall setup-node.
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
+          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
       - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       # ESLint does no type-aware linting on these sites, so it never reads a
       # `.nuxt` directory and `prepare-command` is pure cost here.
@@ -116,7 +119,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: pnpm
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
+          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
       - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: inputs.prepare-command != ''
         run: ${{ inputs.prepare-command }}
@@ -136,7 +140,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: pnpm
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
+          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
       - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: inputs.prepare-command != ''
         run: ${{ inputs.prepare-command }}
