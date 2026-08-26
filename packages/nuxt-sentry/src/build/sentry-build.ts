@@ -31,11 +31,22 @@ export interface SentryBuildInput {
   hasAuthToken: boolean
 }
 
+/**
+ * What the build plugin may do about a release.
+ *
+ * The plugin names a release from git HEAD when the config omits one, and
+ * creates it. A local build holding a token therefore published a release for
+ * a commit that never deployed. Only a named release is ever created.
+ */
+export type SentryReleaseOptions
+  = | { name: string }
+    | { create: false, inject: false }
+
 export interface SentryBuildOptions {
   org: string
   project?: string
   authToken?: string
-  release?: { name: string }
+  release: SentryReleaseOptions
   sourcemaps: {
     disable: boolean
     filesToDeleteAfterUpload: string[]
@@ -48,15 +59,26 @@ export interface SentryBuildOptions {
   telemetry: false
 }
 
+/**
+ * Whether this build both may upload a source map and has a release to bind it to.
+ *
+ * The module reads the same answer to decide whether to emit a client map at
+ * all, so the rule lives here once.
+ */
+export function uploadsSourceMaps(input: Pick<SentryBuildInput, 'sourceMaps' | 'hasAuthToken' | 'release'>): boolean {
+  return input.sourceMaps && input.hasAuthToken && Boolean(input.release)
+}
+
 export function resolveSentryBuildOptions(input: SentryBuildInput): SentryBuildOptions {
   return {
     org: input.org,
     ...(input.project ? { project: input.project } : {}),
     ...(input.authToken ? { authToken: input.authToken } : {}),
-    // An unnamed release cannot bind an uploaded map to the events it explains.
-    ...(input.release ? { release: { name: input.release } } : {}),
+    release: input.release ? { name: input.release } : { create: false, inject: false },
     sourcemaps: {
-      disable: !input.sourceMaps || !input.hasAuthToken,
+      // An unnamed release cannot bind an uploaded map to the reports it
+      // explains, so the upload is waste that also invents the release.
+      disable: !uploadsSourceMaps(input),
       filesToDeleteAfterUpload: ['**/*.map'],
     },
     // Session Replay is not used anywhere in the estate, and its code is the
@@ -102,7 +124,7 @@ export function checkSentryBuild(input: BuildCheckInput): BuildIssue[] {
   if (input.sourceMaps && input.hasAuthToken && !input.release) {
     issues.push({
       _tag: 'warning',
-      message: 'Source maps upload without a release name, so they cannot bind to the reports they explain. Set SENTRY_RELEASE in the deploy workflow.',
+      message: 'This build carries no release name. Source maps stay local, and no release is created. Set SENTRY_RELEASE in the deploy workflow.',
     })
   }
   if (input.isProduction && input.gate === 'release' && !input.release) {
