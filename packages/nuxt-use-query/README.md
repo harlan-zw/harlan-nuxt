@@ -507,6 +507,8 @@ A schema slot that implements only `parse` (no `safeParse`), such as a deferred 
 
 `isDev` (also settable on `useNuxtRpc`, `createNuxtRpcClient`, and `useNuxtRpcQuery`) overrides how `'auto'` picks dev vs. production — it defaults to reading `import.meta.dev` and only needs setting if that isn't the right dev/prod signal for a given client, or in a test that wants to force one branch of `'auto'`.
 
+`useNuxtRpcQuery`'s own `onError` (the one covering the reactive path — see [RPC error handling](#rpc-error-handling) above) also fires for a recovered mismatch, tagged `recovered: true`, on top of the genuine-failure case it already covers. This fires wherever the fetch actually ran — including during SSR — because a recovered mismatch never throws, so it never reaches the AsyncData error/payload machinery a real failure does, and there's no later hydration re-run of `transform` to catch it on the client.
+
 ## Server fetch telemetry
 
 Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:

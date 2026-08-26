@@ -1219,3 +1219,96 @@ describe('useNuxtRpcQuery onError', () => {
     expect(result.opts.onError).toBeUndefined()
   })
 })
+
+describe('useNuxtRpcQuery recovered lenient mismatches reach onError', () => {
+  it('reports a recovered lenient mismatch through onError, tagged recovered: true', () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    }), { onError }) as any
+
+    const data = result.opts.transform({ id: 123 })
+
+    // The recovered payload still comes back from transform, unaffected by
+    // onError even having been called.
+    expect(data).toEqual({ id: 123 })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      operation: expect.objectContaining({ kind: 'query', path: '/api/sites/1' }),
+      error: expect.objectContaining({ type: 'response-validation' }),
+      recovered: true,
+    }))
+  })
+
+  it('reports a recovered mismatch under an \'auto\' prod isDev signal, not only an explicit lenient operation', () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }), { onError, isDev: () => false }) as any
+
+    result.opts.transform({ id: 123 })
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ recovered: true }))
+  })
+
+  it('does not call onError with recovered:true for a clean payload (no mismatch)', () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    }), { onError }) as any
+
+    result.opts.transform({ id: 'abc' })
+
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('does not call the recovered reporter on a strict throw (onMismatch never fires)', () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'strict',
+    }), { onError }) as any
+
+    expect(() => result.opts.transform({ id: 123 })).toThrow()
+    expect(onError).not.toHaveBeenCalledWith(expect.objectContaining({ recovered: true }))
+  })
+
+  it('includes a durationMs on the recovered event once the request timing hook has run', () => {
+    const onError = vi.fn()
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    }), { onError }) as any
+
+    result.opts.onRequest[0]()
+    result.opts.transform({ id: 123 })
+
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ durationMs: expect.any(Number), recovered: true }))
+  })
+
+  it('an onError that throws does not turn the recovered payload into a failure', () => {
+    const onError = vi.fn(() => {
+      throw new Error('boom')
+    })
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    }), { onError }) as any
+
+    expect(() => result.opts.transform({ id: 123 })).not.toThrow()
+    expect(onError).toHaveBeenCalledOnce()
+  })
+})

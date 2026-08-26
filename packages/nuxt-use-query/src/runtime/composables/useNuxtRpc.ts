@@ -48,6 +48,12 @@ export interface NuxtRpcQueryErrorEvent {
    * previous runtime.
    */
   durationMs?: number
+  /**
+   * Set only when a lenient response-validation mismatch was recovered: the
+   * query still resolved to `'success'` with the raw payload instead of
+   * failing. Absent (not `false`) for every other error event.
+   */
+  recovered?: true
 }
 
 // `DefaultT` must stay a generic so the `default` factory drives its own
@@ -88,6 +94,12 @@ export function useNuxtRpcQuery<
   // `onError`, `responseValidation`, and `isDev` belong to this composable,
   // not to `useFetch`. Strip them so they never reach the fetch options.
   const { onError, responseValidation: scopeResponseValidation, isDev: scopeIsDev, ...queryOptions } = options
+  // Tracks when the current attempt's request left, purely to give a recovered
+  // mismatch (reported from `transform` below) a `durationMs`. Reset once read
+  // so a later mismatch on a request whose timing hook never ran (e.g. a
+  // direct `transform` call in a test) reports `undefined` instead of a stale
+  // value.
+  let requestStartedAt: number | undefined
   const query = (useNuxtQuery as any)(() => resolved().path, {
     ...queryOptions,
     key: () => request.value._tag === 'ok' ? request.value.request.key : request.value.key,
@@ -96,6 +108,7 @@ export function useNuxtRpcQuery<
     body: computed(() => request.value._tag === 'ok' ? request.value.request.body : undefined),
     onRequest: [
       () => {
+        requestStartedAt = Date.now()
         if (request.value._tag === 'err')
           throw request.value.error
       },
@@ -106,9 +119,28 @@ export function useNuxtRpcQuery<
     // Lenient mode (operation wins over this composable's `responseValidation`
     // scope option) reports the mismatch and hands the raw payload through
     // instead of throwing.
+    //
+    // `onMismatch` reports the recovered mismatch through this composable's
+    // own `onError` (not `useQueryErrorReporter` below, which only watches
+    // genuine failures). It fires unconditionally, on whichever runtime
+    // actually ran the fetch — a recovered mismatch never throws, so it never
+    // reaches Nuxt's AsyncData error/payload machinery the way a real failure
+    // does, and gating this on `import.meta.client` (like the error watcher
+    // does) would leave every SSR-recovered mismatch unreported: there is no
+    // later hydration re-run of `transform` to catch it on the client.
     transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload, {
       mode: resolveNuxtRpcResponseValidation(resolved().responseValidation, scopeResponseValidation, scopeIsDev),
       path: resolved().path,
+      onMismatch: (error) => {
+        const durationMs = requestStartedAt == null ? undefined : Date.now() - requestStartedAt
+        requestStartedAt = undefined
+        reportRecoveredQueryMismatch(onError, {
+          durationMs,
+          error,
+          operation: describeQueryOperation(resolved()),
+          recovered: true,
+        })
+      },
     }),
   } as UseNuxtQueryOptions<NuxtRpcSchemaOutput<TResponseSchema>>) as NuxtQuery<DefaultT | NuxtRpcSchemaOutput<TResponseSchema>, NuxtRpcError | undefined>
 
@@ -196,6 +228,26 @@ function describeQueryOperation(operation: NuxtRpcQueryOperation<NuxtRpcSchema, 
     key: operation.key,
     method: operation.method === 'POST' ? 'POST' : 'GET',
     path: operation.path,
+  }
+}
+
+/**
+ * Reports a lenient response-validation mismatch recovered by this query's
+ * `transform` (the call still succeeded with the raw payload). Isolated: this
+ * runs inside `transform`, so an `onError` that throws must not turn a
+ * recovered success back into a failure.
+ */
+function reportRecoveredQueryMismatch(
+  onError: ((event: NuxtRpcQueryErrorEvent) => void) | undefined,
+  event: NuxtRpcQueryErrorEvent,
+): void {
+  if (!onError)
+    return
+  try {
+    onError(event)
+  }
+  catch (hookError) {
+    console.error('[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:', hookError)
   }
 }
 
