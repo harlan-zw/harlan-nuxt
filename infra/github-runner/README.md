@@ -35,12 +35,13 @@ and no webhook endpoint is needed.
 
 ## Labels
 
-Two labels serve every repository, so a workflow's `runs-on` is the same string
-everywhere and a site moves between hosted and self-hosted by changing one input.
+Resource labels serve every repository, so a workflow's `runs-on` is the same
+string everywhere and a site moves between hosts by changing one input.
 
 | Label | Use |
 | --- | --- |
 | `harlan-desktop-ci` | Lint, typecheck, test, build. No production secret. |
+| `harlan-desktop-light` | Detection, reports, and API calls. Two CPUs and 2 GB by default. |
 | `harlan-desktop-deploy` | Production deploys. Larger container, one at a time. |
 
 Write them as `runs-on: [self-hosted, linux, x64, harlan-desktop-ci]`. The runner adds
