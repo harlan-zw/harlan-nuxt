@@ -275,6 +275,13 @@ release() {
 
   rm --force "$state_dir/spend/$container_name"
   rm --force "$state_dir/spend-memory/$container_name"
+
+  # A denied burst request stays pending. Wake the scaler when any job returns
+  # capacity, so another repository can use it without waiting for its current
+  # warm job to finish first.
+  if [[ -n "$scale_pipe" && -p "$scale_pipe" && ! -f "$state_dir/shutdown" ]]; then
+    printf 'capacity\n' >"$scale_pipe"
+  fi
 }
 
 # Stops a burst container that registered but never claimed anything. The runner
@@ -428,47 +435,68 @@ run_scaler() {
   local request pool_index container_name
   local burst_counter=0
   local slug live spent spent_memory
+  local pending_pool pending_count attempt
+  local -a pending_pools=()
+  local -A pool_is_pending=()
 
   while true; do
     while IFS=' ' read -r request pool_index; do
-      [[ "$request" == spawn ]] || continue
       [[ -f "$state_dir/shutdown" ]] && continue
 
-      slug="${pool_slug[$pool_index]}"
-      live=$(( pool_warm[pool_index] + $(count_markers "$state_dir/burst/$slug") ))
-      if (( live >= pool_max[pool_index] )); then
+      if [[ "$request" == spawn && -z "${pool_is_pending[$pool_index]:-}" ]]; then
+        pending_pools+=("$pool_index")
+        pool_is_pending[$pool_index]=true
+      elif [[ "$request" != capacity ]]; then
         continue
       fi
 
-      spent="$(sum_markers "$state_dir/spend")"
-      if (( spent + pool_cpus[pool_index] > cpu_budget )); then
-        log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
-        continue
-      fi
+      # Try each denied pool once. A pool that still cannot fit moves to the
+      # back, so repeated capacity changes distribute slots across repositories.
+      pending_count="${#pending_pools[@]}"
+      for (( attempt = 0; attempt < pending_count; attempt++ )); do
+        pending_pool="${pending_pools[0]}"
+        pending_pools=("${pending_pools[@]:1}")
+        slug="${pool_slug[$pending_pool]}"
+        live=$(( pool_warm[pending_pool] + $(count_markers "$state_dir/burst/$slug") ))
+        if (( live >= pool_max[pending_pool] )); then
+          unset 'pool_is_pending[$pending_pool]'
+          continue
+        fi
 
-      # Checked after CPU and never merged with it. A host can have cores to
-      # spare and no memory to back them, which is the case this exists for.
-      spent_memory="$(sum_markers "$state_dir/spend-memory")"
-      if (( spent_memory + pool_memory_gib[pool_index] > memory_budget_gib )); then
-        log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
-        continue
-      fi
+        spent="$(sum_markers "$state_dir/spend")"
+        if (( spent + pool_cpus[pending_pool] > cpu_budget )); then
+          log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
 
-      # A restart resets this counter while a spared burst container from the
-      # previous generation may still hold one of these names. Skip past it.
-      burst_counter=$(( burst_counter + 1 ))
-      container_name="harlan-desktop-$slug-burst-$burst_counter"
-      while docker container inspect "$container_name" >/dev/null 2>&1; do
+        # Checked after CPU and never merged with it. A host can have cores to
+        # spare and no memory to back them, which is the case this exists for.
+        spent_memory="$(sum_markers "$state_dir/spend-memory")"
+        if (( spent_memory + pool_memory_gib[pending_pool] > memory_budget_gib )); then
+          log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
+
+        unset 'pool_is_pending[$pending_pool]'
+
+        # A restart resets this counter while a spared burst container from the
+        # previous generation may still hold one of these names. Skip past it.
         burst_counter=$(( burst_counter + 1 ))
         container_name="harlan-desktop-$slug-burst-$burst_counter"
-      done
-      # Both reservations are written before the fork, so the next request in
-      # this loop already sees this container.
-      printf '%s\n' "${pool_cpus[$pool_index]}" >"$state_dir/burst/$slug/$container_name"
-      reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
+        while docker container inspect "$container_name" >/dev/null 2>&1; do
+          burst_counter=$(( burst_counter + 1 ))
+          container_name="harlan-desktop-$slug-burst-$burst_counter"
+        done
+        # Both reservations are written before the fork, so the next request in
+        # this loop already sees this container.
+        printf '%s\n' "${pool_cpus[$pending_pool]}" >"$state_dir/burst/$slug/$container_name"
+        reserve "$container_name" "${pool_cpus[$pending_pool]}" "${pool_memory_gib[$pending_pool]}"
 
-      log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pool_index]}"
-      run_burst_slot "$pool_index" "$container_name" &
+        log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pending_pool]}"
+        run_burst_slot "$pending_pool" "$container_name" &
+      done
     done <"$scale_pipe"
     # The read loop ends only if every writer closes the pipe. Reopen it.
   done
