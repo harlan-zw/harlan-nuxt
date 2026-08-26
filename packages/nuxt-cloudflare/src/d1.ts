@@ -100,6 +100,16 @@ const SESSION_RESET_D1_SIGNALS = [
   'Internal error while starting up D1 DB storage caused object to be reset',
   'Internal error in D1 DB storage caused object to be reset',
   'storage caused object to be reset',
+  // Cloudflare evicts the Durable Object backing a session and reports it in
+  // its own words: "Connection closed: this Durable Object instance is no
+  // longer active. Reconnect or retry the request." Same family as
+  // `D1_RESET_DO` — the session is gone, the query is replayable.
+  //
+  // Match the Durable Object clause, NOT the "Connection closed" prefix the
+  // message leads with: that prefix is generic enough to appear on unrelated
+  // transports, and replaying an arbitrary closed connection as a D1 session
+  // reset would retry writes that never belonged to this classifier.
+  'Durable Object instance is no longer active',
 ] as const
 const TRANSIENT_D1_SIGNALS = [
   'Network connection lost',
