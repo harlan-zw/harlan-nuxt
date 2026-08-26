@@ -78,7 +78,7 @@ export default defineNuxtModule<ModuleOptions>({
     // calling hasNuxtModuleCompatibility() sees no version and fails closed.
     version,
     configKey: 'content',
-    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
+    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
   },
   moduleDependencies: {
     '@nuxt/ui': {

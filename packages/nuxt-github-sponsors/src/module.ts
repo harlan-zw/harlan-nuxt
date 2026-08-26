@@ -29,7 +29,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-github-sponsors',
     configKey: 'githubSponsors',
-    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
+    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
   },
   /**
    * `tiers` is absent on purpose. Nuxt merges these defaults with `defu`, which

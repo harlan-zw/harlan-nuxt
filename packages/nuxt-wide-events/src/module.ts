@@ -43,7 +43,7 @@ export default defineNuxtModule<ModuleOptions>({
     name: '@harlan-zw/nuxt-wide-events',
     configKey: 'wideEvents',
     compatibility: {
-      nuxt: '>=4.5.0 <5.0.0',
+      nuxt: '>=4.5.0 <6.0.0',
     },
   },
   defaults: {
