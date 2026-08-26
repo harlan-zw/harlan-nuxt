@@ -104,7 +104,7 @@ export function formatDevelopmentWideEvent(
   return lines.join('\n')
 }
 
-/** Write one development Wide Event through its matching Console level. */
+/** Write through the app console at the record's level so Nuxt can attribute the log to its request. */
 export function writeDevelopmentWideEvent(record: DevelopmentWideEventRecord): void {
   const target: 'stdout' | 'stderr' = record.level === 'warn' || record.level === 'error' ? 'stderr' : 'stdout'
   const output = formatDevelopmentWideEvent(record, { includeLevel: false, target })

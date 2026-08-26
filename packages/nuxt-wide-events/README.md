@@ -115,6 +115,25 @@ export default defineEventHandler(async (event) => {
 
 A record keeps the highest level it receives. If the request handler recovers from an error, the record stays an error. A drain and a sampling rate both see the real level.
 
+`getActiveWideEventRequestId(event)` returns the request identity while the Wide Event is collecting. Use it to correlate an application logger, Sentry, or another request-scoped module. It returns `undefined` before collection starts and after emission.
+
+This code stops the build because `user.email` is not configured:
+
+```ts
+addWideEventFields(event, {
+  'user.email': user.email,
+})
+```
+
+Variables and spreads also stop the build:
+
+```ts
+addWideEventFields(event, fields)
+addWideEventFields(event, { ...fields })
+```
+
+This constraint keeps the Field boundary visible to reviewers and coding agents.
+
 ## Production output
 
 Default production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.

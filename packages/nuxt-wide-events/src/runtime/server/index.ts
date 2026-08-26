@@ -69,6 +69,16 @@ export function startWideEvent(event: WideEventLike, requestId?: string, started
   context[STARTED_AT_KEY] = startedAt ?? performance.now()
 }
 
+/** Return the request identity while its Wide Event can still accept Fields. */
+export function getActiveWideEventRequestId(event: WideEventLike): string | undefined {
+  const context = stateContext(event)
+  const state = context[STATE_KEY] as WideEventState | undefined
+  if (state === undefined || state === EMITTED)
+    return undefined
+  const requestId = context[REQUEST_ID_KEY]
+  return typeof requestId === 'string' ? requestId : undefined
+}
+
 export function addWideEventFields(event: WideEventLike, fields: WideEventFields): void
 export function addWideEventFields(event: WideEventLike, fields: WideEventFields, owned = false): void {
   const context = stateContext(event)

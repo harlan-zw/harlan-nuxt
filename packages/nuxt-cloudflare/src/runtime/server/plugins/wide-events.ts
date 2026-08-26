@@ -29,11 +29,10 @@ import { readD1Stats } from '../../../d1-stats'
  * module rests on — a reviewer can read the allowlist and know nothing else can
  * reach an event.
  *
- * So this cannot build its payload conditionally. Every key is present on every
- * call, `null` where the value is unavailable, and the whole thing is one
- * literal. An earlier version assembled a `Record` and passed the variable; it
- * failed the CONSUMING application's build, which is the worst place for a
- * module's mistake to surface.
+ * So this cannot build its payload conditionally. Every key is present in the
+ * source literal. The Wide Events transform removes `undefined` values at
+ * runtime. An earlier version assembled a `Record` and passed the variable; it
+ * failed the consuming application's build.
  */
 export default (nitroApp: NitroApp): void => {
   nitroApp.hooks.hook('beforeResponse', (event: H3Event) => {
@@ -47,8 +46,8 @@ interface RequestCfProperties {
   httpProtocol?: unknown
 }
 
-function stringOrNull(value: unknown): string | null {
-  return typeof value === 'string' ? value : null
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 export function recordCloudflareWideEventFields(event: H3Event): void {
@@ -65,14 +64,14 @@ export function recordCloudflareWideEventFields(event: H3Event): void {
     return
 
   addWideEventFields(event, {
-    'cf.colo': stringOrNull(cf?.colo),
-    'cf.country': stringOrNull(cf?.country),
-    'cf.httpProtocol': stringOrNull(cf?.httpProtocol),
-    'd1.queries': d1 ? d1.queries : null,
-    'd1.primaryQueries': d1 ? d1.primaryQueries : null,
-    'd1.recoveries': d1 ? d1.recoveries : null,
-    'd1.unrecovered': d1 ? d1.unrecovered : null,
-    'd1.durationMs': d1 ? Math.round(d1.durationMs) : null,
-    'd1.region': d1 ? d1.region : null,
+    'cf.colo': stringOrUndefined(cf?.colo),
+    'cf.country': stringOrUndefined(cf?.country),
+    'cf.httpProtocol': stringOrUndefined(cf?.httpProtocol),
+    'd1.queries': d1?.queries,
+    'd1.primaryQueries': d1?.primaryQueries,
+    'd1.recoveries': d1?.recoveries,
+    'd1.unrecovered': d1?.unrecovered,
+    'd1.durationMs': d1 ? Math.round(d1.durationMs) : undefined,
+    'd1.region': d1?.region ?? undefined,
   })
 }

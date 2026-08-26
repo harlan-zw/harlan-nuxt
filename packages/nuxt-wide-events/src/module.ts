@@ -102,6 +102,7 @@ export default defineNuxtModule<ModuleOptions>({
     }
     addServerImports([
       { name: 'addWideEventFields', from: resolver.resolve('./runtime/server/index') },
+      { name: 'getActiveWideEventRequestId', from: resolver.resolve('./runtime/server/index') },
       { name: 'setWideEventLevel', from: resolver.resolve('./runtime/server/index') },
     ])
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addWideEventFields, captureWideEventError, emitWideEvent, setWideEventLevel, startWideEvent } from '../src/runtime/server/index'
+import { addWideEventFields, captureWideEventError, emitWideEvent, getActiveWideEventRequestId, setWideEventLevel, startWideEvent } from '../src/runtime/server/index'
 
 function event() {
   return {
@@ -16,6 +16,18 @@ const addCompilerOwnedFields = addWideEventFields as unknown as (
 ) => void
 
 describe('wide Event runtime', () => {
+  it('exposes the request identity only while its Wide Event is collecting', () => {
+    const request = event()
+
+    expect(getActiveWideEventRequestId(request)).toBeUndefined()
+
+    startWideEvent(request, 'req_1', 10)
+    expect(getActiveWideEventRequestId(request)).toBe('req_1')
+
+    emitWideEvent(request, 200, undefined, undefined, 11, 'now')
+    expect(getActiveWideEventRequestId(request)).toBeUndefined()
+  })
+
   it('emits one structured record with configured fields', () => {
     const request = event()
     startWideEvent(request, 'req_1', 10)
