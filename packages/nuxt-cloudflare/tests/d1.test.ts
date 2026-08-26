@@ -95,6 +95,34 @@ describe('d1 retry classification', () => {
       cause: new Error('D1_ERROR: Replica disconnected from primary.'),
     }))).toEqual({ _tag: 'transient' })
   })
+
+  // Cloudflare evicts the Durable Object backing a D1 session and reports it
+  // with its own wording. Seen in production 2026-08-26 on two unrelated
+  // requests 5ms apart; unclassified, it reached Sentry as an opaque 500
+  // instead of the retryable path every other eviction takes.
+  it('classifies a Durable Object eviction as a session reset', () => {
+    expect(classifyD1RetryError(new Error(
+      'D1_ERROR: Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.',
+    ))).toEqual({ _tag: 'session-reset' })
+  })
+
+  it('classifies the eviction through a wrapping driver error', () => {
+    const wrapped = new Error('Failed query: select "team_id" from "team_catalogs"', {
+      cause: new Error(
+        'D1_ERROR: Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.',
+      ),
+    })
+    expect(classifyD1RetryError(wrapped)).toEqual({ _tag: 'session-reset' })
+    expect(isTransientD1Error(wrapped)).toBe(true)
+  })
+
+  // The eviction text leads with "Connection closed", which is generic enough
+  // to appear on unrelated transports. Match the Durable Object clause instead,
+  // so a websocket or fetch teardown never gets replayed as a D1 session reset.
+  it('does not treat an unrelated closed connection as retryable', () => {
+    expect(classifyD1RetryError(new Error('Connection closed before a response was received')))
+      .toEqual({ _tag: 'permanent' })
+  })
 })
 
 describe('isReplayableD1Sql', () => {
