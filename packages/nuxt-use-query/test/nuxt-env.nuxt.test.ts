@@ -188,10 +188,13 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
   it('preserves response-validation tags across Nuxt AsyncData error wrapping', async () => {
     const scope = effectScope()
     try {
+      // Explicitly strict: this test exercises the throw-and-preserve-tags path,
+      // independent of the 'auto' default's dev/prod resolution.
       const pending = scope.run(() => useNuxtRpcQuery(defineNuxtRpcQuery({
         key: 'invalid-response-env',
         path: '/api/invalid-response-env',
         response: z.object({ count: z.number() }),
+        responseValidation: 'strict',
       })))!
       const query = await pending
 
@@ -200,6 +203,25 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
         type: 'response-validation',
         issues: [expect.objectContaining({ path: 'count' })],
       })
+    }
+    finally {
+      scope.stop()
+    }
+  })
+
+  it('the \'auto\' default (no responseValidation set) resolves to lenient in this real Nuxt build: recovers instead of throwing', async () => {
+    const scope = effectScope()
+    try {
+      const pending = scope.run(() => useNuxtRpcQuery(defineNuxtRpcQuery({
+        key: 'invalid-response-env-auto',
+        path: '/api/invalid-response-env',
+        response: z.object({ count: z.number() }),
+      })))!
+      const query = await pending
+
+      expect(query.status.value).toBe('success')
+      expect(query.error.value).toBeUndefined()
+      expect(query.data.value).toEqual({ count: 'not-a-number' })
     }
     finally {
       scope.stop()

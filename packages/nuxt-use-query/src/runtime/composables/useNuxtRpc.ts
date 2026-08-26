@@ -5,6 +5,7 @@ import type {
   NuxtRpcKey,
   NuxtRpcOperationContext,
   NuxtRpcQueryOperation,
+  NuxtRpcResponseValidation,
   NuxtRpcSchema,
   NuxtRpcSchemaOutput,
 } from '../rpc/core'
@@ -16,6 +17,7 @@ import {
   normalizeNuxtRpcError,
   parseNuxtRpcResponse,
   resolveNuxtRpcQueryRequest,
+  resolveNuxtRpcResponseValidation,
   serializeInvalidNuxtRpcQueryKey,
   serializeNuxtRpcKey,
 } from '../rpc/core'
@@ -61,6 +63,15 @@ export type UseNuxtRpcQueryOptions<TData, DefaultT = undefined> = Omit<
    * reactive query failure reaches no handler.
    */
   onError?: (event: NuxtRpcQueryErrorEvent) => void
+  /** Default response validation mode for this query. The operation's own `responseValidation` wins over this. */
+  responseValidation?: NuxtRpcResponseValidation
+  /**
+   * Resolves an `'auto'` `responseValidation` to a concrete mode. Defaults to
+   * reading Nuxt's `import.meta.dev` (`true` in a dev build ⇒ `strict`,
+   * `false` in production ⇒ `lenient`). Override for tests, or if this
+   * query's dev/prod signal isn't `import.meta.dev`.
+   */
+  isDev?: () => boolean
 }
 
 export function useNuxtRpcQuery<
@@ -74,9 +85,9 @@ export function useNuxtRpcQuery<
   const resolved = () => toValue(operation)
   const request = computed(() => resolveQueryRequestState(resolved()))
   const userOnRequest = options.onRequest
-  // `onError` belongs to this composable, not to `useFetch`. Strip it so it
-  // never reaches the fetch options.
-  const { onError, ...queryOptions } = options
+  // `onError`, `responseValidation`, and `isDev` belong to this composable,
+  // not to `useFetch`. Strip them so they never reach the fetch options.
+  const { onError, responseValidation: scopeResponseValidation, isDev: scopeIsDev, ...queryOptions } = options
   const query = (useNuxtQuery as any)(() => resolved().path, {
     ...queryOptions,
     key: () => request.value._tag === 'ok' ? request.value.request.key : request.value.key,
@@ -92,7 +103,13 @@ export function useNuxtRpcQuery<
     ],
     // Same parse-and-normalize the imperative client uses, so a successful
     // payload that fails its schema surfaces an identical `NuxtRpcError`.
-    transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload),
+    // Lenient mode (operation wins over this composable's `responseValidation`
+    // scope option) reports the mismatch and hands the raw payload through
+    // instead of throwing.
+    transform: (payload: unknown) => parseNuxtRpcResponse(resolved().response, payload, {
+      mode: resolveNuxtRpcResponseValidation(resolved().responseValidation, scopeResponseValidation, scopeIsDev),
+      path: resolved().path,
+    }),
   } as UseNuxtQueryOptions<NuxtRpcSchemaOutput<TResponseSchema>>) as NuxtQuery<DefaultT | NuxtRpcSchemaOutput<TResponseSchema>, NuxtRpcError | undefined>
 
   // `transform` only runs on a successful payload, so on an HTTP / timeout /
@@ -238,6 +255,15 @@ export interface UseNuxtRpcOptions {
   onError?: NuxtRpcClientOptions['onError']
   onSuccess?: NuxtRpcClientOptions['onSuccess']
   onSettled?: NuxtRpcClientOptions['onSettled']
+  /** Default response validation mode for every operation called through this client. An operation's own `responseValidation` wins over this. */
+  responseValidation?: NuxtRpcResponseValidation
+  /**
+   * Resolves an `'auto'` `responseValidation` to a concrete mode. Defaults to
+   * reading Nuxt's `import.meta.dev` (`true` in a dev build ⇒ `strict`,
+   * `false` in production ⇒ `lenient`). Override for tests, or if this
+   * client's dev/prod signal isn't `import.meta.dev`.
+   */
+  isDev?: NuxtRpcClientOptions['isDev']
 }
 
 export function useNuxtRpc(options: UseNuxtRpcOptions = {}) {
@@ -254,6 +280,8 @@ export function useNuxtRpc(options: UseNuxtRpcOptions = {}) {
     onError: withContext(options.onError),
     onSettled: withContext(options.onSettled),
     onSuccess: withContext(options.onSuccess),
+    responseValidation: options.responseValidation,
+    isDev: options.isDev,
   })
 }
 

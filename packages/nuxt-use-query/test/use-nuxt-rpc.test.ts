@@ -651,6 +651,303 @@ describe('useNuxtRpc safe variants (errors-as-values)', () => {
   })
 })
 
+// A schema slot exposing only `parse` (no `safeParse`) — mirrors a deferred or
+// boot-time-loaded schema wrapper in app code. Calling `.safeParse()`
+// unconditionally on a slot like this is exactly what broke prod
+// ("e.safeParse is not a function"); lenient mode must fall back to a
+// try/catch around `.parse()` instead.
+function parseOnlySchema<T>(schema: z.ZodType<T>): z.ZodType<T> {
+  return { parse: (input: unknown) => schema.parse(input) } as unknown as z.ZodType<T>
+}
+
+describe('lenient response validation', () => {
+  it('querySafe recovers a lenient mismatch: returns the raw payload and fires onError with recovered:true', async () => {
+    const onError = vi.fn()
+    const onSuccess = vi.fn()
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 123 })) as any, onError, onSuccess })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { id: 123 } })
+    expect(onSuccess).toHaveBeenCalledWith(expect.objectContaining({ data: { id: 123 } }))
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      operation: expect.objectContaining({ path: '/api/sites/1' }),
+      error: expect.objectContaining({ type: 'response-validation' }),
+      recovered: true,
+    }))
+  })
+
+  it('strict (the default in this unit test environment) still throws on the same mismatch', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 123 })) as any, onError })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }))
+
+    expect(result._tag).toBe('err')
+    if (result._tag === 'err')
+      expect(result.error).toMatchObject({ type: 'response-validation' })
+    // A thrown (non-recovered) failure never carries `recovered: true`.
+    expect(onError).toHaveBeenCalledWith(expect.not.objectContaining({ recovered: true }))
+  })
+
+  it('a client-level responseValidation:lenient default applies when the operation does not set it', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({
+      fetch: (async () => ({ id: 123 })) as any,
+      onError,
+      responseValidation: 'lenient',
+    })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { id: 123 } })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ recovered: true }))
+  })
+
+  it('the operation responseValidation wins over a lenient client default', async () => {
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 123 })) as any, responseValidation: 'lenient' })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'strict',
+    }))
+
+    expect(result._tag).toBe('err')
+  })
+
+  it('executeSafe (mutation) also recovers a lenient mismatch and fires onError', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ ok: 'yes' })) as any, onError })
+
+    const result = await rpc.executeSafe(defineNuxtRpcMutation({
+      body: null,
+      method: 'POST',
+      path: '/api/sites/1/refresh',
+      response: z.object({ ok: z.boolean() }),
+      responseValidation: 'lenient',
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { ok: 'yes' } })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ recovered: true }))
+  })
+
+  it('request body validation stays strict even when the operation is lenient', async () => {
+    const fetch = vi.fn()
+    const rpc = createNuxtRpcClient({ fetch: fetch as any })
+
+    const result = await rpc.executeSafe(defineNuxtRpcMutation({
+      body: z.object({ name: z.string() }),
+      method: 'PATCH',
+      path: '/api/sites/1',
+      response: z.object({ ok: z.boolean() }),
+      responseValidation: 'lenient',
+    }), { name: 123 } as any)
+
+    expect(result._tag).toBe('err')
+    if (result._tag === 'err')
+      expect(result.error).toMatchObject({ type: 'request-validation' })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('a parse-only schema slot (no safeParse) works in strict mode', async () => {
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 'abc' })) as any })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: parseOnlySchema(z.object({ id: z.string() })),
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { id: 'abc' } })
+  })
+
+  it('a parse-only schema slot (no safeParse) recovers in lenient mode instead of throwing "safeParse is not a function"', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({ fetch: (async () => ({ id: 123 })) as any, onError })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: parseOnlySchema(z.object({ id: z.string() })),
+      responseValidation: 'lenient',
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { id: 123 } })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      recovered: true,
+      error: expect.objectContaining({ type: 'response-validation' }),
+    }))
+  })
+})
+
+describe('\'auto\' response validation (the default): dev throws, prod recovers', () => {
+  it('resolves to strict under a dev signal: a mismatch still throws', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({
+      fetch: (async () => ({ id: 123 })) as any,
+      onError,
+      isDev: () => true,
+    })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }))
+
+    expect(result._tag).toBe('err')
+    if (result._tag === 'err')
+      expect(result.error).toMatchObject({ type: 'response-validation' })
+    expect(onError).toHaveBeenCalledWith(expect.not.objectContaining({ recovered: true }))
+  })
+
+  it('resolves to lenient under a prod signal: a mismatch recovers instead of throwing', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({
+      fetch: (async () => ({ id: 123 })) as any,
+      onError,
+      isDev: () => false,
+    })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { id: 123 } })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      recovered: true,
+      error: expect.objectContaining({ type: 'response-validation' }),
+    }))
+  })
+
+  it('an operation-level responseValidation still wins over a prod isDev signal', async () => {
+    const rpc = createNuxtRpcClient({
+      fetch: (async () => ({ id: 123 })) as any,
+      isDev: () => false,
+    })
+
+    const result = await rpc.querySafe(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'strict',
+    }))
+
+    expect(result._tag).toBe('err')
+  })
+
+  it('mutations resolve \'auto\' the same way as queries', async () => {
+    const onError = vi.fn()
+    const rpc = createNuxtRpcClient({
+      fetch: (async () => ({ ok: 'yes' })) as any,
+      onError,
+      isDev: () => false,
+    })
+
+    const result = await rpc.executeSafe(defineNuxtRpcMutation({
+      body: null,
+      method: 'POST',
+      path: '/api/sites/1/refresh',
+      response: z.object({ ok: z.boolean() }),
+    }))
+
+    expect(result).toEqual({ _tag: 'ok', data: { ok: 'yes' } })
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ recovered: true }))
+  })
+})
+
+describe('useNuxtRpcQuery lenient response validation', () => {
+  it('lenient transform returns the raw payload on a mismatch instead of throwing', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'lenient',
+    })) as any
+
+    expect(result.opts.transform({ id: 123 })).toEqual({ id: 123 })
+  })
+
+  it('strict transform (the default in this unit test environment) still throws on the same mismatch', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    })) as any
+
+    expect(() => result.opts.transform({ id: 123 })).toThrow()
+  })
+
+  it('a query-scope responseValidation:lenient default applies when the operation does not set it', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }), { responseValidation: 'lenient' }) as any
+
+    expect(result.opts.transform({ id: 123 })).toEqual({ id: 123 })
+  })
+
+  it('the operation responseValidation wins over a lenient query-scope default', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+      responseValidation: 'strict',
+    }), { responseValidation: 'lenient' }) as any
+
+    expect(() => result.opts.transform({ id: 123 })).toThrow()
+  })
+
+  it('a parse-only schema slot (no safeParse) recovers under a lenient transform', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: parseOnlySchema(z.object({ id: z.string() })),
+      responseValidation: 'lenient',
+    })) as any
+
+    expect(result.opts.transform({ id: 123 })).toEqual({ id: 123 })
+  })
+
+  it('\'auto\' (no responseValidation set) resolves to strict under a dev isDev signal', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }), { isDev: () => true }) as any
+
+    expect(() => result.opts.transform({ id: 123 })).toThrow()
+  })
+
+  it('\'auto\' (no responseValidation set) resolves to lenient under a prod isDev signal', () => {
+    const result = useNuxtRpcQuery(defineNuxtRpcQuery({
+      key: 'site:1',
+      path: '/api/sites/1',
+      response: z.object({ id: z.string() }),
+    }), { isDev: () => false }) as any
+
+    expect(result.opts.transform({ id: 123 })).toEqual({ id: 123 })
+  })
+})
+
 describe('transient transport errors', () => {
   it('tags an ofetch timeout (cause.name === TimeoutError) as timeout', () => {
     const timeoutCause = Object.assign(new Error('aborted due to timeout'), { name: 'TimeoutError', code: 23 })

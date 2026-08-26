@@ -476,6 +476,37 @@ A `NuxtRpcError` is a real `Error` named `NuxtRpcError`. It carries the `type` d
 
 The module registers a payload reducer and reviver for it, so a failure raised during SSR crosses into the browser with its tag intact. The `cause` and `response` fields do not cross: they hold a `FetchError` and a `Response`, which cannot be serialized.
 
+### Response Validation: `strict` / `lenient` / `auto`
+
+`responseValidation` controls what happens when a response payload doesn't match its Zod schema:
+
+- **`strict`**: throws a `response-validation` `NuxtRpcError`.
+- **`lenient`**: recovers instead — the server's word wins over a stale or over-eager client contract. Returns the raw, unparsed payload, calls `onError` with `recovered: true` on the event (so telemetry can still see the mismatch), and logs the normalized error with `console.error` on the client.
+- **`auto`** (the default): resolves to `strict` in a dev build and `lenient` in production, using Nuxt's `import.meta.dev`. A mismatch is a bug you want to see immediately while developing; in production it shouldn't blank the page over one bad row.
+
+Request bodies always validate strictly, regardless of this setting — only response payloads can be lenient.
+
+Override the default per operation:
+
+```ts
+export const siteQueries = defineNuxtQueryGroup('sites', {
+  // A field the server already renamed, still read by an older client build.
+  // Force this one lenient in every build, not just production.
+  detail: (siteId: string) => defineNuxtRpcQuery({
+    key: ['sites', siteId],
+    path: `/api/sites/${siteId}`,
+    response: siteSchema,
+    responseValidation: 'lenient',
+  }),
+})
+```
+
+Or set a default once, on `useNuxtRpc(...)`, `createNuxtRpcClient(...)`, or `useNuxtRpcQuery(operation, { responseValidation: 'auto' | 'strict' | 'lenient' })`. Resolution order: **the operation's own `responseValidation` wins, then the client/scope default, then `'auto'`.**
+
+A schema slot that implements only `parse` (no `safeParse`), such as a deferred `defineNuxtRpcSchemaGroup` entry, still works under lenient validation: it falls back to a try/catch around `parse` instead of calling `safeParse` directly.
+
+`isDev` (also settable on `useNuxtRpc`, `createNuxtRpcClient`, and `useNuxtRpcQuery`) overrides how `'auto'` picks dev vs. production — it defaults to reading `import.meta.dev` and only needs setting if that isn't the right dev/prod signal for a given client, or in a test that wants to force one branch of `'auto'`.
+
 ## Server fetch telemetry
 
 Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
