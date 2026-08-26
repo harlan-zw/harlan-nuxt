@@ -451,7 +451,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-cloudflare',
     configKey: 'nuxtCloudflare',
-    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
+    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
   },
   defaults: {
     bindingTypes: true,

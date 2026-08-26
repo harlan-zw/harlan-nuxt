@@ -60,7 +60,7 @@ export default defineNuxtModule<ModuleOptions>({
     // size budget override has to be copied into each app.
     name: MODULE_NAME,
     configKey: 'nuxtSentry',
-    compatibility: { nuxt: '>=4.5.0 <5.0.0' },
+    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
   },
   defaults: {
     enabled: true,
