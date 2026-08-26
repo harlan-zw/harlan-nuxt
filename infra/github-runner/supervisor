@@ -638,6 +638,26 @@ container_holds_job() {
   docker top "$1" 2>/dev/null | grep --quiet 'Runner\.Worker'
 }
 
+# Stop idle listeners together. Each runner can take Docker's full stop timeout,
+# so serial stops make startup and shutdown scale with the number of pools.
+stop_idle_containers() {
+  local -a container_ids=()
+  local -a stop_pids=()
+  local id stop_pid
+
+  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
+  for id in ${container_ids[@]+"${container_ids[@]}"}; do
+    if ! container_holds_job "$id"; then
+      docker stop --time 20 "$id" >/dev/null 2>&1 &
+      stop_pids+=("$!")
+    fi
+  done
+
+  for stop_pid in ${stop_pids[@]+"${stop_pids[@]}"}; do
+    wait "$stop_pid" || true
+  done
+}
+
 # Stops idle listeners now, then waits for the containers that hold a job.
 #
 # Every container here is ephemeral: it runs at most one job and exits on its
@@ -660,12 +680,7 @@ drain_containers() {
   # never converges.
   [[ -n "$state_dir" && -d "$state_dir" ]] && : >"$state_dir/shutdown"
 
-  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
-  for id in ${container_ids[@]+"${container_ids[@]}"}; do
-    if ! container_holds_job "$id"; then
-      docker stop --time 20 "$id" >/dev/null 2>&1 || true
-    fi
-  done
+  stop_idle_containers
 
   while (( SECONDS < deadline )); do
     waiting=0
@@ -689,15 +704,7 @@ drain_containers() {
 # The startup half of the drain: clear idle leftovers, leave busy ones alone.
 # There is nothing to wait for here, because this process has not started yet.
 drain_leftover_containers() {
-  local -a container_ids=()
-  local id
-
-  mapfile -t container_ids < <(docker ps --quiet --filter "label=$container_label=true")
-  for id in ${container_ids[@]+"${container_ids[@]}"}; do
-    if ! container_holds_job "$id"; then
-      docker stop --time 20 "$id" >/dev/null 2>&1 || true
-    fi
-  done
+  stop_idle_containers
 }
 
 cleanup() {

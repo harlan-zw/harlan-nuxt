@@ -37,10 +37,28 @@ shift || true
 printf '%s %s\n' "$command_name" "$*" >>"$TEST_CALLS/docker"
 
 case "$command_name" in
-  image|volume|rm|stop)
+  image|volume|rm)
     exit 0
     ;;
+  stop)
+    container_id="${*: -1}"
+    touch "$TEST_CALLS/stop-started-$container_id"
+    for _ in $(seq 1 50); do
+      started_count="$(find "$TEST_CALLS" -name 'stop-started-*' | wc -l)"
+      if (( started_count == 4 )); then
+        printf '%s\n' "$container_id" >>"$TEST_CALLS/stopped"
+        exit 0
+      fi
+      sleep 0.02
+    done
+    printf 'Idle runner stops were serial.\n' >&2
+    exit 1
+    ;;
   ps)
+    if [[ ! -e "$TEST_CALLS/leftovers-listed" ]]; then
+      touch "$TEST_CALLS/leftovers-listed"
+      printf 'leftover-%s\n' 1 2 3 4
+    fi
     exit 0
     ;;
   container)
@@ -115,6 +133,13 @@ if [[ ! -s "$test_root/calls/burst" ]]; then
   cat "$test_root/output"
   cat "$test_root/calls/docker"
   printf 'Expected released capacity to start the denied burst runner.\n' >&2
+  exit 1
+fi
+
+if (( $(wc -l <"$test_root/calls/stopped") != 4 )); then
+  cat "$test_root/output"
+  cat "$test_root/calls/docker"
+  printf 'Expected four idle leftover runners to stop concurrently.\n' >&2
   exit 1
 fi
 
