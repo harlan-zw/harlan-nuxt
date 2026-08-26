@@ -28,6 +28,27 @@ export type NuxtRpcSchemaOutput<TSchema extends NuxtRpcSchema>
       ? z.output<TSchema>
       : never
 
+/**
+ * How a response payload is checked against its Zod contract.
+ *
+ * - `strict`: a mismatch throws a `response-validation` error.
+ * - `lenient`: a mismatch is reported (an isolated `onError` hook call with
+ *   `recovered: true`, plus `console.error` on the client) and the raw payload
+ *   is returned instead of failing the call.
+ * - `auto` (the default): resolves to `strict` in a dev build and `lenient`
+ *   in a production build (`import.meta.dev`). A mismatch is a bug to fix
+ *   immediately while developing; in production the server's word wins over
+ *   a stale or over-eager client contract, so the call still returns data
+ *   instead of blanking the page.
+ *
+ * Request bodies always validate strictly, regardless of this setting.
+ *
+ * Resolution order: the operation's own `responseValidation` wins, then the
+ * client/scope option passed to `createNuxtRpcClient` / `useNuxtRpc` /
+ * `useNuxtRpcQuery`, then `auto`.
+ */
+export type NuxtRpcResponseValidation = 'strict' | 'lenient' | 'auto'
+
 export interface NuxtRpcGetQueryOperation<TResponseSchema extends NuxtRpcSchema, TQuery = undefined> {
   /** Stable cache key. Keep helpers beside operations for shared invalidation. */
   key: NuxtRpcKey
@@ -39,6 +60,8 @@ export interface NuxtRpcGetQueryOperation<TResponseSchema extends NuxtRpcSchema,
   body?: never
   /** Zod response contract. `useNuxtRpcQuery` parses every payload through this. */
   response: TResponseSchema
+  /** Overrides the client/scope default for this operation. */
+  responseValidation?: NuxtRpcResponseValidation
 }
 
 export interface NuxtRpcQueryBody<TBodySchema extends z.ZodTypeAny> {
@@ -62,6 +85,8 @@ export interface NuxtRpcPostQueryOperation<
   query?: TQuery
   body: NuxtRpcQueryBody<TBodySchema>
   response: TResponseSchema
+  /** Overrides the client/scope default for this operation. */
+  responseValidation?: NuxtRpcResponseValidation
 }
 
 /**
@@ -87,6 +112,8 @@ export interface NuxtRpcBodyMutationOperation<TBodySchema extends NuxtRpcSchema 
   path: string
   /** Zod response contract. `useNuxtRpc().execute` parses every payload through this. */
   response: TResponseSchema
+  /** Overrides the client/scope default for this operation. */
+  responseValidation?: NuxtRpcResponseValidation
 }
 
 export interface NuxtRpcBodylessMutationOperation<TResponseSchema extends NuxtRpcSchema> {
@@ -96,6 +123,8 @@ export interface NuxtRpcBodylessMutationOperation<TResponseSchema extends NuxtRp
   path: string
   /** Zod response contract. `useNuxtRpc().execute` parses every payload through this. */
   response: TResponseSchema
+  /** Overrides the client/scope default for this operation. */
+  responseValidation?: NuxtRpcResponseValidation
 }
 
 export type NuxtRpcMutationOperation<TBodySchema extends NuxtRpcSchema | null | undefined, TResponseSchema extends NuxtRpcSchema>
@@ -334,6 +363,15 @@ export interface NuxtRpcClientOptions {
   onError?: (event: NuxtRpcErrorEvent) => void | Promise<void>
   onSuccess?: (event: NuxtRpcSuccessEvent) => void | Promise<void>
   onSettled?: (event: NuxtRpcSettledEvent) => void | Promise<void>
+  /** Default response validation mode for every operation called through this client. An operation's own `responseValidation` wins over this. */
+  responseValidation?: NuxtRpcResponseValidation
+  /**
+   * Resolves an `'auto'` `responseValidation` to a concrete mode. Defaults to
+   * reading Nuxt's `import.meta.dev` (`true` in a dev build ⇒ `strict`,
+   * `false` in production ⇒ `lenient`). Override for tests, or if this
+   * client's dev/prod signal isn't `import.meta.dev`.
+   */
+  isDev?: () => boolean
 }
 
 export interface NuxtRpcCallOptions {
@@ -467,6 +505,12 @@ export interface NuxtRpcErrorEvent {
   operation: NuxtRpcOperationContext
   error: NuxtRpcError
   durationMs: number
+  /**
+   * Set only when a lenient response-validation mismatch was recovered: the
+   * call still succeeded and returned the raw payload instead of throwing.
+   * Absent (not `false`) for every other error event.
+   */
+  recovered?: true
 }
 
 export interface NuxtRpcSuccessEvent {
@@ -483,7 +527,7 @@ export interface NuxtRpcSettledEvent {
 }
 
 export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
-  const { fetch, onError, onSettled, onSuccess } = options
+  const { fetch, onError, onSettled, onSuccess, responseValidation: clientResponseValidation, isDev: clientIsDev } = options
 
   // Single place the success/error hooks fire and the timing is measured.
   // `perform` does the fetch+parse; everything that can throw a domain error
@@ -494,21 +538,31 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
   // lets `querySafe`/`executeSafe` honour their no-throw contract regardless of
   // caller-supplied callbacks. The throwing `query`/`execute` wrappers re-throw
   // the Err themselves for TanStack parity.
+  //
+  // `perform` receives a `recovered` holder it can set when a lenient response
+  // validation mismatch was recovered. The outcome still resolves `ok` (the
+  // raw payload was returned, not thrown), but `run` also fires the error hook
+  // with `recovered: true` so the mismatch stays observable.
   async function run<TData>(
     context: NuxtRpcOperationContext,
     silent: boolean | undefined,
-    perform: () => Promise<TData>,
+    perform: (recovered: { error?: NuxtRpcError }) => Promise<TData>,
   ): Promise<NuxtRpcResult<TData>> {
     const startedAt = Date.now()
+    const recovered: { error?: NuxtRpcError } = {}
     const outcome = await toOutcome(
-      perform,
+      () => perform(recovered),
       error => normalizeNuxtRpcError(error, 'response-validation'),
     )
     const durationMs = Date.now() - startedAt
-    if (outcome._tag === 'ok')
+    if (outcome._tag === 'ok') {
+      if (recovered.error)
+        await notifyRpcRecoveredError({ durationMs, error: recovered.error, onError, operation: context, silent })
       await notifyRpcSuccess({ data: outcome.data, durationMs, onSettled, onSuccess, operation: context })
-    else
+    }
+    else {
       await notifyRpcError({ durationMs, error: outcome.error, onError, onSettled, operation: context, silent })
+    }
     return outcome
   }
 
@@ -523,14 +577,18 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
       method,
       path: operation.path,
     }
-    return run(context, callOptions.silent, async () => {
+    return run(context, callOptions.silent, async (recovered) => {
       const request = resolveNuxtRpcQueryRequest(operation)
       const response = await fetch<NuxtRpcSchemaOutput<TResponseSchema>>(request.path, {
         ...(request.method === 'GET' ? {} : { method: request.method }),
         ...(request.query === undefined ? {} : { query: request.query }),
         ...(request.body === undefined ? {} : { body: request.body }),
       } as any)
-      return parseNuxtRpcResponse(operation.response, response)
+      return parseNuxtRpcResponse(operation.response, response, {
+        mode: resolveNuxtRpcResponseValidation(operation.responseValidation, clientResponseValidation, clientIsDev),
+        path: operation.path,
+        onMismatch: error => (recovered.error = error),
+      })
     })
   }
 
@@ -547,13 +605,17 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
     }
     const body = operation.body ? args[0] : undefined
     const callOptions = (operation.body ? args[1] : args[0]) as NuxtRpcCallOptions | undefined
-    return run(context, callOptions?.silent, async () => {
+    return run(context, callOptions?.silent, async (recovered) => {
       const parsedBody = operation.body ? await parseNuxtRpcBody(operation.body, body) : undefined
       const response = await fetch<NuxtRpcSchemaOutput<TResponseSchema>>(operation.path, {
         method: operation.method,
         ...(operation.body == null ? {} : { body: parsedBody }),
       } as any)
-      return parseNuxtRpcResponse(operation.response, response)
+      return parseNuxtRpcResponse(operation.response, response, {
+        mode: resolveNuxtRpcResponseValidation(operation.responseValidation, clientResponseValidation, clientIsDev),
+        path: operation.path,
+        onMismatch: error => (recovered.error = error),
+      })
     })
   }
 
@@ -760,27 +822,135 @@ async function parseNuxtRpcBody<TBodySchema extends NuxtRpcSchema>(schema: TBody
   return parseEagerNuxtRpcBody(resolved, body) as NuxtRpcSchemaOutput<TBodySchema>
 }
 
-export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema>
-export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: NuxtRpcDeferredSchema<TResponseSchema>, response: unknown): Promise<z.output<TResponseSchema>>
-export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>>
-export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>> {
-  if (isNuxtRpcDeferredSchema(schema))
-    return parseDeferredNuxtRpcResponse(schema, response) as Promise<NuxtRpcSchemaOutput<TResponseSchema>>
-  return parseEagerNuxtRpcResponse(schema, response) as NuxtRpcSchemaOutput<TResponseSchema>
+/**
+ * Nuxt's `import.meta.dev` (`true` in a dev build, `false` in production).
+ * Kept behind a function so an `'auto'` responseValidation can be resolved
+ * lazily and overridden in tests. Falls back to `true` (dev-safe: fail loud)
+ * when `import.meta.dev` hasn't been statically replaced by a bundler at
+ * all — e.g. this file imported directly under plain Node, or a test runner
+ * with no Nuxt/Vite macro plugin — rather than silently swallowing every
+ * mismatch in an environment that was never actually production.
+ */
+function defaultIsDev(): boolean {
+  return (import.meta as { dev?: boolean }).dev ?? true
 }
 
-function parseEagerNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown): z.output<TResponseSchema> {
+/** Resolves a declared `responseValidation` (which may be `'auto'`) to a concrete mode. */
+function resolveAutoResponseValidation(
+  mode: NuxtRpcResponseValidation,
+  isDev: () => boolean = defaultIsDev,
+): 'strict' | 'lenient' {
+  return mode === 'auto' ? (isDev() ? 'strict' : 'lenient') : mode
+}
+
+/**
+ * Operation `responseValidation` wins over the client/scope default; `'auto'`
+ * is the fallback when neither is set, resolved to `strict` in dev and
+ * `lenient` in production via `isDev` (defaults to `import.meta.dev`).
+ */
+export function resolveNuxtRpcResponseValidation(
+  operationMode: NuxtRpcResponseValidation | undefined,
+  scopeMode: NuxtRpcResponseValidation | undefined,
+  isDev: () => boolean = defaultIsDev,
+): 'strict' | 'lenient' {
+  return resolveAutoResponseValidation(operationMode ?? scopeMode ?? 'auto', isDev)
+}
+
+export interface NuxtRpcResponseParseOptions {
+  /** Declared mode for this call (may be `'auto'`); defaults to `'auto'`. */
+  mode?: NuxtRpcResponseValidation
+  /** Operation path, used only for the lenient diagnostic message. */
+  path?: string
+  /**
+   * Fired only in lenient mode, only on a mismatch, right before the raw
+   * payload is returned. Lets a caller with its own hook plumbing (e.g.
+   * `createNuxtRpcClient`'s `onError`) surface the recovered mismatch without
+   * turning the call into a failure.
+   */
+  onMismatch?: (error: NuxtRpcError) => void
+  /** Resolves an `'auto'` `mode`. Defaults to `import.meta.dev`. */
+  isDev?: () => boolean
+}
+
+/**
+ * Parse a response payload against its Zod contract. `strict` throws a
+ * `response-validation` `NuxtRpcError` on a mismatch, same as before.
+ * `lenient` reports the mismatch instead of throwing and hands the raw,
+ * unparsed payload through — the server's word wins over a stale or
+ * over-eager client contract. `'auto'` (the default) picks `strict` in a dev
+ * build and `lenient` in production. Request bodies are never parsed
+ * leniently.
+ *
+ * Accepts a schema slot exposing only `parse` (no `safeParse`), such as a
+ * deferred or boot-time-loaded schema wrapper: calling `safeParse`
+ * unconditionally on such a slot throws `TypeError: schema.safeParse is not a
+ * function`, so lenient mode always checks for it first and falls back to a
+ * try/catch around `parse`.
+ */
+export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: TResponseSchema, response: unknown, options?: NuxtRpcResponseParseOptions): z.output<TResponseSchema>
+export function parseNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: NuxtRpcDeferredSchema<TResponseSchema>, response: unknown, options?: NuxtRpcResponseParseOptions): Promise<z.output<TResponseSchema>>
+export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown, options?: NuxtRpcResponseParseOptions): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>>
+export function parseNuxtRpcResponse<TResponseSchema extends NuxtRpcSchema>(schema: TResponseSchema, response: unknown, options: NuxtRpcResponseParseOptions = {}): NuxtRpcSchemaOutput<TResponseSchema> | Promise<NuxtRpcSchemaOutput<TResponseSchema>> {
+  if (isNuxtRpcDeferredSchema(schema))
+    return parseDeferredNuxtRpcResponse(schema, response, options) as Promise<NuxtRpcSchemaOutput<TResponseSchema>>
+  return parseEagerNuxtRpcResponse(schema, response, options) as NuxtRpcSchemaOutput<TResponseSchema>
+}
+
+function parseEagerNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(
+  schema: TResponseSchema,
+  response: unknown,
+  options: NuxtRpcResponseParseOptions = {},
+): z.output<TResponseSchema> {
+  const mode = resolveAutoResponseValidation(options.mode ?? 'auto', options.isDev)
+  const result = safeParseZodLike(schema, response)
+  if (result.success)
+    return result.data as z.output<TResponseSchema>
+
+  const normalized = normalizeNuxtRpcError(result.error, 'response-validation')
+  if (mode === 'strict')
+    throw normalized
+
+  if (import.meta.client) {
+    console.error(`[nuxt-use-query] RPC response for ${options.path ?? '<unknown>'} did not match its schema; returning the raw payload.`, normalized)
+  }
+  options.onMismatch?.(normalized)
+  return response as z.output<TResponseSchema>
+}
+
+/**
+ * Parse through `schema.safeParse` when it exists; otherwise fall back to a
+ * try/catch around `schema.parse` so a parse-only schema slot (no
+ * `safeParse`) still works. See `parseNuxtRpcResponse`'s doc comment for why
+ * this fallback exists.
+ */
+function safeParseZodLike(
+  schema: z.ZodTypeAny,
+  input: unknown,
+): { success: true, data: unknown } | { success: false, error: ZodError } {
+  const slot = schema as unknown as {
+    safeParse?: (input: unknown) => { success: true, data: unknown } | { success: false, error: ZodError }
+    parse: (input: unknown) => unknown
+  }
+  if (typeof slot.safeParse === 'function')
+    return slot.safeParse(input)
   try {
-    return schema.parse(response)
+    return { success: true, data: slot.parse(input) }
   }
   catch (error) {
-    throw normalizeNuxtRpcError(error, 'response-validation')
+    if (error instanceof ZodError)
+      return { success: false, error }
+    const message = error instanceof Error ? error.message : String(error)
+    return { success: false, error: new ZodError([{ code: 'custom', message, path: [] }]) }
   }
 }
 
-async function parseDeferredNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(schema: NuxtRpcDeferredSchema<TResponseSchema>, response: unknown): Promise<z.output<TResponseSchema>> {
+async function parseDeferredNuxtRpcResponse<TResponseSchema extends z.ZodTypeAny>(
+  schema: NuxtRpcDeferredSchema<TResponseSchema>,
+  response: unknown,
+  options: NuxtRpcResponseParseOptions = {},
+): Promise<z.output<TResponseSchema>> {
   const resolved = await resolveNuxtRpcSchema(schema, 'response')
-  return parseEagerNuxtRpcResponse(resolved, response)
+  return parseEagerNuxtRpcResponse(resolved, response, options)
 }
 
 async function resolveNuxtRpcSchema<TSchema extends NuxtRpcSchema>(
@@ -866,5 +1036,31 @@ async function notifyRpcError(options: {
   await runIsolatedHooks([
     ...(options.silent ? [] : [() => options.onError?.(event)]),
     () => options.onSettled?.(event),
+  ], '[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:')
+}
+
+/**
+ * Reports a lenient response-validation mismatch that was recovered (the call
+ * still succeeded with the raw payload). Only `onError` fires here, tagged
+ * `recovered: true` — `onSuccess`/`onSettled` already ran (or will run) for
+ * the successful outcome, so this never double-fires `onSettled`.
+ */
+async function notifyRpcRecoveredError(options: {
+  operation: NuxtRpcOperationContext
+  error: NuxtRpcError
+  durationMs: number
+  silent?: boolean
+  onError?: NuxtRpcClientOptions['onError']
+}) {
+  if (options.silent)
+    return
+  const event: NuxtRpcErrorEvent = {
+    operation: options.operation,
+    error: options.error,
+    durationMs: options.durationMs,
+    recovered: true,
+  }
+  await runIsolatedHooks([
+    () => options.onError?.(event),
   ], '[nuxt-use-query] an RPC lifecycle hook threw; the call outcome is unaffected:')
 }
