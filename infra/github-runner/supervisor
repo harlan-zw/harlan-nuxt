@@ -72,6 +72,10 @@ readonly drain_timeout_seconds="${HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS:-1
 # row, so a dead registration clears after twice this long at worst.
 readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
 readonly demand_poll_seconds="${HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS:-30}"
+# GitHub can retain corrupt queued jobs after their pull request closes. They can
+# neither run nor be cancelled, so they must not keep creating runner demand.
+readonly queued_run_max_age_seconds="${HARLAN_DESKTOP_RUNNER_QUEUED_RUN_MAX_AGE_SECONDS:-21600}"
+readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
 readonly container_label='com.harlanzw.desktop-runner'
 # One pnpm store shared by every container, so an ephemeral job resolves packages
 # from local disk instead of refetching them.
@@ -292,20 +296,33 @@ count_idle_burst() {
 
 queued_job_labels_for_repository() {
   local repository="$1"
-  local listing jobs run_id run_status
+  local listing jobs run_id run_status created_at created_epoch
+  local now_epoch oldest_epoch
   local -a run_ids=()
   local -A seen_run_ids=()
+
+  if [[ -n "$fixed_now_epoch" ]]; then
+    now_epoch="$fixed_now_epoch"
+  else
+    now_epoch="$(date +%s)"
+  fi
+  oldest_epoch=$(( now_epoch - queued_run_max_age_seconds ))
 
   # A run becomes in_progress as soon as its first matrix job starts. Its other
   # jobs can still be queued, so scanning only queued runs leaves the pool at one.
   for run_status in queued in_progress; do
     if ! listing="$(github_api --paginate \
       "repos/$repository/actions/runs?status=$run_status&per_page=100" \
-      --jq '.workflow_runs[].id' 2>/dev/null)"; then
+      --jq '.workflow_runs[] | [.id, .created_at] | @tsv' 2>/dev/null)"; then
       return 1
     fi
-    while IFS= read -r run_id; do
+    while IFS=$'\t' read -r run_id created_at; do
       [[ -z "$run_id" || -n "${seen_run_ids[$run_id]:-}" ]] && continue
+      if ! created_epoch="$(date --date="$created_at" +%s 2>/dev/null)"; then
+        log "Ignoring runner demand with an invalid creation time in $repository"
+        continue
+      fi
+      (( created_epoch < oldest_epoch )) && continue
       seen_run_ids[$run_id]=true
       run_ids+=("$run_id")
     done <<<"$listing"
