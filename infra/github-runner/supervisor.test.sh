@@ -25,6 +25,9 @@ fi
 if [[ "$*" == *'actions/runs?status=in_progress'* && -f "$TEST_CALLS/queue-in-progress" ]]; then
   printf '78\t2026-08-27T04:30:00Z\n'
 fi
+if [[ "$*" == *'actions/runs?status=in_progress'* && -f "$TEST_CALLS/queue-empty-in-progress" ]]; then
+  printf '79\t2026-08-27T04:30:00Z\n'
+fi
 if [[ "$*" == *'actions/runs/78/jobs'* && -f "$TEST_CALLS/queue-in-progress" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
@@ -253,3 +256,30 @@ if (( status != 0 )) || [[ -s "$test_root/calls/burst" ]]; then
 fi
 
 printf 'Stale queued job filtering passed.\n'
+
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-empty-in-progress"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || rg --quiet 'Queued job demand is unavailable' "$test_root/output"; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected an empty current run to report available demand.\n' >&2
+  exit 1
+fi
+
+printf 'Empty current workflow demand passed.\n'

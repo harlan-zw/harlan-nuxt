@@ -336,6 +336,8 @@ queued_job_labels_for_repository() {
     fi
     [[ -n "$jobs" ]] && printf '%s\n' "$jobs"
   done
+
+  return 0
 }
 
 queued_jobs_for_pool() {
