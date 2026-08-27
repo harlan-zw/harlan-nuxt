@@ -10,11 +10,9 @@
 #
 # HOW DEMAND IS DETECTED
 #
-# Nothing here polls GitHub. Each container's own runner listener holds a long
-# poll against GitHub and prints `Running job:` on stdout the moment it claims
-# one. The supervisor reads that line and treats it as the scale-up event, so a
-# matrix wider than the warm pool gets extra containers within seconds, and the
-# only GitHub API call made is one registration token per container.
+# Zero-warm pools poll queued jobs in queued and in-progress workflow runs before
+# they register a runner. Warm pools can still use listener claims as their
+# low-latency demand signal.
 #
 # SLOT KINDS
 #
@@ -73,6 +71,7 @@ readonly drain_timeout_seconds="${HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS:-1
 # How often the offline registrations are swept. A delete needs two sweeps in a
 # row, so a dead registration clears after twice this long at worst.
 readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
+readonly demand_poll_seconds="${HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS:-30}"
 readonly container_label='com.harlanzw.desktop-runner'
 # One pnpm store shared by every container, so an ephemeral job resolves packages
 # from local disk instead of refetching them.
@@ -140,7 +139,7 @@ github_api() {
   fi
 
   for argument in "$@"; do
-    if [[ "$argument" == repos/*/actions/runners* ]]; then
+    if [[ "$argument" == repos/*/actions/* ]]; then
       endpoint="$argument"
       break
     fi
@@ -206,8 +205,12 @@ read_config() {
     [[ -z "$repository" || "$repository" == \#* ]] && continue
 
     if [[ -z "$memory_swap" ]]; then
-      log "Ignoring malformed pool line: $repository"
-      continue
+      log "Malformed pool line: $repository"
+      return 1
+    fi
+    if [[ ! "$warm" =~ ^[0-9]+$ || ! "$max" =~ ^[1-9][0-9]*$ || ! "$cpus" =~ ^[1-9][0-9]*$ || "$warm" -gt "$max" ]]; then
+      log "Invalid warm, max, or CPU value for $repository"
+      return 1
     fi
 
     pool_repository+=("$repository")
@@ -271,6 +274,101 @@ count_markers() {
   done
 
   printf '%s' "$total"
+}
+
+count_idle_burst() {
+  local pool_index="$1"
+  local marker container_name
+  local total=0
+
+  for marker in "$state_dir/burst/${pool_slug[$pool_index]}"/*; do
+    [[ -f "$marker" ]] || continue
+    container_name="${marker##*/}"
+    [[ -f "$state_dir/claimed/$container_name" ]] || total=$(( total + 1 ))
+  done
+
+  printf '%s' "$total"
+}
+
+queued_job_labels_for_repository() {
+  local repository="$1"
+  local listing jobs run_id run_status
+  local -a run_ids=()
+  local -A seen_run_ids=()
+
+  # A run becomes in_progress as soon as its first matrix job starts. Its other
+  # jobs can still be queued, so scanning only queued runs leaves the pool at one.
+  for run_status in queued in_progress; do
+    if ! listing="$(github_api --paginate \
+      "repos/$repository/actions/runs?status=$run_status&per_page=100" \
+      --jq '.workflow_runs[].id' 2>/dev/null)"; then
+      return 1
+    fi
+    while IFS= read -r run_id; do
+      [[ -z "$run_id" || -n "${seen_run_ids[$run_id]:-}" ]] && continue
+      seen_run_ids[$run_id]=true
+      run_ids+=("$run_id")
+    done <<<"$listing"
+  done
+
+  for run_id in ${run_ids[@]+"${run_ids[@]}"}; do
+    if ! jobs="$(github_api --paginate \
+      "repos/$repository/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+      --jq '.jobs[] | select(.status == "queued") | (.labels | join(","))' 2>/dev/null)"; then
+      return 1
+    fi
+    [[ -n "$jobs" ]] && printf '%s\n' "$jobs"
+  done
+}
+
+queued_jobs_for_pool() {
+  local pool_index="$1"
+  local jobs="$2"
+  local label="${pool_label[$pool_index]%%,*}"
+  local labels
+  local total=0
+
+  while IFS= read -r labels; do
+    if [[ ",$labels," == *",$label,"* ]]; then
+      total=$(( total + 1 ))
+    fi
+  done <<<"$jobs"
+
+  printf '%s' "$total"
+}
+
+run_demand_poller() {
+  local pool_index repository jobs queued idle deficit request
+  local -A repository_jobs=()
+  local -A repository_result=()
+
+  while [[ ! -f "$state_dir/shutdown" ]]; do
+    repository_jobs=()
+    repository_result=()
+    for pool_index in "${!pool_repository[@]}"; do
+      [[ -f "$state_dir/shutdown" ]] && return 0
+      repository="${pool_repository[$pool_index]}"
+      if [[ -z "${repository_result[$repository]:-}" ]]; then
+        if jobs="$(queued_job_labels_for_repository "$repository")"; then
+          repository_result[$repository]=available
+          repository_jobs[$repository]="$jobs"
+        else
+          repository_result[$repository]=unavailable
+        fi
+      fi
+      if [[ "${repository_result[$repository]}" == unavailable ]]; then
+        log "Queued job demand is unavailable for ${pool_slug[$pool_index]}"
+        continue
+      fi
+      queued="$(queued_jobs_for_pool "$pool_index" "${repository_jobs[$repository]}")"
+      idle="$(count_idle_burst "$pool_index")"
+      deficit=$(( queued - idle ))
+      for (( request = 0; request < deficit; request++ )); do
+        printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
+      done
+    done
+    sleep "$demand_poll_seconds"
+  done
 }
 
 # The store volume must exist and belong to the container's `runner` user before
@@ -391,12 +489,11 @@ run_container() {
         # demand signal in this system.
         if [[ "$line" == *'Running job:'* && ! -f "$state_dir/claimed/$container_name" ]]; then
           : >"$state_dir/claimed/$container_name"
-          # A burst container reserved its CPU when the scaler launched it.
-          # Charging again here would double count it.
+          # A burst container reserved capacity before it registered.
           if [[ "$slot_kind" == warm ]]; then
             reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
+            printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
           fi
-          printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
         fi
       done
   pipe_status=("${PIPESTATUS[@]}")
@@ -763,16 +860,21 @@ main() {
   # every wide matrix serialises behind its warm slots for no visible reason.
   local warm_floor=0
   local warm_memory_floor=0
+  local widest_pool_cpu=0
   local widest_pool_memory=0
   for pool_index in "${!pool_repository[@]}"; do
     warm_floor=$(( warm_floor + pool_warm[pool_index] * pool_cpus[pool_index] ))
     warm_memory_floor=$(( warm_memory_floor + pool_warm[pool_index] * pool_memory_gib[pool_index] ))
+    if (( pool_cpus[pool_index] > widest_pool_cpu )); then
+      widest_pool_cpu="${pool_cpus[$pool_index]}"
+    fi
     if (( pool_memory_gib[pool_index] > widest_pool_memory )); then
       widest_pool_memory="${pool_memory_gib[$pool_index]}"
     fi
   done
-  if (( warm_floor >= cpu_budget )); then
-    log "Warm floor is $warm_floor CPU against a burst threshold of $cpu_budget, so bursting is off whenever most pools are busy. Lower warm, or raise HARLAN_DESKTOP_RUNNER_CPU_BUDGET."
+  if (( warm_floor > cpu_budget )); then
+    log "Warm floor is $warm_floor CPU against a budget of $cpu_budget"
+    return 1
   fi
 
   # The memory budget gates BURSTS. A warm slot claims a job without asking, so
@@ -780,22 +882,25 @@ main() {
   # A busy warm slot does spend, which keeps later bursts honest, but nothing can
   # refuse the warm job itself.
   #
-  # This is reported against host RAM, not against the budget. Every pool needs
-  # `warm` of at least 1 or it is inert -- the only demand signal in this system
-  # is a running container claiming a job, so a pool with no warm slot never
-  # spawns, never claims, and never bursts. That puts a hard floor under this
-  # number, so comparing it to the budget would print a warning that no
-  # configuration could ever clear. The levers are the pools' `memory` values and
-  # the number of pools, never `warm`.
   local host_ram_gib
   host_ram_gib="$(free --gibi | awk '/^Mem:/ { print $2 }')"
-  if [[ -n "$host_ram_gib" ]] && (( warm_memory_floor > host_ram_gib )); then
-    log "Warm slots can promise ${warm_memory_floor}g at once against ${host_ram_gib}g of RAM, and a warm job cannot be refused. Only every pool building at the same instant reaches that, but nothing prevents it. Lower the pools' memory values, or run fewer pools."
+  if (( warm_memory_floor > memory_budget_gib )); then
+    log "Warm floor is ${warm_memory_floor}g against a memory budget of ${memory_budget_gib}g"
+    return 1
+  fi
+  if [[ -n "$host_ram_gib" ]] && (( memory_budget_gib > host_ram_gib )); then
+    log "Memory budget is ${memory_budget_gib}g on a ${host_ram_gib}g host"
+    return 1
   fi
 
-  # A pool whose single container cannot fit the budget would be held forever.
+  # A pool whose single container cannot fit a budget would be held forever.
+  if (( widest_pool_cpu > cpu_budget )); then
+    log "A pool asks for ${widest_pool_cpu} CPU against a $cpu_budget budget"
+    return 1
+  fi
   if (( widest_pool_memory > memory_budget_gib )); then
-    log "A pool asks for ${widest_pool_memory}g against a ${memory_budget_gib}g budget, so it can never burst. Raise HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB above it."
+    log "A pool asks for ${widest_pool_memory}g against a ${memory_budget_gib}g budget"
+    return 1
   fi
 
   ensure_pnpm_store
@@ -806,6 +911,8 @@ main() {
   # Hold the pipe open for writing for this process's lifetime, so the scaler's
   # read loop never sees end-of-file between bursts.
   exec {scale_pipe_holder}>"$scale_pipe"
+
+  run_demand_poller &
 
   for pool_index in "${!pool_repository[@]}"; do
     log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]} memory ${pool_memory[$pool_index]}"

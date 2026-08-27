@@ -11,13 +11,15 @@ the user `harlan-zw`, so each repository needs its own registration. The
 supervisor holds every pool in one process so that is a config line, not a
 service.
 
-## Why nothing polls
+## Demand
 
-Each container's runner listener holds a long poll against GitHub and prints
-`Running job:` on stdout the instant it claims one. The supervisor reads that
-line and treats it as the scale-up event. The only GitHub API call it makes is
-one registration token per container, so a wide matrix costs no extra requests
-and no webhook endpoint is needed.
+The supervisor polls queued GitHub Actions jobs by runner label.
+
+It reserves host capacity before it registers a runner.
+
+Workflow shells with no jobs create no demand.
+
+A warm listener remains optional for a pool that needs lower startup latency.
 
 ## Trust boundary
 
@@ -118,20 +120,24 @@ service drains the queue.
 
 ## Tuning
 
-`runners.conf` carries `warm`, `max`, and `cpus` per pool. Environment overrides:
+`runners.conf` carries `warm`, `max`, and `cpus` per pool. Use zero warm runners
+to make every job pass admission before runner registration.
+
+Environment overrides:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
 | `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
+| `HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS` | `30` | Time between queued job demand checks. |
 | `HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS` | `1800` | Time a stop waits for jobs in flight before it kills them. Keep the unit's `TimeoutStopSec` above it. |
 | `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
 | `HARLAN_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
 
-Idle warm containers cost about 60 MB each and no CPU, so they do not spend
-against the threshold. Only a warm container holding a job, and a burst container
-from the moment it launches, do.
+Idle warm containers cost about 60 MB each and no CPU.
+
+Their possible jobs still count toward the startup floor.
 
 ## Why memory is budgeted separately
 
@@ -147,32 +153,36 @@ the symptom is a deploy dying at `nuxt build` with exit 129 while comfortably
 inside its own 32g limit. It was not killed for exceeding its cap. It was the
 biggest thing alive when the CI containers admitted beside it ran the host out.
 
-So bursts now spend a memory budget as well as a CPU one, and both must clear.
-A pool that fits the CPU threshold but not the memory budget is held.
+Every demand-started runner spends CPU and memory before registration.
 
-**The budget gates bursts, not warm slots.** A warm slot claims a job without
-asking, so the sum of `warm * memory` across pools is capacity this host has
-promised unconditionally, and no admission decision can take it back. A busy
-warm slot does spend, which keeps later bursts honest, but nothing can refuse
-the warm job itself. The supervisor logs that floor at startup when it exceeds
-host RAM.
+A runner starts only when both reservations fit.
 
-`warm` is not the lever for it. **Every pool needs `warm` of at least 1 or it is
-inert.** The only demand signal in this system is a running container claiming a
-job, so a pool with no warm slot never spawns a container, never claims, and
-never bursts. That puts a hard floor under the promised total of one container
-per pool, and the levers are the pools' `memory` values and the number of pools.
+Warm jobs can claim before admission.
 
-`CPU_BUDGET` holds back **bursts**; it cannot cap total load. A warm container
-claims its job straight from GitHub and the supervisor has no say in it, so the
-real floor is `sum(warm * cpus)` across every pool, and in-flight CPU exceeds the
-threshold whenever enough warm runners are busy at once. That is intended: under
-a wide multi-repository push, warm capacity absorbs the work and the rest queues
-for a few seconds rather than piling burst containers onto a 24 core box.
+The supervisor therefore rejects startup when the warm floor exceeds a budget.
 
-The catch is that when the warm floor is at or above the threshold, bursting is
-effectively off. The supervisor warns at startup when that is true, since the
-symptom otherwise is every wide matrix serialising for no visible reason.
+It also rejects a memory budget larger than host RAM.
+
+The supplied configurations use zero warm runners.
+
+Queued jobs then wait for the next demand poll instead of bypassing admission.
+
+## Hogwild installation
+
+Install the versioned Hogwild files into their fixed system paths:
+
+```bash
+sudo install -Dm755 infra/github-runner/supervisor /var/lib/github-runner/bin/supervisor
+sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
+sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
+sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
+sudo install -Dm755 infra/github-runner/hogwild-safe-poweroff /usr/local/sbin/hogwild-safe-poweroff
+sudo systemctl daemon-reload
+sudo systemctl kill --signal HUP systemd-logind
+sudo systemctl restart hogwild-github-runner.service
+```
+
+Use `sudo hogwild-safe-poweroff` for a drained shutdown.
 
 ## Updating the runner
 
