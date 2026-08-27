@@ -8,6 +8,7 @@ describe('prepareCloudflareBindingTypes', () => {
   it('gives reordered Wrangler vars and ProcessEnv keys the same signature', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-binding-types-'))
     const common = {
+      cacheDir: false as const,
       compatibilityDate: '2026-08-11',
       nodeCompat: true,
       rootDir: root,
@@ -40,6 +41,8 @@ describe('prepareCloudflareBindingTypes', () => {
       })
 
       expect(prepared.signature).toBe(final.signature)
+      expect(prepared.content).not.toContain(root)
+      expect(final.content).not.toContain(root)
     }
     finally {
       await rm(root, { force: true, recursive: true })

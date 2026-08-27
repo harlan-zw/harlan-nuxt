@@ -21,7 +21,10 @@ import {
 } from './wrangler'
 
 export interface ModuleOptions {
-  bindingTypes?: boolean
+  bindingTypes?: boolean | {
+    /** Shared cache directory. Set false to generate binding types every time. */
+    cacheDir?: false | string
+  }
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
@@ -209,7 +212,7 @@ export type BindingTypeAudit
  * clean build for types that no longer match the deployed config.
  */
 export function resolveBindingTypeAudit(
-  bindingTypes: boolean | undefined,
+  bindingTypes: ModuleOptions['bindingTypes'],
   signature: string | undefined,
 ): BindingTypeAudit {
   if (bindingTypes === false)
@@ -325,12 +328,17 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       getContents: async () => {
         const { prepareCloudflareBindingTypes } = await import('./binding-types')
         const compatibilityDate = nuxt.options.compatibilityDate
+        const cacheDir = typeof options.bindingTypes === 'object'
+          ? options.bindingTypes.cacheDir
+          : undefined
         const artifact = await prepareCloudflareBindingTypes({
           buildDir: nuxt.options.buildDir,
+          cacheDir,
           compatibilityDate: typeof compatibilityDate === 'string'
             ? compatibilityDate || undefined
             : compatibilityDate.cloudflare ?? compatibilityDate.default,
           nodeCompat: Boolean((nuxt.options.nitro as NitroCloudflareShape).cloudflare?.nodeCompat),
+          onCacheInvalid: reason => logger.warn(`Binding type cache entry is invalid: ${reason}. Rebuilding it.`),
           rootDir: nuxt.options.rootDir,
           wrangler: (nuxt.options.nitro as NitroCloudflareShape).cloudflare?.wrangler ?? {},
         })

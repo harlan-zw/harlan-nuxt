@@ -280,6 +280,18 @@ function apiToken(event?: H3Event) {
 
 `nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
 
+Binding types use a shared cache under `$XDG_CACHE_HOME/nuxt-cloudflare` or `~/.cache/nuxt-cloudflare`. The cache key includes the Wrangler config and version. Each worktree still receives private `.nuxt` files. Set `cacheDir` to a shared absolute path. Set it to `false` to bypass the cache.
+
+```ts
+export default defineNuxtConfig({
+  nuxtCloudflare: {
+    bindingTypes: {
+      cacheDir: '/shared/nuxt-cloudflare',
+    },
+  },
+})
+```
+
 The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
 
 `useCloudflareRuntimeConfig` reads runtime config from both contexts. On Cloudflare, `NUXT_*` Worker vars and secrets bind onto runtime config only through an event, so a bare `useRuntimeConfig()` off the request path returns build-time defaults. Without an event this reads the Cloudflare entry environment and wraps it as the source Nitro requires. The module's Nitro plugin supplies the reader; use `runtimeConfigSource` directly only when you own the `useRuntimeConfig` call.
