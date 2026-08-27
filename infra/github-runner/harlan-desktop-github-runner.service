@@ -11,19 +11,9 @@ Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner
 # load sat near 8 with 46 cores committed. 48 was below the 58-core warm floor,
 # so bursting switched off whenever most pools were busy and the queue stalled.
 Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=72
-# 60g host. Sized from MEASURED usage, not from the container limits it sums.
-#
-# A CI container is capped at 12g but measured 0.02-4.2g resident all afternoon:
-# eight live containers held 104g of limits against 3g of real use. Budgeting the
-# limits starved the one repository that had a backlog, because the budget is
-# global and first-come, so idle warm slots elsewhere held it while 50 jobs
-# queued. 80g of promises maps to roughly 15-25g of real memory against the ~30g
-# this host has spare.
-#
-# Re-read `memory.peak` from a busy container before moving this again. The two
-# earlier values, 36 and 52, were both derived from limits rather than
-# measurement, and both throttled the queue.
-Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=80
+# Leave 12 GiB of the 60 GiB host outside runner container limits.
+Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=48
+Environment=HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=15
 ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
 Restart=always
 RestartSec=10
