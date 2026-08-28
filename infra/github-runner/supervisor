@@ -76,6 +76,9 @@ readonly demand_poll_seconds="${HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS:-30}"
 # neither run nor be cancelled, so they must not keep creating runner demand.
 readonly queued_run_max_age_seconds="${HARLAN_DESKTOP_RUNNER_QUEUED_RUN_MAX_AGE_SECONDS:-21600}"
 readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
+readonly status_interval_seconds="${HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS:-15}"
+readonly status_output_override="${HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT:-}"
+readonly status_publisher="${HARLAN_DESKTOP_RUNNER_STATUS_PUBLISHER:-$(dirname "${BASH_SOURCE[0]}")/publish-status}"
 readonly container_label='com.harlanzw.desktop-runner'
 # One pnpm store shared by every container, so an ephemeral job resolves packages
 # from local disk instead of refetching them.
@@ -294,6 +297,16 @@ count_idle_burst() {
   printf '%s' "$total"
 }
 
+publish_queue_count() {
+  local pool_index="$1"
+  local queued="$2"
+  local target="$state_dir/queued/${pool_slug[$pool_index]}"
+  local temporary="$target.$$"
+
+  printf '%s\n' "$queued" >"$temporary"
+  mv --force "$temporary" "$target"
+}
+
 queued_job_labels_for_repository() {
   local repository="$1"
   local listing jobs run_id run_status created_at created_epoch
@@ -376,10 +389,12 @@ run_demand_poller() {
         fi
       fi
       if [[ "${repository_result[$repository]}" == unavailable ]]; then
+        rm --force "$state_dir/queued/${pool_slug[$pool_index]}"
         log "Queued job demand is unavailable for ${pool_slug[$pool_index]}"
         continue
       fi
       queued="$(queued_jobs_for_pool "$pool_index" "${repository_jobs[$repository]}")"
+      publish_queue_count "$pool_index" "$queued"
       idle="$(count_idle_burst "$pool_index")"
       deficit=$(( queued - idle ))
       for (( request = 0; request < deficit; request++ )); do
@@ -387,6 +402,69 @@ run_demand_poller() {
       done
     done
     sleep "$demand_poll_seconds"
+  done
+}
+
+record_running_job() {
+  local container_name="$1"
+  local job_name="$2"
+  local target="$state_dir/jobs/$container_name.json"
+  local temporary="$target.$$"
+
+  # Runner output is a boundary. Keep visible text bounded before JSON encoding.
+  job_name="${job_name:0:240}"
+  jq --compact-output --null-input \
+    --arg name "$job_name" \
+    --argjson startedAt "$(( $(date +%s) * 1000 ))" \
+    '{ name: $name, startedAt: $startedAt }' >"$temporary"
+  mv --force "$temporary" "$target"
+}
+
+record_completed_job() {
+  local container_name="$1"
+  local repository="$2"
+  local pool="$3"
+  local reported_outcome="$4"
+  local job_file="$state_dir/jobs/$container_name.json"
+  local outcome event recent_file="$state_dir/recent/jobs.ndjson"
+
+  [[ -r "$job_file" ]] || return 0
+  case "$reported_outcome" in
+    Succeeded) outcome='Succeeded' ;;
+    Failed) outcome='Failed' ;;
+    Canceled|Cancelled) outcome='Cancelled' ;;
+    *) outcome='Unknown' ;;
+  esac
+
+  event="$(jq --compact-output \
+    --arg repository "$repository" \
+    --arg pool "$pool" \
+    --arg outcome "$outcome" \
+    --argjson completedAt "$(( $(date +%s) * 1000 ))" \
+    '. + { completedAt: $completedAt, outcome: $outcome, pool: $pool, repository: $repository }' \
+    "$job_file")"
+
+  (
+    flock --exclusive 9
+    printf '%s\n' "$event" >>"$recent_file"
+    tail --lines 40 "$recent_file" >"$recent_file.$$"
+    mv --force "$recent_file.$$" "$recent_file"
+  ) 9>"$state_dir/recent/jobs.lock"
+  rm --force "$job_file"
+}
+
+run_status_publisher() {
+  local output_file="${status_output_override:-$state_dir/status.json}"
+
+  if [[ ! -x "$status_publisher" ]]; then
+    log "Runner status publisher is unavailable: $status_publisher"
+    return 0
+  fi
+
+  while [[ ! -f "$state_dir/shutdown" ]]; do
+    "$status_publisher" "$state_dir" "$output_file" \
+      || log 'Runner status snapshot failed'
+    sleep "$status_interval_seconds"
   done
 }
 
@@ -461,6 +539,7 @@ run_container() {
   local registration_token
   local runner_name
   local line
+  local job_name reported_outcome
   local -a pipe_status=()
 
   if ! registration_token="$(github_api \
@@ -508,17 +587,27 @@ run_container() {
         # demand signal in this system.
         if [[ "$line" == *'Running job:'* && ! -f "$state_dir/claimed/$container_name" ]]; then
           : >"$state_dir/claimed/$container_name"
+          job_name="${line#*Running job:}"
+          job_name="${job_name#"${job_name%%[![:space:]]*}"}"
+          record_running_job "$container_name" "$job_name"
           # A burst container reserved capacity before it registered.
           if [[ "$slot_kind" == warm ]]; then
             reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
             printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
           fi
         fi
+        if [[ "$line" == *' completed with result: '* ]]; then
+          reported_outcome="${line##* completed with result: }"
+          record_completed_job "$container_name" "$repository" "${pool_slug[$pool_index]}" "$reported_outcome"
+        fi
       done
   pipe_status=("${PIPESTATUS[@]}")
   set -e
 
   rm --force "$state_dir/claimed/$container_name"
+  if [[ -f "$state_dir/jobs/$container_name.json" ]]; then
+    record_completed_job "$container_name" "$repository" "${pool_slug[$pool_index]}" Unknown
+  fi
   [[ "$slot_kind" == warm ]] && release "$container_name"
 
   # Index 1 is `docker run`. Index 0 is the token `printf`, which cannot fail in
@@ -832,6 +921,8 @@ cleanup() {
 main() {
   require_command docker
   require_command gh
+  require_command jq
+  require_command flock
 
   if ! docker image inspect "$runner_image" >/dev/null 2>&1; then
     log "Runner image is unavailable; build $runner_image from infra/github-runner."
@@ -846,7 +937,8 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline"
+  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued" "$state_dir/recent"
+  chmod 0750 "$state_dir"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"
   mkfifo --mode 0600 "$scale_pipe"
@@ -932,6 +1024,7 @@ main() {
   exec {scale_pipe_holder}>"$scale_pipe"
 
   run_demand_poller &
+  run_status_publisher &
 
   for pool_index in "${!pool_repository[@]}"; do
     log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]} memory ${pool_memory[$pool_index]}"

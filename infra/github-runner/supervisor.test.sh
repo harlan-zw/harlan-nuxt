@@ -141,6 +141,8 @@ HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
 HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS=30 \
+HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.05 \
+HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
 timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
 status=$?
 set -e
@@ -165,6 +167,12 @@ if (( $(wc -l <"$test_root/calls/stopped") != 4 )); then
   exit 1
 fi
 
+if ! jq --exit-status '.recentJobs | any(.name == "first" and .outcome == "Succeeded")' "$test_root/calls/status.json" >/dev/null; then
+  cat "$test_root/calls/status.json"
+  printf 'Expected completed jobs in the published runner status.\n' >&2
+  exit 1
+fi
+
 printf 'Capacity retry passed.\n'
 
 rm -rf "$test_root/calls" "$test_root/runtime"
@@ -183,6 +191,8 @@ HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
 HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.05 \
+HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
 HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
 timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
 status=$?
@@ -198,6 +208,12 @@ if [[ ! -s "$test_root/calls/burst" ]]; then
   cat "$test_root/output"
   cat "$test_root/calls/docker"
   printf 'Expected a queued job to start a zero-warm pool.\n' >&2
+  exit 1
+fi
+
+if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, live: 0, maximum: 2, memoryPerRunnerBytes: 1073741824, name: "example-ci", queued: 1, repository: "harlan-zw/example", running: 0 }]' "$test_root/calls/status.json" >/dev/null; then
+  cat "$test_root/calls/status.json"
+  printf 'Expected queued demand in the published runner status.\n' >&2
   exit 1
 fi
 

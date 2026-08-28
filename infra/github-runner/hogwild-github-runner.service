@@ -13,7 +13,7 @@ SupplementaryGroups=docker
 StateDirectory=github-runner
 StateDirectoryMode=0700
 RuntimeDirectory=github-runner
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0750
 Environment=HOME=/var/lib/github-runner
 Environment=XDG_RUNTIME_DIR=/run/github-runner
 Environment=HARLAN_DESKTOP_RUNNER_CONFIG=/var/lib/github-runner/config/runners.conf
