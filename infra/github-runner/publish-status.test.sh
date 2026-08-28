@@ -40,6 +40,19 @@ esac
 EOF
 chmod +x "$test_root/bin/docker"
 
+cat >"$test_root/bin/date" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  +%s) printf '1787930500\n' ;;
+  +%s.%N) printf '1787930500.123456789\n' ;;
+  +%s%3N) printf '1787930500123456789\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+chmod +x "$test_root/bin/date"
+
 PATH="$test_root/bin:$PATH" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=20 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=24 \
@@ -78,6 +91,13 @@ jq --exit-status '
 
 if [[ "$(stat -c '%a' "$snapshot")" != 640 ]]; then
   printf 'Expected the runner snapshot to be group-readable only.\n' >&2
+  exit 1
+fi
+
+PATH="$test_root/bin:$PATH" \
+./infra/github-runner/publish-status "$test_root/state"
+if ! jq --exit-status '.updatedAt == 1787930500000' "$snapshot" >/dev/null; then
+  printf 'Expected a portable millisecond timestamp.\n' >&2
   exit 1
 fi
 
