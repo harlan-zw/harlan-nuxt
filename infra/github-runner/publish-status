@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly state_dir="${1:?Runner state directory is required}"
+readonly output_file="${2:-$state_dir/status.json}"
+readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
+readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
+readonly fixed_now_epoch_ms="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS:-}"
+readonly container_label='com.harlanzw.desktop-runner'
+
+if [[ ! -r "$state_dir/runners.conf" ]]; then
+  printf 'Runner config is unavailable: %s\n' "$state_dir/runners.conf" >&2
+  exit 1
+fi
+
+for command_name in docker flock jq; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'Required command is unavailable: %s\n' "$command_name" >&2
+    exit 1
+  fi
+done
+
+pool_slug_for() {
+  local repository="$1"
+  local label="${2%%,*}"
+
+  printf '%s-%s' "${repository##*/}" "${label#harlan-desktop-}" \
+    | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+memory_bytes_for() {
+  local value="$1"
+  local number="${value%[gGmM]}"
+
+  case "$value" in
+    *[gG]) printf '%s' "$(( number * 1024 * 1024 * 1024 ))" ;;
+    *[mM]) printf '%s' "$(( number * 1024 * 1024 ))" ;;
+    *) return 1 ;;
+  esac
+}
+
+readonly temporary_pools="$(mktemp --tmpdir="$state_dir" .status-pools.XXXXXX)"
+readonly temporary_snapshot="$(mktemp --tmpdir="$state_dir" .status.XXXXXX)"
+cleanup() {
+  rm --force "$temporary_pools" "$temporary_snapshot"
+}
+trap cleanup EXIT
+
+metadata="$(docker ps \
+  --filter "label=$container_label=true" \
+  --format '{{json .}}' | jq --compact-output --slurp '
+  def labels:
+    .Labels
+    | split(",")
+    | map(select(contains("=")) | split("=") | { key: .[0], value: (.[1:] | join("=")) })
+    | from_entries;
+  [ .[]
+    | (labels) as $labels
+    | {
+        id: .ID,
+        name: .Names,
+        pool: $labels["com.harlanzw.desktop-runner.pool"],
+        repository: $labels["com.harlanzw.desktop-runner.repository"]
+      }
+    | select(.id != null and .name != null and .pool != null and .repository != null)
+  ]
+')"
+
+mapfile -t container_ids < <(jq --raw-output '.[].id' <<<"$metadata")
+raw_stats=''
+if (( ${#container_ids[@]} > 0 )); then
+  # Keep logical state when one resource sample fails. The snapshot marks each resource unavailable.
+  raw_stats="$(docker stats --no-stream --format '{{json .}}' "${container_ids[@]}" 2>/dev/null || true)"
+fi
+stats="$(jq --compact-output --slurp '
+  def bytes:
+    capture("^(?<amount>[0-9]+(\\.[0-9]+)?)(?<unit>B|kB|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$") as $match
+    | ($match.amount | tonumber)
+      * ({ B: 1, kB: 1000, KB: 1000, MB: 1000000, GB: 1000000000, TB: 1000000000000,
+           KiB: 1024, MiB: 1048576, GiB: 1073741824, TiB: 1099511627776 }[$match.unit]);
+  [ .[] | {
+      cpuPercent: (try (.CPUPerc | rtrimstr("%") | tonumber) catch null),
+      memoryBytes: (try (.MemUsage | split("/")[0] | gsub(" "; "") | bytes) catch null),
+      name: .Name,
+      networkRxBytes: (try (.NetIO | split("/")[0] | gsub(" "; "") | bytes) catch null),
+      networkTxBytes: (try (.NetIO | split("/")[1] | gsub(" "; "") | bytes) catch null),
+      tasks: (try (.PIDs | tonumber) catch null)
+    }
+  ]
+' <<<"$raw_stats")"
+
+jobs="$({
+  for job_file in "$state_dir/jobs"/*.json; do
+    [[ -f "$job_file" ]] || continue
+    container_name="${job_file##*/}"
+    container_name="${container_name%.json}"
+    # A partial event file is ignored until the next snapshot.
+    jq --compact-output --arg container "$container_name" \
+      'select(.name | type == "string") | select(.startedAt | type == "number") | . + { container: $container }' \
+      "$job_file" 2>/dev/null || true
+  done
+} | jq --compact-output --slurp '.')"
+
+recent_jobs='[]'
+if [[ -r "$state_dir/recent/jobs.ndjson" ]]; then
+  recent_jobs="$(flock --shared "$state_dir/recent/jobs.lock" \
+    tail --lines 40 "$state_dir/recent/jobs.ndjson" \
+    | jq --compact-output --slurp '[.[] | select(type == "object")] | .[-20:]')"
+fi
+
+while IFS='|' read -r repository labels warm maximum cpus memory memory_swap; do
+  repository="${repository#"${repository%%[![:space:]]*}"}"
+  [[ -z "$repository" || "$repository" == \#* || -z "$memory_swap" ]] && continue
+  slug="$(pool_slug_for "$repository" "$labels")"
+  if ! memory_bytes="$(memory_bytes_for "$memory")"; then
+    printf 'Pool memory has no supported suffix: %s\n' "$memory" >&2
+    exit 1
+  fi
+  queued='null'
+  if [[ -r "$state_dir/queued/$slug" ]]; then
+    read -r queued_value <"$state_dir/queued/$slug" || queued_value=''
+    [[ "$queued_value" =~ ^[0-9]+$ ]] && queued="$queued_value"
+  fi
+  jq --compact-output --null-input \
+    --arg name "$slug" \
+    --arg repository "$repository" \
+    --argjson cpuPerRunner "$cpus" \
+    --argjson maximum "$maximum" \
+    --argjson memoryPerRunnerBytes "$memory_bytes" \
+    --argjson queued "$queued" \
+    '{
+      cpuPerRunner: $cpuPerRunner,
+      maximum: $maximum,
+      memoryPerRunnerBytes: $memoryPerRunnerBytes,
+      name: $name,
+      queued: $queued,
+      repository: $repository
+    }' >>"$temporary_pools"
+done <"$state_dir/runners.conf"
+pools="$(jq --compact-output --slurp '.' "$temporary_pools")"
+
+runners="$(jq --compact-output --null-input \
+  --argjson jobs "$jobs" \
+  --argjson metadata "$metadata" \
+  --argjson stats "$stats" '
+  $metadata | map(
+    . as $container
+    | ($jobs | map(select(.container == $container.name)) | first) as $job
+    | ($stats | map(select(.name == $container.name)) | first) as $resources
+    | {
+        activity: (if $job == null then "Starting" else "Running" end),
+        cpuPercent: ($resources.cpuPercent // null),
+        memoryBytes: ($resources.memoryBytes // null),
+        name: $container.name,
+        networkRxBytes: ($resources.networkRxBytes // null),
+        networkTxBytes: ($resources.networkTxBytes // null),
+        pool: $container.pool,
+        repository: $container.repository,
+        tasks: ($resources.tasks // null)
+      }
+      + if $job == null then {} else { job: { name: $job.name, startedAt: $job.startedAt } } end
+  )
+')"
+
+pools="$(jq --compact-output --null-input \
+  --argjson pools "$pools" \
+  --argjson runners "$runners" '
+  $pools | map(
+    . as $pool
+    | . + {
+        live: ([ $runners[] | select(.pool == $pool.name) ] | length),
+        running: ([ $runners[] | select(.pool == $pool.name and .activity == "Running") ] | length)
+      }
+  )
+')"
+
+if [[ -n "$fixed_now_epoch_ms" ]]; then
+  updated_at="$fixed_now_epoch_ms"
+else
+  updated_at="$(date +%s%3N)"
+fi
+
+jq --null-input \
+  --argjson cpuBudget "$cpu_budget" \
+  --argjson memoryBudgetBytes "$(( memory_budget_gib * 1024 * 1024 * 1024 ))" \
+  --argjson pools "$pools" \
+  --argjson recentJobs "$recent_jobs" \
+  --argjson runners "$runners" \
+  --argjson updatedAt "$updated_at" \
+  '{
+    version: 1,
+    updatedAt: $updatedAt,
+    budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes },
+    pools: $pools,
+    runners: $runners,
+    recentJobs: $recentJobs
+  }' >"$temporary_snapshot"
+
+chmod 0640 "$temporary_snapshot"
+mv --force "$temporary_snapshot" "$output_file"

@@ -59,6 +59,8 @@ docker build --tag harlan-desktop-github-runner:2.336.0 infra/github-runner
 
 install -Dm755 infra/github-runner/supervisor \
   ~/.local/lib/harlan-desktop-github-runner/supervisor
+install -Dm755 infra/github-runner/publish-status \
+  ~/.local/lib/harlan-desktop-github-runner/publish-status
 install -Dm644 infra/github-runner/runners.conf \
   ~/.config/harlan-desktop-github-runner/runners.conf
 install -Dm644 infra/github-runner/harlan-desktop-github-runner.service \
@@ -99,6 +101,10 @@ gh api repos/harlan-zw/nuxtseo.com/actions/runners \
 journalctl --user --unit harlan-desktop-github-runner.service --follow
 ```
 
+The supervisor publishes `status.json` beside its runtime state every 15 seconds.
+
+The snapshot contains pool demand, active jobs, recent outcomes, and container resources. It contains no credentials or Docker configuration.
+
 Stop local CI before shutting down or doing CPU-heavy local work:
 
 ```bash
@@ -131,6 +137,7 @@ Environment overrides:
 | `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
 | `HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS` | `30` | Time between queued job demand checks. |
+| `HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS` | `15` | Time between read-only status snapshots. |
 | `HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS` | `1800` | Time a stop waits for jobs in flight before it kills them. Keep the unit's `TimeoutStopSec` above it. |
 | `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |
 | `HARLAN_DESKTOP_RUNNER_CONFIG` | `/etc/harlan-desktop-github-runner/runners.conf` | Pool table. |
@@ -173,6 +180,7 @@ Install the versioned Hogwild files into their fixed system paths:
 
 ```bash
 sudo install -Dm755 infra/github-runner/supervisor /var/lib/github-runner/bin/supervisor
+sudo install -Dm755 infra/github-runner/publish-status /var/lib/github-runner/bin/publish-status
 sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
 sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
 sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
