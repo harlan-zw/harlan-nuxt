@@ -179,7 +179,7 @@ pools="$(jq --compact-output --null-input \
 if [[ -n "$fixed_now_epoch_ms" ]]; then
   updated_at="$fixed_now_epoch_ms"
 else
-  updated_at="$(date +%s%3N)"
+  updated_at="$(( $(date +%s) * 1000 ))"
 fi
 
 jq --null-input \
