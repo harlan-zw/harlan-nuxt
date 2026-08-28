@@ -136,7 +136,7 @@ Environment overrides:
 | `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
 | `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
-| `HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS` | `30` | Time between queued job demand checks. |
+| `HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS` | `60` | Time between queued job demand checks. Values below 60 use 60 to protect the GitHub API budget. |
 | `HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS` | `15` | Time between read-only status snapshots. |
 | `HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS` | `1800` | Time a stop waits for jobs in flight before it kills them. Keep the unit's `TimeoutStopSec` above it. |
 | `HARLAN_DESKTOP_RUNNER_IMAGE` | `harlan-desktop-github-runner:2.336.0` | Image tag. |

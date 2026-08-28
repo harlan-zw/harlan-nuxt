@@ -71,7 +71,11 @@ readonly drain_timeout_seconds="${HARLAN_DESKTOP_RUNNER_DRAIN_TIMEOUT_SECONDS:-1
 # How often the offline registrations are swept. A delete needs two sweeps in a
 # row, so a dead registration clears after twice this long at worst.
 readonly prune_interval_seconds="${HARLAN_DESKTOP_RUNNER_PRUNE_INTERVAL_SECONDS:-300}"
-readonly demand_poll_seconds="${HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS:-30}"
+readonly configured_demand_poll_seconds="${HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS:-60}"
+# Each repository needs at least two API reads per scan. Faster scans exhaust
+# one owner's shared GitHub API budget before its hourly reset.
+readonly minimum_demand_poll_seconds=60
+readonly demand_poll_seconds=$(( configured_demand_poll_seconds > minimum_demand_poll_seconds ? configured_demand_poll_seconds : minimum_demand_poll_seconds ))
 # GitHub can retain corrupt queued jobs after their pull request closes. They can
 # neither run nor be cancelled, so they must not keep creating runner demand.
 readonly queued_run_max_age_seconds="${HARLAN_DESKTOP_RUNNER_QUEUED_RUN_MAX_AGE_SECONDS:-21600}"
