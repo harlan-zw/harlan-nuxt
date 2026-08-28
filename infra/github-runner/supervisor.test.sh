@@ -217,6 +217,13 @@ if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, live: 0, maximum: 2, memory
   exit 1
 fi
 
+queued_poll_count="$(grep -F -c 'actions/runs?status=queued' "$test_root/calls/gh")"
+if (( queued_poll_count != 1 )); then
+  cat "$test_root/calls/gh"
+  printf 'Expected demand polling to preserve the GitHub API budget.\n' >&2
+  exit 1
+fi
+
 printf 'Queued job demand passed.\n'
 
 rm -rf "$test_root/calls" "$test_root/runtime"

@@ -13,7 +13,7 @@ Environment=HARLAN_DESKTOP_RUNNER_CONFIG=%h/.config/harlan-desktop-github-runner
 Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=72
 # Leave 12 GiB of the 60 GiB host outside runner container limits.
 Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=48
-Environment=HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=15
+Environment=HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=60
 ExecStart=%h/.local/lib/harlan-desktop-github-runner/supervisor
 Restart=always
 RestartSec=10
