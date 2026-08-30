@@ -12,13 +12,39 @@ RUN apt-get update \
     curl \
     git \
     jq \
+    libasound2t64 \
+    libatk-bridge2.0-0t64 \
+    libatk1.0-0t64 \
+    libatspi2.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libglib2.0-0t64 \
     libicu74 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
     libssl3t64 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
     pkg-config \
     python3 \
     unzip \
     xz-utils \
   && rm -rf /var/lib/apt/lists/*
+# The libasound/libatk/libnss/libx* set is what Playwright's bundled Chromium
+# needs to launch. Workflows then install browsers with
+# `playwright install chromium`, without `--with-deps`, since the runner user
+# has no root for apt-get.
 
 RUN useradd --create-home --home-dir /home/runner --shell /bin/bash runner
 
