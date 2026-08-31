@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly operation="${1:-}"
+readonly history_dir="${2:-}"
+readonly raw_retention_days="${HARLAN_DESKTOP_RUNNER_RAW_RETENTION_DAYS:-90}"
+readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
+
+if [[ "$operation" != import || -z "$history_dir" ]]; then
+  printf 'usage: job-history import HISTORY_DIRECTORY\n' >&2
+  exit 2
+fi
+if [[ ! "$raw_retention_days" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'Raw Runner job retention must be a positive day count.\n' >&2
+  exit 2
+fi
+
+for command_name in date flock jq; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'Required command is unavailable: %s\n' "$command_name" >&2
+    exit 1
+  fi
+done
+
+temporary_input="$(mktemp)"
+temporary_jobs=''
+temporary_summary=''
+cleanup() {
+  rm --force "$temporary_input"
+  if [[ -n "$temporary_jobs" ]]; then
+    rm --force "$temporary_jobs"
+  fi
+  if [[ -n "$temporary_summary" ]]; then
+    rm --force "$temporary_summary"
+  fi
+  return 0
+}
+trap cleanup EXIT
+
+cat >"$temporary_input"
+[[ -s "$temporary_input" ]] || exit 0
+
+if ! jq --exit-status --slurp '
+  def count($maximum):
+    type == "number" and . >= 0 and . <= $maximum and floor == .;
+  def text($maximum):
+    type == "string" and length > 0 and length <= $maximum;
+  all(.[];
+    type == "object"
+    and (.completedAt | count(10000000000000))
+    and (.name | text(240))
+    and (.outcome == "Cancelled" or .outcome == "Failed" or .outcome == "Succeeded" or .outcome == "Unknown")
+    and (.pool | type == "string" and test("^[a-z0-9][a-z0-9-]{0,119}$"))
+    and (.repository | type == "string" and test("^[A-Za-z0-9_.-]{1,80}/[A-Za-z0-9_.-]{1,100}$"))
+    and (.startedAt | count(10000000000000))
+    and .completedAt >= .startedAt
+  )
+' "$temporary_input" >/dev/null; then
+  printf 'Runner job history input is invalid.\n' >&2
+  exit 1
+fi
+
+mkdir --parents "$history_dir/daily" "$history_dir/jobs"
+
+if [[ -n "$fixed_now_epoch" ]]; then
+  now_epoch="$fixed_now_epoch"
+else
+  now_epoch="$(date +%s)"
+fi
+if [[ ! "$now_epoch" =~ ^[0-9]+$ ]]; then
+  printf 'Runner history time must be a Unix timestamp.\n' >&2
+  exit 2
+fi
+cutoff_epoch=$(( now_epoch - raw_retention_days * 86400 ))
+cutoff_day="$(date --utc --date="@$cutoff_epoch" +%F)"
+
+(
+  flock --exclusive 9
+
+  while read -r day; do
+    [[ -n "$day" ]] || continue
+    jobs_file="$history_dir/jobs/$day.ndjson"
+    summary_file="$history_dir/daily/$day.json"
+    temporary_jobs="$(mktemp --tmpdir="$history_dir/jobs" ".$day.XXXXXX")"
+    temporary_summary="$(mktemp --tmpdir="$history_dir/daily" ".$day.XXXXXX")"
+    declare -a inputs=("$temporary_input")
+    [[ -r "$jobs_file" ]] && inputs=("$jobs_file" "$temporary_input")
+
+    jq --compact-output --slurp --arg day "$day" '
+      [ .[]
+        | select((.completedAt / 1000 | strftime("%Y-%m-%d")) == $day)
+      ]
+      | sort_by(.completedAt, .repository, .pool, .name, .startedAt)
+      | unique_by([.repository, .pool, .name, .startedAt, .completedAt])
+      | .[]
+    ' "${inputs[@]}" >"$temporary_jobs"
+
+    jq --slurp --arg date "$day" '
+      {
+        actualMilliseconds: (map(.completedAt - .startedAt) | add // 0),
+        billableMinutes: (map(((.completedAt - .startedAt + 59999) / 60000 | floor)) | add // 0),
+        completed: length,
+        date: $date,
+        trackedSince: (map(.startedAt) | min)
+      }
+    ' "$temporary_jobs" >"$temporary_summary"
+
+    mv --force "$temporary_jobs" "$jobs_file"
+    temporary_jobs=''
+    mv --force "$temporary_summary" "$summary_file"
+    temporary_summary=''
+  done < <(jq --raw-output '(.completedAt / 1000 | strftime("%Y-%m-%d"))' "$temporary_input" | sort --unique)
+
+  for jobs_file in "$history_dir/jobs"/*.ndjson; do
+    [[ -f "$jobs_file" ]] || continue
+    day="${jobs_file##*/}"
+    day="${day%.ndjson}"
+    if [[ "$day" < "$cutoff_day" ]]; then
+      rm --force "$jobs_file"
+    fi
+  done
+  true
+) 9>"$history_dir/jobs.lock"

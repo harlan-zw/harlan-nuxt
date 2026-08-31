@@ -79,6 +79,8 @@ readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
 readonly status_interval_seconds="${HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS:-15}"
 readonly status_output_override="${HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT:-}"
 readonly status_publisher="${HARLAN_DESKTOP_RUNNER_STATUS_PUBLISHER:-$(dirname "${BASH_SOURCE[0]}")/publish-status}"
+readonly history_root="${HARLAN_DESKTOP_RUNNER_HISTORY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/harlan-desktop-github-runner}"
+readonly history_writer="${HARLAN_DESKTOP_RUNNER_JOB_HISTORY:-$(dirname "${BASH_SOURCE[0]}")/job-history}"
 readonly container_label='com.harlanzw.desktop-runner'
 # One pnpm store shared by every container, so an ephemeral job resolves packages
 # from local disk instead of refetching them.
@@ -437,7 +439,7 @@ record_completed_job() {
   local pool="$3"
   local reported_outcome="$4"
   local job_file="$state_dir/jobs/$container_name.json"
-  local outcome event recent_file="$state_dir/recent/jobs.ndjson"
+  local outcome event
 
   [[ -r "$job_file" ]] || return 0
   case "$reported_outcome" in
@@ -455,12 +457,9 @@ record_completed_job() {
     '. + { completedAt: $completedAt, outcome: $outcome, pool: $pool, repository: $repository }' \
     "$job_file")"
 
-  (
-    flock --exclusive 9
-    printf '%s\n' "$event" >>"$recent_file"
-    tail --lines 40 "$recent_file" >"$recent_file.$$"
-    mv --force "$recent_file.$$" "$recent_file"
-  ) 9>"$state_dir/recent/jobs.lock"
+  if ! printf '%s\n' "$event" | "$history_writer" import "$history_root"; then
+    log 'Completed Runner job history write failed'
+  fi
   rm --force "$job_file"
 }
 
@@ -473,7 +472,7 @@ run_status_publisher() {
   fi
 
   while [[ ! -f "$state_dir/shutdown" ]]; do
-    "$status_publisher" "$state_dir" "$output_file" \
+    "$status_publisher" "$state_dir" "$output_file" "$history_root" \
       || log 'Runner status snapshot failed'
     sleep "$status_interval_seconds"
   done
@@ -948,6 +947,11 @@ main() {
   require_command jq
   require_command flock
 
+  if [[ ! -x "$history_writer" ]]; then
+    log "Runner job history writer is unavailable: $history_writer"
+    return 1
+  fi
+
   if ! docker image inspect "$runner_image" >/dev/null 2>&1; then
     log "Runner image is unavailable; build $runner_image from infra/github-runner."
     return 1
@@ -961,7 +965,7 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued" "$state_dir/recent"
+  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued"
   chmod 0750 "$state_dir"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"

@@ -4,6 +4,7 @@ set -euo pipefail
 
 readonly state_dir="${1:?Runner state directory is required}"
 readonly output_file="${2:-$state_dir/status.json}"
+readonly history_dir="${3:-${HARLAN_DESKTOP_RUNNER_HISTORY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/harlan-desktop-github-runner}}"
 readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
 readonly memory_headroom_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB:-8}"
@@ -105,10 +106,30 @@ jobs="$({
 } | jq --compact-output --slurp '.')"
 
 recent_jobs='[]'
-if [[ -r "$state_dir/recent/jobs.ndjson" ]]; then
-  recent_jobs="$(flock --shared "$state_dir/recent/jobs.lock" \
-    tail --lines 40 "$state_dir/recent/jobs.ndjson" \
-    | jq --compact-output --slurp '[.[] | select(type == "object")] | .[-20:]')"
+job_totals='null'
+if [[ -d "$history_dir" ]]; then
+  exec 9>"$history_dir/jobs.lock"
+  flock --shared 9
+  recent_jobs="$({
+    for jobs_file in "$history_dir/jobs"/*.ndjson; do
+      [[ -f "$jobs_file" ]] || continue
+      tail --lines 20 "$jobs_file"
+    done | jq --compact-output --slurp '[.[] | select(type == "object")] | sort_by(.completedAt) | .[-20:]'
+  })"
+
+  daily_files=("$history_dir/daily"/*.json)
+  if [[ -f "${daily_files[0]}" ]]; then
+    job_totals="$(jq --compact-output --slurp '
+      {
+        actualMilliseconds: (map(.actualMilliseconds) | add // 0),
+        billableMinutes: (map(.billableMinutes) | add // 0),
+        completed: (map(.completed) | add // 0),
+        trackedSince: (map(.trackedSince) | min)
+      }
+    ' "${daily_files[@]}")"
+  fi
+  flock --unlock 9
+  exec 9>&-
 fi
 
 while IFS='|' read -r repository labels warm maximum cpus memory_reservation memory_limit memory_swap; do
@@ -193,14 +214,16 @@ jq --null-input \
   --argjson cpuBudget "$cpu_budget" \
   --argjson memoryBudgetBytes "$(( memory_budget_gib * 1024 * 1024 * 1024 ))" \
   --argjson memoryHeadroomBytes "$(( memory_headroom_gib * 1024 * 1024 * 1024 ))" \
+  --argjson jobTotals "$job_totals" \
   --argjson pools "$pools" \
   --argjson recentJobs "$recent_jobs" \
   --argjson runners "$runners" \
   --argjson updatedAt "$updated_at" \
   '{
-    version: 2,
+    version: 3,
     updatedAt: $updatedAt,
     budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes, memoryHeadroomBytes: $memoryHeadroomBytes },
+    jobTotals: $jobTotals,
     pools: $pools,
     runners: $runners,
     recentJobs: $recentJobs
