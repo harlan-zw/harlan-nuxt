@@ -17,7 +17,7 @@ RuntimeDirectoryMode=0750
 Environment=HOME=/var/lib/github-runner
 Environment=XDG_RUNTIME_DIR=/run/github-runner
 Environment=HARLAN_DESKTOP_RUNNER_CONFIG=/var/lib/github-runner/config/runners.conf
-Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=20
+Environment=HARLAN_DESKTOP_RUNNER_CPU_BUDGET=32
 Environment=HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=24
 Environment=HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB=6
 Environment=HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=60
