@@ -11,6 +11,7 @@ RUN apt-get update \
     ca-certificates \
     curl \
     git \
+    gh \
     jq \
     libicu74 \
     libssl3t64 \
@@ -18,6 +19,7 @@ RUN apt-get update \
     python3 \
     unzip \
     xz-utils \
+    zstd \
   && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --home-dir /home/runner --shell /bin/bash runner
