@@ -6,6 +6,7 @@ readonly state_dir="${1:?Runner state directory is required}"
 readonly output_file="${2:-$state_dir/status.json}"
 readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
 readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
+readonly memory_headroom_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB:-8}"
 readonly fixed_now_epoch_ms="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS:-}"
 readonly container_label='com.harlanzw.desktop-runner'
 
@@ -110,12 +111,16 @@ if [[ -r "$state_dir/recent/jobs.ndjson" ]]; then
     | jq --compact-output --slurp '[.[] | select(type == "object")] | .[-20:]')"
 fi
 
-while IFS='|' read -r repository labels warm maximum cpus memory memory_swap; do
+while IFS='|' read -r repository labels warm maximum cpus memory_reservation memory_limit memory_swap; do
   repository="${repository#"${repository%%[![:space:]]*}"}"
   [[ -z "$repository" || "$repository" == \#* || -z "$memory_swap" ]] && continue
   slug="$(pool_slug_for "$repository" "$labels")"
-  if ! memory_bytes="$(memory_bytes_for "$memory")"; then
-    printf 'Pool memory has no supported suffix: %s\n' "$memory" >&2
+  if ! memory_reservation_bytes="$(memory_bytes_for "$memory_reservation")"; then
+    printf 'Pool memory reservation has no supported suffix: %s\n' "$memory_reservation" >&2
+    exit 1
+  fi
+  if ! memory_limit_bytes="$(memory_bytes_for "$memory_limit")"; then
+    printf 'Pool memory limit has no supported suffix: %s\n' "$memory_limit" >&2
     exit 1
   fi
   queued='null'
@@ -128,12 +133,14 @@ while IFS='|' read -r repository labels warm maximum cpus memory memory_swap; do
     --arg repository "$repository" \
     --argjson cpuPerRunner "$cpus" \
     --argjson maximum "$maximum" \
-    --argjson memoryPerRunnerBytes "$memory_bytes" \
+    --argjson memoryLimitBytes "$memory_limit_bytes" \
+    --argjson memoryReservationBytes "$memory_reservation_bytes" \
     --argjson queued "$queued" \
     '{
       cpuPerRunner: $cpuPerRunner,
       maximum: $maximum,
-      memoryPerRunnerBytes: $memoryPerRunnerBytes,
+      memoryLimitBytes: $memoryLimitBytes,
+      memoryReservationBytes: $memoryReservationBytes,
       name: $name,
       queued: $queued,
       repository: $repository
@@ -185,14 +192,15 @@ fi
 jq --null-input \
   --argjson cpuBudget "$cpu_budget" \
   --argjson memoryBudgetBytes "$(( memory_budget_gib * 1024 * 1024 * 1024 ))" \
+  --argjson memoryHeadroomBytes "$(( memory_headroom_gib * 1024 * 1024 * 1024 ))" \
   --argjson pools "$pools" \
   --argjson recentJobs "$recent_jobs" \
   --argjson runners "$runners" \
   --argjson updatedAt "$updated_at" \
   '{
-    version: 1,
+    version: 2,
     updatedAt: $updatedAt,
-    budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes },
+    budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes, memoryHeadroomBytes: $memoryHeadroomBytes },
     pools: $pools,
     runners: $runners,
     recentJobs: $recentJobs

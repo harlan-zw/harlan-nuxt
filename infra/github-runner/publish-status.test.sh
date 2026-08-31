@@ -9,11 +9,11 @@ mkdir -p "$test_root/bin" "$test_root/state/jobs" "$test_root/state/queued" \
   "$test_root/state/recent" "$test_root/state/spend" "$test_root/state/spend-memory"
 
 cat >"$test_root/state/runners.conf" <<'EOF'
-harlan-zw/example|harlan-desktop-ci|0|4|4|8g|10g
+harlan-zw/example|harlan-desktop-ci|0|4|4|4g|8g|10g
 EOF
 printf '2\n' >"$test_root/state/queued/example-ci"
 printf '4\n' >"$test_root/state/spend/harlan-desktop-example-ci-burst-1"
-printf '8\n' >"$test_root/state/spend-memory/harlan-desktop-example-ci-burst-1"
+printf '4\n' >"$test_root/state/spend-memory/harlan-desktop-example-ci-burst-1"
 cat >"$test_root/state/jobs/harlan-desktop-example-ci-burst-1.json" <<'EOF'
 {"name":"test & build","startedAt":1787930400000}
 EOF
@@ -61,14 +61,15 @@ HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
 
 snapshot="$test_root/state/status.json"
 jq --exit-status '
-  .version == 1
+  .version == 2
   and .updatedAt == 1787930500000
-  and .budgets == { cpu: 20, memoryBytes: 25769803776 }
+  and .budgets == { cpu: 20, memoryBytes: 25769803776, memoryHeadroomBytes: 8589934592 }
   and .pools == [{
     cpuPerRunner: 4,
     live: 1,
     maximum: 4,
-    memoryPerRunnerBytes: 8589934592,
+    memoryLimitBytes: 8589934592,
+    memoryReservationBytes: 4294967296,
     name: "example-ci",
     queued: 2,
     repository: "harlan-zw/example",
