@@ -5,8 +5,9 @@ set -euo pipefail
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 
-mkdir -p "$test_root/bin" "$test_root/state/jobs" "$test_root/state/queued" \
-  "$test_root/state/recent" "$test_root/state/spend" "$test_root/state/spend-memory"
+mkdir -p "$test_root/bin" "$test_root/history/daily" "$test_root/history/jobs" \
+  "$test_root/state/jobs" "$test_root/state/queued" "$test_root/state/spend" \
+  "$test_root/state/spend-memory"
 
 cat >"$test_root/state/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|4|4|4g|8g|10g
@@ -17,8 +18,11 @@ printf '4\n' >"$test_root/state/spend-memory/harlan-desktop-example-ci-burst-1"
 cat >"$test_root/state/jobs/harlan-desktop-example-ci-burst-1.json" <<'EOF'
 {"name":"test & build","startedAt":1787930400000}
 EOF
-cat >"$test_root/state/recent/jobs.ndjson" <<'EOF'
+cat >"$test_root/history/jobs/2026-08-28.ndjson" <<'EOF'
 {"completedAt":1787930300000,"name":"lint","outcome":"Succeeded","pool":"example-ci","repository":"harlan-zw/example","startedAt":1787930200000}
+EOF
+cat >"$test_root/history/daily/2026-08-28.json" <<'EOF'
+{"actualMilliseconds":100000,"billableMinutes":2,"completed":1,"date":"2026-08-28","trackedSince":1787930200000}
 EOF
 
 cat >"$test_root/bin/docker" <<'EOF'
@@ -57,13 +61,14 @@ PATH="$test_root/bin:$PATH" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=20 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=24 \
 HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
-./infra/github-runner/publish-status "$test_root/state"
+./infra/github-runner/publish-status "$test_root/state" "$test_root/state/status.json" "$test_root/history"
 
 snapshot="$test_root/state/status.json"
 jq --exit-status '
-  .version == 2
+  .version == 3
   and .updatedAt == 1787930500000
   and .budgets == { cpu: 20, memoryBytes: 25769803776, memoryHeadroomBytes: 8589934592 }
+  and .jobTotals == { actualMilliseconds: 100000, billableMinutes: 2, completed: 1, trackedSince: 1787930200000 }
   and .pools == [{
     cpuPerRunner: 4,
     live: 1,
@@ -96,7 +101,7 @@ if [[ "$(stat -c '%a' "$snapshot")" != 640 ]]; then
 fi
 
 PATH="$test_root/bin:$PATH" \
-./infra/github-runner/publish-status "$test_root/state"
+./infra/github-runner/publish-status "$test_root/state" "$test_root/state/status.json" "$test_root/history"
 if ! jq --exit-status '.updatedAt == 1787930500000' "$snapshot" >/dev/null; then
   printf 'Expected a portable millisecond timestamp.\n' >&2
   exit 1
@@ -106,7 +111,7 @@ snapshot_checksum="$(sha256sum "$snapshot")"
 set +e
 TEST_DOCKER_FAIL=ps \
 PATH="$test_root/bin:$PATH" \
-./infra/github-runner/publish-status "$test_root/state" >/dev/null 2>&1
+./infra/github-runner/publish-status "$test_root/state" "$test_root/state/status.json" "$test_root/history" >/dev/null 2>&1
 failure_status=$?
 set -e
 if (( failure_status == 0 )) || [[ "$(sha256sum "$snapshot")" != "$snapshot_checksum" ]]; then

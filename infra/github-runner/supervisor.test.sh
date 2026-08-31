@@ -143,6 +143,7 @@ PATH="$test_root/bin:$PATH" \
 XDG_RUNTIME_DIR="$test_root/runtime" \
 CREDENTIALS_DIRECTORY="$test_root/credentials" \
 HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
 HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS=30 \
@@ -181,6 +182,11 @@ fi
 if ! jq --exit-status '.recentJobs | any(.name == "first" and .outcome == "Succeeded")' "$test_root/calls/status.json" >/dev/null; then
   cat "$test_root/calls/status.json"
   printf 'Expected completed jobs in the published runner status.\n' >&2
+  exit 1
+fi
+
+if ! jq --exit-status '.completed == 1' "$test_root/history/daily/"*.json >/dev/null; then
+  printf 'Expected completed jobs to persist outside runtime state.\n' >&2
   exit 1
 fi
 

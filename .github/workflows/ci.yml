@@ -29,6 +29,8 @@ jobs:
       - run: pnpm dev:prepare
       - run: pnpm lint
       - run: bash infra/github-runner/supervisor.test.sh
+      - run: bash infra/github-runner/job-history.test.sh
+      - run: bash infra/github-runner/backfill-job-history.test.sh
       - run: bash infra/github-runner/publish-status.test.sh
       - run: pnpm typecheck
       - run: pnpm test

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly history_dir="${1:-}"
+readonly config_file="${2:-}"
+readonly since="${3:-}"
+readonly until="${4:-$(date --utc +%F)}"
+readonly history_writer="${HARLAN_DESKTOP_RUNNER_JOB_HISTORY:-$(dirname "${BASH_SOURCE[0]}")/job-history}"
+
+if [[ -z "$history_dir" || -z "$config_file" || ! "$since" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ || ! "$until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  printf 'usage: backfill-job-history HISTORY_DIRECTORY CONFIG_FILE SINCE_DATE [UNTIL_DATE]\n' >&2
+  exit 2
+fi
+if [[ ! -r "$config_file" ]]; then
+  printf 'Runner config is unavailable: %s\n' "$config_file" >&2
+  exit 1
+fi
+if [[ ! -x "$history_writer" ]]; then
+  printf 'Runner job history writer is unavailable: %s\n' "$history_writer" >&2
+  exit 1
+fi
+
+github_api() {
+  local repository="$1"
+  shift
+  local owner="${repository%%/*}"
+  local credential=''
+
+  if [[ -n "${CREDENTIALS_DIRECTORY:-}" ]]; then
+    credential="$CREDENTIALS_DIRECTORY/github-$owner-token"
+    if [[ ! -r "$credential" ]]; then
+      printf 'GitHub credential is unavailable for owner: %s\n' "$owner" >&2
+      return 1
+    fi
+    GH_TOKEN="$(<"$credential")" gh api "$@"
+    return
+  fi
+  gh api "$@"
+}
+
+pool_slug_for() {
+  local repository="$1"
+  local label="${2%%,*}"
+
+  printf '%s-%s' "${repository##*/}" "${label#harlan-desktop-}" \
+    | tr --complement --squeeze-repeats '[:alnum:]-' '-' \
+    | tr '[:upper:]' '[:lower:]'
+}
+
+configured_pools_for() {
+  local target_repository="$1"
+  local repository labels
+
+  while IFS='|' read -r repository labels _; do
+    repository="${repository#"${repository%%[![:space:]]*}"}"
+    repository="${repository%"${repository##*[![:space:]]}"}"
+    [[ "$repository" == "$target_repository" ]] || continue
+    pool_slug_for "$repository" "$labels"
+    printf '\n'
+  done <"$config_file" \
+    | jq --raw-input --slurp --compact-output \
+      'split("\n") | map(select(length > 0)) | unique | sort_by(length) | reverse'
+}
+
+temporary_jobs="$(mktemp)"
+cleanup() {
+  rm --force "$temporary_jobs"
+}
+trap cleanup EXIT
+
+declare -A seen_repositories=()
+while IFS='|' read -r repository _; do
+  repository="${repository#"${repository%%[![:space:]]*}"}"
+  repository="${repository%"${repository##*[![:space:]]}"}"
+  [[ -z "$repository" || "$repository" == \#* || -n "${seen_repositories[$repository]:-}" ]] && continue
+  seen_repositories[$repository]=done
+  configured_pools="$(configured_pools_for "$repository")"
+
+  if ! run_ids="$(github_api "$repository" --paginate \
+    "repos/$repository/actions/runs?status=completed&created=$since..$until&per_page=100" \
+    | jq --raw-output '.workflow_runs[].id')"; then
+    printf 'GitHub Actions runs are unavailable for %s.\n' "$repository" >&2
+    exit 1
+  fi
+
+  while read -r run_id; do
+    [[ -n "$run_id" ]] || continue
+    if ! github_api "$repository" --paginate \
+      "repos/$repository/actions/runs/$run_id/jobs?filter=latest&per_page=100" \
+      | jq --compact-output --arg repository "$repository" --argjson pools "$configured_pools" '
+        .jobs[]
+        | (.runner_name // "") as $runnerName
+        | ($pools | map(
+            . as $pool
+            | select($runnerName | startswith("harlan-desktop-\($pool)-"))
+          ) | first) as $pool
+        | select(
+            .status == "completed"
+            and .started_at != null
+            and .completed_at != null
+            and $pool != null
+          )
+        | {
+            completedAt: (.completed_at | fromdateiso8601 * 1000),
+            name: .name[:240],
+            outcome: (
+              if .conclusion == "success" then "Succeeded"
+              elif .conclusion == "failure" then "Failed"
+              elif .conclusion == "cancelled" then "Cancelled"
+              else "Unknown"
+              end
+            ),
+            pool: $pool,
+            repository: $repository,
+            startedAt: (.started_at | fromdateiso8601 * 1000)
+          }
+      ' >>"$temporary_jobs"; then
+      printf 'GitHub Actions jobs are unavailable for %s run %s.\n' "$repository" "$run_id" >&2
+      exit 1
+    fi
+  done <<<"$run_ids"
+done <"$config_file"
+
+"$history_writer" import "$history_dir" <"$temporary_jobs"
+printf 'Imported %s Runner jobs.\n' "$(wc --lines <"$temporary_jobs")"

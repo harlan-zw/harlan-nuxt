@@ -61,6 +61,10 @@ install -Dm755 infra/github-runner/supervisor \
   ~/.local/lib/harlan-desktop-github-runner/supervisor
 install -Dm755 infra/github-runner/publish-status \
   ~/.local/lib/harlan-desktop-github-runner/publish-status
+install -Dm755 infra/github-runner/job-history \
+  ~/.local/lib/harlan-desktop-github-runner/job-history
+install -Dm755 infra/github-runner/backfill-job-history \
+  ~/.local/lib/harlan-desktop-github-runner/backfill-job-history
 install -Dm644 infra/github-runner/runners.conf \
   ~/.config/harlan-desktop-github-runner/runners.conf
 install -Dm644 infra/github-runner/harlan-desktop-github-runner.service \
@@ -103,7 +107,9 @@ journalctl --user --unit harlan-desktop-github-runner.service --follow
 
 The supervisor publishes `status.json` beside its runtime state every 15 seconds.
 
-The snapshot contains pool demand, active jobs, recent outcomes, and container resources. It contains no credentials or Docker configuration.
+The snapshot contains pool demand, active jobs, recent outcomes, lifetime Runner job totals, and container resources. It contains no credentials or Docker configuration.
+
+Raw Runner jobs persist for 90 days. Daily totals persist until they are removed manually.
 
 Stop local CI before shutting down or doing CPU-heavy local work:
 
@@ -185,6 +191,8 @@ Install the versioned Hogwild files into their fixed system paths:
 ```bash
 sudo install -Dm755 infra/github-runner/supervisor /var/lib/github-runner/bin/supervisor
 sudo install -Dm755 infra/github-runner/publish-status /var/lib/github-runner/bin/publish-status
+sudo install -Dm755 infra/github-runner/job-history /var/lib/github-runner/bin/job-history
+sudo install -Dm755 infra/github-runner/backfill-job-history /var/lib/github-runner/bin/backfill-job-history
 sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
 sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
 sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
