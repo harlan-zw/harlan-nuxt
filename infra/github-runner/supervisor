@@ -30,20 +30,16 @@
 # containers would burst past `max` every time. The scaler writes each reservation
 # before it forks, which makes the count exact.
 #
-# Only work in flight spends the budget: a warm container spends while it holds a
-# job, and a burst container spends from the moment it is launched, because it
-# was launched to take one. Idle warm listeners cost about 60 MB and no CPU, so
-# charging for them would block every burst on an otherwise idle host.
+# Only work in flight spends the budget. A warm container spends while it holds
+# a job. A burst container spends when it launches. Idle warm listeners cost
+# about 60 MB and no CPU.
 #
 # CPU and memory are both budgeted, and for different reasons. CPU oversubscribes
 # safely: a container over its quota is throttled and its job just runs slower.
-# Memory does not. `--memory` is a LIMIT, not a RESERVATION, so Docker will
-# happily admit containers whose limits sum past physical RAM. Nothing reserves
-# anything, and the kernel resolves the overcommit by killing the largest RSS in
-# the cgroup that loses, which is always a build. That is how a 32g deploy
-# container gets OOM-killed on a 60g host: not by exceeding its own limit, but by
-# being the biggest thing alive when CI containers admitted beside it exhausted
-# the host. Budgeting memory the same way CPU is budgeted is what stops it.
+# Memory does not. Each pool therefore has two memory values. The reservation
+# represents expected peak use and spends the host budget. The hard limit stops
+# one runaway job. This lets flat CI jobs run beside a larger deploy without
+# pretending every job already consumes its hard limit.
 
 set -euo pipefail
 
@@ -53,13 +49,13 @@ readonly config_file="${HARLAN_DESKTOP_RUNNER_CONFIG:-/etc/harlan-desktop-github
 # modest oversubscription keeps a wide matrix moving without starving
 # interactive work on the workstation.
 readonly cpu_budget="${HARLAN_DESKTOP_RUNNER_CPU_BUDGET:-32}"
-# Gibibytes of container memory limit that in-flight work may hold at once. This
-# is a ceiling on what is PROMISED, not on what is used, so it must leave room
-# for the workstation itself: a desktop session with an IDE, a browser and a few
-# language servers holds 30g here without trying. On a 60g host, 36g of budget
-# keeps the deploy pool (32g) able to run alone while holding CI back, and lets
-# three CI containers (12g each) share the host when no deploy is in flight.
+# Gibibytes of expected peak memory that in-flight work may reserve. This must
+# leave room for the workstation and abnormal growth up to each hard limit.
 readonly memory_budget_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
+# Keep this much currently available memory after each admission. Reservations
+# cover expected growth after admission. This guard covers host work and sudden
+# pressure that is outside the runner pool.
+readonly memory_headroom_gib="${HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB:-8}"
 # A burst container that has claimed nothing by now is surplus. Stopping it
 # returns the pool to `warm` after a quiet spell.
 readonly burst_idle_seconds="${HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS:-300}"
@@ -115,11 +111,11 @@ declare -a pool_label=()
 declare -a pool_warm=()
 declare -a pool_max=()
 declare -a pool_cpus=()
-declare -a pool_memory=()
+declare -a pool_memory_reservation=()
+declare -a pool_memory_limit=()
 declare -a pool_memory_swap=()
-# `pool_memory` as a plain integer of gibibytes, for the budget arithmetic. The
-# unsuffixed string goes to Docker; only this one is summed.
-declare -a pool_memory_gib=()
+# The unsuffixed reservation goes to Docker. Only this integer form is summed.
+declare -a pool_memory_reservation_gib=()
 declare -a pool_slug=()
 
 # One entry per repository, however many pools it owns. Pruning is per
@@ -202,25 +198,36 @@ repository_slug_for() {
 }
 
 read_config() {
-  local repository label warm max cpus memory memory_swap
+  local repository label warm max cpus memory_reservation memory_limit memory_swap extra
+  local memory_reservation_gib memory_limit_gib memory_swap_gib
 
   if [[ ! -r "$config_file" ]]; then
     log "Runner config is unreadable: $config_file"
     return 1
   fi
 
-  while IFS='|' read -r repository label warm max cpus memory memory_swap; do
+  while IFS='|' read -r repository label warm max cpus memory_reservation memory_limit memory_swap extra; do
     # Skip comments and blank lines. Leading whitespace is tolerated so the file
     # can be indented.
     repository="${repository#"${repository%%[![:space:]]*}"}"
     [[ -z "$repository" || "$repository" == \#* ]] && continue
 
-    if [[ -z "$memory_swap" ]]; then
+    if [[ -z "$memory_swap" || -n "$extra" ]]; then
       log "Malformed pool line: $repository"
       return 1
     fi
     if [[ ! "$warm" =~ ^[0-9]+$ || ! "$max" =~ ^[1-9][0-9]*$ || ! "$cpus" =~ ^[1-9][0-9]*$ || "$warm" -gt "$max" ]]; then
       log "Invalid warm, max, or CPU value for $repository"
+      return 1
+    fi
+    if ! memory_reservation_gib="$(memory_gib_for "$memory_reservation")" \
+      || ! memory_limit_gib="$(memory_gib_for "$memory_limit")" \
+      || ! memory_swap_gib="$(memory_gib_for "$memory_swap")"; then
+      log "Invalid memory value for $repository"
+      return 1
+    fi
+    if (( memory_reservation_gib >= memory_limit_gib || memory_limit_gib > memory_swap_gib )); then
+      log "Memory must increase from reservation to limit to swap for $repository"
       return 1
     fi
 
@@ -229,9 +236,10 @@ read_config() {
     pool_warm+=("$warm")
     pool_max+=("$max")
     pool_cpus+=("$cpus")
-    pool_memory+=("$memory")
+    pool_memory_reservation+=("$memory_reservation")
+    pool_memory_limit+=("$memory_limit")
     pool_memory_swap+=("$memory_swap")
-    pool_memory_gib+=("$(memory_gib_for "$memory")")
+    pool_memory_reservation_gib+=("$memory_reservation_gib")
     pool_slug+=("$(pool_slug_for "$repository" "$label")")
   done <"$config_file"
 
@@ -241,22 +249,21 @@ read_config() {
   fi
 }
 
-# `12g` -> `12`. Docker's suffixes are accepted so the config stays in Docker's
-# own units, and anything else is refused rather than guessed at: a pool silently
-# read as 0 would spend nothing and defeat the budget entirely.
+# `12g` becomes `12`. Docker suffixes keep the config in Docker's own units.
 memory_gib_for() {
   local value="$1"
   local number="${value%[gGmM]}"
 
   case "$value" in
-    *[gG]) printf '%s' "$number" ;;
+    [1-9]*[gG]) [[ "$number" =~ ^[1-9][0-9]*$ ]] && printf '%s' "$number" ;;
     # Rounded up, so a sub-gibibyte pool still spends a whole unit.
-    *[mM]) printf '%s' "$(( (number + 1023) / 1024 ))" ;;
-    *)
-      log "Pool memory '$value' has no g or m suffix; treating it as gibibytes"
-      printf '%s' "$value"
-      ;;
+    [1-9]*[mM]) [[ "$number" =~ ^[1-9][0-9]*$ ]] && printf '%s' "$(( (number + 1023) / 1024 ))" ;;
+    *) return 1 ;;
   esac
+}
+
+host_available_memory_gib() {
+  free --gibi | awk '/^Mem:/ { print $7 }'
 }
 
 # Sum of a marker directory's contents. Each file is named after its container,
@@ -573,7 +580,8 @@ run_container() {
     --label "$container_label.pool=${pool_slug[$pool_index]}" \
     --label "$container_label.repository=$repository" \
     --cpus "${pool_cpus[$pool_index]}" \
-    --memory "${pool_memory[$pool_index]}" \
+    --memory-reservation "${pool_memory_reservation[$pool_index]}" \
+    --memory "${pool_memory_limit[$pool_index]}" \
     --memory-swap "${pool_memory_swap[$pool_index]}" \
     --volume "$pnpm_store_volume:/pnpm-store" \
     --env npm_config_store_dir=/pnpm-store \
@@ -596,7 +604,7 @@ run_container() {
           record_running_job "$container_name" "$job_name"
           # A burst container reserved capacity before it registered.
           if [[ "$slot_kind" == warm ]]; then
-            reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_gib[$pool_index]}"
+            reserve "$container_name" "${pool_cpus[$pool_index]}" "${pool_memory_reservation_gib[$pool_index]}"
             printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
           fi
         fi
@@ -677,7 +685,7 @@ run_burst_slot() {
 run_scaler() {
   local request pool_index container_name
   local burst_counter=0
-  local slug live spent spent_memory
+  local slug live spent spent_memory available_memory
   local pending_pool pending_count attempt
   local -a pending_pools=()
   local -A pool_is_pending=()
@@ -716,8 +724,20 @@ run_scaler() {
         # Checked after CPU and never merged with it. A host can have cores to
         # spare and no memory to back them, which is the case this exists for.
         spent_memory="$(sum_markers "$state_dir/spend-memory")"
-        if (( spent_memory + pool_memory_gib[pending_pool] > memory_budget_gib )); then
+        if (( spent_memory + pool_memory_reservation_gib[pending_pool] > memory_budget_gib )); then
           log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
+
+        available_memory="$(host_available_memory_gib)"
+        if [[ ! "$available_memory" =~ ^[0-9]+$ ]]; then
+          log "Available memory is unknown; holding $slug at $live"
+          pending_pools+=("$pending_pool")
+          continue
+        fi
+        if (( available_memory - pool_memory_reservation_gib[pending_pool] < memory_headroom_gib )); then
+          log "Available memory ${available_memory}g, headroom ${memory_headroom_gib}g; holding $slug at $live"
           pending_pools+=("$pending_pool")
           continue
         fi
@@ -735,7 +755,7 @@ run_scaler() {
         # Both reservations are written before the fork, so the next request in
         # this loop already sees this container.
         printf '%s\n' "${pool_cpus[$pending_pool]}" >"$state_dir/burst/$slug/$container_name"
-        reserve "$container_name" "${pool_cpus[$pending_pool]}" "${pool_memory_gib[$pending_pool]}"
+        reserve "$container_name" "${pool_cpus[$pending_pool]}" "${pool_memory_reservation_gib[$pending_pool]}"
 
         log "Bursting $slug to $(( live + 1 )) of ${pool_max[$pending_pool]}"
         run_burst_slot "$pending_pool" "$container_name" &
@@ -979,12 +999,12 @@ main() {
   local widest_pool_memory=0
   for pool_index in "${!pool_repository[@]}"; do
     warm_floor=$(( warm_floor + pool_warm[pool_index] * pool_cpus[pool_index] ))
-    warm_memory_floor=$(( warm_memory_floor + pool_warm[pool_index] * pool_memory_gib[pool_index] ))
+    warm_memory_floor=$(( warm_memory_floor + pool_warm[pool_index] * pool_memory_reservation_gib[pool_index] ))
     if (( pool_cpus[pool_index] > widest_pool_cpu )); then
       widest_pool_cpu="${pool_cpus[$pool_index]}"
     fi
-    if (( pool_memory_gib[pool_index] > widest_pool_memory )); then
-      widest_pool_memory="${pool_memory_gib[$pool_index]}"
+    if (( pool_memory_reservation_gib[pool_index] > widest_pool_memory )); then
+      widest_pool_memory="${pool_memory_reservation_gib[$pool_index]}"
     fi
   done
   if (( warm_floor > cpu_budget )); then
@@ -1005,6 +1025,10 @@ main() {
   fi
   if [[ -n "$host_ram_gib" ]] && (( memory_budget_gib > host_ram_gib )); then
     log "Memory budget is ${memory_budget_gib}g on a ${host_ram_gib}g host"
+    return 1
+  fi
+  if [[ ! "$memory_headroom_gib" =~ ^[0-9]+$ ]] || (( memory_headroom_gib >= host_ram_gib )); then
+    log "Memory headroom must be below host RAM"
     return 1
   fi
 
@@ -1031,7 +1055,7 @@ main() {
   run_status_publisher &
 
   for pool_index in "${!pool_repository[@]}"; do
-    log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]} memory ${pool_memory[$pool_index]}"
+    log "Pool ${pool_slug[$pool_index]}: ${pool_repository[$pool_index]} warm ${pool_warm[$pool_index]} max ${pool_max[$pool_index]} cpus ${pool_cpus[$pool_index]} memory reservation ${pool_memory_reservation[$pool_index]} limit ${pool_memory_limit[$pool_index]}"
     for slot_number in $(seq 1 "${pool_warm[$pool_index]}"); do
       run_warm_slot "$pool_index" "$slot_number" &
     done

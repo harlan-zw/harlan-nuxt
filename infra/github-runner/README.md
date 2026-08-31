@@ -126,15 +126,19 @@ service drains the queue.
 
 ## Tuning
 
-`runners.conf` carries `warm`, `max`, and `cpus` per pool. Use zero warm runners
-to make every job pass admission before runner registration.
+`runners.conf` carries CPU, memory reservation, memory limit, and pool size.
+Use zero warm runners to make every job pass admission before registration.
+
+The memory reservation represents expected peak use. It spends the host memory
+budget and becomes Docker's soft limit. The memory limit is a higher hard cap.
 
 Environment overrides:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `HARLAN_DESKTOP_RUNNER_CPU_BUDGET` | `32` | Threshold above which bursts are held. Not a cap; see below. |
-| `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of container memory limit in-flight work may hold. Leave the rest for the workstation. |
+| `HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB` | `36` | Gibibytes of expected peak memory that running jobs may reserve. |
+| `HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB` | `8` | Available host memory that admission must leave after one new reservation. |
 | `HARLAN_DESKTOP_RUNNER_BURST_IDLE_SECONDS` | `300` | Time a burst container may sit unclaimed before it is retired. |
 | `HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS` | `60` | Time between queued job demand checks. Values below 60 use 60 to protect the GitHub API budget. |
 | `HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS` | `15` | Time between read-only status snapshots. |
@@ -152,17 +156,17 @@ CPU oversubscribes safely. A container over its quota is throttled and its job
 takes longer. Memory does not behave that way, and the difference has already
 cost a production deploy.
 
-`--memory` is a limit, not a reservation. Docker admits containers whose limits
-sum well past physical RAM, and nothing reserves anything. On this host that
-reached 164g of limits committed against 60g of RAM. The kernel resolves the
-overcommit by killing the largest resident process, which is always a build, so
-the symptom is a deploy dying at `nuxt build` with exit 129 while comfortably
-inside its own 32g limit. It was not killed for exceeding its cap. It was the
-biggest thing alive when the CI containers admitted beside it ran the host out.
+`--memory` is a hard limit. Charging every job for that limit left CPUs idle.
+Charging current use alone can admit several jobs before their builds grow.
+
+Each pool now sets a reservation and a hard limit. The scheduler charges the
+reservation before registration. Deploy reservations stay near measured peaks.
+Flat CI reservations stay below their abnormal hard limit.
 
 Every demand-started runner spends CPU and memory before registration.
 
-A runner starts only when both reservations fit.
+A runner starts only when both reservations fit. It must also leave the host
+memory headroom available at admission time.
 
 Warm jobs can claim before admission.
 

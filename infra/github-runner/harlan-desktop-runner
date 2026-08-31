@@ -101,8 +101,8 @@ pool_section() {
 
   printf '%-26s %5s %6s %5s  %s\n' 'POOL' 'WARM' 'BURST' 'BUSY' 'REPOSITORY'
 
-  local repository labels warm max cpus memory memory_swap
-  while IFS='|' read -r repository labels warm max cpus memory memory_swap; do
+  local repository labels warm max cpus memory_reservation memory_limit memory_swap
+  while IFS='|' read -r repository labels warm max cpus memory_reservation memory_limit memory_swap; do
     repository="${repository#"${repository%%[![:space:]]*}"}"
     [[ -z "$repository" || "$repository" == \#* || -z "$memory_swap" ]] && continue
 
@@ -128,6 +128,13 @@ pool_section() {
   # from GitHub with no say from the supervisor.
   printf '\nCPU in flight  %s, burst threshold %s' "$spent" "$budget"
   (( spent >= budget )) && printf '  %sbursts held%s' "$yellow" "$reset"
+  printf '\n'
+
+  local spent_memory memory_budget
+  spent_memory="$(sum_files "$state_root/spend-memory")"
+  memory_budget="${HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB:-36}"
+  printf 'Memory reserved %sg, budget %sg' "$spent_memory" "$memory_budget"
+  (( spent_memory >= memory_budget )) && printf '  %sbursts held%s' "$yellow" "$reset"
   printf '\n'
 
   local containers
