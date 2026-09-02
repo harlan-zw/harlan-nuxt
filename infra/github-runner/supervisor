@@ -329,22 +329,25 @@ publish_queue_count() {
 }
 
 # A pull request run is abandoned when no open pull request points at the run's
-# exact commit. A branch name match alone is not proof, because a new pull
-# request can reuse a closed pull request's branch name. A run whose listing
-# gave no commit falls back to the branch name. Every aged run of another event
-# is abandoned before this check, because it has no branch to verify and age is
-# its only bound on demand.
+# exact commit. A branch name match alone is not proof, because two open pull
+# requests from different forks can share one branch name while pointing at
+# different commits. Verification therefore keys open pull requests by commit,
+# so an aged run survives while any open pull request holds its commit. A run
+# whose listing gave no commit falls back to the branch name. Every aged run of
+# another event is abandoned before this check, because it has no branch to
+# verify and age is its only bound on demand.
 aged_run_is_abandoned() {
   local head_branch="$1"
   local head_sha="$2"
-  local -n known_branches="$3"
+  local -n known_shas="$3"
+  local -n known_branches="$4"
 
   [[ -n "$head_branch" ]] || return 1
   if [[ -z "$head_sha" ]]; then
     [[ -z "${known_branches[$head_branch]:-}" ]]
     return
   fi
-  [[ "${known_branches[$head_branch]:-}" != "$head_sha" ]]
+  [[ -z "${known_shas[$head_sha]:-}" ]]
 }
 
 queued_job_labels_for_repository() {
@@ -356,6 +359,7 @@ queued_job_labels_for_repository() {
   local -a aged_runs=()
   local -A seen_run_ids=()
   local -A open_branches=()
+  local -A open_head_shas=()
 
   if [[ -n "$fixed_now_epoch" ]]; then
     now_epoch="$fixed_now_epoch"
@@ -408,11 +412,12 @@ queued_job_labels_for_repository() {
       return 1
     fi
     while IFS=$'\t' read -r branch sha; do
-      [[ -n "$branch" ]] && open_branches[$branch]="$sha"
+      [[ -n "$sha" ]] && open_head_shas[$sha]=true
+      [[ -n "$branch" ]] && open_branches[$branch]=true
     done <<<"$listing"
     for aged_run in "${verifiable_aged_runs[@]}"; do
       IFS=$'\t' read -r run_id event head_branch head_sha <<<"$aged_run"
-      if aged_run_is_abandoned "$head_branch" "$head_sha" open_branches; then
+      if aged_run_is_abandoned "$head_branch" "$head_sha" open_head_shas open_branches; then
         log "Ignoring runner demand from closed pull request run $run_id in $repository"
         continue
       fi
