@@ -23,40 +23,57 @@ if [[ "$*" == *registration-token* ]]; then
   printf 'test-token\n'
 fi
 if [[ "$*" == *'actions/runs?status=in_progress'* && -f "$TEST_CALLS/queue-in-progress" ]]; then
-  printf '78\t2026-08-27T04:30:00Z\tpull_request\tfix/live\n'
+  printf '78\t2026-08-27T04:30:00Z\tpull_request\tfix/live\t1111111111111111111111111111111111111111\n'
 fi
 if [[ "$*" == *'actions/runs?status=in_progress'* && -f "$TEST_CALLS/queue-empty-in-progress" ]]; then
-  printf '79\t2026-08-27T04:30:00Z\tpull_request\tfix/live\n'
+  printf '79\t2026-08-27T04:30:00Z\tpull_request\tfix/live\t1111111111111111111111111111111111111111\n'
 fi
 if [[ "$*" == *'actions/runs/78/jobs'* && -f "$TEST_CALLS/queue-in-progress" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-enabled" ]]; then
-  printf '77\t2026-08-27T04:30:00Z\tpull_request\tfix/live\n'
+  printf '77\t2026-08-27T04:30:00Z\tpull_request\tfix/live\t1111111111111111111111111111111111111111\n'
 fi
 if [[ "$*" == *'actions/runs/77/jobs'* && -f "$TEST_CALLS/queue-enabled" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n%.0s' 1 2
 fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-stale" ]]; then
-  printf '76\t2026-08-26T00:00:00Z\tpull_request\tfix/closed\n'
+  printf '76\t2026-08-26T00:00:00Z\tpull_request\tfix/closed\t3333333333333333333333333333333333333333\n'
 fi
 if [[ "$*" == *'actions/runs/76/jobs'* && -f "$TEST_CALLS/queue-stale" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-rot-push" ]]; then
-  printf '75\t2026-08-26T00:00:00Z\tpush\tfix/gone\n'
+  printf '75\t2026-08-26T00:00:00Z\tpush\tfix/gone\t4444444444444444444444444444444444444444\n'
 fi
 if [[ "$*" == *'actions/runs/75/jobs'* && -f "$TEST_CALLS/queue-rot-push" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-starved" ]]; then
-  printf '75\t2026-08-26T00:00:00Z\tpull_request\tfix/open\n'
+  printf '75\t2026-08-26T00:00:00Z\tpull_request\tfix/open\t2222222222222222222222222222222222222222\n'
 fi
 if [[ "$*" == *'actions/runs/75/jobs'* && -f "$TEST_CALLS/queue-starved" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
 if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-starved" ]]; then
-  printf 'fix/open\n'
+  printf 'fix/open\t2222222222222222222222222222222222222222\n'
+fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-collision" ]]; then
+  if [[ "$*" == *'.head_sha'* ]]; then
+    printf '74\t2026-08-26T00:00:00Z\tpull_request\tfix/reused\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+  else
+    printf '74\t2026-08-26T00:00:00Z\tpull_request\tfix/reused\n'
+  fi
+fi
+if [[ "$*" == *'actions/runs/74/jobs'* && -f "$TEST_CALLS/queue-collision" ]]; then
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
+if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-collision" ]]; then
+  if [[ "$*" == *'.head.sha'* ]]; then
+    printf 'fix/reused\tbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+  else
+    printf 'fix/reused\n'
+  fi
 fi
 EOF
 
@@ -371,6 +388,39 @@ if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
 fi
 
 printf 'Starved pull request demand passed.\n'
+
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-collision"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || [[ -s "$test_root/calls/burst" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected an aged run from a closed pull request whose branch name an open pull request reused to leave a zero-warm pool stopped.\n' >&2
+  exit 1
+fi
+
+if grep --quiet 'actions/runs/74/jobs' "$test_root/calls/gh"; then
+  cat "$test_root/calls/gh"
+  printf 'Expected the reused-branch run to be dropped before its jobs were read.\n' >&2
+  exit 1
+fi
+
+printf 'Reused branch demand filtering passed.\n'
 
 rm -rf "$test_root/calls" "$test_root/runtime"
 mkdir -p "$test_root/calls" "$test_root/runtime"

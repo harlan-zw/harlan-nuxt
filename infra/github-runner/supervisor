@@ -78,8 +78,10 @@ readonly demand_poll_seconds=$(( configured_demand_poll_seconds > minimum_demand
 # Age alone cannot identify one. A pull request that waits behind a saturated
 # host ages past any threshold too, and dropping its demand starves it for good:
 # it never bursts a runner, so it only ages further. An aged pull request run
-# therefore keeps its demand while its branch still has an open pull request.
-# A run of any other event has no branch to verify. Age stays its only bound.
+# therefore keeps its demand while an open pull request still points at the run's
+# exact commit. The branch name is not enough, because a new pull request can
+# reuse a closed pull request's branch name. A run of any other event has no
+# branch to verify. Age stays its only bound.
 readonly queued_run_max_age_seconds="${HARLAN_DESKTOP_RUNNER_QUEUED_RUN_MAX_AGE_SECONDS:-21600}"
 readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
 readonly status_interval_seconds="${HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS:-15}"
@@ -326,21 +328,29 @@ publish_queue_count() {
   mv --force "$temporary" "$target"
 }
 
-# A pull request run is abandoned when its branch has no open pull request.
-# Every aged run of another event is abandoned before this check, because it has
-# no branch to verify and age is its only bound on demand.
+# A pull request run is abandoned when no open pull request points at the run's
+# exact commit. A branch name match alone is not proof, because a new pull
+# request can reuse a closed pull request's branch name. A run whose listing
+# gave no commit falls back to the branch name. Every aged run of another event
+# is abandoned before this check, because it has no branch to verify and age is
+# its only bound on demand.
 aged_run_is_abandoned() {
   local head_branch="$1"
-  local -n known_branches="$2"
+  local head_sha="$2"
+  local -n known_branches="$3"
 
   [[ -n "$head_branch" ]] || return 1
-  [[ -z "${known_branches[$head_branch]:-}" ]]
+  if [[ -z "$head_sha" ]]; then
+    [[ -z "${known_branches[$head_branch]:-}" ]]
+    return
+  fi
+  [[ "${known_branches[$head_branch]:-}" != "$head_sha" ]]
 }
 
 queued_job_labels_for_repository() {
   local repository="$1"
   local listing jobs run_id run_status created_at created_epoch
-  local event head_branch aged_run branch
+  local event head_branch head_sha aged_run branch sha
   local now_epoch oldest_epoch
   local -a run_ids=()
   local -a aged_runs=()
@@ -359,10 +369,10 @@ queued_job_labels_for_repository() {
   for run_status in queued in_progress; do
     if ! listing="$(github_api --paginate \
       "repos/$repository/actions/runs?status=$run_status&per_page=100" \
-      --jq '.workflow_runs[] | [.id, .created_at, .event, .head_branch] | @tsv' 2>/dev/null)"; then
+      --jq '.workflow_runs[] | [.id, .created_at, .event, .head_branch, .head_sha] | @tsv' 2>/dev/null)"; then
       return 1
     fi
-    while IFS=$'\t' read -r run_id created_at event head_branch; do
+    while IFS=$'\t' read -r run_id created_at event head_branch head_sha; do
       [[ -z "$run_id" || -n "${seen_run_ids[$run_id]:-}" ]] && continue
       if ! created_epoch="$(date --date="$created_at" +%s 2>/dev/null)"; then
         log "Ignoring runner demand with an invalid creation time in $repository"
@@ -370,7 +380,7 @@ queued_job_labels_for_repository() {
       fi
       seen_run_ids[$run_id]=true
       if (( created_epoch < oldest_epoch )); then
-        aged_runs+=("$run_id"$'\t'"$event"$'\t'"$head_branch")
+        aged_runs+=("$run_id"$'\t'"$event"$'\t'"$head_branch"$'\t'"$head_sha")
         continue
       fi
       run_ids+=("$run_id")
@@ -383,7 +393,7 @@ queued_job_labels_for_repository() {
   local -a verifiable_aged_runs=()
   if (( ${#aged_runs[@]} > 0 )); then
     for aged_run in "${aged_runs[@]}"; do
-      IFS=$'\t' read -r run_id event head_branch <<<"$aged_run"
+      IFS=$'\t' read -r run_id event head_branch head_sha <<<"$aged_run"
       if [[ "$event" == pull_request || "$event" == pull_request_target ]]; then
         verifiable_aged_runs+=("$aged_run")
       else
@@ -394,15 +404,15 @@ queued_job_labels_for_repository() {
   if (( ${#verifiable_aged_runs[@]} > 0 )); then
     if ! listing="$(github_api --paginate \
       "repos/$repository/pulls?state=open&per_page=100" \
-      --jq '.[].head.ref' 2>/dev/null)"; then
+      --jq '.[] | [.head.ref, .head.sha] | @tsv' 2>/dev/null)"; then
       return 1
     fi
-    while IFS= read -r branch; do
-      [[ -n "$branch" ]] && open_branches[$branch]=true
+    while IFS=$'\t' read -r branch sha; do
+      [[ -n "$branch" ]] && open_branches[$branch]="$sha"
     done <<<"$listing"
     for aged_run in "${verifiable_aged_runs[@]}"; do
-      IFS=$'\t' read -r run_id event head_branch <<<"$aged_run"
-      if aged_run_is_abandoned "$head_branch" open_branches; then
+      IFS=$'\t' read -r run_id event head_branch head_sha <<<"$aged_run"
+      if aged_run_is_abandoned "$head_branch" "$head_sha" open_branches; then
         log "Ignoring runner demand from closed pull request run $run_id in $repository"
         continue
       fi
