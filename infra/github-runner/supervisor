@@ -77,9 +77,9 @@ readonly demand_poll_seconds=$(( configured_demand_poll_seconds > minimum_demand
 #
 # Age alone cannot identify one. A pull request that waits behind a saturated
 # host ages past any threshold too, and dropping its demand starves it for good:
-# it never bursts a runner, so it only ages further. Age therefore selects which
-# runs to verify, and never decides on its own. A pull request run keeps its
-# demand while its branch still has an open pull request.
+# it never bursts a runner, so it only ages further. An aged pull request run
+# therefore keeps its demand while its branch still has an open pull request.
+# A run of any other event has no branch to verify. Age stays its only bound.
 readonly queued_run_max_age_seconds="${HARLAN_DESKTOP_RUNNER_QUEUED_RUN_MAX_AGE_SECONDS:-21600}"
 readonly fixed_now_epoch="${HARLAN_DESKTOP_RUNNER_NOW_EPOCH:-}"
 readonly status_interval_seconds="${HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS:-15}"
@@ -326,15 +326,13 @@ publish_queue_count() {
   mv --force "$temporary" "$target"
 }
 
-# A run whose pull request is closed cannot run. Every other aged run keeps its
-# demand, because a closed pull request is the only way a queued run is known to
-# become permanently unrunnable.
+# A pull request run is abandoned when its branch has no open pull request.
+# Every aged run of another event is abandoned before this check, because it has
+# no branch to verify and age is its only bound on demand.
 aged_run_is_abandoned() {
-  local event="$1"
-  local head_branch="$2"
-  local -n known_branches="$3"
+  local head_branch="$1"
+  local -n known_branches="$2"
 
-  [[ "$event" == pull_request || "$event" == pull_request_target ]] || return 1
   [[ -n "$head_branch" ]] || return 1
   [[ -z "${known_branches[$head_branch]:-}" ]]
 }
@@ -379,9 +377,21 @@ queued_job_labels_for_repository() {
     done <<<"$listing"
   done
 
-  # Verifying costs one more read of the shared API budget, so only a repository
-  # holding an aged run pays for it.
+  # Verifying costs one more read of the shared API budget, so only a
+  # repository holding an aged pull request run pays for it. An aged run of any
+  # other event is dropped here, because age is its only bound on demand.
+  local -a verifiable_aged_runs=()
   if (( ${#aged_runs[@]} > 0 )); then
+    for aged_run in "${aged_runs[@]}"; do
+      IFS=$'\t' read -r run_id event head_branch <<<"$aged_run"
+      if [[ "$event" == pull_request || "$event" == pull_request_target ]]; then
+        verifiable_aged_runs+=("$aged_run")
+      else
+        log "Ignoring runner demand from aged $event run $run_id in $repository"
+      fi
+    done
+  fi
+  if (( ${#verifiable_aged_runs[@]} > 0 )); then
     if ! listing="$(github_api --paginate \
       "repos/$repository/pulls?state=open&per_page=100" \
       --jq '.[].head.ref' 2>/dev/null)"; then
@@ -390,9 +400,9 @@ queued_job_labels_for_repository() {
     while IFS= read -r branch; do
       [[ -n "$branch" ]] && open_branches[$branch]=true
     done <<<"$listing"
-    for aged_run in "${aged_runs[@]}"; do
+    for aged_run in "${verifiable_aged_runs[@]}"; do
       IFS=$'\t' read -r run_id event head_branch <<<"$aged_run"
-      if aged_run_is_abandoned "$event" "$head_branch" open_branches; then
+      if aged_run_is_abandoned "$head_branch" open_branches; then
         log "Ignoring runner demand from closed pull request run $run_id in $repository"
         continue
       fi
