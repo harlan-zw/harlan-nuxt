@@ -519,3 +519,41 @@ if ! grep --quiet 'Available memory 2g, headroom 2g; holding example-ci at 0' "$
 fi
 
 printf 'Host memory headroom passed.\n'
+
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory"
+
+# Two queued jobs mean two spawn requests for the one pool. Every one of them
+# has to re-run the gate. With all pools at 0 no job can return capacity, so a
+# dropped request would hold the pool until something unrelated wrote to the
+# pipe, which is how the pools stayed at 0 for an hour on 2026-09-04.
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=2 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=2 \
+HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB=2 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the supervisor to exit cleanly while the pool was held.\n' >&2
+  exit 1
+fi
+
+holds="$(grep --count 'holding example-ci at 0' "$test_root/output" || true)"
+if (( holds < 2 )); then
+  cat "$test_root/output"
+  printf 'Expected every queued job to re-run the gate, saw %s hold(s).\n' "$holds" >&2
+  exit 1
+fi
+
+printf 'Repeated demand re-runs the memory gate passed.\n'
