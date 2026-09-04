@@ -127,6 +127,7 @@ declare -a pool_memory_swap=()
 # The unsuffixed reservation goes to Docker. Only this integer form is summed.
 declare -a pool_memory_reservation_gib=()
 declare -a pool_slug=()
+declare -a pool_is_deploy=()
 
 # One entry per repository, however many pools it owns. Pruning is per
 # repository, so a repository with two pools must not be pruned twice.
@@ -251,6 +252,11 @@ read_config() {
     pool_memory_swap+=("$memory_swap")
     pool_memory_reservation_gib+=("$memory_reservation_gib")
     pool_slug+=("$(pool_slug_for "$repository" "$label")")
+    if [[ ",$label," == *,harlan-desktop-deploy,* ]]; then
+      pool_is_deploy+=(1)
+    else
+      pool_is_deploy+=(0)
+    fi
   done <"$config_file"
 
   if (( ${#pool_repository[@]} == 0 )); then
@@ -455,10 +461,14 @@ queued_jobs_for_pool() {
 
 run_demand_poller() {
   local pool_index repository jobs queued idle deficit request
+  local -a deploy_requests=()
+  local -a standard_requests=()
   local -A repository_jobs=()
   local -A repository_result=()
 
   while [[ ! -f "$state_dir/shutdown" ]]; do
+    deploy_requests=()
+    standard_requests=()
     repository_jobs=()
     repository_result=()
     for pool_index in "${!pool_repository[@]}"; do
@@ -482,8 +492,17 @@ run_demand_poller() {
       idle="$(count_idle_burst "$pool_index")"
       deficit=$(( queued - idle ))
       for (( request = 0; request < deficit; request++ )); do
-        printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
+        if (( pool_is_deploy[pool_index] )); then
+          deploy_requests+=("$pool_index")
+        else
+          standard_requests+=("$pool_index")
+        fi
       done
+    done
+    # Send the complete scan as deploys first. Config order must not decide
+    # whether production work can reserve capacity.
+    for pool_index in ${deploy_requests[@]+"${deploy_requests[@]}"} ${standard_requests[@]+"${standard_requests[@]}"}; do
+      printf 'spawn %s\n' "$pool_index" >"$scale_pipe"
     done
     sleep "$demand_poll_seconds"
   done
@@ -755,8 +774,8 @@ run_burst_slot() {
 run_scaler() {
   local request pool_index container_name
   local burst_counter=0
-  local slug live spent spent_memory available_memory
-  local pending_pool pending_count attempt
+  local slug live spent spent_memory available_memory hold_reason
+  local pending_pool pending_count attempt candidate priority_index queued_demand
   local -a pending_pools=()
   local -A pool_is_pending=()
 
@@ -779,10 +798,20 @@ run_scaler() {
 
       # Try each denied pool once. A pool that still cannot fit moves to the
       # back, so repeated capacity changes distribute slots across repositories.
+      # The oldest pending deploy goes first. Once denied, it stays first and
+      # reserves future capacity by stopping lower-priority admissions.
       pending_count="${#pending_pools[@]}"
       for (( attempt = 0; attempt < pending_count; attempt++ )); do
-        pending_pool="${pending_pools[0]}"
-        pending_pools=("${pending_pools[@]:1}")
+        priority_index=0
+        for candidate in "${!pending_pools[@]}"; do
+          if (( pool_is_deploy[pending_pools[candidate]] )); then
+            priority_index="$candidate"
+            break
+          fi
+        done
+        pending_pool="${pending_pools[$priority_index]}"
+        unset "pending_pools[$priority_index]"
+        pending_pools=("${pending_pools[@]}")
         slug="${pool_slug[$pending_pool]}"
         live=$(( pool_warm[pending_pool] + $(count_markers "$state_dir/burst/$slug") ))
         if (( live >= pool_max[pending_pool] )); then
@@ -790,30 +819,48 @@ run_scaler() {
           continue
         fi
 
+        # A zero-warm pool has no listeners, so its published queued count is
+        # its only demand. A run cancelled while this entry sat held leaves the
+        # count at zero, and admitting the entry would burst an empty runner
+        # that reserves its share until the idle reaper returns it. Drop the
+        # stale entry so freed capacity goes to the next pool.
+        if (( pool_warm[pending_pool] == 0 )); then
+          queued_demand=''
+          if [[ -r "$state_dir/queued/$slug" ]]; then
+            read -r queued_demand <"$state_dir/queued/$slug" || queued_demand=''
+          fi
+          if [[ "$queued_demand" == 0 ]]; then
+            unset 'pool_is_pending[$pending_pool]'
+            log "Dropping held demand for $slug; its queued count returned to zero"
+            continue
+          fi
+        fi
+
+        hold_reason=''
         spent="$(sum_markers "$state_dir/spend")"
         if (( spent + pool_cpus[pending_pool] > cpu_budget )); then
-          log "CPU in flight $spent, burst threshold $cpu_budget; holding $slug at $live"
-          pending_pools+=("$pending_pool")
-          continue
+          hold_reason="CPU in flight $spent, burst threshold $cpu_budget"
+        else
+          # Checked after CPU and never merged with it. A host can have cores to
+          # spare and no memory to back them, which is the case this exists for.
+          spent_memory="$(sum_markers "$state_dir/spend-memory")"
+          if (( spent_memory + pool_memory_reservation_gib[pending_pool] > memory_budget_gib )); then
+            hold_reason="Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g"
+          else
+            available_memory="$(host_available_memory_gib)"
+            if [[ ! "$available_memory" =~ ^[0-9]+$ ]]; then
+              hold_reason='Available memory is unknown'
+            elif (( available_memory - pool_memory_reservation_gib[pending_pool] < memory_headroom_gib )); then
+              hold_reason="Available memory ${available_memory}g, headroom ${memory_headroom_gib}g"
+            fi
+          fi
         fi
-
-        # Checked after CPU and never merged with it. A host can have cores to
-        # spare and no memory to back them, which is the case this exists for.
-        spent_memory="$(sum_markers "$state_dir/spend-memory")"
-        if (( spent_memory + pool_memory_reservation_gib[pending_pool] > memory_budget_gib )); then
-          log "Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g; holding $slug at $live"
-          pending_pools+=("$pending_pool")
-          continue
-        fi
-
-        available_memory="$(host_available_memory_gib)"
-        if [[ ! "$available_memory" =~ ^[0-9]+$ ]]; then
-          log "Available memory is unknown; holding $slug at $live"
-          pending_pools+=("$pending_pool")
-          continue
-        fi
-        if (( available_memory - pool_memory_reservation_gib[pending_pool] < memory_headroom_gib )); then
-          log "Available memory ${available_memory}g, headroom ${memory_headroom_gib}g; holding $slug at $live"
+        if [[ -n "$hold_reason" ]]; then
+          log "$hold_reason; holding $slug at $live"
+          if (( pool_is_deploy[pending_pool] )); then
+            pending_pools=("$pending_pool" "${pending_pools[@]}")
+            break
+          fi
           pending_pools+=("$pending_pool")
           continue
         fi
