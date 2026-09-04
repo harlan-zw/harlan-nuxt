@@ -37,6 +37,17 @@ fi
 if [[ "$*" == *'actions/runs/77/jobs'* && -f "$TEST_CALLS/queue-enabled" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n%.0s' 1 2
 fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-priority" ]]; then
+  for _ in $(seq 1 50); do
+    [[ -f "$TEST_CALLS/warm-running" ]] && break
+    sleep 0.01
+  done
+  printf '73\t2026-08-27T04:30:00Z\tpush\tmain\t6666666666666666666666666666666666666666\n'
+fi
+if [[ "$*" == *'actions/runs/73/jobs'* && -f "$TEST_CALLS/queue-priority" ]]; then
+  printf 'self-hosted,harlan-desktop-deploy\n'
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-stale" ]]; then
   printf '76\t2026-08-26T00:00:00Z\tpull_request\tfix/closed\t3333333333333333333333333333333333333333\n'
 fi
@@ -163,6 +174,7 @@ case "$command_name" in
     attempts=$(( attempts + 1 ))
     printf '%s\n' "$attempts" >"$attempts_file"
     if (( attempts == 1 )); then
+      touch "$TEST_CALLS/warm-running"
       printf 'Running job: first\n'
       sleep 0.2
       printf 'Job first completed with result: Succeeded\n'
@@ -557,3 +569,48 @@ if (( holds < 2 )); then
 fi
 
 printf 'Repeated demand re-runs the memory gate passed.\n'
+
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-priority"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-busy|1|1|4|1g|2g|3g
+harlan-zw/example|harlan-desktop-ci|0|1|4|1g|2g|3g
+harlan-zw/example|harlan-desktop-deploy|0|1|12|1g|2g|3g
+EOF
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=12 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=12 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected deploy priority scheduling to drain cleanly.\n' >&2
+  exit 1
+fi
+
+if [[ "$(<"$test_root/calls/burst")" != *-deploy-burst-* ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/burst"
+  printf 'Expected the pending deploy to receive released capacity first.\n' >&2
+  exit 1
+fi
+
+if grep --quiet --fixed-strings -- '-ci-burst-' "$test_root/calls/burst"; then
+  cat "$test_root/output"
+  cat "$test_root/calls/burst"
+  printf 'Expected CI admission to wait behind the pending deploy.\n' >&2
+  exit 1
+fi
+
+printf 'Deploy priority passed.\n'

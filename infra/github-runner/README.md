@@ -17,6 +17,9 @@ The supervisor polls queued GitHub Actions jobs by runner label.
 
 It reserves host capacity before it registers a runner.
 
+Pending deploys reserve the next available capacity. CI and light pools wait
+until the oldest deploy fits and starts.
+
 Workflow shells with no jobs create no demand.
 
 A warm listener remains optional for a pool that needs lower startup latency.
