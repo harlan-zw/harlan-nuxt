@@ -3,7 +3,13 @@
 set -euo pipefail
 
 test_root="$(mktemp -d)"
-trap 'rm -rf "$test_root"' EXIT
+state_home="$(mktemp -d)"
+trap 'rm -rf "$test_root" "$state_home"' EXIT
+
+# Every invocation must point HARLAN_DESKTOP_RUNNER_HISTORY_DIR at the test
+# root. A write into the default history root lands here and fails the final
+# check, so the suite can never touch real runner history again.
+export XDG_STATE_HOME="$state_home"
 
 mkdir -p "$test_root/bin" "$test_root/runtime" "$test_root/calls" "$test_root/credentials"
 printf 'repository-token\n' >"$test_root/credentials/github-harlan-zw-token"
@@ -47,6 +53,28 @@ fi
 if [[ "$*" == *'actions/runs/73/jobs'* && -f "$TEST_CALLS/queue-priority" ]]; then
   printf 'self-hosted,harlan-desktop-deploy\n'
   printf 'self-hosted,harlan-desktop-ci\n'
+fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-cancel" ]]; then
+  for _ in $(seq 1 50); do
+    [[ -f "$TEST_CALLS/warm-running" ]] && break
+    sleep 0.01
+  done
+  scans=0
+  [[ -f "$TEST_CALLS/cancel-scans" ]] && read -r scans <"$TEST_CALLS/cancel-scans"
+  scans=$(( scans + 1 ))
+  printf '%s\n' "$scans" >"$TEST_CALLS/cancel-scans"
+  if (( scans >= 2 )); then
+    touch "$TEST_CALLS/scanned-after-cancel"
+  fi
+  printf '73\t2026-08-27T04:30:00Z\tpush\tmain\t6666666666666666666666666666666666666666\n'
+fi
+if [[ "$*" == *'actions/runs/73/jobs'* && -f "$TEST_CALLS/queue-cancel" ]]; then
+  if [[ -f "$TEST_CALLS/scanned-after-cancel" ]]; then
+    printf 'self-hosted,harlan-desktop-ci\n'
+  else
+    printf 'self-hosted,harlan-desktop-deploy\n'
+    printf 'self-hosted,harlan-desktop-ci\n'
+  fi
 fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-stale" ]]; then
   printf '76\t2026-08-26T00:00:00Z\tpull_request\tfix/closed\t3333333333333333333333333333333333333333\n'
@@ -176,6 +204,12 @@ case "$command_name" in
     if (( attempts == 1 )); then
       touch "$TEST_CALLS/warm-running"
       printf 'Running job: first\n'
+      if [[ -f "$TEST_CALLS/hold-warm-job" ]]; then
+        for _ in $(seq 1 2000); do
+          [[ -f "$TEST_CALLS/scanned-after-cancel" ]] && break
+          sleep 0.05
+        done
+      fi
       sleep 0.2
       printf 'Job first completed with result: Succeeded\n'
       exit 0
@@ -585,6 +619,7 @@ PATH="$test_root/bin:$PATH" \
 XDG_RUNTIME_DIR="$test_root/runtime" \
 CREDENTIALS_DIRECTORY="$test_root/credentials" \
 HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
 HARLAN_DESKTOP_RUNNER_CPU_BUDGET=12 \
 HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=12 \
 HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
@@ -614,3 +649,54 @@ if grep --quiet --fixed-strings -- '-ci-burst-' "$test_root/calls/burst"; then
 fi
 
 printf 'Deploy priority passed.\n'
+
+# A deploy run cancelled while its burst request is held must release the
+# reservation. Scan one queues the deploy, scan two lists it gone, and only
+# then does the busy slot return capacity. CI has to be admitted on the freed
+# slot with no empty deploy burst in front of it. The second scan lands after
+# the 60 second demand poll floor, so this block runs longer than the others.
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-cancel" "$test_root/calls/hold-warm-job"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=12 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=12 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 70 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the cancelled deploy reservation to drain cleanly.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet -- '-ci-burst-' "$test_root/calls/burst" 2>/dev/null; then
+  cat "$test_root/output"
+  [[ -f "$test_root/calls/burst" ]] && cat "$test_root/calls/burst"
+  printf 'Expected CI to be admitted once the deploy demand vanished.\n' >&2
+  exit 1
+fi
+
+if grep --quiet -- '-deploy-burst-' "$test_root/calls/burst" 2>/dev/null; then
+  cat "$test_root/calls/burst"
+  printf 'Expected the cancelled deploy not to burst an empty runner.\n' >&2
+  exit 1
+fi
+
+printf 'Cancelled deploy reservation passed.\n'
+
+if [[ -n "$(find "$state_home" -mindepth 1 -print -quit)" ]]; then
+  find "$state_home"
+  printf 'Expected every invocation to keep job history inside the test root.\n' >&2
+  exit 1
+fi

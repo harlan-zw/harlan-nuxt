@@ -775,7 +775,7 @@ run_scaler() {
   local request pool_index container_name
   local burst_counter=0
   local slug live spent spent_memory available_memory hold_reason
-  local pending_pool pending_count attempt candidate priority_index
+  local pending_pool pending_count attempt candidate priority_index queued_demand
   local -a pending_pools=()
   local -A pool_is_pending=()
 
@@ -817,6 +817,23 @@ run_scaler() {
         if (( live >= pool_max[pending_pool] )); then
           unset 'pool_is_pending[$pending_pool]'
           continue
+        fi
+
+        # A zero-warm pool has no listeners, so its published queued count is
+        # its only demand. A run cancelled while this entry sat held leaves the
+        # count at zero, and admitting the entry would burst an empty runner
+        # that reserves its share until the idle reaper returns it. Drop the
+        # stale entry so freed capacity goes to the next pool.
+        if (( pool_warm[pending_pool] == 0 )); then
+          queued_demand=''
+          if [[ -r "$state_dir/queued/$slug" ]]; then
+            read -r queued_demand <"$state_dir/queued/$slug" || queued_demand=''
+          fi
+          if [[ "$queued_demand" == 0 ]]; then
+            unset 'pool_is_pending[$pending_pool]'
+            log "Dropping held demand for $slug; its queued count returned to zero"
+            continue
+          fi
         fi
 
         hold_reason=''
