@@ -764,9 +764,15 @@ run_scaler() {
     while IFS=' ' read -r request pool_index; do
       [[ -f "$state_dir/shutdown" ]] && continue
 
-      if [[ "$request" == spawn && -z "${pool_is_pending[$pool_index]:-}" ]]; then
-        pending_pools+=("$pool_index")
-        pool_is_pending[$pool_index]=true
+      # A spawn for a pool already pending adds no second entry, but it still
+      # runs the retry below. It is fresh demand, and with every pool at 0 no
+      # job can return capacity, so dropping it here would hold the pools until
+      # something unrelated wrote to this pipe.
+      if [[ "$request" == spawn ]]; then
+        if [[ -z "${pool_is_pending[$pool_index]:-}" ]]; then
+          pending_pools+=("$pool_index")
+          pool_is_pending[$pool_index]=true
+        fi
       elif [[ "$request" != capacity ]]; then
         continue
       fi
