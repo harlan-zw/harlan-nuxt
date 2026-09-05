@@ -411,17 +411,23 @@ queued_job_labels_for_repository() {
       fi
     done
   fi
+  # Verification is an extra bound on aged demand, not the demand itself. A
+  # token without `pull_requests: read` cannot make this call, and failing the
+  # whole repository here would stop every pool on one stale run. Drop the aged
+  # runs instead: the repository keeps scheduling its fresh ones.
   if (( ${#verifiable_aged_runs[@]} > 0 )); then
     if ! listing="$(github_api --paginate \
       "repos/$repository/pulls?state=open&per_page=100" \
       --jq '.[] | [.head.ref, .head.sha] | @tsv' 2>/dev/null)"; then
-      return 1
+      log "Cannot verify aged pull request runs in $repository, so ignoring ${#verifiable_aged_runs[@]} of them"
+      verifiable_aged_runs=()
+      listing=''
     fi
     while IFS=$'\t' read -r branch sha; do
       [[ -n "$sha" ]] && open_head_shas[$sha]=true
       [[ -n "$branch" ]] && open_branches[$branch]=true
     done <<<"$listing"
-    for aged_run in "${verifiable_aged_runs[@]}"; do
+    for aged_run in ${verifiable_aged_runs[@]+"${verifiable_aged_runs[@]}"}; do
       IFS=$'\t' read -r run_id event head_branch head_sha <<<"$aged_run"
       if aged_run_is_abandoned "$head_branch" "$head_sha" open_head_shas open_branches; then
         log "Ignoring runner demand from closed pull request run $run_id in $repository"
