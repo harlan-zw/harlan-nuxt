@@ -282,6 +282,15 @@ host_available_memory_gib() {
   free --gibi | awk '/^Mem:/ { print $7 }'
 }
 
+# RAM-backed filesystems spend the same pages the pools budget, and they are
+# invisible in `MemAvailable`: a full /tmp reads exactly like a busy host. The
+# hold reason names them so the next multi-hour hold is one log line rather than
+# a host login (2026-09-05, a 12g /tmp held the deploy pool at 0 for 3h21m).
+host_ram_backed_memory_gib() {
+  df --block-size=1G --output=fstype,used 2>/dev/null \
+    | awk '$1 == "tmpfs" || $1 == "ramfs" { total += $2 } END { print total + 0 }'
+}
+
 # Sum of a marker directory's contents. Each file is named after its container,
 # so concurrent slots create and remove distinct paths and never contend.
 sum_markers() {
@@ -774,7 +783,7 @@ run_burst_slot() {
 run_scaler() {
   local request pool_index container_name
   local burst_counter=0
-  local slug live spent spent_memory available_memory hold_reason
+  local slug live spent spent_memory available_memory ram_backed_memory hold_reason
   local pending_pool pending_count attempt candidate priority_index queued_demand
   local -a pending_pools=()
   local -A pool_is_pending=()
@@ -852,6 +861,10 @@ run_scaler() {
               hold_reason='Available memory is unknown'
             elif (( available_memory - pool_memory_reservation_gib[pending_pool] < memory_headroom_gib )); then
               hold_reason="Available memory ${available_memory}g, headroom ${memory_headroom_gib}g"
+              ram_backed_memory="$(host_ram_backed_memory_gib)"
+              if [[ "$ram_backed_memory" =~ ^[0-9]+$ ]] && (( ram_backed_memory > 0 )); then
+                hold_reason="${hold_reason}, RAM-backed filesystems hold ${ram_backed_memory}g"
+              fi
             fi
           fi
         fi

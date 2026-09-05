@@ -199,8 +199,10 @@ sudo install -Dm755 infra/github-runner/backfill-job-history /var/lib/github-run
 sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
 sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
 sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
+sudo install -Dm644 infra/github-runner/hogwild-tmp.conf /etc/tmpfiles.d/runner-tmp.conf
 sudo install -Dm755 infra/github-runner/hogwild-safe-poweroff /usr/local/sbin/hogwild-safe-poweroff
 sudo systemctl daemon-reload
+sudo systemd-tmpfiles --clean
 sudo systemctl kill --signal HUP systemd-logind
 sudo systemctl restart hogwild-github-runner.service
 ```
