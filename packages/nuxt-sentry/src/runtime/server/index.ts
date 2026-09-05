@@ -35,6 +35,8 @@ export {
   redactText,
   redactValue,
 } from '../shared/redact'
+export type { CaptureTaskFailure, ReportingTask, TaskFailureReport, TaskLike, TaskRunContext } from '../shared/task'
+export { describeTaskFailure, resolveTaskName, withTaskReporting } from '../shared/task'
 export type {
   DataCollection,
   DropRuleName,
@@ -56,6 +58,7 @@ export type {
 } from '../shared/types'
 export type { WorkerAttribution } from './attribution'
 export { resolveWorkerAttribution } from './attribution'
+export { withSentryTask } from './task'
 export type {
   DrainedWideEvent,
   SentryCorrelation,
