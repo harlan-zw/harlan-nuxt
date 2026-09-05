@@ -558,9 +558,17 @@ if (( status != 0 )) || [[ -s "$test_root/calls/burst" ]]; then
   exit 1
 fi
 
-if ! grep --quiet 'Available memory 2g, headroom 2g; holding example-ci at 0' "$test_root/output"; then
+if ! grep --quiet 'Available memory 2g, headroom 2g' "$test_root/output"; then
   cat "$test_root/output"
   printf 'Expected the memory headroom decision in the supervisor log.\n' >&2
+  exit 1
+fi
+
+# A RAM-backed filesystem spends the pages the pools budget, and `MemAvailable`
+# cannot say so. Without this the reader sees only that memory is gone.
+if ! grep --quiet 'RAM-backed filesystems hold [0-9]\+g; holding example-ci at 0' "$test_root/output"; then
+  cat "$test_root/output"
+  printf 'Expected the hold reason to name RAM-backed filesystem usage.\n' >&2
   exit 1
 fi
 
