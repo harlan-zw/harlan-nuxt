@@ -200,6 +200,23 @@ if (nuxtSentry.target._tag === 'enabled') {
 
 The same constant is still written to `runtimeConfig.public.nuxtSentry`, so code that already reads it keeps working.
 
+## Scheduled tasks
+
+Nitro's `runTask` calls no hook, so nothing can see a scheduled task run. A throwing task reaches Sentry, if at all, as an unattributed `scriptThrewException`. Wrap the task definition with `withSentryTask` to tag the Error Report with the task name. The error is rethrown, so the scheduler still sees the task fail.
+
+```ts
+import { withSentryTask } from '@harlan-zw/nuxt-sentry/server/task'
+
+export default withSentryTask(defineTask({
+  meta: { name: 'my:cron' },
+  async run() {
+    // ...
+  },
+}))
+```
+
+`withSentryTask` reports through `@sentry/cloudflare`, so it runs on a Cloudflare Workers preset only. It lives in its own subpath export, because the SDK-free `@harlan-zw/nuxt-sentry/server` barrel must keep resolving on Node, where that peer is not installed.
+
 ## Wide Events
 
 With `@harlan-zw/nuxt-wide-events` installed, two bridges are wired and neither package imports the other.
