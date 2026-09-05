@@ -493,11 +493,21 @@ run_demand_poller() {
       fi
       if [[ "${repository_result[$repository]}" == unavailable ]]; then
         rm --force "$state_dir/queued/${pool_slug[$pool_index]}"
+        rm --force "$state_dir/held/${pool_slug[$pool_index]}"
         log "Queued job demand is unavailable for ${pool_slug[$pool_index]}"
         continue
       fi
       queued="$(queued_jobs_for_pool "$pool_index" "${repository_jobs[$repository]}")"
       publish_queue_count "$pool_index" "$queued"
+      # A hold ends when its demand ends, not only when a capacity event
+      # arrives. The gate reads pending entries on spawn and capacity requests
+      # alone, and a cancelled run sends neither: no burst is running to finish
+      # and the deficit is zero, so the entry would sit held over an idle pool
+      # until restart. Wake the gate whenever a held pool's scan reaches zero;
+      # its zero-demand drop then removes the marker beside the queued count.
+      if (( queued == 0 )) && [[ -f "$state_dir/held/${pool_slug[$pool_index]}" ]]; then
+        printf 'capacity\n' >"$scale_pipe"
+      fi
       idle="$(count_idle_burst "$pool_index")"
       deficit=$(( queued - idle ))
       for (( request = 0; request < deficit; request++ )); do
@@ -824,6 +834,7 @@ run_scaler() {
         slug="${pool_slug[$pending_pool]}"
         live=$(( pool_warm[pending_pool] + $(count_markers "$state_dir/burst/$slug") ))
         if (( live >= pool_max[pending_pool] )); then
+          rm --force "$state_dir/held/$slug"
           unset 'pool_is_pending[$pending_pool]'
           continue
         fi
@@ -839,6 +850,7 @@ run_scaler() {
             read -r queued_demand <"$state_dir/queued/$slug" || queued_demand=''
           fi
           if [[ "$queued_demand" == 0 ]]; then
+            rm --force "$state_dir/held/$slug"
             unset 'pool_is_pending[$pending_pool]'
             log "Dropping held demand for $slug; its queued count returned to zero"
             continue
@@ -870,6 +882,14 @@ run_scaler() {
         fi
         if [[ -n "$hold_reason" ]]; then
           log "$hold_reason; holding $slug at $live"
+          # The journal already carries this, and nothing reads the journal until
+          # someone notices. `publish-status` turns the marker into the dashboard's
+          # hold state, so a pool held for hours stops looking like an idle one.
+          # That state ages the hold from the marker's mtime. Write the marker
+          # only while it is absent, so later gate runs keep the hold's start.
+          if [[ ! -e "$state_dir/held/$slug" ]]; then
+            printf '%s\n' "$hold_reason" >"$state_dir/held/$slug"
+          fi
           if (( pool_is_deploy[pending_pool] )); then
             pending_pools=("$pending_pool" "${pending_pools[@]}")
             break
@@ -879,6 +899,9 @@ run_scaler() {
         fi
 
         unset 'pool_is_pending[$pending_pool]'
+        # The hold ends when the gate admits the pool. Remove the marker beside
+        # the scheduling it guarded, or the pool reports held while it runs.
+        rm --force "$state_dir/held/$slug"
 
         # A restart resets this counter while a spared burst container from the
         # previous generation may still hold one of these names. Skip past it.
@@ -1102,7 +1125,7 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued"
+  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued" "$state_dir/held"
   chmod 0750 "$state_dir"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"
