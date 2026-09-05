@@ -689,6 +689,93 @@ fi
 
 printf 'Held start survives later gate runs passed.\n'
 
+# A hold must end when its demand ends, not only when a capacity event
+# arrives. The gate runs on spawn and capacity requests alone, so a run that
+# is cancelled while its pool is held sends neither: the next scan publishes
+# queued 0 and stays quiet, and no busy slot ever returns capacity. The
+# marker then reports a hold over an idle pool until restart. Hold one cold
+# pool at low memory, cancel its run with no other pools and no bursts, and
+# require the published hold to clear within one demand scan.
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
+EOF
+
+set +e
+(
+  TEST_CALLS="$test_root/calls" \
+  PATH="$test_root/bin:$PATH" \
+  XDG_RUNTIME_DIR="$test_root/runtime" \
+  CREDENTIALS_DIRECTORY="$test_root/credentials" \
+  HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+  HARLAN_DESKTOP_RUNNER_CPU_BUDGET=2 \
+  HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=2 \
+  HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB=2 \
+  HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+  HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+  HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.2 \
+  HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
+  timeout --preserve-status --kill-after=1 100 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+) &
+supervisor_pid=$!
+
+saw_hold=''
+cancelled_demand=''
+saw_queued_zero=''
+held_cleared=''
+while kill -0 "$supervisor_pid" 2>/dev/null; do
+  pool_json="$(jq --compact-output '.pools[] | select(.name == "example-ci")' "$test_root/calls/status.json" 2>/dev/null || true)"
+  if [[ -n "$pool_json" ]]; then
+    held_reason="$(jq --raw-output '.heldReason // empty' <<<"$pool_json")"
+    queued_count="$(jq --raw-output '.queued' <<<"$pool_json")"
+    if [[ -n "$held_reason" ]]; then
+      saw_hold=1
+      if [[ -z "$cancelled_demand" ]]; then
+        rm --force "$test_root/calls/queue-enabled"
+        cancelled_demand=1
+      fi
+    fi
+    [[ "$queued_count" == 0 ]] && saw_queued_zero=1
+    if [[ -n "$saw_hold" && -n "$cancelled_demand" && -z "$held_reason" ]]; then
+      held_cleared=1
+    fi
+  fi
+  sleep 0.05
+done
+wait "$supervisor_pid"
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the supervisor to exit cleanly while the hold end was checked.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$saw_hold" ]]; then
+  cat "$test_root/output"
+  printf 'Expected the low memory hold to publish a hold reason.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$saw_queued_zero" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected the cancelled run to publish a queued count of zero.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$held_cleared" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/status.json"
+  printf 'Expected the published hold to clear once its queued count reached zero with no capacity event.\n' >&2
+  exit 1
+fi
+
+printf 'Cancelled hold clears without a capacity event passed.\n'
+
 rm -rf "$test_root/calls" "$test_root/runtime"
 mkdir -p "$test_root/calls" "$test_root/runtime"
 touch "$test_root/calls/queue-priority"
