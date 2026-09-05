@@ -22,6 +22,8 @@ const root = resolve(fileURLToPath(new URL('../', import.meta.url)))
 describe('server barrel resolves without @sentry/cloudflare', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'nuxt-sentry-barrel-'))
 
+  // Packing runs a full build, which is well past the default hook timeout on a
+  // cold CI runner.
   beforeAll(() => {
     execSync('pnpm test:pack', { cwd: root, stdio: 'pipe' })
     const tarball = readdirSync(join(root, '.pack')).find(file => file.endsWith('.tgz'))
@@ -29,7 +31,7 @@ describe('server barrel resolves without @sentry/cloudflare', () => {
     const pkgDir = join(sandbox, 'node_modules', '@harlan-zw', 'nuxt-sentry')
     mkdirSync(pkgDir, { recursive: true })
     execSync(`tar -xzf ${JSON.stringify(join(root, '.pack', tarball!))} -C ${JSON.stringify(pkgDir)} --strip-components=1`)
-  })
+  }, 180_000)
 
   afterAll(() => {
     rmSync(sandbox, { recursive: true, force: true })
