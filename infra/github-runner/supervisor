@@ -493,6 +493,7 @@ run_demand_poller() {
       fi
       if [[ "${repository_result[$repository]}" == unavailable ]]; then
         rm --force "$state_dir/queued/${pool_slug[$pool_index]}"
+        rm --force "$state_dir/held/${pool_slug[$pool_index]}"
         log "Queued job demand is unavailable for ${pool_slug[$pool_index]}"
         continue
       fi
@@ -870,6 +871,10 @@ run_scaler() {
         fi
         if [[ -n "$hold_reason" ]]; then
           log "$hold_reason; holding $slug at $live"
+          # The journal already carries this, and nothing reads the journal until
+          # someone notices. `publish-status` turns the marker into the dashboard's
+          # hold state, so a pool held for hours stops looking like an idle one.
+          printf '%s\n' "$hold_reason" >"$state_dir/held/$slug"
           if (( pool_is_deploy[pending_pool] )); then
             pending_pools=("$pending_pool" "${pending_pools[@]}")
             break
@@ -1102,7 +1107,7 @@ main() {
   # read from the real reservations.
   state_dir="$state_root"
   rm --recursive --force "$state_dir"
-  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued"
+  mkdir --parents "$state_dir/spend" "$state_dir/spend-memory" "$state_dir/claimed" "$state_dir/burst" "$state_dir/offline" "$state_dir/jobs" "$state_dir/queued" "$state_dir/held"
   chmod 0750 "$state_dir"
   scale_pipe="$state_dir/scale"
   cp "$config_file" "$published_config"

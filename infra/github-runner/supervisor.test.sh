@@ -316,7 +316,7 @@ if (( $(wc -l <"$test_root/calls/burst") != 2 )); then
   exit 1
 fi
 
-if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, live: 0, maximum: 2, memoryLimitBytes: 2147483648, memoryReservationBytes: 1073741824, name: "example-ci", queued: 2, repository: "harlan-zw/example", running: 0 }]' "$test_root/calls/status.json" >/dev/null; then
+if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, heldReason: null, heldSince: null, live: 0, maximum: 2, memoryLimitBytes: 2147483648, memoryReservationBytes: 1073741824, name: "example-ci", queued: 2, repository: "harlan-zw/example", running: 0 }]' "$test_root/calls/status.json" >/dev/null; then
   cat "$test_root/calls/status.json"
   printf 'Expected queued demand in the published runner status.\n' >&2
   exit 1
