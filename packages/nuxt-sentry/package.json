@@ -31,13 +31,18 @@
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
+    },
+    "./server/task": {
+      "types": "./dist/runtime/server/task.d.ts",
+      "import": "./dist/runtime/server/task.js"
     }
   },
   "main": "./dist/module.mjs",
   "types": "./dist/types.d.mts",
   "typesVersions": {
     "*": {
-      "server": ["dist/runtime/server/index.d.ts"]
+      "server": ["dist/runtime/server/index.d.ts"],
+      "server/task": ["dist/runtime/server/task.d.ts"]
     }
   },
   "files": ["dist"],

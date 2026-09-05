@@ -6,6 +6,10 @@
  * client or a background failure is filtered differently from a foreground one.
  * A non Cloudflare site keeps its own `sentry.server.config.ts` and builds its
  * `beforeSend` from here.
+ *
+ * This barrel stays SDK-free. `@sentry/cloudflare` is an optional peer, and a
+ * Node preset does not install it, so a Cloudflare-only helper such as
+ * `withSentryTask` lives in its own subpath export instead of here.
  */
 
 export {
@@ -58,7 +62,6 @@ export type {
 } from '../shared/types'
 export type { WorkerAttribution } from './attribution'
 export { resolveWorkerAttribution } from './attribution'
-export { withSentryTask } from './task'
 export type {
   DrainedWideEvent,
   SentryCorrelation,
