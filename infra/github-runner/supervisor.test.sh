@@ -6,17 +6,10 @@ test_root="$(mktemp -d)"
 state_home="$(mktemp -d)"
 trap 'rm -rf "$test_root" "$state_home"' EXIT
 
-# Every invocation must point HARLAN_DESKTOP_RUNNER_HISTORY_DIR at the test
-# root. A write into the default history root lands here and fails the final
-# check, so the suite can never touch real runner history again.
 export XDG_STATE_HOME="$state_home"
 
-mkdir -p "$test_root/bin" "$test_root/runtime" "$test_root/calls" "$test_root/credentials"
+mkdir -p "$test_root/bin" "$test_root/credentials"
 printf 'repository-token\n' >"$test_root/credentials/github-harlan-zw-token"
-
-cat >"$test_root/runners.conf" <<'EOF'
-harlan-zw/example|harlan-desktop-ci|1|2|1|1g|2g|3g
-EOF
 
 cat >"$test_root/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -238,6 +231,41 @@ EOF
 
 chmod +x "$test_root/bin/gh" "$test_root/bin/free" "$test_root/bin/docker"
 
+current_case=''
+
+# Every invocation must point HARLAN_DESKTOP_RUNNER_HISTORY_DIR at the test
+# root. A write into the default history root lands in the state home, so the
+# suite can never touch real runner history again.
+assert_state_home_clean() {
+  local case_name="${1:-the suite}"
+  if [[ -n "$(find "$state_home" -mindepth 1 -print -quit)" ]]; then
+    find "$state_home"
+    printf 'Expected %s to keep job history inside the test root.\n' "$case_name" >&2
+    exit 1
+  fi
+}
+
+# Every case runs against its own fixture. An inherited config, call log,
+# runtime directory or state home lets a case pass for the wrong reason. A
+# leftover warm pool bursts a runner before any demand is polled, so an
+# assertion that a runner started says nothing about the behaviour under test.
+# The default config warms nothing, so only polled demand can start a runner.
+# A case that needs another config writes it after this call.
+begin_case() {
+  assert_state_home_clean "$current_case"
+  current_case="$1"
+  rm -rf "$test_root/calls" "$test_root/runtime" "$test_root/history" "$state_home"
+  mkdir -p "$test_root/calls" "$test_root/runtime" "$state_home"
+  cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
+EOF
+}
+
+begin_case 'Capacity retry'
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|1|2|1|1g|2g|3g
+EOF
+
 set +e
 TEST_CALLS="$test_root/calls" \
 PATH="$test_root/bin:$PATH" \
@@ -273,7 +301,7 @@ if ! grep --quiet --fixed-strings -- '--memory-reservation 1g --memory 2g --memo
   exit 1
 fi
 
-if (( $(wc -l <"$test_root/calls/stopped") != 4 )); then
+if (( $(wc -l <"$test_root/calls/stopped" 2>/dev/null || echo 0) != 4 )); then
   cat "$test_root/output"
   cat "$test_root/calls/docker"
   printf 'Expected four idle leftover runners to stop concurrently.\n' >&2
@@ -293,8 +321,7 @@ fi
 
 printf 'Capacity retry passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Queued job demand'
 touch "$test_root/calls/queue-enabled"
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
@@ -322,7 +349,7 @@ if (( status != 0 )); then
   exit 1
 fi
 
-if (( $(wc -l <"$test_root/calls/burst") != 2 )); then
+if (( $(wc -l <"$test_root/calls/burst" 2>/dev/null || echo 0) != 2 )); then
   cat "$test_root/output"
   cat "$test_root/calls/docker"
   printf 'Expected reservations to admit two queued runners.\n' >&2
@@ -344,8 +371,7 @@ fi
 
 printf 'Queued job demand passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'In-progress workflow demand'
 touch "$test_root/calls/queue-in-progress"
 
 set +e
@@ -371,8 +397,7 @@ fi
 
 printf 'In-progress workflow demand passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Closed pull request demand filtering'
 touch "$test_root/calls/queue-stale"
 
 set +e
@@ -398,8 +423,7 @@ fi
 
 printf 'Closed pull request demand filtering passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Aged non-pull_request demand filtering'
 touch "$test_root/calls/queue-rot-push"
 
 set +e
@@ -431,8 +455,7 @@ fi
 
 printf 'Aged non-pull_request demand filtering passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Starved pull request demand'
 touch "$test_root/calls/queue-starved"
 
 set +e
@@ -458,8 +481,7 @@ fi
 
 printf 'Starved pull request demand passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Shared branch head demand'
 touch "$test_root/calls/queue-starved-collision"
 
 set +e
@@ -485,8 +507,7 @@ fi
 
 printf 'Shared branch head demand passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Refused aged run verification'
 touch "$test_root/calls/queue-refused"
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
@@ -518,6 +539,12 @@ if ! grep --quiet 'Cannot verify aged pull request runs' "$test_root/output"; th
   exit 1
 fi
 
+if grep --quiet 'Queued job demand is unavailable' "$test_root/output"; then
+  cat "$test_root/output"
+  printf 'Expected refused verification to leave the repository available.\n' >&2
+  exit 1
+fi
+
 if ! grep --quiet 'actions/runs/80/jobs' "$test_root/calls/gh"; then
   cat "$test_root/output"
   cat "$test_root/calls/gh"
@@ -540,8 +567,7 @@ fi
 
 printf 'Refused aged run verification passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Reused branch demand filtering'
 touch "$test_root/calls/queue-collision"
 
 set +e
@@ -573,8 +599,7 @@ fi
 
 printf 'Reused branch demand filtering passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Empty current workflow demand'
 touch "$test_root/calls/queue-empty-in-progress"
 
 set +e
@@ -600,8 +625,7 @@ fi
 
 printf 'Empty current workflow demand passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Host memory headroom'
 touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory"
 
 set +e
@@ -642,8 +666,7 @@ fi
 
 printf 'Host memory headroom passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Repeated demand re-runs the memory gate'
 touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory"
 
 # Two queued jobs mean two spawn requests for the one pool. Every one of them
@@ -684,8 +707,7 @@ printf 'Repeated demand re-runs the memory gate passed.\n'
 # rewrites the marker resets that start, so a hold ages past no snapshot.
 # Two queued jobs mean two gate runs, and `slow-free` separates their marker
 # writes by more than a second so the rewrite lands in a later mtime second.
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Held start survives later gate runs'
 touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory" "$test_root/calls/slow-free"
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
@@ -761,8 +783,7 @@ printf 'Held start survives later gate runs passed.\n'
 # marker then reports a hold over an idle pool until restart. Hold one cold
 # pool at low memory, cancel its run with no other pools and no bursts, and
 # require the published hold to clear within one demand scan.
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Cancelled hold clears without a capacity event'
 touch "$test_root/calls/queue-enabled" "$test_root/calls/low-memory"
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
@@ -841,8 +862,7 @@ fi
 
 printf 'Cancelled hold clears without a capacity event passed.\n'
 
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Deploy priority'
 touch "$test_root/calls/queue-priority"
 cat >"$test_root/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-busy|1|1|4|1g|2g|3g
@@ -894,9 +914,13 @@ printf 'Deploy priority passed.\n'
 # the 60 second demand poll floor, so this block runs longer than the others.
 # Once the held demand is dropped, the published hold must go too: a marker
 # that survives the drop reports a healthy pool as held until restart.
-rm -rf "$test_root/calls" "$test_root/runtime"
-mkdir -p "$test_root/calls" "$test_root/runtime"
+begin_case 'Cancelled deploy reservation'
 touch "$test_root/calls/queue-cancel" "$test_root/calls/hold-warm-job"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-busy|1|1|4|1g|2g|3g
+harlan-zw/example|harlan-desktop-ci|0|1|4|1g|2g|3g
+harlan-zw/example|harlan-desktop-deploy|0|1|12|1g|2g|3g
+EOF
 
 set +e
 TEST_CALLS="$test_root/calls" \
@@ -942,8 +966,4 @@ fi
 
 printf 'Cancelled deploy reservation passed.\n'
 
-if [[ -n "$(find "$state_home" -mindepth 1 -print -quit)" ]]; then
-  find "$state_home"
-  printf 'Expected every invocation to keep job history inside the test root.\n' >&2
-  exit 1
-fi
+assert_state_home_clean "$current_case"
