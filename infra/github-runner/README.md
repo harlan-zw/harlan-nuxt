@@ -112,6 +112,22 @@ The supervisor publishes `status.json` beside its runtime state every 15 seconds
 
 The snapshot contains pool demand, active jobs, recent outcomes, lifetime Runner job totals, and container resources. It contains no credentials or Docker configuration.
 
+Each pool also carries a hold state. A quiet pool and a refused pool must never render the same.
+
+| Hold | The supervisor refused because |
+| --- | --- |
+| `NotHeld` | Nothing refused this pool. |
+| `AtMaximum` | The pool already runs its maximum runners. |
+| `CpuBudget` | Work in flight spends the CPU burst threshold. |
+| `MemoryBudget` | Work in flight spends the memory budget. |
+| `MemoryHeadroom` | The host lacks the memory this pool reserves. |
+| `MemoryUnknown` | The host memory reading failed. |
+| `DemandUnavailable` | The supervisor could not read queued job demand. |
+
+Every hold carries `since`, the time the supervisor first refused. A hold that has run ten hours is a different story from one that has run ten seconds.
+
+`MemoryHeadroom` also carries `ramBackedBytes`. A full RAM-backed filesystem reads exactly like a busy host in `MemAvailable`.
+
 Raw Runner jobs persist for 90 days. Daily totals persist until they are removed manually.
 
 Stop local CI before shutting down or doing CPU-heavy local work:
