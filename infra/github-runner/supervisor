@@ -365,6 +365,9 @@ aged_run_is_abandoned() {
   [[ -z "${known_shas[$head_sha]:-}" ]]
 }
 
+# Its stdout is job labels and is captured by the demand poller, so every
+# diagnostic inside this function must go to stderr or it vanishes into the
+# label text.
 queued_job_labels_for_repository() {
   local repository="$1"
   local listing jobs run_id run_status created_at created_epoch
@@ -394,7 +397,7 @@ queued_job_labels_for_repository() {
     while IFS=$'\t' read -r run_id created_at event head_branch head_sha; do
       [[ -z "$run_id" || -n "${seen_run_ids[$run_id]:-}" ]] && continue
       if ! created_epoch="$(date --date="$created_at" +%s 2>/dev/null)"; then
-        log "Ignoring runner demand with an invalid creation time in $repository"
+        log "Ignoring runner demand with an invalid creation time in $repository" >&2
         continue
       fi
       seen_run_ids[$run_id]=true
@@ -416,24 +419,30 @@ queued_job_labels_for_repository() {
       if [[ "$event" == pull_request || "$event" == pull_request_target ]]; then
         verifiable_aged_runs+=("$aged_run")
       else
-        log "Ignoring runner demand from aged $event run $run_id in $repository"
+        log "Ignoring runner demand from aged $event run $run_id in $repository" >&2
       fi
     done
   fi
+  # Verification is an extra bound on aged demand, not the demand itself. A
+  # token without `pull_requests: read` cannot make this call, and failing the
+  # whole repository here would stop every pool on one stale run. Drop the aged
+  # runs instead: the repository keeps scheduling its fresh ones.
   if (( ${#verifiable_aged_runs[@]} > 0 )); then
     if ! listing="$(github_api --paginate \
       "repos/$repository/pulls?state=open&per_page=100" \
       --jq '.[] | [.head.ref, .head.sha] | @tsv' 2>/dev/null)"; then
-      return 1
+      log "Cannot verify aged pull request runs in $repository, so ignoring ${#verifiable_aged_runs[@]} of them" >&2
+      verifiable_aged_runs=()
+      listing=''
     fi
     while IFS=$'\t' read -r branch sha; do
       [[ -n "$sha" ]] && open_head_shas[$sha]=true
       [[ -n "$branch" ]] && open_branches[$branch]=true
     done <<<"$listing"
-    for aged_run in "${verifiable_aged_runs[@]}"; do
+    for aged_run in ${verifiable_aged_runs[@]+"${verifiable_aged_runs[@]}"}; do
       IFS=$'\t' read -r run_id event head_branch head_sha <<<"$aged_run"
       if aged_run_is_abandoned "$head_branch" "$head_sha" open_head_shas open_branches; then
-        log "Ignoring runner demand from closed pull request run $run_id in $repository"
+        log "Ignoring runner demand from closed pull request run $run_id in $repository" >&2
         continue
       fi
       run_ids+=("$run_id")

@@ -97,6 +97,16 @@ fi
 if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-starved" ]]; then
   printf 'fix/open\t2222222222222222222222222222222222222222\n'
 fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-refused" ]]; then
+  printf '81\t2026-08-26T00:00:00Z\tpull_request\tfix/aged\t7777777777777777777777777777777777777777\n'
+  printf '80\t2026-08-27T04:30:00Z\tpull_request\tfix/fresh\t8888888888888888888888888888888888888888\n'
+fi
+if [[ "$*" == *'actions/runs/80/jobs'* && -f "$TEST_CALLS/queue-refused" ]]; then
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
+if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-refused" ]]; then
+  exit 1
+fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-starved-collision" ]]; then
   printf '75\t2026-08-26T00:00:00Z\tpull_request\tfix/open\t2222222222222222222222222222222222222222\n'
 fi
@@ -471,6 +481,61 @@ if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
 fi
 
 printf 'Shared branch head demand passed.\n'
+
+rm -rf "$test_root/calls" "$test_root/runtime"
+mkdir -p "$test_root/calls" "$test_root/runtime"
+touch "$test_root/calls/queue-refused"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
+EOF
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected refused verification to drain the supervisor cleanly.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet 'Cannot verify aged pull request runs' "$test_root/output"; then
+  cat "$test_root/output"
+  printf 'Expected the refused aged run verification in the supervisor log.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet 'actions/runs/80/jobs' "$test_root/calls/gh"; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected the fresh run demand to survive refused verification.\n' >&2
+  exit 1
+fi
+
+if grep --quiet 'actions/runs/81/jobs' "$test_root/calls/gh"; then
+  cat "$test_root/calls/gh"
+  printf 'Expected the unverifiable aged run to be dropped before its jobs were read.\n' >&2
+  exit 1
+fi
+
+if [[ ! -s "$test_root/calls/burst" ]] || [[ "$(<"$test_root/calls/burst")" != *-ci-burst-* ]]; then
+  cat "$test_root/output"
+  [[ -f "$test_root/calls/burst" ]] && cat "$test_root/calls/burst"
+  printf 'Expected the fresh run labels to reach the burst decision.\n' >&2
+  exit 1
+fi
+
+printf 'Refused aged run verification passed.\n'
 
 rm -rf "$test_root/calls" "$test_root/runtime"
 mkdir -p "$test_root/calls" "$test_root/runtime"
