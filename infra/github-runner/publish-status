@@ -45,6 +45,34 @@ memory_bytes_for() {
 
 readonly temporary_pools="$(mktemp --tmpdir="$state_dir" .status-pools.XXXXXX)"
 readonly temporary_snapshot="$(mktemp --tmpdir="$state_dir" .status.XXXXXX)"
+# Host memory, split by who is holding it. `MemAvailable` alone cannot say
+# whether a host is busy or whether a RAM-backed filesystem ate the budget, and
+# on 2026-09-05 that difference cost 3h21m of a held deploy pool.
+host_memory_total_bytes() {
+  awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo
+}
+
+host_memory_available_bytes() {
+  awk '/^MemAvailable:/ { print $2 * 1024; exit }' /proc/meminfo
+}
+
+host_ram_backed_bytes() {
+  df --block-size=1 --output=fstype,used 2>/dev/null \
+    | awk '$1 == "tmpfs" || $1 == "ramfs" { total += $2 } END { print total + 0 }'
+}
+
+# What the pools themselves have reserved, from the supervisor's own markers, so
+# the dashboard never re-derives a number the scheduler already owns.
+runner_in_flight_bytes() {
+  local total=0 marker value
+  for marker in "$state_dir/spend-memory"/*; do
+    [[ -f "$marker" ]] || continue
+    read -r value <"$marker" || value=''
+    [[ "$value" =~ ^[0-9]+$ ]] && total=$(( total + value ))
+  done
+  printf '%s' "$(( total * 1024 * 1024 * 1024 ))"
+}
+
 cleanup() {
   rm --force "$temporary_pools" "$temporary_snapshot"
 }
@@ -149,6 +177,12 @@ while IFS='|' read -r repository labels warm maximum cpus memory_reservation mem
     read -r queued_value <"$state_dir/queued/$slug" || queued_value=''
     [[ "$queued_value" =~ ^[0-9]+$ ]] && queued="$queued_value"
   fi
+  held_reason=''
+  held_since='null'
+  if [[ -r "$state_dir/held/$slug" ]]; then
+    read -r held_reason <"$state_dir/held/$slug" || held_reason=''
+    held_since="$(( $(stat --format=%Y "$state_dir/held/$slug") * 1000 ))"
+  fi
   jq --compact-output --null-input \
     --arg name "$slug" \
     --arg repository "$repository" \
@@ -157,8 +191,12 @@ while IFS='|' read -r repository labels warm maximum cpus memory_reservation mem
     --argjson memoryLimitBytes "$memory_limit_bytes" \
     --argjson memoryReservationBytes "$memory_reservation_bytes" \
     --argjson queued "$queued" \
+    --arg heldReason "$held_reason" \
+    --argjson heldSince "$held_since" \
     '{
       cpuPerRunner: $cpuPerRunner,
+      heldReason: (if $heldReason == "" then null else $heldReason end),
+      heldSince: $heldSince,
       maximum: $maximum,
       memoryLimitBytes: $memoryLimitBytes,
       memoryReservationBytes: $memoryReservationBytes,
@@ -210,6 +248,18 @@ else
   updated_at="$(( $(date +%s) * 1000 ))"
 fi
 
+host_memory="$(jq --compact-output --null-input \
+  --argjson totalBytes "$(host_memory_total_bytes)" \
+  --argjson availableBytes "$(host_memory_available_bytes)" \
+  --argjson ramBackedBytes "$(host_ram_backed_bytes)" \
+  --argjson inFlightBytes "$(runner_in_flight_bytes)" \
+  '{
+    availableBytes: $availableBytes,
+    inFlightBytes: $inFlightBytes,
+    ramBackedBytes: $ramBackedBytes,
+    totalBytes: $totalBytes
+  }')"
+
 jq --null-input \
   --argjson cpuBudget "$cpu_budget" \
   --argjson memoryBudgetBytes "$(( memory_budget_gib * 1024 * 1024 * 1024 ))" \
@@ -219,10 +269,12 @@ jq --null-input \
   --argjson recentJobs "$recent_jobs" \
   --argjson runners "$runners" \
   --argjson updatedAt "$updated_at" \
+  --argjson hostMemory "$host_memory" \
   '{
-    version: 3,
+    version: 4,
     updatedAt: $updatedAt,
     budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes, memoryHeadroomBytes: $memoryHeadroomBytes },
+    hostMemory: $hostMemory,
     jobTotals: $jobTotals,
     pools: $pools,
     runners: $runners,

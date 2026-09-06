@@ -7,12 +7,16 @@ trap 'rm -rf "$test_root"' EXIT
 
 mkdir -p "$test_root/bin" "$test_root/history/daily" "$test_root/history/jobs" \
   "$test_root/state/jobs" "$test_root/state/queued" "$test_root/state/spend" \
-  "$test_root/state/spend-memory"
+  "$test_root/state/spend-memory" "$test_root/state/held"
 
 cat >"$test_root/state/runners.conf" <<'EOF'
 harlan-zw/example|harlan-desktop-ci|0|4|4|4g|8g|10g
 EOF
 printf '2\n' >"$test_root/state/queued/example-ci"
+# A held pool reads as an idle one until the reason reaches the snapshot. The
+# mtime is the hold's start, so a dashboard can age it.
+printf 'Available memory 17g, headroom 6g, RAM-backed filesystems hold 12g\n' >"$test_root/state/held/example-ci"
+touch --date='@1787930450' "$test_root/state/held/example-ci"
 printf '4\n' >"$test_root/state/spend/harlan-desktop-example-ci-burst-1"
 printf '4\n' >"$test_root/state/spend-memory/harlan-desktop-example-ci-burst-1"
 cat >"$test_root/state/jobs/harlan-desktop-example-ci-burst-1.json" <<'EOF'
@@ -65,12 +69,14 @@ HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
 
 snapshot="$test_root/state/status.json"
 jq --exit-status '
-  .version == 3
+  .version == 4
   and .updatedAt == 1787930500000
   and .budgets == { cpu: 20, memoryBytes: 25769803776, memoryHeadroomBytes: 8589934592 }
   and .jobTotals == { actualMilliseconds: 100000, billableMinutes: 2, completed: 1, trackedSince: 1787930200000 }
   and .pools == [{
     cpuPerRunner: 4,
+    heldReason: "Available memory 17g, headroom 6g, RAM-backed filesystems hold 12g",
+    heldSince: 1787930450000,
     live: 1,
     maximum: 4,
     memoryLimitBytes: 8589934592,
@@ -93,6 +99,10 @@ jq --exit-status '
     tasks: 47
   }]
   and (.recentJobs | length) == 1
+  and (.hostMemory.totalBytes > 0)
+  and (.hostMemory.availableBytes > 0)
+  and (.hostMemory.ramBackedBytes >= 0)
+  and (.hostMemory.inFlightBytes == 4294967296)
 ' "$snapshot" >/dev/null
 
 if [[ "$(stat -c '%a' "$snapshot")" != 640 ]]; then
