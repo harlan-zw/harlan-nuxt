@@ -21,6 +21,9 @@ printf '%s\n' "$*" >>"$TEST_CALLS/gh"
 if [[ "$*" == *registration-token* ]]; then
   printf 'test-token\n'
 fi
+if [[ "$*" == *'actions/runs?status='* && -f "$TEST_CALLS/demand-unavailable" ]]; then
+  exit 1
+fi
 if [[ "$*" == *'actions/runs?status=in_progress'* && -f "$TEST_CALLS/queue-in-progress" ]]; then
   printf '78\t2026-08-27T04:30:00Z\tpull_request\tfix/live\t1111111111111111111111111111111111111111\n'
 fi
@@ -356,7 +359,7 @@ if (( $(wc -l <"$test_root/calls/burst" 2>/dev/null || echo 0) != 2 )); then
   exit 1
 fi
 
-if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, heldReason: null, heldSince: null, live: 0, maximum: 2, memoryLimitBytes: 2147483648, memoryReservationBytes: 1073741824, name: "example-ci", queued: 2, repository: "harlan-zw/example", running: 0 }]' "$test_root/calls/status.json" >/dev/null; then
+if ! jq --exit-status '.pools == [{ cpuPerRunner: 1, hold: { _tag: "NotHeld" }, live: 0, maximum: 2, memoryLimitBytes: 2147483648, memoryReservationBytes: 1073741824, name: "example-ci", queued: 2, repository: "harlan-zw/example", running: 0 }]' "$test_root/calls/status.json" >/dev/null; then
   cat "$test_root/calls/status.json"
   printf 'Expected queued demand in the published runner status.\n' >&2
   exit 1
@@ -639,6 +642,8 @@ HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=2 \
 HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB=2 \
 HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
 HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.05 \
+HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
 timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
 status=$?
 set -e
@@ -661,6 +666,23 @@ fi
 if ! grep --quiet 'RAM-backed filesystems hold [0-9]\+g; holding example-ci at 0' "$test_root/output"; then
   cat "$test_root/output"
   printf 'Expected the hold reason to name RAM-backed filesystem usage.\n' >&2
+  exit 1
+fi
+
+# A sentence in the journal cannot be read back. The snapshot carries the tag
+# and the numbers behind it, so a page can say how far short the pool fell.
+if ! jq --exit-status '
+  .pools[]
+  | select(.name == "example-ci")
+  | .hold._tag == "MemoryHeadroom"
+    and .hold.availableBytes == 2147483648
+    and .hold.headroomBytes == 2147483648
+    and .hold.poolBytes == 1073741824
+    and (.hold.ramBackedBytes | type) == "number"
+    and (.hold.since | type) == "number"
+' "$test_root/calls/status.json" >/dev/null; then
+  jq --compact-output '.pools[] | select(.name == "example-ci") | .hold' "$test_root/calls/status.json"
+  printf 'Expected the published hold to name the headroom shortfall and its numbers.\n' >&2
   exit 1
 fi
 
@@ -734,7 +756,7 @@ held_since_first=''
 held_since_drifted=''
 while kill -0 "$supervisor_pid" 2>/dev/null; do
   if [[ -s "$test_root/calls/status.json" ]]; then
-    held_since="$(jq --raw-output '.pools[] | select(.name == "example-ci") | .heldSince // empty' "$test_root/calls/status.json" 2>/dev/null || true)"
+    held_since="$(jq --raw-output '.pools[] | select(.name == "example-ci") | select(.hold._tag != "NotHeld") | .hold.since' "$test_root/calls/status.json" 2>/dev/null || true)"
     if [[ -n "$held_since" ]]; then
       if [[ -z "$held_since_first" ]]; then
         held_since_first="$held_since"
@@ -814,7 +836,7 @@ held_cleared=''
 while kill -0 "$supervisor_pid" 2>/dev/null; do
   pool_json="$(jq --compact-output '.pools[] | select(.name == "example-ci")' "$test_root/calls/status.json" 2>/dev/null || true)"
   if [[ -n "$pool_json" ]]; then
-    held_reason="$(jq --raw-output '.heldReason // empty' <<<"$pool_json")"
+    held_reason="$(jq --raw-output 'select(.hold._tag != "NotHeld") | .hold._tag' <<<"$pool_json")"
     queued_count="$(jq --raw-output '.queued' <<<"$pool_json")"
     if [[ -n "$held_reason" ]]; then
       saw_hold=1
@@ -958,12 +980,145 @@ if grep --quiet -- '-deploy-burst-' "$test_root/calls/burst" 2>/dev/null; then
   exit 1
 fi
 
-if ! jq --exit-status '.pools[] | select(.name == "example-deploy") | .heldReason == null and .heldSince == null' "$test_root/calls/status.json" >/dev/null; then
+if ! jq --exit-status '.pools[] | select(.name == "example-deploy") | .hold == { _tag: "NotHeld" }' "$test_root/calls/status.json" >/dev/null; then
   cat "$test_root/calls/status.json"
   printf 'Expected the dropped deploy demand to clear the published hold.\n' >&2
   exit 1
 fi
 
 printf 'Cancelled deploy reservation passed.\n'
+
+# Cause one of the 2026-09-06 outage. The supervisor could not read queued job
+# demand, so it never considered a runner, and it said so only in the journal.
+# The pool published the zeroes a quiet morning publishes, for ten hours. The
+# refusal must reach the snapshot, and it must go when demand reads again.
+begin_case 'Unreadable demand publishes a hold'
+touch "$test_root/calls/demand-unavailable"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|0|2|1|1g|2g|3g
+EOF
+
+set +e
+(
+  TEST_CALLS="$test_root/calls" \
+  PATH="$test_root/bin:$PATH" \
+  XDG_RUNTIME_DIR="$test_root/runtime" \
+  CREDENTIALS_DIRECTORY="$test_root/credentials" \
+  HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+  HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
+  HARLAN_DESKTOP_RUNNER_CPU_BUDGET=4 \
+  HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=4 \
+  HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+  HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+  HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.2 \
+  HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
+  timeout --preserve-status --kill-after=1 70 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+) &
+supervisor_pid=$!
+
+saw_demand_hold=''
+saw_hold_start=''
+restored_demand=''
+demand_hold_cleared=''
+while kill -0 "$supervisor_pid" 2>/dev/null; do
+  hold_json="$(jq --compact-output '.pools[] | select(.name == "example-ci") | .hold' "$test_root/calls/status.json" 2>/dev/null || true)"
+  if [[ -n "$hold_json" ]]; then
+    hold_tag="$(jq --raw-output '._tag' <<<"$hold_json")"
+    if [[ "$hold_tag" == DemandUnavailable ]]; then
+      saw_demand_hold=1
+      jq --exit-status '.since | type == "number"' <<<"$hold_json" >/dev/null && saw_hold_start=1
+      if [[ -z "$restored_demand" ]]; then
+        rm --force "$test_root/calls/demand-unavailable"
+        touch "$test_root/calls/queue-enabled"
+        restored_demand=1
+      fi
+    fi
+    if [[ -n "$restored_demand" && "$hold_tag" == NotHeld ]]; then
+      demand_hold_cleared=1
+    fi
+  fi
+  sleep 0.05
+done
+wait "$supervisor_pid"
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the unreadable demand run to drain cleanly.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet 'Queued job demand is unavailable for example-ci' "$test_root/output"; then
+  cat "$test_root/output"
+  printf 'Expected the unavailable demand decision in the supervisor log.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$saw_demand_hold" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/status.json"
+  printf 'Expected unreadable demand to publish a hold instead of an idle pool.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$saw_hold_start" ]]; then
+  cat "$test_root/calls/status.json"
+  printf 'Expected the demand hold to carry the time it was first seen.\n' >&2
+  exit 1
+fi
+
+if [[ -z "$demand_hold_cleared" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/status.json"
+  printf 'Expected the demand hold to clear once demand read again.\n' >&2
+  exit 1
+fi
+
+printf 'Unreadable demand publishes a hold passed.\n'
+
+# A pool at its own ceiling starts no runner either. The gate drops the entry
+# and stops tracking the pool, so the demand scan owns this reason. Queued work
+# with no new runner needs the ceiling named, or the page shows only zeroes.
+begin_case 'Pool at its maximum publishes a hold'
+touch "$test_root/calls/queue-enabled"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|1|1|1|1g|2g|3g
+EOF
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=4 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=4 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+HARLAN_DESKTOP_RUNNER_STATUS_INTERVAL_SECONDS=0.05 \
+HARLAN_DESKTOP_RUNNER_STATUS_OUTPUT="$test_root/calls/status.json" \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the pool at its maximum to drain cleanly.\n' >&2
+  exit 1
+fi
+
+if ! jq --exit-status '
+  .pools[]
+  | select(.name == "example-ci")
+  | .hold._tag == "AtMaximum" and .hold.live == 1 and .hold.maximum == 1
+' "$test_root/calls/status.json" >/dev/null; then
+  jq --compact-output '.pools[] | select(.name == "example-ci") | .hold' "$test_root/calls/status.json"
+  printf 'Expected a pool at its maximum to publish that reason.\n' >&2
+  exit 1
+fi
+
+printf 'Pool at its maximum publishes a hold passed.\n'
 
 assert_state_home_clean "$current_case"

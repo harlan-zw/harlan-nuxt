@@ -343,6 +343,55 @@ publish_queue_count() {
   mv --force "$temporary" "$target"
 }
 
+# One marker per pool naming why no runner started. The gate and the demand
+# poller both write it, because both can refuse, and a pool carries one reason
+# at a time. `publish-status` renders the marker into the snapshot, so the
+# reason reaches a reader instead of only the journal.
+#
+# The reason is a tagged object, not a sentence. The status page needs the
+# numbers behind the refusal, and a sentence cannot be read back.
+#
+# The write is atomic and carries the hold's start forward. A hold that has run
+# for ten hours must never read as one that started on the last gate run.
+write_hold() {
+  local slug="$1"
+  local tag="$2"
+  local numbers="${3:-}"
+  local target="$state_dir/held/$slug"
+  local temporary="$target.$$"
+  local since=''
+
+  [[ -n "$numbers" ]] || numbers='{}'
+  if [[ -r "$target" ]]; then
+    since="$(jq --raw-output '.since // empty' "$target" 2>/dev/null)" || since=''
+  fi
+  [[ "$since" =~ ^[0-9]+$ ]] || since="$(( $(date +%s) * 1000 ))"
+
+  if ! jq --compact-output --null-input \
+    --arg tag "$tag" \
+    --argjson since "$since" \
+    --argjson numbers "$numbers" \
+    '{ _tag: $tag, since: $since } + $numbers' >"$temporary" 2>/dev/null; then
+    rm --force "$temporary"
+    log "Could not write the hold reason for $slug"
+    return 0
+  fi
+  mv --force "$temporary" "$target"
+}
+
+clear_hold() {
+  rm --force "$state_dir/held/$1"
+}
+
+# Empty when the pool holds no reason. A caller retires only the reason it owns,
+# so one writer never erases another writer's refusal.
+hold_tag_for() {
+  local target="$state_dir/held/$1"
+
+  [[ -r "$target" ]] || return 0
+  jq --raw-output '._tag // empty' "$target" 2>/dev/null || true
+}
+
 # A pull request run is abandoned when no open pull request points at the run's
 # exact commit. A branch name match alone is not proof, because two open pull
 # requests from different forks can share one branch name while pointing at
@@ -479,6 +528,7 @@ queued_jobs_for_pool() {
 
 run_demand_poller() {
   local pool_index repository jobs queued idle deficit request
+  local live hold_tag hold_numbers
   local -a deploy_requests=()
   local -a standard_requests=()
   local -A repository_jobs=()
@@ -502,9 +552,18 @@ run_demand_poller() {
       fi
       if [[ "${repository_result[$repository]}" == unavailable ]]; then
         rm --force "$state_dir/queued/${pool_slug[$pool_index]}"
-        rm --force "$state_dir/held/${pool_slug[$pool_index]}"
+        # The supervisor cannot read demand, so it never even considers a runner.
+        # On 2026-09-06 that ran for ten hours and said so only in the journal,
+        # while the pool published the same zeroes a quiet morning publishes.
+        # Publish the refusal instead of erasing it.
+        write_hold "${pool_slug[$pool_index]}" DemandUnavailable
         log "Queued job demand is unavailable for ${pool_slug[$pool_index]}"
         continue
+      fi
+      # Demand reads again. Every later reason belongs to the gate, so this scan
+      # retires only the reason this scan owns.
+      if [[ "$(hold_tag_for "${pool_slug[$pool_index]}")" == DemandUnavailable ]]; then
+        clear_hold "${pool_slug[$pool_index]}"
       fi
       queued="$(queued_jobs_for_pool "$pool_index" "${repository_jobs[$repository]}")"
       publish_queue_count "$pool_index" "$queued"
@@ -516,6 +575,20 @@ run_demand_poller() {
       # its zero-demand drop then removes the marker beside the queued count.
       if (( queued == 0 )) && [[ -f "$state_dir/held/${pool_slug[$pool_index]}" ]]; then
         printf 'capacity\n' >"$scale_pipe"
+      fi
+      # The gate refuses a pool at its ceiling and then stops tracking it, so
+      # only this scan can retire that reason. A pool below its ceiling, or with
+      # nothing queued, is not held by its maximum. A busy pool with an empty
+      # queue is working, and must never render as a refused one.
+      live=$(( pool_warm[pool_index] + $(count_markers "$state_dir/burst/${pool_slug[$pool_index]}") ))
+      hold_tag="$(hold_tag_for "${pool_slug[$pool_index]}")"
+      if (( queued > 0 && live >= pool_max[pool_index] )); then
+        if [[ -z "$hold_tag" || "$hold_tag" == AtMaximum ]]; then
+          printf -v hold_numbers '{"live":%d,"maximum":%d}' "$live" "${pool_max[$pool_index]}"
+          write_hold "${pool_slug[$pool_index]}" AtMaximum "$hold_numbers"
+        fi
+      elif [[ "$hold_tag" == AtMaximum ]]; then
+        clear_hold "${pool_slug[$pool_index]}"
       fi
       idle="$(count_idle_burst "$pool_index")"
       deficit=$(( queued - idle ))
@@ -803,6 +876,7 @@ run_scaler() {
   local request pool_index container_name
   local burst_counter=0
   local slug live spent spent_memory available_memory ram_backed_memory hold_reason
+  local hold_tag hold_numbers
   local pending_pool pending_count attempt candidate priority_index queued_demand
   local -a pending_pools=()
   local -A pool_is_pending=()
@@ -843,7 +917,12 @@ run_scaler() {
         slug="${pool_slug[$pending_pool]}"
         live=$(( pool_warm[pending_pool] + $(count_markers "$state_dir/burst/$slug") ))
         if (( live >= pool_max[pending_pool] )); then
-          rm --force "$state_dir/held/$slug"
+          # Not a fault, and still a reason no runner started. A reader who sees
+          # queued work and no new runner needs the pool's own ceiling named.
+          # The demand poller retires this reason, because the gate drops the
+          # entry here and never looks at the pool again.
+          printf -v hold_numbers '{"live":%d,"maximum":%d}' "$live" "${pool_max[$pending_pool]}"
+          write_hold "$slug" AtMaximum "$hold_numbers"
           unset 'pool_is_pending[$pending_pool]'
           continue
         fi
@@ -859,7 +938,7 @@ run_scaler() {
             read -r queued_demand <"$state_dir/queued/$slug" || queued_demand=''
           fi
           if [[ "$queued_demand" == 0 ]]; then
-            rm --force "$state_dir/held/$slug"
+            clear_hold "$slug"
             unset 'pool_is_pending[$pending_pool]'
             log "Dropping held demand for $slug; its queued count returned to zero"
             continue
@@ -867,38 +946,54 @@ run_scaler() {
         fi
 
         hold_reason=''
+        hold_tag=''
+        hold_numbers=''
         spent="$(sum_markers "$state_dir/spend")"
         if (( spent + pool_cpus[pending_pool] > cpu_budget )); then
           hold_reason="CPU in flight $spent, burst threshold $cpu_budget"
+          hold_tag='CpuBudget'
+          printf -v hold_numbers '{"budgetCpu":%d,"inFlightCpu":%d,"poolCpu":%d}' \
+            "$cpu_budget" "$spent" "${pool_cpus[$pending_pool]}"
         else
           # Checked after CPU and never merged with it. A host can have cores to
           # spare and no memory to back them, which is the case this exists for.
           spent_memory="$(sum_markers "$state_dir/spend-memory")"
           if (( spent_memory + pool_memory_reservation_gib[pending_pool] > memory_budget_gib )); then
             hold_reason="Memory in flight ${spent_memory}g, budget ${memory_budget_gib}g"
+            hold_tag='MemoryBudget'
+            printf -v hold_numbers '{"budgetBytes":%d,"inFlightBytes":%d,"poolBytes":%d}' \
+              "$(( memory_budget_gib * 1024 ** 3 ))" \
+              "$(( spent_memory * 1024 ** 3 ))" \
+              "$(( pool_memory_reservation_gib[pending_pool] * 1024 ** 3 ))"
           else
             available_memory="$(host_available_memory_gib)"
             if [[ ! "$available_memory" =~ ^[0-9]+$ ]]; then
               hold_reason='Available memory is unknown'
+              hold_tag='MemoryUnknown'
             elif (( available_memory - pool_memory_reservation_gib[pending_pool] < memory_headroom_gib )); then
               hold_reason="Available memory ${available_memory}g, headroom ${memory_headroom_gib}g"
               ram_backed_memory="$(host_ram_backed_memory_gib)"
-              if [[ "$ram_backed_memory" =~ ^[0-9]+$ ]] && (( ram_backed_memory > 0 )); then
+              [[ "$ram_backed_memory" =~ ^[0-9]+$ ]] || ram_backed_memory=0
+              if (( ram_backed_memory > 0 )); then
                 hold_reason="${hold_reason}, RAM-backed filesystems hold ${ram_backed_memory}g"
               fi
+              hold_tag='MemoryHeadroom'
+              printf -v hold_numbers '{"availableBytes":%d,"headroomBytes":%d,"poolBytes":%d,"ramBackedBytes":%d}' \
+                "$(( available_memory * 1024 ** 3 ))" \
+                "$(( memory_headroom_gib * 1024 ** 3 ))" \
+                "$(( pool_memory_reservation_gib[pending_pool] * 1024 ** 3 ))" \
+                "$(( ram_backed_memory * 1024 ** 3 ))"
             fi
           fi
         fi
-        if [[ -n "$hold_reason" ]]; then
+        if [[ -n "$hold_tag" ]]; then
           log "$hold_reason; holding $slug at $live"
           # The journal already carries this, and nothing reads the journal until
-          # someone notices. `publish-status` turns the marker into the dashboard's
+          # someone notices. `publish-status` turns the marker into the snapshot's
           # hold state, so a pool held for hours stops looking like an idle one.
-          # That state ages the hold from the marker's mtime. Write the marker
-          # only while it is absent, so later gate runs keep the hold's start.
-          if [[ ! -e "$state_dir/held/$slug" ]]; then
-            printf '%s\n' "$hold_reason" >"$state_dir/held/$slug"
-          fi
+          # The numbers travel with the tag, because the reader needs the size of
+          # the shortfall, not only its name.
+          write_hold "$slug" "$hold_tag" "$hold_numbers"
           if (( pool_is_deploy[pending_pool] )); then
             pending_pools=("$pending_pool" "${pending_pools[@]}")
             break
@@ -910,7 +1005,7 @@ run_scaler() {
         unset 'pool_is_pending[$pending_pool]'
         # The hold ends when the gate admits the pool. Remove the marker beside
         # the scheduling it guarded, or the pool reports held while it runs.
-        rm --force "$state_dir/held/$slug"
+        clear_hold "$slug"
 
         # A restart resets this counter while a spared burst container from the
         # previous generation may still hold one of these names. Skip past it.
