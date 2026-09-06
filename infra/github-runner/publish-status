@@ -177,11 +177,19 @@ while IFS='|' read -r repository labels warm maximum cpus memory_reservation mem
     read -r queued_value <"$state_dir/queued/$slug" || queued_value=''
     [[ "$queued_value" =~ ^[0-9]+$ ]] && queued="$queued_value"
   fi
-  held_reason=''
-  held_since='null'
-  if [[ -r "$state_dir/held/$slug" ]]; then
-    read -r held_reason <"$state_dir/held/$slug" || held_reason=''
-    held_since="$(( $(stat --format=%Y "$state_dir/held/$slug") * 1000 ))"
+  # A quiet pool and a refused pool publish the same zeroes. The supervisor's
+  # marker is the only thing that separates them, so a marker that will not parse
+  # must never render as quiet.
+  hold='{"_tag":"NotHeld"}'
+  if [[ -e "$state_dir/held/$slug" ]]; then
+    if ! hold="$(jq --compact-output --exit-status '
+      select(
+        (._tag | IN("AtMaximum", "CpuBudget", "DemandUnavailable", "MemoryBudget", "MemoryHeadroom", "MemoryUnknown"))
+        and (.since | type == "number")
+      )' "$state_dir/held/$slug" 2>/dev/null)"; then
+      printf 'Pool hold state is unreadable: %s\n' "$slug" >&2
+      hold='{"_tag":"HoldUnreadable"}'
+    fi
   fi
   jq --compact-output --null-input \
     --arg name "$slug" \
@@ -191,12 +199,10 @@ while IFS='|' read -r repository labels warm maximum cpus memory_reservation mem
     --argjson memoryLimitBytes "$memory_limit_bytes" \
     --argjson memoryReservationBytes "$memory_reservation_bytes" \
     --argjson queued "$queued" \
-    --arg heldReason "$held_reason" \
-    --argjson heldSince "$held_since" \
+    --argjson hold "$hold" \
     '{
       cpuPerRunner: $cpuPerRunner,
-      heldReason: (if $heldReason == "" then null else $heldReason end),
-      heldSince: $heldSince,
+      hold: $hold,
       maximum: $maximum,
       memoryLimitBytes: $memoryLimitBytes,
       memoryReservationBytes: $memoryReservationBytes,
@@ -271,7 +277,7 @@ jq --null-input \
   --argjson updatedAt "$updated_at" \
   --argjson hostMemory "$host_memory" \
   '{
-    version: 4,
+    version: 5,
     updatedAt: $updatedAt,
     budgets: { cpu: $cpuBudget, memoryBytes: $memoryBudgetBytes, memoryHeadroomBytes: $memoryHeadroomBytes },
     hostMemory: $hostMemory,

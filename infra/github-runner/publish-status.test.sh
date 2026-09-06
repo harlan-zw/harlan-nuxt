@@ -14,9 +14,11 @@ harlan-zw/example|harlan-desktop-ci|0|4|4|4g|8g|10g
 EOF
 printf '2\n' >"$test_root/state/queued/example-ci"
 # A held pool reads as an idle one until the reason reaches the snapshot. The
-# mtime is the hold's start, so a dashboard can age it.
-printf 'Available memory 17g, headroom 6g, RAM-backed filesystems hold 12g\n' >"$test_root/state/held/example-ci"
-touch --date='@1787930450' "$test_root/state/held/example-ci"
+# reason is a tagged object with the numbers behind it, so a reader sees the size
+# of the shortfall and how long it has held.
+cat >"$test_root/state/held/example-ci" <<'HELD'
+{"_tag":"MemoryHeadroom","since":1787930450000,"availableBytes":18253611008,"headroomBytes":6442450944,"poolBytes":13958643712,"ramBackedBytes":12884901888}
+HELD
 printf '4\n' >"$test_root/state/spend/harlan-desktop-example-ci-burst-1"
 printf '4\n' >"$test_root/state/spend-memory/harlan-desktop-example-ci-burst-1"
 cat >"$test_root/state/jobs/harlan-desktop-example-ci-burst-1.json" <<'EOF'
@@ -69,14 +71,20 @@ HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
 
 snapshot="$test_root/state/status.json"
 jq --exit-status '
-  .version == 4
+  .version == 5
   and .updatedAt == 1787930500000
   and .budgets == { cpu: 20, memoryBytes: 25769803776, memoryHeadroomBytes: 8589934592 }
   and .jobTotals == { actualMilliseconds: 100000, billableMinutes: 2, completed: 1, trackedSince: 1787930200000 }
   and .pools == [{
     cpuPerRunner: 4,
-    heldReason: "Available memory 17g, headroom 6g, RAM-backed filesystems hold 12g",
-    heldSince: 1787930450000,
+    hold: {
+      _tag: "MemoryHeadroom",
+      availableBytes: 18253611008,
+      headroomBytes: 6442450944,
+      poolBytes: 13958643712,
+      ramBackedBytes: 12884901888,
+      since: 1787930450000
+    },
     live: 1,
     maximum: 4,
     memoryLimitBytes: 8589934592,
@@ -126,6 +134,29 @@ failure_status=$?
 set -e
 if (( failure_status == 0 )) || [[ "$(sha256sum "$snapshot")" != "$snapshot_checksum" ]]; then
   printf 'Expected Docker failure to preserve the previous runner snapshot.\n' >&2
+  exit 1
+fi
+
+# A marker the publisher cannot read is a broken pool, not a quiet one. Rendering
+# it as no hold would restore the exact failure this state exists to remove.
+printf 'not json\n' >"$test_root/state/held/example-ci"
+PATH="$test_root/bin:$PATH" \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
+./infra/github-runner/publish-status "$test_root/state" "$test_root/state/status.json" "$test_root/history" 2>/dev/null
+if ! jq --exit-status '.pools[0].hold == { _tag: "HoldUnreadable" }' "$snapshot" >/dev/null; then
+  jq --compact-output '.pools[0].hold' "$snapshot"
+  printf 'Expected an unreadable hold marker to stay distinct from no hold.\n' >&2
+  exit 1
+fi
+
+# A pool the supervisor never refused carries no hold at all.
+rm --force "$test_root/state/held/example-ci"
+PATH="$test_root/bin:$PATH" \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH_MS=1787930500000 \
+./infra/github-runner/publish-status "$test_root/state" "$test_root/state/status.json" "$test_root/history"
+if ! jq --exit-status '.pools[0].hold == { _tag: "NotHeld" }' "$snapshot" >/dev/null; then
+  jq --compact-output '.pools[0].hold' "$snapshot"
+  printf 'Expected a pool with no marker to publish no hold.\n' >&2
   exit 1
 fi
 
