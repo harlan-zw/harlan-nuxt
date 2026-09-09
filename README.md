@@ -53,7 +53,17 @@ Packages are pnpm workspace members under `packages/*`. Shared dependency versio
 
 ## Releases
 
-Push a `<package>-v<version>` tag, for example `nuxt-dx-v0.0.2`. The trusted GitHub Actions publisher releases that package under the `latest` npm tag with provenance.
+Merge the package version bump through a pull request first. Then run from the repo root:
+
+```bash
+pnpm release                         # choose a package and confirm publishing
+pnpm release nuxt-dx --dry-run        # preview the version, commit, and tag
+pnpm release nuxt-dx --yes            # publish without a prompt
+```
+
+The command reads the version from `origin/main` and pushes its `<package>-v<version>` tag.
+It rejects existing tags and prerelease versions.
+The trusted GitHub Actions publisher releases that package under the `latest` npm tag with provenance.
 
 ## Sponsors
 

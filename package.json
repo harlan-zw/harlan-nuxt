@@ -18,9 +18,14 @@
     "dev:prepare": "pnpm -r --if-present run dev:prepare",
     "lint": "pnpm -r --if-present run lint",
     "lint:fix": "pnpm -r --if-present run lint:fix",
+    "release": "node scripts/release.mjs",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "test": "pnpm -r --if-present run test",
+    "test": "node --test scripts/*.test.mjs && pnpm -r --if-present run test",
     "test:attw": "pnpm -r --if-present run test:attw",
     "test:pack": "pnpm -r --if-present run test:pack"
+  },
+  "devDependencies": {
+    "consola": "catalog:",
+    "yaml": "catalog:"
   }
 }
