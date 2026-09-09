@@ -135,7 +135,14 @@ catalogs:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      consola:
+        specifier: 'catalog:'
+        version: 3.4.2
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
 
   packages/comark-content:
     dependencies:
