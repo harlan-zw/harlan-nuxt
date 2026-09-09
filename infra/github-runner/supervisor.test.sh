@@ -84,6 +84,34 @@ fi
 if [[ "$*" == *'actions/runs/75/jobs'* && -f "$TEST_CALLS/queue-rot-push" ]]; then
   printf 'self-hosted,harlan-desktop-ci\n'
 fi
+if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-rot-push" ]]; then
+  printf 'fix/other\t9999999999999999999999999999999999999999\n'
+fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-rot-schedule" ]]; then
+  printf '77\t2026-08-26T00:00:00Z\tschedule\tmain\t4444444444444444444444444444444444444444\n'
+fi
+if [[ "$*" == *'actions/runs/77/jobs'* && -f "$TEST_CALLS/queue-rot-schedule" ]]; then
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-starved-push" ]]; then
+  printf '78\t2026-08-26T00:00:00Z\tpush\tfix/open\t2222222222222222222222222222222222222222\n'
+fi
+if [[ "$*" == *'actions/runs/78/jobs'* && -f "$TEST_CALLS/queue-starved-push" ]]; then
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
+if [[ "$*" == *'pulls?state=open'* && -f "$TEST_CALLS/queue-starved-push" ]]; then
+  printf 'fix/open\t2222222222222222222222222222222222222222\n'
+fi
+if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-rerun" ]]; then
+  if [[ "$*" == *'.run_started_at'* ]]; then
+    printf '79\t2026-08-27T04:30:00Z\tpush\tfix/rerun\t1111111111111111111111111111111111111111\n'
+  else
+    printf '79\t2026-08-26T00:00:00Z\tpush\tfix/rerun\t1111111111111111111111111111111111111111\n'
+  fi
+fi
+if [[ "$*" == *'actions/runs/79/jobs'* && -f "$TEST_CALLS/queue-rerun" ]]; then
+  printf 'self-hosted,harlan-desktop-ci\n'
+fi
 if [[ "$*" == *'actions/runs?status=queued'* && -f "$TEST_CALLS/queue-starved" ]]; then
   printf '75\t2026-08-26T00:00:00Z\tpull_request\tfix/open\t2222222222222222222222222222222222222222\n'
 fi
@@ -426,7 +454,7 @@ fi
 
 printf 'Closed pull request demand filtering passed.\n'
 
-begin_case 'Aged non-pull_request demand filtering'
+begin_case 'Aged push demand filtering'
 touch "$test_root/calls/queue-rot-push"
 
 set +e
@@ -446,17 +474,113 @@ set -e
 if (( status != 0 )) || [[ -s "$test_root/calls/burst" ]]; then
   cat "$test_root/output"
   cat "$test_root/calls/gh"
-  printf 'Expected an aged non-pull_request run to leave a zero-warm pool stopped.\n' >&2
+  printf 'Expected an aged push run whose commit no open pull request holds to leave a zero-warm pool stopped.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet 'pulls?state=open' "$test_root/calls/gh"; then
+  cat "$test_root/calls/gh"
+  printf 'Expected an aged push run to be verified against open pull requests.\n' >&2
+  exit 1
+fi
+
+if grep --quiet 'actions/runs/75/jobs' "$test_root/calls/gh"; then
+  cat "$test_root/calls/gh"
+  printf 'Expected the abandoned push run to be dropped before its jobs were read.\n' >&2
+  exit 1
+fi
+
+printf 'Aged push demand filtering passed.\n'
+
+begin_case 'Aged schedule demand filtering'
+touch "$test_root/calls/queue-rot-schedule"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || [[ -s "$test_root/calls/burst" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected an aged schedule run to leave a zero-warm pool stopped.\n' >&2
   exit 1
 fi
 
 if grep --quiet 'pulls?state=open' "$test_root/calls/gh"; then
   cat "$test_root/calls/gh"
-  printf 'Expected an aged non-pull_request run to skip pull request verification.\n' >&2
+  printf 'Expected an aged schedule run to skip pull request verification.\n' >&2
   exit 1
 fi
 
-printf 'Aged non-pull_request demand filtering passed.\n'
+printf 'Aged schedule demand filtering passed.\n'
+
+begin_case 'Starved push demand'
+touch "$test_root/calls/queue-starved-push"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected an aged push run whose commit an open pull request holds to still start a runner.\n' >&2
+  exit 1
+fi
+
+printf 'Starved push demand passed.\n'
+
+begin_case 'Rerun demand'
+touch "$test_root/calls/queue-rerun"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected a rerun of an old run to count as fresh demand.\n' >&2
+  exit 1
+fi
+
+if grep --quiet 'pulls?state=open' "$test_root/calls/gh"; then
+  cat "$test_root/calls/gh"
+  printf 'Expected a fresh rerun to skip pull request verification.\n' >&2
+  exit 1
+fi
+
+printf 'Rerun demand passed.\n'
 
 begin_case 'Starved pull request demand'
 touch "$test_root/calls/queue-starved"
