@@ -1,6 +1,7 @@
 import type { WranglerDiagnostic, WranglerDiagnosticOptions } from './wrangler'
 import type { ReadProjectWranglerOptions } from './wrangler-reader'
 import { diagnoseWranglerSourceConfigs, discoverWranglerSourceConfigs } from './diagnostics'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveConfigStaticAssetDirectory } from './static-assets'
 import { diagnoseWranglerConfig } from './wrangler'
 import { readProjectWranglerConfig } from './wrangler-reader'
 
@@ -39,11 +40,15 @@ export function diagnoseWranglerProject(options: DiagnoseWranglerProjectOptions)
       sourceConfigPaths,
     }
   }
+  const staticAssetDirectory = resolveConfigStaticAssetDirectory(loaded.path, loaded.config)
   return {
     configPath: loaded.path,
     diagnostics: [
       ...diagnoseWranglerConfig(loaded.config, { ...options, generated: loaded.generated, normalized: true }),
       ...diagnoseWranglerSourceConfigs(sourceConfigPaths),
+      ...(staticAssetDirectory === undefined
+        ? []
+        : diagnoseStaticAssetRules(readStaticAssetRuleFiles(staticAssetDirectory))),
     ],
     sourceConfigPaths,
   }

@@ -10,6 +10,73 @@ import {
 import { diagnoseWranglerProject } from '../src/doctor'
 
 describe('diagnoseWranglerProject', () => {
+  it('counts no rule file when the config declares no assets directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
+    await writeFile(join(root, 'wrangler.jsonc'), JSON.stringify({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      workers_dev: false,
+      upload_source_maps: true,
+      observability: { enabled: true },
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    }))
+    await writeFile(join(root, '_headers'), Array.from({ length: 101 }, (_, i) => `/p${i}\n  X-A: 1`).join('\n'))
+
+    try {
+      const result = diagnoseWranglerProject({ cwd: root, now: new Date('2026-08-11T00:00:00Z') })
+
+      expect(result.diagnostics.map(diagnostic => diagnostic.code)).not.toContain('static-headers-rule-limit')
+    }
+    finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  it('counts the rule files under a Pages build output directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
+    await mkdir(join(root, 'dist'))
+    await writeFile(join(root, 'wrangler.jsonc'), JSON.stringify({
+      name: 'pages-site',
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      pages_build_output_dir: './dist',
+    }))
+    await writeFile(join(root, 'dist/_headers'), Array.from({ length: 101 }, (_, i) => `/p${i}\n  X-A: 1`).join('\n'))
+
+    try {
+      const result = diagnoseWranglerProject({ cwd: root, now: new Date('2026-08-11T00:00:00Z') })
+
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ _tag: 'error', code: 'static-headers-rule-limit' }))
+    }
+    finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
+  it('counts the rule files under the assets directory the config names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
+    await mkdir(join(root, 'public'))
+    await writeFile(join(root, 'wrangler.jsonc'), JSON.stringify({
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      workers_dev: false,
+      upload_source_maps: true,
+      assets: { directory: './public', binding: 'ASSETS' },
+      observability: { enabled: true },
+      version_metadata: { binding: 'CF_VERSION_METADATA' },
+    }))
+    await writeFile(join(root, 'public/_headers'), Array.from({ length: 101 }, (_, i) => `/p${i}\n  X-A: 1`).join('\n'))
+
+    try {
+      const result = diagnoseWranglerProject({ cwd: root, now: new Date('2026-08-11T00:00:00Z') })
+
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ _tag: 'error', code: 'static-headers-rule-limit' }))
+    }
+    finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
   it('warns when the authored config uses legacy TOML even if Wrangler can load it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
     await mkdir(join(root, 'apps/site'), { recursive: true })

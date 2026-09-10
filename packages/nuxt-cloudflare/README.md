@@ -172,7 +172,7 @@ pnpm nuxt-cloudflare doctor --strict --allow-warning source-maps-disabled
 
 The CLI reads Wrangler config through Wrangler itself, so JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects follow deployment semantics. It separately inspects root authoring format. Existing TOML remains supported and receives non-blocking guidance because Cloudflare recommends JSONC for new projects. Shadowed root configs warn because they can silently drift.
 
-Errors cover malformed asset patterns, invalid Durable Object lifecycles, invalid Container storage, queue limits, unsafe example bindings, and unflattened generated environments. Warnings cover blanket Worker-first assets, missing environment bindings, unrestricted email, local service fidelity, deprecated fields, telemetry gaps, and public endpoints. Secret values are never included.
+Errors cover `_headers` and `_redirects` files past Cloudflare's rule limits, malformed asset patterns, invalid Durable Object lifecycles, invalid Container storage, queue limits, unsafe example bindings, and unflattened generated environments. Warnings cover blanket Worker-first assets, missing environment bindings, unrestricted email, local service fidelity, deprecated fields, telemetry gaps, and public endpoints. Secret values are never included.
 
 Normal mode fails errors. `--strict` also fails warnings. Intentional exceptions remain visible and may be listed with `--allow-warning`. Module builds use the equivalent policy:
 

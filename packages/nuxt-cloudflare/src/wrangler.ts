@@ -107,6 +107,8 @@ export interface WranglerConfigInput extends Record<string, unknown> {
   }
   mtls_certificates?: WranglerRemoteBindingInput[]
   no_bundle?: boolean
+  /** Pages projects name their upload directory here instead of `assets.directory`. */
+  pages_build_output_dir?: string
   observability?: WranglerObservabilityInput
   placement?: WranglerPlacementInput
   preview_urls?: boolean
@@ -174,6 +176,8 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'secret-declared-as-var',
   'source-maps-disabled',
   'stale-compatibility-date',
+  'static-headers-rule-limit',
+  'static-redirects-rule-limit',
   'traces-disabled',
   'remote-binding-not-enabled',
   'unsafe-hello-world-binding',
