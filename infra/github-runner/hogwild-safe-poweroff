@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-systemctl stop hogwild-github-runner.service
-systemctl poweroff
