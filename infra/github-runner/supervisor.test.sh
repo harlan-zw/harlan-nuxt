@@ -18,8 +18,8 @@ if [[ "${GH_TOKEN:-}" != repository-token ]]; then
   exit 1
 fi
 printf '%s\n' "$*" >>"$TEST_CALLS/gh"
-if [[ "$*" == *registration-token* ]]; then
-  printf 'test-token\n'
+if [[ "$*" == *generate-jitconfig* ]]; then
+  printf 'test-jit-config\n'
 fi
 if [[ "$*" == *'actions/runs?status='* && -f "$TEST_CALLS/demand-unavailable" ]]; then
   exit 1

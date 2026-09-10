@@ -690,8 +690,8 @@ ensure_pnpm_store() {
 
   # Cheap and idempotent, and it repairs a volume restored from a backup as the
   # wrong owner. Failure here is not fatal: pnpm would still work, just slower.
-  # `--entrypoint` is required: the image's entrypoint expects a registration
-  # token on stdin and exits without one.
+  # `--entrypoint` is required: the image's entrypoint expects a just-in-time
+  # runner config on stdin and exits without one.
   docker run --rm --user 0 --entrypoint chown \
     --volume "$pnpm_store_volume:/pnpm-store" \
     "$runner_image" --recursive 1001:1001 /pnpm-store >/dev/null 2>&1 \
@@ -744,32 +744,46 @@ run_container() {
   local container_name="$3"
 
   local repository="${pool_repository[$pool_index]}"
-  local registration_token
+  local jit_config
   local runner_name
   local line
   local job_name reported_outcome
   local -a pipe_status=()
-
-  if ! registration_token="$(github_api \
-    --method POST \
-    "repos/$repository/actions/runners/registration-token" \
-    --jq .token 2>/dev/null)"; then
-    log "Could not get a registration token for $repository"
-    return 1
-  fi
+  local -a label_fields=()
+  local label
 
   # This string is what a job's log prints as `Runner name:`, and it is the only
   # place a reader sees whose machine ran their code. Lead with the machine, not
   # the pool.
   runner_name="harlan-desktop-${pool_slug[$pool_index]}-$$-${RANDOM}"
 
-  # The token enters on stdin, so it never lands on disk and never lands in an
+  # A just-in-time config replaces the registration token and `config.sh`. The
+  # host mints it, because minting needs repository administration and the
+  # container must never hold that credential. GitHub creates the runner record
+  # here, with its name and labels fixed, and removes it after one job, so the
+  # container only listens. Runner group 1 is the default group every
+  # repository-scoped runner belongs to.
+  for label in ${pool_label[$pool_index]//,/ }; do
+    label_fields+=(--field "labels[]=$label")
+  done
+  if ! jit_config="$(github_api \
+    --method POST \
+    "repos/$repository/actions/runners/generate-jitconfig" \
+    --field "name=$runner_name" \
+    --field runner_group_id=1 \
+    "${label_fields[@]}" \
+    --jq .encoded_jit_config 2>/dev/null)"; then
+    log "Could not get a just-in-time runner config for $repository"
+    return 1
+  fi
+
+  # The config enters on stdin, so it never lands on disk and never lands in an
   # env var that `docker inspect` would echo back.
   #
   # errexit is lifted across the pipeline so the container's exit status can be
   # read from PIPESTATUS instead of aborting this function.
   set +e
-  printf '%s\n' "$registration_token" | docker run \
+  printf '%s\n' "$jit_config" | docker run \
     --rm \
     --interactive \
     --name "$container_name" \
@@ -785,9 +799,6 @@ run_container() {
     --pids-limit 4096 \
     --cap-drop ALL \
     --security-opt no-new-privileges \
-    --env "RUNNER_LABELS=${pool_label[$pool_index]}" \
-    --env "RUNNER_NAME=$runner_name" \
-    --env "RUNNER_URL=https://github.com/$repository" \
     "$runner_image" 2>&1 \
     | while IFS= read -r line; do
         printf '[%s] %s\n' "$container_name" "$line"
@@ -1035,16 +1046,18 @@ run_scaler() {
   done
 }
 
-# An ephemeral runner deregisters itself when it exits cleanly, but a host that
-# lost power, or a `docker kill`, leaves the registration behind. They accumulate
+# A just-in-time runner is removed when its one job completes, but a host that
+# lost power, a `docker kill`, or a container that never connected leaves the
+# registration behind. They accumulate
 # against the repository's runner limit and make `gh api ... /runners` unreadable,
 # so clear them at startup and on a timer after that. Only offline runners are
 # touched. A busy runner reports `online`, so it is never removed.
 #
 # WHY A DELETE NEEDS TWO SWEEPS
 #
-# A container registers before its listener connects. GitHub reports it offline
-# for a second or two in that gap, and it is very much alive. So the first sweep
+# The runner record exists from the moment the host mints its config, before
+# the container has even started. GitHub reports it offline in that gap, and it
+# is very much alive. So the first sweep
 # that sees a registration offline only remembers it, in a marker file named
 # after the runner id. The next sweep deletes it, but only if it is still
 # offline. A registration that came back online loses its marker instead.

@@ -27,11 +27,14 @@ A warm listener remains optional for a pool that needs lower startup latency.
 ## Trust boundary
 
 - Every pool is repository-scoped and accepts jobs from that repository only.
-- Every job gets a newly registered ephemeral runner in a fresh container.
+- Every job gets a fresh container and a just-in-time runner that GitHub
+  removes after that one job.
 - Containers run unprivileged, drop all Linux capabilities, and receive no host
   filesystem mount and no Docker socket.
-- Registration tokens enter through stdin, never through a file or an
-  environment variable.
+- The host mints each runner's just-in-time config, because minting needs
+  repository administration and the container must never hold that credential.
+- The config enters through stdin, never through a file or an environment
+  variable.
 - **Public repositories are excluded on purpose.** A self-hosted runner on a
   public repository lets a fork pull request run code on this workstation.
   `unhead.unjs.io`, `request-indexing`, `harlanzw.com`, and `unlighthouse.dev`
