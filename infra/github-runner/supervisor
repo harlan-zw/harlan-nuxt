@@ -763,7 +763,12 @@ run_container() {
   # here, with its name and labels fixed, and removes it after one job, so the
   # container only listens. Runner group 1 is the default group every
   # repository-scoped runner belongs to.
-  for label in ${pool_label[$pool_index]//,/ }; do
+  #
+  # `config.sh` added `self-hosted` and the image platform's OS and architecture
+  # as default labels; `generate-jitconfig` adds none. Workflows pin
+  # `runs-on: [self-hosted, linux, x64, <pool label>]`, so the mint must name
+  # them itself or no job can ever match the runner.
+  for label in self-hosted linux x64 ${pool_label[$pool_index]//,/ }; do
     label_fields+=(--field "labels[]=$label")
   done
   if ! jit_config="$(github_api \

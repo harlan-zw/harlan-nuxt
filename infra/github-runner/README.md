@@ -52,8 +52,8 @@ string everywhere and a site moves between hosts by changing one input.
 | `harlan-desktop-light` | Detection, reports, and API calls. Two CPUs and 2 GB by default. |
 | `harlan-desktop-deploy` | Production deploys. Larger container, one at a time. |
 
-Write them as `runs-on: [self-hosted, linux, x64, harlan-desktop-ci]`. The runner adds
-`self-hosted`, `linux`, and `x64` itself.
+Write them as `runs-on: [self-hosted, linux, x64, harlan-desktop-ci]`. The supervisor
+mints every runner with `self-hosted`, `linux`, and `x64` plus the pool labels.
 
 ## Host setup
 
@@ -230,6 +230,14 @@ Use `sudo hogwild-safe-poweroff` for a drained shutdown.
 
 ## Updating the runner
 
-Update `RUNNER_VERSION` and `RUNNER_SHA256` in the Dockerfile, update the tag in
-`HARLAN_DESKTOP_RUNNER_IMAGE` or the supervisor default, rebuild, then restart the
-service. GitHub requires a runner update within 30 days of a release.
+A just-in-time config cannot disable runner self-update. `config.sh` accepted
+`--disableupdate`; `generate-jitconfig` has no equivalent, and `run.sh --jitconfig`
+rejects the flag. While the image pin trails GitHub's latest release, every job
+container downloads that release, applies it, and runs its job on it. Jobs then
+execute an unpinned runner version, and every job pays the download until the
+image matches the latest release.
+
+Rebuild the image promptly after every runner release. Update `RUNNER_VERSION` and
+`RUNNER_SHA256` in the Dockerfile, update the tag in `HARLAN_DESKTOP_RUNNER_IMAGE` or
+the supervisor default, rebuild, then restart the service. GitHub requires a runner
+update within 30 days of a release.
