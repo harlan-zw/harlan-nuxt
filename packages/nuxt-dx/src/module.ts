@@ -1,4 +1,6 @@
 import type { Nuxt, NuxtApp } from '@nuxt/schema'
+import type { ConsolaInstance } from 'consola'
+import type { BudgetNoticeReport, DiagnosticOutput } from './diagnostic-output'
 import type { DiagnosticIssue } from './runtime/app/report'
 import type { BudgetOverride, BudgetVerdict } from './size-budget/budget'
 import type { ModuleOwner } from './size-budget/module-owner'
@@ -9,16 +11,18 @@ import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
+import { createDiagnosticOutput } from './diagnostic-output'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { createOverrideUsage } from './size-budget/override-usage'
 import { extractPluginName } from './size-budget/plugin-name'
-import { formatBudgetReport } from './size-budget/report'
+import { formatBudgetDiagnostics, formatBudgetReport } from './size-budget/report'
 import { sizeBudgetRollupPlugin } from './size-budget/rollup'
 import { BUDGET_SCOPES } from './size-budget/scope'
 import { kilobytesToBytes } from './size-budget/size'
 import { createSnapshotWriter, resolveReportPath } from './size-budget/snapshot'
 import { runtimeTargets } from './size-budget/targets'
+import { createTerminalAccess } from './terminal-bridge'
 
 export interface SizeBudgetOptions {
   /**
@@ -92,9 +96,7 @@ interface ResolvedBudgets {
   fail: boolean
 }
 
-const logger = useLogger('nuxt-dx')
-
-function resolveBudgets(options: SizeBudgetOptions): ResolvedBudgets {
+function resolveBudgets(options: SizeBudgetOptions, logger: ConsolaInstance): ResolvedBudgets {
   const resolve = (kilobytes: number | false | undefined, fallback: number, label: string) => {
     if (kilobytes === false)
       return undefined
@@ -173,7 +175,7 @@ function reporter(scope: BudgetScope, defaultBytes: number, budgets: ResolvedBud
     const report = formatBudgetReport(scope, over, reportBaseDir(nuxt))
     if (budgets.fail)
       throw new Error(`[nuxt-dx] ${report}`)
-    logger.warn(report)
+    return { message: report, entries: formatBudgetDiagnostics(scope, over, reportBaseDir(nuxt)) }
   }
 }
 
@@ -218,8 +220,8 @@ function runtimeEntries(scope: BudgetScope, paths: readonly string[], owners: re
   return paths.map(path => ({ scope, path, owner: moduleOwnerOf(path, owners) }))
 }
 
-function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined): void {
-  const budgets = resolveBudgets(options)
+function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: string | undefined, logger: ConsolaInstance, output: DiagnosticOutput): void {
+  const budgets = resolveBudgets(options, logger)
   const enabledScopes = BUDGET_SCOPES.filter(scope => budgets.byScope[scope] !== undefined)
 
   if (reportPath !== undefined && !enabledScopes.length)
@@ -266,17 +268,28 @@ function setupSizeBudget(options: SizeBudgetOptions, nuxt: Nuxt, reportPath: str
    * still leaves the artifact behind.
    */
   const onMeasured = (scopes: readonly BudgetScope[]) => {
+    const bundle = scopes.some(scope => scope === 'client' || scope === 'client-middleware') ? 'client' : 'server'
     const reports = new Map(scopes.map((scope) => {
       const defaultBytes = budgets.byScope[scope]!
       return [scope, reporter(scope, defaultBytes, budgets, nuxt, scope === 'client')] as const
     }))
     return async (measured: readonly MeasuredTarget[]) => {
-      for (const scope of scopes) {
-        const entries = measured.filter(target => target.scope === scope)
-        await writeSnapshot?.(scope, entries)
-        await reports.get(scope)!(entries)
-      }
-      await trackOverrides(measured)
+      output.updateBudgetDiagnostics(bundle, [])
+      return output.runTask({
+        start: `Checking ${bundle} runtime size budgets`,
+        failure: `Failed to check ${bundle} runtime size budgets`,
+      }, async () => {
+        const overBudget: BudgetNoticeReport[] = []
+        for (const scope of scopes) {
+          const entries = measured.filter(target => target.scope === scope)
+          await writeSnapshot?.(scope, entries)
+          const report = await reports.get(scope)!(entries)
+          if (report)
+            overBudget.push(report)
+        }
+        await trackOverrides(measured)
+        output.updateBudgetDiagnostics(bundle, overBudget)
+      })
     }
   }
 
@@ -351,9 +364,12 @@ export default defineNuxtModule<ModuleOptions>({
     if (!options.enabled)
       return
 
+    const logger = useLogger('nuxt-dx')
+    const output = createDiagnosticOutput(createTerminalAccess(logger), logger)
+    nuxt.hook('close', () => output.dispose())
     const reportPath = resolveReportPath(options.report)
     if (options.sizeBudget !== false)
-      setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath)
+      setupSizeBudget(options.sizeBudget ?? {}, nuxt, reportPath, logger, output)
     else if (reportPath !== undefined)
       logger.warn('`nuxtDx.report` is on, but `nuxtDx.sizeBudget` is `false`, so there is nothing to measure.')
 
