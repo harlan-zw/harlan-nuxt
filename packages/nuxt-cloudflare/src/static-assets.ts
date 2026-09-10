@@ -18,13 +18,23 @@ export interface StaticAssetRuleFiles {
   redirects?: string
 }
 
-/** The `_headers` and `_redirects` files under an output public directory, when present. */
-export function readStaticAssetRuleFiles(publicDir: string): StaticAssetRuleFiles {
+/**
+ * The `_headers` and `_redirects` files an output carries, when present.
+ *
+ * Nitro's Workers presets write them under the public directory. The Pages
+ * presets write them at the output root, so the caller passes every place a
+ * preset can put them and the first directory holding a file wins.
+ */
+export function readStaticAssetRuleFiles(directories: readonly string[]): StaticAssetRuleFiles {
   const files: StaticAssetRuleFiles = {}
   for (const [key, name] of [['headers', '_headers'], ['redirects', '_redirects']] as const) {
-    const path = join(publicDir, name)
-    if (existsSync(path))
-      files[key] = readFileSync(path, 'utf8')
+    for (const directory of directories) {
+      const path = join(directory, name)
+      if (existsSync(path)) {
+        files[key] = readFileSync(path, 'utf8')
+        break
+      }
+    }
   }
   return files
 }

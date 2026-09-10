@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -50,12 +50,19 @@ describe('diagnoseStaticAssetRules', () => {
 })
 
 describe('readStaticAssetRuleFiles', () => {
-  it('reads whichever files the output carries', async () => {
+  it('reads each file from the first directory that holds it', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-assets-'))
     try {
-      await writeFile(join(dir, '_headers'), '/*\n  X-A: 1\n')
-      expect(readStaticAssetRuleFiles(dir)).toEqual({ headers: '/*\n  X-A: 1\n' })
-      expect(readStaticAssetRuleFiles(join(dir, 'missing'))).toEqual({})
+      await mkdir(join(dir, 'public'))
+      await writeFile(join(dir, 'public/_headers'), '/*\n  X-A: 1\n')
+      await writeFile(join(dir, '_redirects'), '/old /new 301\n')
+
+      expect(readStaticAssetRuleFiles([join(dir, 'public'), dir])).toEqual({
+        headers: '/*\n  X-A: 1\n',
+        redirects: '/old /new 301\n',
+      })
+      expect(readStaticAssetRuleFiles([join(dir, 'missing')])).toEqual({})
+      expect(readStaticAssetRuleFiles([])).toEqual({})
     }
     finally {
       await rm(dir, { force: true, recursive: true })

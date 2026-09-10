@@ -46,15 +46,19 @@ export function diagnoseWranglerProject(options: DiagnoseWranglerProjectOptions)
     diagnostics: [
       ...diagnoseWranglerConfig(loaded.config, { ...options, generated: loaded.generated, normalized: true }),
       ...diagnoseWranglerSourceConfigs(sourceConfigPaths),
-      ...diagnoseStaticAssetRules(readStaticAssetRuleFiles(resolveAssetsDirectory(loaded.path, loaded.config.assets?.directory))),
+      ...diagnoseStaticAssetRules(readStaticAssetRuleFiles(resolveAssetsDirectories(loaded.path, loaded.config.assets?.directory))),
     ],
     sourceConfigPaths,
   }
 }
 
-/** The assets directory is relative to the config that names it. Without one there is nothing to count. */
-function resolveAssetsDirectory(configPath: string | undefined, directory: string | undefined): string {
+/**
+ * Where a deploy would read `_headers` and `_redirects` from. The assets
+ * directory is relative to the config that names it, and a config with no
+ * assets uploads no rule files, so there is nothing to count.
+ */
+function resolveAssetsDirectories(configPath: string | undefined, directory: string | undefined): string[] {
   if (!configPath || !directory)
-    return ''
-  return resolve(dirname(configPath), directory)
+    return []
+  return [resolve(dirname(configPath), directory)]
 }
