@@ -1,0 +1,12 @@
+[Unit]
+Description=Hogwild DOCKER-USER firewall rules
+After=docker.service ufw.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/hogwild-docker-user-rules
+
+[Install]
+WantedBy=multi-user.target

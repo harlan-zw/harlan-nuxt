@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Rules Docker consults before its own FORWARD rules.
+# 1. Containers must not reach the LAN, the tailnet, or link-local addresses.
+#    The desktop DNS fallback from /etc/docker/daemon.json stays reachable.
+# 2. The LAN and the tailnet must not reach published container ports.
+#    Docker publishes ports past ufw. Loopback still works.
+set -euo pipefail
+lan_dns=192.168.50.139
+iptables -N DOCKER-USER 2>/dev/null || true
+iptables -F DOCKER-USER
+for proto in udp tcp; do
+  iptables -A DOCKER-USER -i docker0 -d "$lan_dns" -p "$proto" --dport 53 -j RETURN
+done
+for net in 192.168.0.0/16 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16; do
+  iptables -A DOCKER-USER -i docker0 -d "$net" -j DROP
+done
+iptables -A DOCKER-USER -i docker0 ! -o docker0 -d 172.16.0.0/12 -j DROP
+for iface in eno3 tailscale0; do
+  iptables -A DOCKER-USER -i "$iface" -o docker0 -m conntrack --ctstate NEW -j DROP
+done
+iptables -A DOCKER-USER -j RETURN
