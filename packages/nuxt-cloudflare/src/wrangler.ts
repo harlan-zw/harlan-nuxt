@@ -174,6 +174,8 @@ export const WRANGLER_DIAGNOSTIC_CODES = [
   'secret-declared-as-var',
   'source-maps-disabled',
   'stale-compatibility-date',
+  'static-headers-rule-limit',
+  'static-redirects-rule-limit',
   'traces-disabled',
   'remote-binding-not-enabled',
   'unsafe-hello-world-binding',
