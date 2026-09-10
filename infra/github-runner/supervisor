@@ -903,6 +903,7 @@ run_scaler() {
   local pending_pool pending_count attempt candidate priority_index queued_demand
   local -a pending_pools=()
   local -A pool_is_pending=()
+  local -A tried_pools=()
 
   while true; do
     while IFS=' ' read -r request pool_index; do
@@ -924,17 +925,25 @@ run_scaler() {
       # Try each denied pool once. A pool that still cannot fit moves to the
       # back, so repeated capacity changes distribute slots across repositories.
       # The oldest pending deploy goes first. Once denied, it stays first and
-      # reserves future capacity by stopping lower-priority admissions.
+      # reserves future capacity by stopping lower-priority admissions, but
+      # only while work is in flight to return that capacity. With nothing in
+      # flight the deploy waits on the host alone, and holding smaller pools
+      # behind it starves them for no gain (2026-09-10, 16 minutes at 0).
       pending_count="${#pending_pools[@]}"
+      tried_pools=()
       for (( attempt = 0; attempt < pending_count; attempt++ )); do
-        priority_index=0
+        priority_index=''
         for candidate in "${!pending_pools[@]}"; do
+          [[ -n "${tried_pools[${pending_pools[$candidate]}]:-}" ]] && continue
           if (( pool_is_deploy[pending_pools[candidate]] )); then
             priority_index="$candidate"
             break
           fi
+          [[ -z "$priority_index" ]] && priority_index="$candidate"
         done
+        [[ -z "$priority_index" ]] && break
         pending_pool="${pending_pools[$priority_index]}"
+        tried_pools[$pending_pool]=true
         unset "pending_pools[$priority_index]"
         pending_pools=("${pending_pools[@]}")
         slug="${pool_slug[$pending_pool]}"
@@ -1019,7 +1028,8 @@ run_scaler() {
           write_hold "$slug" "$hold_tag" "$hold_numbers"
           if (( pool_is_deploy[pending_pool] )); then
             pending_pools=("$pending_pool" "${pending_pools[@]}")
-            break
+            (( spent > 0 )) && break
+            continue
           fi
           pending_pools+=("$pending_pool")
           continue

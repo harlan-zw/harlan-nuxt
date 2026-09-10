@@ -1092,6 +1092,61 @@ fi
 
 printf 'Deploy priority passed.\n'
 
+# A held deploy reserves the capacity that in-flight work will return. With
+# nothing in flight, no job can return capacity, so the deploy waits on the host
+# alone and every pool behind it starved for no gain: on 2026-09-10 a 13g deploy
+# held on host memory kept a 1g CI pool and a 1g light pool at 0 for 16 minutes
+# while both would have fit. The deploy still goes first on every pass.
+begin_case 'Idle deploy hold admits pools that fit'
+touch "$test_root/calls/queue-priority"
+cat >"$test_root/runners.conf" <<'EOF'
+harlan-zw/example|harlan-desktop-ci|0|1|4|1g|2g|3g
+harlan-zw/example|harlan-desktop-deploy|0|1|4|30g|31g|32g
+EOF
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_HISTORY_DIR="$test_root/history" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=16 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=31 \
+HARLAN_DESKTOP_RUNNER_MEMORY_HEADROOM_GIB=2 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )); then
+  cat "$test_root/output"
+  printf 'Expected the idle deploy hold to drain cleanly.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet 'Available memory 24g, headroom 2g.*; holding example-deploy at 0' "$test_root/output"; then
+  cat "$test_root/output"
+  printf 'Expected host memory to hold the deploy.\n' >&2
+  exit 1
+fi
+
+if grep --quiet --fixed-strings -- '-deploy-burst-' "$test_root/calls/burst" 2>/dev/null; then
+  cat "$test_root/output"
+  cat "$test_root/calls/burst"
+  printf 'Expected the held deploy not to burst.\n' >&2
+  exit 1
+fi
+
+if ! grep --quiet --fixed-strings -- '-ci-burst-' "$test_root/calls/burst" 2>/dev/null; then
+  cat "$test_root/output"
+  printf 'Expected CI to be admitted past a deploy held with nothing in flight.\n' >&2
+  exit 1
+fi
+
+printf 'Idle deploy hold admits pools that fit passed.\n'
+
 # A deploy run cancelled while its burst request is held must release the
 # reservation. Scan one queues the deploy, scan two lists it gone, and only
 # then does the busy slot return capacity. CI has to be admitted on the freed
