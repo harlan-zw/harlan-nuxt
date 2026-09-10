@@ -1,7 +1,9 @@
-# Harlan's desktop GitHub runner
+# Hogwild GitHub runner
 
 One host, one supervisor, one ephemeral container per job, across every private
-Harlan site.
+Harlan site. Hogwild is the only host. The desktop unit is masked and stays
+masked; the `harlan-desktop` names in labels, files, and variables are history,
+and renaming them would touch every workflow for no gain.
 
 ## Why pools and not one shared runner
 
@@ -36,7 +38,7 @@ A warm listener remains optional for a pool that needs lower startup latency.
 - The config enters through stdin, never through a file or an environment
   variable.
 - **Public repositories are excluded on purpose.** A self-hosted runner on a
-  public repository lets a fork pull request run code on this workstation.
+  public repository lets a fork pull request run code on this host.
   `unhead.unjs.io`, `request-indexing`, `harlanzw.com`, and `unlighthouse.dev`
   stay on GitHub-hosted runners. Before adding any of them, set "Require
   approval for all outside collaborators" on that repository.
@@ -55,49 +57,44 @@ string everywhere and a site moves between hosts by changing one input.
 Write them as `runs-on: [self-hosted, linux, x64, harlan-desktop-ci]`. The supervisor
 mints every runner with `self-hosted`, `linux`, and `x64` plus the pool labels.
 
-## Host setup
+## Hogwild installation
 
-Needs Docker, GitHub CLI authenticated with repository administration access on
-every repository in `runners.conf`.
+Needs Docker and a GitHub token with repository administration access on every
+repository in `hogwild-runners.conf`, loaded through the unit's encrypted
+credentials.
 
 ```bash
 docker build --tag harlan-desktop-github-runner:2.336.0 infra/github-runner
 
-install -Dm755 infra/github-runner/supervisor \
-  ~/.local/lib/harlan-desktop-github-runner/supervisor
-install -Dm755 infra/github-runner/publish-status \
-  ~/.local/lib/harlan-desktop-github-runner/publish-status
-install -Dm755 infra/github-runner/job-history \
-  ~/.local/lib/harlan-desktop-github-runner/job-history
-install -Dm755 infra/github-runner/backfill-job-history \
-  ~/.local/lib/harlan-desktop-github-runner/backfill-job-history
-install -Dm644 infra/github-runner/runners.conf \
-  ~/.config/harlan-desktop-github-runner/runners.conf
-install -Dm644 infra/github-runner/harlan-desktop-github-runner.service \
-  ~/.config/systemd/user/harlan-desktop-github-runner.service
-
-systemctl --user daemon-reload
-systemctl --user enable --now harlan-desktop-github-runner.service
+sudo install -Dm755 infra/github-runner/supervisor /var/lib/github-runner/bin/supervisor
+sudo install -Dm755 infra/github-runner/publish-status /var/lib/github-runner/bin/publish-status
+sudo install -Dm755 infra/github-runner/job-history /var/lib/github-runner/bin/job-history
+sudo install -Dm755 infra/github-runner/backfill-job-history /var/lib/github-runner/bin/backfill-job-history
+sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
+sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
+sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
+sudo install -Dm644 infra/github-runner/hogwild-tmp.conf /etc/tmpfiles.d/runner-tmp.conf
+sudo install -Dm755 infra/github-runner/hogwild-safe-poweroff /usr/local/sbin/hogwild-safe-poweroff
+sudo systemctl daemon-reload
+sudo systemd-tmpfiles --clean
+sudo systemctl kill --signal HUP systemd-logind
+sudo systemctl restart hogwild-github-runner.service
 ```
+
+Restart drains: running jobs finish first. Use `sudo hogwild-safe-poweroff` for a
+drained shutdown.
 
 ## Status
 
+On Hogwild the source of truth is the supervisor's `status.json`:
+
 ```bash
-harlan-desktop-runner          # both sections
-harlan-desktop-runner pool     # the workstation only, no network calls
-harlan-desktop-runner sites    # open pull requests and their checks
+sudo cat /run/github-runner/harlan-desktop-github-runner/status.json | jq .pools
 ```
 
-`pool` reads the supervisor's own reservation files under `XDG_RUNTIME_DIR`, the
-same ones it sizes bursts from, so it reports what the supervisor believes rather
-than a second guess from `docker ps`. That is also why the unit does not put its
-state in `/tmp`: `PrivateTmp` would hide it from this command.
-
-`sites` lists every open pull request across the inventory with its check state,
-then up to three recent local branches per repository that have commits and no
-pull request. That last part is capped on purpose, since nuxtseo.com alone keeps
-over a hundred branches. Raise `HARLAN_DESKTOP_RUNNER_BRANCH_LIMIT` for the long
-tail.
+`harlan-desktop-runner` is the old workstation status script. It reads the
+desktop unit and the caller's `XDG_RUNTIME_DIR`, so it is not installed on
+Hogwild.
 
 Check capacity and logs:
 
@@ -108,7 +105,7 @@ docker ps --filter label=com.harlanzw.desktop-runner=true \
 gh api repos/harlan-zw/nuxtseo.com/actions/runners \
   --jq '.runners[] | [.name, .status, .busy] | @tsv'
 
-journalctl --user --unit harlan-desktop-github-runner.service --follow
+journalctl --unit hogwild-github-runner.service --follow
 ```
 
 The supervisor publishes `status.json` beside its runtime state every 15 seconds.
@@ -133,10 +130,10 @@ Every hold carries `since`, the time the supervisor first refused. A hold that h
 
 Raw Runner jobs persist for 90 days. Daily totals persist until they are removed manually.
 
-Stop local CI before shutting down or doing CPU-heavy local work:
+Stop CI before shutting down or doing CPU-heavy work on the host:
 
 ```bash
-systemctl --user stop harlan-desktop-github-runner.service
+sudo systemctl stop hogwild-github-runner.service
 ```
 
 Stopping and restarting both drain. Idle listeners go immediately, so nothing
@@ -205,28 +202,6 @@ It also rejects a memory budget larger than host RAM.
 The supplied configurations use zero warm runners.
 
 Queued jobs then wait for the next demand poll instead of bypassing admission.
-
-## Hogwild installation
-
-Install the versioned Hogwild files into their fixed system paths:
-
-```bash
-sudo install -Dm755 infra/github-runner/supervisor /var/lib/github-runner/bin/supervisor
-sudo install -Dm755 infra/github-runner/publish-status /var/lib/github-runner/bin/publish-status
-sudo install -Dm755 infra/github-runner/job-history /var/lib/github-runner/bin/job-history
-sudo install -Dm755 infra/github-runner/backfill-job-history /var/lib/github-runner/bin/backfill-job-history
-sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-runner/config/runners.conf
-sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
-sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
-sudo install -Dm644 infra/github-runner/hogwild-tmp.conf /etc/tmpfiles.d/runner-tmp.conf
-sudo install -Dm755 infra/github-runner/hogwild-safe-poweroff /usr/local/sbin/hogwild-safe-poweroff
-sudo systemctl daemon-reload
-sudo systemd-tmpfiles --clean
-sudo systemctl kill --signal HUP systemd-logind
-sudo systemctl restart hogwild-github-runner.service
-```
-
-Use `sudo hogwild-safe-poweroff` for a drained shutdown.
 
 ## Updating the runner
 
