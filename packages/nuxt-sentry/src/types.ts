@@ -101,6 +101,17 @@ export interface ModuleOptions {
   workerVersionBinding?: string | false
 
   /**
+   * Report a Nitro scheduled task's failures, tagged with the task name.
+   *
+   * Every registered task is wrapped at build time, including one a module
+   * registers from inside its own package. `false` leaves tasks alone; wrap the
+   * ones you choose with `withSentryTask`. Cloudflare presets only.
+   *
+   * @default true
+   */
+  tasks?: boolean
+
+  /**
    * Forward failing Wide Events to Sentry Logs.
    *
    * `true` forwards a Wide Event whose level is `error`. Pass

@@ -40,7 +40,7 @@ export {
   redactValue,
 } from '../shared/redact'
 export type { CaptureTaskFailure, ReportingTask, TaskFailureReport, TaskLike, TaskRunContext } from '../shared/task'
-export { describeTaskFailure, resolveTaskName, withTaskReporting } from '../shared/task'
+export { describeTaskFailure, isReportingTask, resolveTaskName, withTaskReporting } from '../shared/task'
 export type {
   DataCollection,
   DropRuleName,

@@ -78,6 +78,7 @@ Set `SENTRY_AUTH_TOKEN` in CI to upload source maps. Set `SENTRY_RELEASE` in the
 | `environment` | `'production'` | Environment name, or a host prefix map. |
 | `tracesSampleRate` | `0.05` | Fraction of requests traced, or a rate per environment. |
 | `dataCollection` | `'scrubbed'` | How much of the request a report carries. |
+| `tasks` | `true` | Report every Nitro scheduled task's failures, tagged with the task name. |
 | `policy` | see below | Report Policy. |
 | `sourceMaps` | `true` | Emit and upload client source maps when a token is present. |
 | `logs` | `false` | Forward `console.warn` and `console.error` to Sentry Logs. |
@@ -202,7 +203,11 @@ The same constant is still written to `runtimeConfig.public.nuxtSentry`, so code
 
 ## Scheduled tasks
 
-Nitro's `runTask` calls no hook, so nothing can see a scheduled task run. A throwing task reaches Sentry, if at all, as an unattributed `scriptThrewException`. Wrap the task definition with `withSentryTask` to tag the Error Report with the task name. The error is rethrown, so the scheduler still sees the task fail.
+Nitro's `runTask` calls no hook, so no plugin can see a scheduled task run. A throwing task reaches Sentry, if at all, as an unattributed `scriptThrewException`.
+
+On a Cloudflare preset the module wraps every registered task at build time, including one another module registers from inside its own package. A failure is reported with a `task` tag naming the task, then rethrown, so the scheduler still sees the task fail. Set `tasks: false` to leave tasks alone.
+
+`withSentryTask` wraps one task by hand. Use it when `tasks` is off, or in a task file shared with a build the module does not cover. Wrapping a task the build already wrapped changes nothing, so one failure reports once.
 
 ```ts
 import { withSentryTask } from '@harlan-zw/nuxt-sentry/server/task'

@@ -1,4 +1,5 @@
 import type { Nuxt } from '@nuxt/schema'
+import type { TaskRegistration } from './build/tasks'
 import type { SentryRuntimeConfig } from './runtime/shared/types'
 import type { ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
@@ -17,6 +18,7 @@ import { resolve } from 'pathe'
 import { resolveReportPolicy } from './build/policy'
 import { checkSentryBuild, hasSentryAuthToken, resolveSentryBuildOptions, uploadsSourceMaps } from './build/sentry-build'
 import { resolveRelease, resolveReportTarget } from './build/target'
+import { planTaskReporting } from './build/tasks'
 import { resolveWideEventDrain } from './build/wide-events'
 
 export type { ModuleOptions } from './types'
@@ -82,6 +84,7 @@ export default defineNuxtModule<ModuleOptions>({
     // Errors only. Sentry meters Logs as their own byte quota, so a wider drain
     // is a cost a site opts into.
     wideEvents: false,
+    tasks: true,
   },
   setup(options, nuxt) {
     const logger = useLogger(MODULE_NAME)
@@ -188,6 +191,8 @@ export default defineNuxtModule<ModuleOptions>({
     const cloudflare = isCloudflarePreset(nitro.preset)
     if (cloudflare) {
       addServerPlugin(resolver.resolve('./runtime/server/plugins/sentry-cloudflare'))
+      if (options.tasks !== false)
+        reportTasks(nuxt, resolver.resolve('./runtime/server/task'))
     }
     else {
       logger.warn('The Nitro preset is not a Cloudflare one, so this module registers no server plugin. Keep the site\'s own sentry.server.config.ts and build it with createBeforeSend from @harlan-zw/nuxt-sentry/server.')
@@ -210,6 +215,39 @@ function describeReason(reason: string): string {
     default:
       return ''
   }
+}
+
+interface NitroTaskRegistry {
+  tasks?: Record<string, TaskRegistration>
+  virtual?: Record<string, string | (() => string)>
+}
+
+/**
+ * Point every registered Nitro task at a wrapper that reports its failures.
+ *
+ * `nitro:init` fires after Nitro has merged the tasks registered by config with
+ * the ones it scanned from `server/tasks`, and before the rollup config reads
+ * the registry, so every task is present and the rewrite is what the build
+ * sees. Each wrapper is a `nitro.options.virtual` entry, which Nitro's rollup
+ * plugin resolves by id. A task file added while the dev server runs is
+ * wrapped on the next start.
+ */
+function reportTasks(nuxt: Nuxt, wrapperModule: string): void {
+  // Nitro's Nuxt hook augmentation is not on this package's check tsconfig,
+  // the same reason `registerWideEvents` casts its hook.
+  const onNitroInit = nuxt.hook as unknown as (
+    name: 'nitro:init',
+    callback: (nitro: { options: NitroTaskRegistry }) => void,
+  ) => void
+  onNitroInit('nitro:init', (nitro) => {
+    const registry = nitro.options
+    const tasks = registry.tasks ?? {}
+    const virtual = (registry.virtual ??= {})
+    for (const plan of planTaskReporting(tasks, wrapperModule)) {
+      virtual[plan.id] = plan.code
+      tasks[plan.name]!.handler = plan.id
+    }
+  })
 }
 
 /**

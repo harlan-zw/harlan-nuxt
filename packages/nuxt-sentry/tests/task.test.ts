@@ -1,6 +1,6 @@
 import type { TaskFailureReport } from '../src/runtime/shared/task'
 import { describe, expect, it, vi } from 'vitest'
-import { describeTaskFailure, resolveTaskName, withTaskReporting } from '../src/runtime/shared/task'
+import { describeTaskFailure, isReportingTask, resolveTaskName, withTaskReporting } from '../src/runtime/shared/task'
 
 /**
  * A scheduled task is the one path the Nitro plugin cannot see. Nitro's
@@ -77,6 +77,17 @@ describe('task failure reporting', () => {
 
     await expect(task.run({ name: 'from-nitro' })).rejects.toThrow()
     expect(reports[0]!.tags.task).toBe('from-nitro')
+  })
+
+  it('reports once when the build wraps a task a site already wrapped by hand', async () => {
+    const { reports, capture } = captured()
+    const byHand = withTaskReporting({ meta: { name: 'x' }, run: () => Promise.reject(new Error('x')) }, capture)
+    const byBuild = withTaskReporting(byHand, capture)
+
+    expect(isReportingTask(byHand)).toBe(true)
+    expect(byBuild).toBe(byHand)
+    await expect(byBuild.run({})).rejects.toThrow()
+    expect(reports).toHaveLength(1)
   })
 
   it('names an unnamed task rather than reporting an empty tag', () => {
