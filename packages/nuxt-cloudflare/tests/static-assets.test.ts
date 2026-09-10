@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { diagnoseStaticAssetRules, readStaticAssetRuleFiles } from '../src/static-assets'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory, resolveConfigStaticAssetDirectory } from '../src/static-assets'
 
 function headerRules(prefix: string, count: number): string {
   return Array.from({ length: count }, (_, i) => `${prefix}/page-${i}.md\n  Content-Type: text/markdown\n`).join('')
@@ -50,22 +50,47 @@ describe('diagnoseStaticAssetRules', () => {
 })
 
 describe('readStaticAssetRuleFiles', () => {
-  it('reads each file from the first directory that holds it', async () => {
+  it('reads whichever files the directory carries', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-assets-'))
     try {
-      await mkdir(join(dir, 'public'))
-      await writeFile(join(dir, 'public/_headers'), '/*\n  X-A: 1\n')
-      await writeFile(join(dir, '_redirects'), '/old /new 301\n')
-
-      expect(readStaticAssetRuleFiles([join(dir, 'public'), dir])).toEqual({
-        headers: '/*\n  X-A: 1\n',
-        redirects: '/old /new 301\n',
-      })
-      expect(readStaticAssetRuleFiles([join(dir, 'missing')])).toEqual({})
-      expect(readStaticAssetRuleFiles([])).toEqual({})
+      await writeFile(join(dir, '_headers'), '/*\n  X-A: 1\n')
+      expect(readStaticAssetRuleFiles(dir)).toEqual({ headers: '/*\n  X-A: 1\n' })
+      expect(readStaticAssetRuleFiles(join(dir, 'missing'))).toEqual({})
     }
     finally {
       await rm(dir, { force: true, recursive: true })
     }
+  })
+})
+
+describe('resolveBuildStaticAssetDirectory', () => {
+  const output = { dir: '/site/.output', publicDir: '/site/.output/public' }
+
+  it.each([
+    ['cloudflare-module', '/site/.output/public'],
+    ['cloudflare-durable', '/site/.output/public'],
+    ['cloudflare_module', '/site/.output/public'],
+    ['cloudflare-pages', '/site/.output'],
+    ['cloudflare-pages-static', '/site/.output'],
+    [undefined, '/site/.output/public'],
+  ])('%s uploads from %s', (preset, expected) => {
+    expect(resolveBuildStaticAssetDirectory(preset, output)).toBe(expected)
+  })
+})
+
+describe('resolveConfigStaticAssetDirectory', () => {
+  it('resolves a Worker assets directory against the config location', () => {
+    expect(resolveConfigStaticAssetDirectory('/site/.output/server/wrangler.json', { assets: { directory: '../public' } }))
+      .toBe('/site/.output/public')
+  })
+
+  it('resolves a Pages build output directory the same way', () => {
+    expect(resolveConfigStaticAssetDirectory('/site/wrangler.jsonc', { pages_build_output_dir: './dist' }))
+      .toBe('/site/dist')
+  })
+
+  it('has nothing to count when the config uploads no assets', () => {
+    expect(resolveConfigStaticAssetDirectory('/site/wrangler.jsonc', {})).toBeUndefined()
+    expect(resolveConfigStaticAssetDirectory(undefined, { assets: { directory: 'public' } })).toBeUndefined()
   })
 })

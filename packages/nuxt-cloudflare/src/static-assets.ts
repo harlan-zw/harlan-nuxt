@@ -1,6 +1,6 @@
 import type { WranglerDiagnostic } from './wrangler'
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'pathe'
+import { dirname, join, resolve } from 'pathe'
 
 /**
  * Cloudflare's published caps for the static asset control files. The upload
@@ -19,22 +19,40 @@ export interface StaticAssetRuleFiles {
 }
 
 /**
- * The `_headers` and `_redirects` files an output carries, when present.
- *
- * Nitro's Workers presets write them under the public directory. The Pages
- * presets write them at the output root, so the caller passes every place a
- * preset can put them and the first directory holding a file wins.
+ * Where a Nitro build writes `_headers` and `_redirects`. Its Workers presets
+ * put them under the public directory; its Pages presets put them at the
+ * output root, which is what `wrangler pages deploy` uploads.
  */
-export function readStaticAssetRuleFiles(directories: readonly string[]): StaticAssetRuleFiles {
+export function resolveBuildStaticAssetDirectory(
+  preset: string | undefined,
+  output: { dir: string, publicDir: string },
+): string {
+  return String(preset || '').includes('pages') ? output.dir : output.publicDir
+}
+
+/**
+ * Where a deploy of this config reads the rule files from, relative to the
+ * config that names it. A Worker uploads its `assets.directory`; a Pages
+ * project uploads `pages_build_output_dir`. A config naming neither uploads
+ * no rule files, so there is nothing to count.
+ */
+export function resolveConfigStaticAssetDirectory(
+  configPath: string | undefined,
+  config: { assets?: { directory?: string }, pages_build_output_dir?: string },
+): string | undefined {
+  const directory = config.assets?.directory ?? config.pages_build_output_dir
+  if (!configPath || !directory)
+    return undefined
+  return resolve(dirname(configPath), directory)
+}
+
+/** The `_headers` and `_redirects` files in one directory, when present. */
+export function readStaticAssetRuleFiles(directory: string): StaticAssetRuleFiles {
   const files: StaticAssetRuleFiles = {}
   for (const [key, name] of [['headers', '_headers'], ['redirects', '_redirects']] as const) {
-    for (const directory of directories) {
-      const path = join(directory, name)
-      if (existsSync(path)) {
-        files[key] = readFileSync(path, 'utf8')
-        break
-      }
-    }
+    const path = join(directory, name)
+    if (existsSync(path))
+      files[key] = readFileSync(path, 'utf8')
   }
   return files
 }

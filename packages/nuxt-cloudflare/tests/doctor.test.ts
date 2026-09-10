@@ -32,6 +32,27 @@ describe('diagnoseWranglerProject', () => {
     }
   })
 
+  it('counts the rule files under a Pages build output directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
+    await mkdir(join(root, 'dist'))
+    await writeFile(join(root, 'wrangler.jsonc'), JSON.stringify({
+      name: 'pages-site',
+      compatibility_date: '2026-08-11',
+      compatibility_flags: ['nodejs_compat'],
+      pages_build_output_dir: './dist',
+    }))
+    await writeFile(join(root, 'dist/_headers'), Array.from({ length: 101 }, (_, i) => `/p${i}\n  X-A: 1`).join('\n'))
+
+    try {
+      const result = diagnoseWranglerProject({ cwd: root, now: new Date('2026-08-11T00:00:00Z') })
+
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({ _tag: 'error', code: 'static-headers-rule-limit' }))
+    }
+    finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+
   it('counts the rule files under the assets directory the config names', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nuxt-cloudflare-doctor-'))
     await mkdir(join(root, 'public'))

@@ -12,7 +12,7 @@ import {
 } from './diagnostics'
 import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
 import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache'
-import { diagnoseStaticAssetRules, readStaticAssetRuleFiles } from './static-assets'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory } from './static-assets'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -266,9 +266,9 @@ async function auditGeneratedWranglerConfig(
     ...diagnoseWranglerSourceConfigs(discoverWranglerSourceConfigs(rootDir)),
     // Every module's prerender headers land in one `_headers` file, and the
     // upload is the first thing that counts them. Count them here instead.
-    // Workers presets write the files under the public directory; the Pages
-    // presets write them at the output root.
-    ...diagnoseStaticAssetRules(readStaticAssetRuleFiles([nitro.options.output.publicDir, nitro.options.output.dir])),
+    ...diagnoseStaticAssetRules(readStaticAssetRuleFiles(
+      resolveBuildStaticAssetDirectory(nitro.options.preset, nitro.options.output),
+    )),
   ]
   const policy = options.doctor ?? { _tag: 'advisory' }
   const outcome = evaluateWranglerDiagnostics(diagnostics, policy)

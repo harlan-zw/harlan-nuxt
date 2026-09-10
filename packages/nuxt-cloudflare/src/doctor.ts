@@ -1,8 +1,7 @@
 import type { WranglerDiagnostic, WranglerDiagnosticOptions } from './wrangler'
 import type { ReadProjectWranglerOptions } from './wrangler-reader'
-import { dirname, resolve } from 'pathe'
 import { diagnoseWranglerSourceConfigs, discoverWranglerSourceConfigs } from './diagnostics'
-import { diagnoseStaticAssetRules, readStaticAssetRuleFiles } from './static-assets'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveConfigStaticAssetDirectory } from './static-assets'
 import { diagnoseWranglerConfig } from './wrangler'
 import { readProjectWranglerConfig } from './wrangler-reader'
 
@@ -41,24 +40,16 @@ export function diagnoseWranglerProject(options: DiagnoseWranglerProjectOptions)
       sourceConfigPaths,
     }
   }
+  const staticAssetDirectory = resolveConfigStaticAssetDirectory(loaded.path, loaded.config)
   return {
     configPath: loaded.path,
     diagnostics: [
       ...diagnoseWranglerConfig(loaded.config, { ...options, generated: loaded.generated, normalized: true }),
       ...diagnoseWranglerSourceConfigs(sourceConfigPaths),
-      ...diagnoseStaticAssetRules(readStaticAssetRuleFiles(resolveAssetsDirectories(loaded.path, loaded.config.assets?.directory))),
+      ...(staticAssetDirectory === undefined
+        ? []
+        : diagnoseStaticAssetRules(readStaticAssetRuleFiles(staticAssetDirectory))),
     ],
     sourceConfigPaths,
   }
-}
-
-/**
- * Where a deploy would read `_headers` and `_redirects` from. The assets
- * directory is relative to the config that names it, and a config with no
- * assets uploads no rule files, so there is nothing to count.
- */
-function resolveAssetsDirectories(configPath: string | undefined, directory: string | undefined): string[] {
-  if (!configPath || !directory)
-    return []
-  return [resolve(dirname(configPath), directory)]
 }
