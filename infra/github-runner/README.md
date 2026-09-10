@@ -59,9 +59,9 @@ mints every runner with `self-hosted`, `linux`, and `x64` plus the pool labels.
 
 ## Hogwild installation
 
-Needs Docker and a GitHub token with repository administration access on every
-repository in `hogwild-runners.conf`, loaded through the unit's encrypted
-credentials.
+Needs Docker, `systemd-zram-generator`, and a GitHub token with repository
+administration access on every repository in `hogwild-runners.conf`, loaded
+through the unit's encrypted credentials.
 
 ```bash
 docker build --tag harlan-desktop-github-runner:2.336.0 infra/github-runner
@@ -74,12 +74,19 @@ sudo install -Dm644 infra/github-runner/hogwild-runners.conf /var/lib/github-run
 sudo install -Dm644 infra/github-runner/hogwild-github-runner.service /etc/systemd/system/hogwild-github-runner.service
 sudo install -Dm644 infra/github-runner/hogwild-logind.conf /etc/systemd/logind.conf.d/runner-safe-power.conf
 sudo install -Dm644 infra/github-runner/hogwild-tmp.conf /etc/tmpfiles.d/runner-tmp.conf
+sudo install -Dm644 infra/github-runner/hogwild-zram-generator.conf /etc/systemd/zram-generator.conf
 sudo install -Dm755 infra/github-runner/hogwild-safe-poweroff /usr/local/sbin/hogwild-safe-poweroff
+sudo systemctl mask tmp.mount
 sudo systemctl daemon-reload
+sudo systemctl restart systemd-zram-setup@zram0.service
 sudo systemd-tmpfiles --clean
 sudo systemctl kill --signal HUP systemd-logind
 sudo systemctl restart hogwild-github-runner.service
 ```
+
+Ubuntu mounts `/tmp` as a tmpfs, so every file in it spends the pages the pools
+budget. Masking `tmp.mount` puts `/tmp` on the NVMe at the next boot. Until
+then `hogwild-tmp.conf` keeps the tmpfs small.
 
 Restart drains: running jobs finish first. Use `sudo hogwild-safe-poweroff` for a
 drained shutdown.
