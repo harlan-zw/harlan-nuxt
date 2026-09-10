@@ -18,8 +18,8 @@ if [[ "${GH_TOKEN:-}" != repository-token ]]; then
   exit 1
 fi
 printf '%s\n' "$*" >>"$TEST_CALLS/gh"
-if [[ "$*" == *registration-token* ]]; then
-  printf 'test-token\n'
+if [[ "$*" == *generate-jitconfig* ]]; then
+  printf 'test-jit-config\n'
 fi
 if [[ "$*" == *'actions/runs?status='* && -f "$TEST_CALLS/demand-unavailable" ]]; then
   exit 1
@@ -427,6 +427,45 @@ if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
 fi
 
 printf 'In-progress workflow demand passed.\n'
+
+# A just-in-time config fixes every label at mint time. `generate-jitconfig`
+# adds no default labels, so the supervisor has to send the image platform's
+# own. Workflows pin `runs-on: [self-hosted, linux, x64, <pool label>]`, so a
+# mint without the platform labels matches no job ever.
+begin_case 'Just-in-time config carries the platform labels'
+touch "$test_root/calls/queue-in-progress"
+
+set +e
+TEST_CALLS="$test_root/calls" \
+PATH="$test_root/bin:$PATH" \
+XDG_RUNTIME_DIR="$test_root/runtime" \
+CREDENTIALS_DIRECTORY="$test_root/credentials" \
+HARLAN_DESKTOP_RUNNER_CONFIG="$test_root/runners.conf" \
+HARLAN_DESKTOP_RUNNER_CPU_BUDGET=1 \
+HARLAN_DESKTOP_RUNNER_MEMORY_BUDGET_GIB=1 \
+HARLAN_DESKTOP_RUNNER_DEMAND_POLL_SECONDS=1 \
+HARLAN_DESKTOP_RUNNER_NOW_EPOCH=1787808600 \
+timeout --preserve-status --kill-after=1 2 ./infra/github-runner/supervisor >"$test_root/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 )) || [[ ! -s "$test_root/calls/burst" ]]; then
+  cat "$test_root/output"
+  cat "$test_root/calls/gh"
+  printf 'Expected polled demand to mint a just-in-time runner config.\n' >&2
+  exit 1
+fi
+
+mint_line="$(grep 'generate-jitconfig' "$test_root/calls/gh")"
+for label in self-hosted linux x64 harlan-desktop-ci; do
+  if [[ "$mint_line" != *"labels[]=$label"* ]]; then
+    printf '%s\n' "$mint_line"
+    printf 'Expected the minted runner to carry the %s label.\n' "$label" >&2
+    exit 1
+  fi
+done
+
+printf 'Just-in-time config carries the platform labels passed.\n'
 
 begin_case 'Closed pull request demand filtering'
 touch "$test_root/calls/queue-stale"
