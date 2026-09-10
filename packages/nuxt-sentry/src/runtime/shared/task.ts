@@ -44,6 +44,18 @@ export interface TaskFailureReport {
   context: { nitro_task: { name: string } }
 }
 
+/**
+ * Marks a task the wrapper already built. The module wraps every registered
+ * task at build time, and a site may also wrap one by hand, so the second
+ * wrapper must find the first and leave it alone, or one failure reports twice.
+ */
+const REPORTING = Symbol.for('@harlan-zw/nuxt-sentry:reporting-task')
+
+/** True for a task `withTaskReporting` already wrapped. */
+export function isReportingTask(task: TaskLike): boolean {
+  return REPORTING in task
+}
+
 /** Captures a task failure. Sentry's `captureException` shape, so the real one drops in. */
 export type CaptureTaskFailure = (report: TaskFailureReport) => void
 
@@ -75,12 +87,16 @@ export function describeTaskFailure(name: string, error: unknown): TaskFailureRe
  *
  * A capture that itself fails is ignored on purpose: losing the report is bad,
  * and replacing the task's real error with a reporting error is worse.
+ *
+ * Wrapping a wrapped task returns it unchanged, so one failure reports once.
  */
 export function withTaskReporting<Result>(
   task: TaskLike<Result>,
   capture: CaptureTaskFailure,
 ): ReportingTask<Result> {
-  return {
+  if (isReportingTask(task))
+    return task as ReportingTask<Result>
+  const wrapped: ReportingTask<Result> = {
     ...(task.meta ? { meta: task.meta } : {}),
     run: async (context) => {
       try {
@@ -98,4 +114,6 @@ export function withTaskReporting<Result>(
       }
     },
   }
+  Object.defineProperty(wrapped, REPORTING, { value: true, enumerable: false })
+  return wrapped
 }
