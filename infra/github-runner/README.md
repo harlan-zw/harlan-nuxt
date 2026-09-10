@@ -91,6 +91,24 @@ then `hogwild-tmp.conf` keeps the tmpfs small.
 Restart drains: running jobs finish first. Use `sudo hogwild-safe-poweroff` for a
 drained shutdown.
 
+### Firewall
+
+Containers resolve DNS through the host's AdGuard at `192.168.50.211:53`, set in
+`/etc/docker/daemon.json` under `dns`. ufw allows port 53 from the LAN only, and
+containers arrive from `172.17.0.0/16` on `docker0`. Without these rules ufw
+drops every lookup to the first nameserver, glibc waits 5 seconds before the
+second answers, and a parallel Nuxt build pushes undici past its 10 second
+connect timeout (2026-09-10, gscdump.com deploy failed on `fonts.gstatic.com`).
+
+```bash
+sudo ufw allow in on docker0 from 172.17.0.0/16 to 192.168.50.211 port 53 proto udp comment 'AdGuard DNS for runner containers'
+sudo ufw allow in on docker0 from 172.17.0.0/16 to 192.168.50.211 port 53 proto tcp comment 'AdGuard DNS for runner containers'
+```
+
+If the host IP or the resolver changes, update `daemon.json` and these rules
+together. A `[UFW BLOCK] IN=docker0 ... DPT=53` line in `journalctl -k` means
+they have drifted.
+
 ## Status
 
 On Hogwild the source of truth is the supervisor's `status.json`:
