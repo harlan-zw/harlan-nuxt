@@ -81,7 +81,9 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
     return 0
   }
   // Generated checks are imported only in Node. The server registry never enters this artifact.
-  const loaded = await import(pathToFileURL(artifact ?? resolve(rootDir, '.nuxt/checkin/external.mjs')).href) as { default: readonly Check<ExternalCheckEvent>[], options: ExternalOptions }
+  const locator = artifact ? null : await readState(resolve(rootDir, 'node_modules/.cache/nuxt-checkin/artifact.json'))
+  const locatedArtifact = typeof locator?.path === 'string' ? locator.path : resolve(rootDir, '.nuxt/checkin/external.mjs')
+  const loaded = await import(pathToFileURL(artifact ?? locatedArtifact).href) as { default: readonly Check<ExternalCheckEvent>[], options: ExternalOptions }
   const now = clock()
   const directory = loaded.options.save ? resolve(rootDir, env[loaded.options.save.dirEnv ?? ''] || loaded.options.save.dir) : undefined
   const statePath = directory && loaded.options.save?.stateFile ? resolve(directory, loaded.options.save.stateFile) : undefined
@@ -93,6 +95,8 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
       throw new Error('Saved check timestamp is invalid.')
     since = new Date(timestamp)
   }
+  if (since && since.getTime() > now.getTime())
+    throw new Error('Check start time is in the future.')
   const { report, exitCode } = await runExternalChecks(loaded.default, loaded.options, { rootDir, env, clock, now, since, previous })
   if (save) {
     if (!directory)

@@ -26,7 +26,10 @@ export async function bundleChecks(source: string, destination: string): Promise
         return resolved
       },
       async load(id) {
-        return id === entry ? source : readFile(id, 'utf8')
+        if (id === entry)
+          return source
+        const text = await readFile(id, 'utf8')
+        return id.endsWith('.json') ? `export default ${JSON.stringify(JSON.parse(text))}` : text
       },
       transform(code, id) {
         if (/\.[mc]?tsx?$/.test(id))

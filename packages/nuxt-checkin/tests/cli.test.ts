@@ -32,3 +32,13 @@ describe('shared CLI', () => {
     finally { await rm(root, { recursive: true }) }
   })
 })
+
+it('rejects a future collection window before any check executes', async () => {
+  const { root, artifact } = await fixture('{_tag:\'Pass\',evidence:{}}')
+  try {
+    await expect(runCli(['--artifact', artifact, '--since', '2026-09-16T00:00:00Z'], { cwd: root, clock: () => new Date('2026-09-15T00:00:00Z'), stdout: () => {
+      throw new Error('Unexpected output')
+    } })).rejects.toThrow('Check start time is in the future.')
+  }
+  finally { await rm(root, { recursive: true }) }
+})

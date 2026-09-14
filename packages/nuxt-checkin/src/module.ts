@@ -1,6 +1,6 @@
 import type { CheckRegistration, CheckRegistry, ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { addServerTemplate, addTypeTemplate, createResolver, defineNuxtModule, getLayerDirectories, resolveFiles } from '@nuxt/kit'
 import { isAbsolute, resolve } from 'pathe'
@@ -67,6 +67,11 @@ export default defineNuxtModule<ModuleOptions>({
       await mkdir(directory, { recursive: true })
       const destination = resolve(directory, `${execution}.mjs`)
       await bundleChecks(`${await generate(execution)}\nexport const options = ${JSON.stringify(execution === 'external' ? options.external ?? { required: [] } : options.build ?? {})}\n`, destination)
+      if (execution === 'external') {
+        const cache = resolve(nuxt.options.rootDir, 'node_modules/.cache/nuxt-checkin')
+        await mkdir(cache, { recursive: true })
+        await writeFile(resolve(cache, 'artifact.json'), JSON.stringify({ path: destination }))
+      }
       return destination
     }
     nuxt.hook('ready', async () => {
