@@ -1,3 +1,4 @@
+import type {} from '@harlan-zw/nuxt-checkin'
 import type { Nuxt } from '@nuxt/schema'
 import type { TaskRegistration } from './build/tasks'
 import type { SentryRuntimeConfig } from './runtime/shared/types'
@@ -92,6 +93,10 @@ export default defineNuxtModule<ModuleOptions>({
       return
 
     const resolver = createResolver(import.meta.url)
+    nuxt.hook('checkin:register', (registry) => {
+      for (const check of options.checks ?? [])
+        registry.add({ id: check.id, handler: resolver.resolve('./checks'), options: { ...check } })
+    })
     const env = {
       nodeEnv: process.env.NODE_ENV,
       sentryRelease: process.env.SENTRY_RELEASE,

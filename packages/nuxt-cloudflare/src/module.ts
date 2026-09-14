@@ -1,9 +1,11 @@
+import type {} from '@harlan-zw/nuxt-checkin'
 import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
+import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, defineNuxtModule, hasNuxtModule, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, createResolver, defineNuxtModule, hasNuxtModule, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -22,6 +24,9 @@ import {
 } from './wrangler'
 
 export interface ModuleOptions {
+  /** Register checks through the public check-in API. */
+  checks?: D1CheckOptions[]
+
   bindingTypes?: boolean | {
     /** Shared cache directory. Set false to generate binding types every time. */
     cacheDir?: false | string
@@ -286,6 +291,13 @@ async function auditGeneratedWranglerConfig(
 export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void {
   if (!options.enabled)
     return
+  if (options.checks?.length) {
+    const checkResolver = createResolver(import.meta.url)
+    nuxt.hook('checkin:register', (registry) => {
+      for (const check of options.checks ?? [])
+        registry.add({ id: check.id, handler: checkResolver.resolve('./checks'), options: { ...check } })
+    })
+  }
 
   const configure = () => configureNitroCloudflare(
     nuxt.options.nitro as NitroCloudflareShape,

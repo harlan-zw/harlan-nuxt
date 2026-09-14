@@ -1,0 +1,14 @@
+{
+  "name": "checkin-test-fixture",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev:prepare": "pnpm --filter @harlan-zw/nuxt-cf-jobs --filter @harlan-zw/nuxt-cloudflare --filter @harlan-zw/nuxt-sentry build"
+  },
+  "dependencies": {
+    "@harlan-zw/nuxt-cf-jobs": "workspace:*",
+    "@harlan-zw/nuxt-checkin": "workspace:*",
+    "@harlan-zw/nuxt-cloudflare": "workspace:*",
+    "@harlan-zw/nuxt-sentry": "workspace:*"
+  }
+}

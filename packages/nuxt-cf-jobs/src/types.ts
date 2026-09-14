@@ -1,3 +1,5 @@
+import type { QueueCheckOptions } from './checks'
+
 export interface QueueBindingOptions {
   binding: string
   queueName?: string
@@ -76,6 +78,9 @@ export interface ReconcileOptions {
 }
 
 export interface ModuleOptions {
+  /** Register checks through the public check-in API. */
+  checks?: QueueCheckOptions[]
+
   /**
    * Logical queue name -> Cloudflare env binding name.
    *

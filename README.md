@@ -21,6 +21,7 @@ Every package here publishes to npm with provenance. Versions and release notes 
 
 | Package | What it does |
 | --- | --- |
+| [`@harlan-zw/nuxt-checkin`](./packages/nuxt-checkin) | Deterministic server checks from site files and existing modules. |
 | [`@harlan-zw/nuxt-cf-jobs`](./packages/nuxt-cf-jobs) | ☁️ Typed Cloudflare Queue jobs with file-based definitions, optional D1 durability, scheduled tasks, and an operations CLI. |
 | [`@harlan-zw/nuxt-use-query`](./packages/nuxt-use-query) | 🔄 Nuxt-native queries, mutations, and subscriptions with SWR, invalidation, polling, and typed RPC contracts. |
 | [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |

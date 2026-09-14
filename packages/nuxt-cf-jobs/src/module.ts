@@ -1,3 +1,4 @@
+import type {} from '@harlan-zw/nuxt-checkin'
 import type { Nuxt } from '@nuxt/schema'
 import type { RegistrySourcesContext } from './build/registry'
 import type { DiscoveredTask } from './tasks'
@@ -94,6 +95,13 @@ export default defineNuxtModule<ModuleOptions>().with({
     const resolver = createResolver(import.meta.url)
     const queues = options.queues as ModuleOptions['queues']
     const hasQueues = Object.keys(queues).length > 0
+    nuxt.hook('checkin:register', (registry) => {
+      for (const check of options.checks ?? []) {
+        if (!(check.queue in queues))
+          throw new Error(`Check queue is not configured: ${check.queue}`)
+        registry.add({ id: check.id, handler: resolver.resolve('./checks'), options: { ...check } })
+      }
+    })
     const broadcast = resolveBroadcastOptions(options.broadcast)
     const reconcile = resolveReconcileOptions(options.reconcile)
 

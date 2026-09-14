@@ -51,6 +51,10 @@
     "./cache": {
       "types": "./dist/cache.d.mts",
       "import": "./dist/cache.mjs"
+    },
+    "./checks": {
+      "types": "./dist/checks.d.mts",
+      "import": "./dist/checks.mjs"
     }
   },
   "main": "./dist/module.mjs",
@@ -74,6 +78,9 @@
       ],
       "wrangler": [
         "dist/wrangler.d.mts"
+      ],
+      "checks": [
+        "dist/checks.d.mts"
       ]
     }
   },
@@ -100,8 +107,14 @@
     "test:contract": "nuxt build tests/fixtures/cache-contract && vitest run tests/cache-contract.nitro.test.ts"
   },
   "peerDependencies": {
+    "@harlan-zw/nuxt-checkin": "^0.1.0",
     "nuxt": ">=4.5.0 <6.0.0",
     "wrangler": ">=4.120.0 <5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@harlan-zw/nuxt-checkin": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
@@ -117,6 +130,7 @@
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@harlan-zw/nuxt-checkin": "workspace:*",
     "@harlan-zw/nuxt-wide-events": "workspace:^",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",

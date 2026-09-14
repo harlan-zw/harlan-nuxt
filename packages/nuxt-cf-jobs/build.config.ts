@@ -4,6 +4,7 @@ export default defineBuildConfig({
   failOnWarn: false,
   entries: [
     'src/module',
+    'src/checks',
     'src/cli/index',
   ],
   externals: [
