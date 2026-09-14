@@ -62,6 +62,7 @@ export interface HttpCheckOptions {
   id: string
   url: string
   status?: number
+  attempts?: 1 | 2
   includes?: string
   maxBytes?: number
 }
@@ -108,14 +109,31 @@ export async function readBoundedResponseText(response: Response, maxBytes: numb
 }
 export function defineHttpCheck(options: HttpCheckOptions, dependencies: RequestDependencies = {}): Check<ExternalCheckEvent> {
   const url = checkUrl(options.url)
+  const attempts = options.attempts ?? 1
+  if (attempts !== 1 && attempts !== 2)
+    throw new TypeError('HTTP check attempts must be one or two.')
   return defineExternalCheck({ id: options.id, async run(context) {
-    const response = await (dependencies.request ?? fetch)(url, { signal: context.signal, redirect: 'error' })
-    if (response.status !== (options.status ?? 200)) {
-      await response.body?.cancel()
-      return fail('HTTP status does not match.', { status: response.status })
+    let firstFailure: string | undefined
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const response = await (dependencies.request ?? fetch)(url, { signal: context.signal, redirect: 'error' }).catch(() => undefined)
+      if (!response) {
+        // Network failure becomes explicit unavailable coverage after the bounded retry.
+        firstFailure ??= 'HTTP request failed.'
+        if (context.signal.aborted || attempt + 1 === attempts)
+          return unavailable('HTTP request failed.')
+        continue
+      }
+      if (response.status !== (options.status ?? 200)) {
+        await response.body?.cancel()
+        firstFailure ??= `HTTP ${response.status}`
+        if (attempt + 1 === attempts)
+          return fail('HTTP status does not match.', { status: response.status, firstFailure })
+        continue
+      }
+      const body = await readBoundedResponseText(response, options.maxBytes ?? 2_097_152)
+      return options.includes && !body.includes(options.includes) ? fail('HTTP response is missing expected content.') : pass({ status: response.status, ...(firstFailure ? { firstFailure } : {}) })
     }
-    const body = await readBoundedResponseText(response, options.maxBytes ?? 2_097_152)
-    return options.includes && !body.includes(options.includes) ? fail('HTTP response is missing expected content.') : pass({ status: response.status })
+    return unavailable('HTTP request did not complete.')
   } })
 }
 export function defineReportCheck(options: ReportCheckOptions, dependencies: RequestDependencies = {}): Check<ExternalCheckEvent> {

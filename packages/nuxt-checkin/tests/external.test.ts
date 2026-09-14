@@ -22,3 +22,11 @@ describe('external checks', () => {
     expect(result.exitCode).toBe(2)
   })
 })
+
+it('records a recovered HTTP failure after one retry', async () => {
+  let attempts = 0
+  const check = defineHttpCheck({ id: 'home', url: 'https://example.com', attempts: 2 }, { request: (async () => new Response('ok', { status: ++attempts === 1 ? 503 : 200 })) as typeof fetch })
+  const { report } = await runExternalChecks([check], { required: ['home'] })
+  expect(report.results[0]?.result).toEqual({ _tag: 'Pass', evidence: { status: 200, firstFailure: 'HTTP 503' } })
+  expect(attempts).toBe(2)
+})

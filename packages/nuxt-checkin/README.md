@@ -293,6 +293,7 @@ Omit `tokenEnv` for public reports. Use `authHeader` for Cookie or x-api-key aut
 Expected deployment and required IDs remain independent of the received report.
 
 Use `defineHttpCheck` for a status and optional text check.
+Set `attempts: 2` for one retry. Recovered failures remain in result evidence.
 Use `defineExternalCheck` for custom collections.
 Its context adds `rootDir`, runtime `env`, `since`, `previous`, and `clock()` to the shared check context.
 Use `runCheckCommand` for bounded, cancellable subprocess collections.
@@ -309,7 +310,8 @@ pnpm exec nuxt-checkin --since 2026-09-15T00:00:00Z
 Prepare discovers checks without running build checks or requiring a production build.
 It writes `.nuxt/checkin/external.mjs`, a Node artifact containing only external checks and public configuration.
 Nuxt aliases are rejected in Node checks. Server handlers remain in the server virtual module.
-Use `--artifact path` when Nuxt uses a custom build directory.
+Prepare records custom build directories for later CLI runs.
+Use `--artifact path` to select an artifact explicitly.
 Build checks run during `build:before`. Warnings, failures, or incomplete coverage stop the build.
 
 The CLI prints the shared JSON report.
