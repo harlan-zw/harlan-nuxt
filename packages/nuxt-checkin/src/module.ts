@@ -20,43 +20,47 @@ export default defineNuxtModule<ModuleOptions>({
     const directories = options.dirs
       ? options.dirs.map(dir => resolve(nuxt.options.rootDir, dir))
       : getLayerDirectories(nuxt).map(layer => resolve(layer.server, 'checks'))
+    const generate = async () => {
+      const sources = [...new Set((await Promise.all(directories.filter(existsSync).map(dir => resolveFiles(dir, '**/*.{ts,js,mts,mjs}', {
+        ignore: ['**/_*.*', '**/*.d.{ts,mts}', '**/*.test.*', '**/*.spec.*'],
+      })))).flat())].sort()
+      const ids = new Set<string>()
+      const claim = (id: string) => {
+        if (typeof id !== 'string' || !/^[\w.-]+$/.test(id))
+          throw new Error('Module check requires a valid ID.')
+        if (ids.has(id))
+          throw new Error(`Duplicate check ID: ${id}`)
+        ids.add(id)
+      }
+      const imports = [`import { defineChecks } from ${JSON.stringify(server)}`]
+      const entries: string[] = []
+      for (const [i, file] of sources.entries()) {
+        claim(await readCheckId(file))
+        imports.push(`import check${i} from ${JSON.stringify(file)}`)
+        entries.push(`check${i}`)
+      }
+      const registrations: CheckRegistration[] = []
+      await nuxt.callHook('checkin:register', { add: registration => registrations.push(registration) })
+      for (const [i, registration] of registrations.entries()) {
+        claim(registration.id)
+        if (typeof registration.handler !== 'string' || !isAbsolute(registration.handler))
+          throw new Error('Module check handler must be an absolute path.')
+        const name = `moduleCheck${i}`
+        imports.push(`import ${name} from ${JSON.stringify(registration.handler)}`)
+        entries.push(`${name}(${JSON.stringify({ ...registration.options, id: registration.id }, (_key, value: unknown) => {
+          if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint' || (typeof value === 'number' && !Number.isFinite(value)))
+            throw new Error('Module check options must contain JSON values.')
+          return value
+        })})`)
+      }
+      return `${imports.join('\n')}\nexport default defineChecks([${entries.join(', ')}])\n`
+    }
+    nuxt.hook('build:before', async () => {
+      await generate()
+    })
     addServerTemplate({
       filename: '#checkin/checks',
-      getContents: async () => {
-        const sources = [...new Set((await Promise.all(directories.filter(existsSync).map(dir => resolveFiles(dir, '**/*.{ts,js,mts,mjs}', {
-          ignore: ['**/_*.*', '**/*.d.{ts,mts}', '**/*.test.*', '**/*.spec.*'],
-        })))).flat())].sort()
-        const ids = new Set<string>()
-        const claim = (id: string) => {
-          if (typeof id !== 'string' || !/^[\w.-]+$/.test(id))
-            throw new Error('Module check requires a valid ID.')
-          if (ids.has(id))
-            throw new Error(`Duplicate check ID: ${id}`)
-          ids.add(id)
-        }
-        const imports = [`import { defineChecks } from ${JSON.stringify(server)}`]
-        const entries: string[] = []
-        for (const [i, file] of sources.entries()) {
-          claim(await readCheckId(file))
-          imports.push(`import check${i} from ${JSON.stringify(file)}`)
-          entries.push(`check${i}`)
-        }
-        const registrations: CheckRegistration[] = []
-        await nuxt.callHook('checkin:register', { add: registration => registrations.push(registration) })
-        for (const [i, registration] of registrations.entries()) {
-          claim(registration.id)
-          if (typeof registration.handler !== 'string' || !isAbsolute(registration.handler))
-            throw new Error('Module check handler must be an absolute path.')
-          const name = `moduleCheck${i}`
-          imports.push(`import ${name} from ${JSON.stringify(registration.handler)}`)
-          entries.push(`${name}(${JSON.stringify({ ...registration.options, id: registration.id }, (_key, value: unknown) => {
-            if (typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint' || (typeof value === 'number' && !Number.isFinite(value)))
-              throw new Error('Module check options must contain JSON values.')
-            return value
-          })})`)
-        }
-        return `${imports.join('\n')}\nexport default defineChecks([${entries.join(', ')}])\n`
-      },
+      getContents: generate,
     })
     addTypeTemplate({
       filename: 'checkin/types.d.ts',

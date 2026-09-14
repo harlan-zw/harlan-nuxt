@@ -12,8 +12,7 @@ describe('module registration errors', () => {
     const nuxt = await loadNuxt({ cwd: rootDir, dev: false })
     try {
       nuxt.hook('checkin:register', registry => registry.add({ id, handler: '/not-executed.ts', options }))
-      const nitro = (nuxt.options as unknown as { nitro: { virtual: Record<string, () => Promise<string>> } }).nitro
-      await expect(nitro.virtual['#checkin/checks']!()).rejects.toThrow(error)
+      await expect(nuxt.callHook('build:before')).rejects.toThrow(error)
     }
     finally {
       await nuxt.close()
