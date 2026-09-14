@@ -1,8 +1,8 @@
 {
-  "name": "@harlan-zw/nuxt-sentry",
+  "name": "@harlan-zw/nuxt-checkin",
   "type": "module",
-  "version": "0.1.4",
-  "description": "One Sentry Report Policy for Nuxt: registration, gating, drop rules, and redaction.",
+  "version": "0.1.0",
+  "description": "Deterministic server checks discovered from Nuxt sites and modules.",
   "author": {
     "name": "Harlan Wilton",
     "email": "harlan@harlanzw.com",
@@ -10,11 +10,11 @@
   },
   "license": "MIT",
   "funding": "https://github.com/sponsors/harlan-zw",
-  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-sentry#readme",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/nuxt-checkin#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
-    "directory": "packages/nuxt-sentry"
+    "directory": "packages/nuxt-checkin"
   },
   "bugs": {
     "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
@@ -31,14 +31,6 @@
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
-    },
-    "./server/task": {
-      "types": "./dist/runtime/server/task.d.ts",
-      "import": "./dist/runtime/server/task.js"
-    },
-    "./checks": {
-      "types": "./dist/checks.d.mts",
-      "import": "./dist/checks.mjs"
     }
   },
   "main": "./dist/module.mjs",
@@ -47,12 +39,6 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
-      ],
-      "server/task": [
-        "dist/runtime/server/task.d.ts"
-      ],
-      "checks": [
-        "dist/checks.d.mts"
       ]
     }
   },
@@ -64,7 +50,7 @@
   },
   "scripts": {
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
-    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "dev:prepare": "pnpm build",
     "prepack": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -74,31 +60,19 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "@harlan-zw/nuxt-checkin": "^0.1.0",
-    "@sentry/cloudflare": "catalog:",
-    "@sentry/nuxt": "catalog:",
     "nuxt": ">=4.5.0 <6.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@harlan-zw/nuxt-checkin": {
-      "optional": true
-    },
-    "@sentry/cloudflare": {
-      "optional": true
-    }
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
-    "pathe": "catalog:"
+    "pathe": "catalog:",
+    "typescript": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
-    "@harlan-zw/nuxt-checkin": "workspace:*",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/schema": "catalog:",
-    "@sentry/cloudflare": "catalog:",
-    "@sentry/nuxt": "catalog:",
+    "@nuxt/test-utils": "catalog:",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "h3": "catalog:",

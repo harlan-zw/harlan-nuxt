@@ -6,6 +6,8 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 
 | Term | Export path | Stability | Consumers | Customer word |
 | --- | --- | --- | --- | --- |
+| Check | `@harlan-zw/nuxt-checkin/server` | planned | site and module server code | "check" |
+| Check Result | `@harlan-zw/nuxt-checkin/server` | planned | routes and external runners | "result" |
 | Queue Job | `@harlan-zw/nuxt-cf-jobs` | published | Nuxt server code | "job" |
 | Query | `@harlan-zw/nuxt-use-query/query` | published | Nuxt app code | "query" |
 | Mutation | `@harlan-zw/nuxt-use-query/mutation` | published | Nuxt app code | "mutation" |
@@ -30,6 +32,20 @@ Collisions
 `Event` belongs to `Wide Event` and `Domain Event`. Sentry's own word for a captured error is "event", so `nuxt-sentry` never carries that word into its API. It says `Error Report`.
 
 ## Terms
+
+### Check
+
+**Is:** a named deterministic observation of an expected application condition.
+**Use for:** file discovery, module contributions, execution, and thresholds.
+**Never:** evaluation, diagnostic, probe as the public concept.
+**Casing:** `Check` in headings, `check` in prose, and `Check` in types.
+
+### Check Result
+
+**Is:** one Check's Pass, Warn, Fail, Unavailable, or Skipped outcome with evidence or a reason.
+**Use for:** runner output and severity/coverage decisions.
+**Never:** Error Report, alert, finding as the public concept.
+**Casing:** `Check Result` in headings, `result` in prose, and `CheckResult` in types.
 
 ### Wide Event
 

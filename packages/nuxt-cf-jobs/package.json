@@ -76,6 +76,10 @@
       "types": "./dist/runtime/server/testing.d.ts",
       "import": "./dist/runtime/server/testing.js",
       "default": "./dist/runtime/server/testing.js"
+    },
+    "./checks": {
+      "types": "./dist/checks.d.mts",
+      "import": "./dist/checks.mjs"
     }
   },
   "main": "./dist/module.mjs",
@@ -108,6 +112,9 @@
       ],
       "testing": [
         "dist/runtime/server/testing.d.ts"
+      ],
+      "checks": [
+        "dist/checks.d.mts"
       ]
     }
   },
@@ -136,11 +143,15 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
+    "@harlan-zw/nuxt-checkin": "^0.1.0",
     "@sentry/cloudflare": "catalog:",
     "nuxt": ">=4.5.0 <6.0.0",
     "vite": "^8.0.0"
   },
   "peerDependenciesMeta": {
+    "@harlan-zw/nuxt-checkin": {
+      "optional": true
+    },
     "@sentry/cloudflare": {
       "optional": true
     }
@@ -156,6 +167,7 @@
     "@antfu/eslint-config": "catalog:",
     "@arethetypeswrong/cli": "catalog:",
     "@cloudflare/workers-types": "catalog:",
+    "@harlan-zw/nuxt-checkin": "workspace:*",
     "@nuxt/module-builder": "catalog:",
     "@nuxt/test-utils": "catalog:",
     "@sentry/cloudflare": "catalog:",

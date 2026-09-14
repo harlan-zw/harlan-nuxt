@@ -1,9 +1,13 @@
 import type { PolicyOptions } from './build/policy'
 import type { ReportGate } from './build/target'
 import type { WideEventsOption } from './build/wide-events'
+import type { SentryCheckOptions } from './checks'
 import type { DataCollection } from './runtime/shared/types'
 
 export interface ModuleOptions {
+  /** Register checks through the public check-in API. */
+  checks?: SentryCheckOptions[]
+
   /**
    * Register anything at all. Set false to remove the module without editing
    * the rest of the config.
