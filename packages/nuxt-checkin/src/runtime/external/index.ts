@@ -159,8 +159,8 @@ export function defineReportCheck(options: ReportCheckOptions, dependencies: Req
 export function runCheckCommand(context: Pick<ExternalCheckContext, 'rootDir' | 'signal' | 'env'>, command: string, args: readonly string[], options: { maxBytes?: number } = {}): Promise<{ _tag: 'Ok', stdout: string, stderr: string } | { _tag: 'Err', reason: string }> {
   return new Promise((resolve) => {
     const child = spawn(command, [...args], { cwd: context.rootDir, env: context.env, signal: context.signal, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
     let size = 0
     let exceeded = false
     const append = (chunk: Buffer, output: 'stdout' | 'stderr') => {
@@ -171,13 +171,13 @@ export function runCheckCommand(context: Pick<ExternalCheckContext, 'rootDir' | 
         return
       }
       if (output === 'stdout')
-        stdout += chunk.toString()
-      else stderr += chunk.toString()
+        stdout.push(chunk)
+      else stderr.push(chunk)
     }
     child.stdout.on('data', (chunk: Buffer) => append(chunk, 'stdout'))
     child.stderr.on('data', (chunk: Buffer) => append(chunk, 'stderr'))
     child.on('error', () => resolve({ _tag: 'Err', reason: 'Check command could not complete.' }))
-    child.on('close', code => resolve(exceeded ? { _tag: 'Err', reason: 'Check command exceeded its output limit.' } : code === 0 ? { _tag: 'Ok', stdout, stderr } : { _tag: 'Err', reason: 'Check command failed.' }))
+    child.on('close', code => resolve(exceeded ? { _tag: 'Err', reason: 'Check command exceeded its output limit.' } : code === 0 ? { _tag: 'Ok', stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') } : { _tag: 'Err', reason: 'Check command failed.' }))
   })
 }
 

@@ -1,5 +1,6 @@
+import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { defineHttpCheck, defineReportCheck, runExternalChecks } from '../src/runtime/external'
+import { defineHttpCheck, defineReportCheck, runCheckCommand, runExternalChecks } from '../src/runtime/external'
 import { runChecks } from '../src/runtime/server'
 
 describe('external checks', () => {
@@ -29,4 +30,13 @@ it('records a recovered HTTP failure after one retry', async () => {
   const { report } = await runExternalChecks([check], { required: ['home'] })
   expect(report.results[0]?.result).toEqual({ _tag: 'Pass', evidence: { status: 200, firstFailure: 'HTTP 503' } })
   expect(attempts).toBe(2)
+})
+
+it('preserves UTF-8 across subprocess output chunks', async () => {
+  const controller = new AbortController()
+  const result = await runCheckCommand({ rootDir: process.cwd(), env: process.env, signal: controller.signal }, process.execPath, [
+    '-e',
+    'const bytes=Buffer.from(\'😀\');process.stdout.write(bytes.subarray(0,2));setTimeout(()=>process.stdout.write(bytes.subarray(2)),20)',
+  ])
+  expect(result).toEqual({ _tag: 'Ok', stdout: '😀', stderr: '' })
 })
