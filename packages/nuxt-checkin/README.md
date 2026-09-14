@@ -248,6 +248,8 @@ The module also scans `checks/external` and `checks/build` in every layer.
 Each file exports one check with a literal ID.
 Use `execution: 'external'` or `execution: 'build'` for module registrations.
 Server registrations retain the default execution context.
+Discovered `.ts` and `.mts` build and external checks join Nuxt’s Node type project.
+Legacy Nuxt type configuration includes them too. JavaScript checking follows the app’s existing policy.
 IDs must be unique within each execution context.
 
 ```ts

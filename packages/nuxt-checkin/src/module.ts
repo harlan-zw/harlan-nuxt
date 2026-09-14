@@ -26,11 +26,19 @@ export default defineNuxtModule<ModuleOptions>({
       : getLayerDirectories(nuxt).map(layer => resolve(layer.server, 'checks'))
     const externalDirectories = getLayerDirectories(nuxt).map(layer => resolve(layer.root, 'checks/external'))
     const buildDirectories = getLayerDirectories(nuxt).map(layer => resolve(layer.root, 'checks/build'))
+    const discover = async (selectedDirectories: readonly string[]) => [...new Set((await Promise.all(selectedDirectories.filter(existsSync).map(dir => resolveFiles(dir, '**/*.{ts,js,mts,mjs}', {
+      ignore: ['**/_*.*', '**/*.d.{ts,mts}', '**/*.test.*', '**/*.spec.*'],
+    })))).flat())].sort()
+    nuxt.hook('prepare:types', async ({ nodeReferences }) => {
+      // References include source checks in both Node and legacy projects, even for installed Nuxt layers.
+      for (const file of await discover([...externalDirectories, ...buildDirectories])) {
+        if (/\.m?ts$/.test(file))
+          nodeReferences.push({ path: file })
+      }
+    })
     const generate = async (execution: 'server' | 'build' | 'external' = 'server') => {
       const selectedDirectories = execution === 'server' ? directories : execution === 'external' ? externalDirectories : buildDirectories
-      const sources = [...new Set((await Promise.all(selectedDirectories.filter(existsSync).map(dir => resolveFiles(dir, '**/*.{ts,js,mts,mjs}', {
-        ignore: ['**/_*.*', '**/*.d.{ts,mts}', '**/*.test.*', '**/*.spec.*'],
-      })))).flat())].sort()
+      const sources = await discover(selectedDirectories)
       const ids = new Set<string>()
       const claim = (id: string) => {
         if (typeof id !== 'string' || !/^[\w.-]+$/.test(id))
