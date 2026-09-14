@@ -283,6 +283,9 @@ importers:
       pathe:
         specifier: 'catalog:'
         version: 2.0.3
+      rollup:
+        specifier: 'catalog:'
+        version: 4.62.4
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

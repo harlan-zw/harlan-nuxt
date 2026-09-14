@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-checkin",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deterministic server checks discovered from Nuxt sites and modules.",
   "author": {
     "name": "Harlan Wilton",
@@ -31,6 +31,10 @@
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
+    },
+    "./external": {
+      "types": "./dist/runtime/external/index.d.ts",
+      "import": "./dist/runtime/external/index.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -39,8 +43,14 @@
     "*": {
       "server": [
         "dist/runtime/server/index.d.ts"
+      ],
+      "external": [
+        "dist/runtime/external/index.d.ts"
       ]
     }
+  },
+  "bin": {
+    "nuxt-checkin": "./dist/cli/index.mjs"
   },
   "files": [
     "dist"
@@ -65,6 +75,7 @@
   "dependencies": {
     "@nuxt/kit": "catalog:",
     "pathe": "catalog:",
+    "rollup": "catalog:",
     "typescript": "catalog:"
   },
   "devDependencies": {

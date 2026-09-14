@@ -241,3 +241,116 @@ An identity is optional for local `runChecks` calls; external validation always 
 Run this validation from an independent schedule to detect a site check-in that stopped running.
 Retain the previous complete report with its original timestamp when a new run fails.
 This package does not install a scheduler, persistence service, or public route.
+
+## Shared CLI
+
+The module also scans `checks/external` and `checks/build` in every layer.
+Each file exports one check with a literal ID.
+Use `execution: 'external'` or `execution: 'build'` for module registrations.
+Server registrations retain the default execution context.
+Discovered `.ts` and `.mts` build and external checks join Nuxt’s Node type project.
+Legacy Nuxt type configuration includes them too. JavaScript checking follows the app’s existing policy.
+IDs must be unique within each execution context.
+
+```ts
+export default defineNuxtConfig({
+  modules: ['@harlan-zw/nuxt-checkin'],
+  checkin: {
+    external: {
+      required: ['site.report', 'site.home', 'sentry.site'],
+      credentials: { sentry: 'SENTRY_AUTH_TOKEN' },
+      timeoutMs: 30_000,
+      totalTimeoutMs: 45_000,
+      save: {
+        dir: '.checkin',
+        stateFile: 'state.json',
+        timestampKey: 'lastRun',
+        baseline: 'daily',
+      },
+    },
+    build: { required: ['content.ready'] },
+  },
+})
+```
+
+```ts
+// checks/external/report.ts
+import { defineReportCheck } from '@harlan-zw/nuxt-checkin/external'
+
+export default defineReportCheck({
+  id: 'site.report',
+  url: 'https://example.com/api/internal/checkin',
+  site: 'example.com',
+  environment: 'production',
+  deploymentEnv: 'CHECKIN_DEPLOYMENT',
+  tokenEnv: 'CHECKIN_TOKEN',
+  required: ['catalog.freshness'],
+  maxAgeMs: 300_000,
+})
+```
+
+The report helper rejects redirects and bounds response bytes.
+It reads the validation clock after receiving the response body.
+Omit `tokenEnv` for public reports. Use `authHeader` for Cookie or x-api-key authentication.
+Expected deployment and required IDs remain independent of the received report.
+
+Use `defineHttpCheck` for a status and optional text check.
+Set `attempts: 2` for one retry. Recovered failures remain in result evidence.
+Use `defineExternalCheck` for custom collections.
+Its context adds `rootDir`, runtime `env`, `since`, `previous`, and `clock()` to the shared check context.
+Use `runCheckCommand` for bounded, cancellable subprocess collections.
+Checks must use asynchronous operations and honor `signal`.
+Synchronous work can block Node timers.
+
+```sh
+pnpm exec nuxt-checkin prepare
+pnpm exec nuxt-checkin
+pnpm exec nuxt-checkin --save
+pnpm exec nuxt-checkin --since 2026-09-15T00:00:00Z
+```
+
+Prepare discovers checks without running build checks or requiring a production build.
+It writes `.nuxt/checkin/external.mjs`, a Node artifact containing only external checks and public configuration.
+Nuxt aliases are rejected in Node checks. Server handlers remain in the server virtual module.
+Prepare records custom build directories for later CLI runs.
+Use `--artifact path` to select an artifact explicitly.
+Build checks run during `build:before`. Warnings, failures, or incomplete coverage stop the build.
+
+The CLI prints the shared JSON report.
+Exit codes are `0` for complete passing coverage, `1` for warnings or failures, and `2` for incomplete coverage.
+Archives require `--save`. Files use mode `0600`; new directories use mode `0700`.
+Every attempt receives a unique archive file.
+A configured state file advances only after complete passing coverage.
+The daily policy preserves the first successful baseline for each UTC day.
+Omit `stateFile` for archives without baseline state.
+`dirEnv` can override the archive directory at execution time.
+
+Credentials resolve at execution time. Configuration contains environment names, never credential values.
+For file fallback, use `{ env: 'SENTRY_AUTH_TOKEN', files: [{ path: '~/.sentryclirc', section: 'auth', key: 'token' }] }`.
+Files are read in order when the environment credential is absent.
+Missing files are ignored. Other read failures remain visible.
+
+```mermaid
+flowchart LR
+  definitions[Site and module checks] --> discovery[Build discovery]
+  discovery --> build[Build checks]
+  discovery --> server[Server virtual module]
+  discovery --> external[Node external artifact]
+  server --> route[Authenticated report route]
+  external --> cli[Shared CLI]
+  cli --> route
+  cli --> providers[Provider APIs]
+  cli --> report[JSON report and optional archive]
+```
+
+
+## Pending stable release
+
+This branch prepares Check-in 0.2.0 and compatible integration releases:
+Cloudflare 0.4.2, Sentry 0.1.6, and Queue Jobs 0.2.4.
+These integration versions accept both Check-in 0.1 and 0.2, including the current 0.2 prerelease.
+
+Draft consumers currently use Check-in 0.2.0-alpha.0 with the previously released integrations.
+Their exact dependency override prevents pnpm from installing another Check-in version for an integration peer.
+After upgrading the integrations you use, remove that temporary override and use Check-in 0.2.0.
+The published alpha archive remains unchanged.
