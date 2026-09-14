@@ -948,6 +948,27 @@ describe('useNuxtRpcQuery lenient response validation', () => {
   })
 })
 
+describe('zod error recognition', () => {
+  it('tags a thrown zod error as a validation failure with its issues', () => {
+    const parsed = z.object({ id: z.string() }).safeParse({ id: 1 })
+    if (parsed.success)
+      throw new Error('fixture must fail')
+
+    const n = normalizeNuxtRpcError(parsed.error, 'request-validation')
+
+    expect(n).toMatchObject({
+      type: 'request-validation',
+      issues: [expect.objectContaining({ path: 'id' })],
+    })
+  })
+
+  it('does not tag an unrelated error carrying an issues array as validation', () => {
+    const e = Object.assign(new Error('upstream'), { issues: [] })
+
+    expect(normalizeNuxtRpcError(e).type).not.toBe('response-validation')
+  })
+})
+
 describe('transient transport errors', () => {
   it('tags an ofetch timeout (cause.name === TimeoutError) as timeout', () => {
     const timeoutCause = Object.assign(new Error('aborted due to timeout'), { name: 'TimeoutError', code: 23 })
