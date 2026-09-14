@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags:
+      - 'nuxt-checkin-v*'
       - 'nuxt-cf-jobs-v*'
       - 'nuxt-use-query-v*'
       - 'nuxt-domain-events-v*'
@@ -46,6 +47,10 @@ jobs:
       - run: pnpm test:pack
 
       - run: pnpm test:attw
+
+      - name: Publish nuxt-checkin
+        if: startsWith(github.ref_name, 'nuxt-checkin-v')
+        run: npm publish packages/nuxt-checkin/.pack/*.tgz --access public --provenance
 
       - name: Publish nuxt-cf-jobs
         if: startsWith(github.ref_name, 'nuxt-cf-jobs-v')
