@@ -9,10 +9,11 @@ export interface QueueCheckOptions {
   queue: string
   warnAfterSeconds: number
   failAfterSeconds: number
+  failMinimumReady?: number
   staleAfterSeconds?: number
 }
 
-interface QueueEvidence {
+export interface QueueEvidence {
   queue: string
   ready: number
   reserved: number
@@ -21,27 +22,37 @@ interface QueueEvidence {
   oldestReservationAgeSeconds: number | null
 }
 
-export function evaluateQueueCheck(evidence: QueueEvidence, options: Pick<QueueCheckOptions, 'warnAfterSeconds' | 'failAfterSeconds' | 'staleAfterSeconds'>) {
+export function evaluateQueueCheck(evidence: QueueEvidence, options: Pick<QueueCheckOptions, 'warnAfterSeconds' | 'failAfterSeconds' | 'staleAfterSeconds' | 'failMinimumReady'>) {
   if (evidence.oldestReservationAgeSeconds !== null && options.staleAfterSeconds !== undefined && evidence.oldestReservationAgeSeconds >= options.staleAfterSeconds)
     return fail('Queue has a stale reservation.', { ...evidence })
-  if (evidence.oldestDueAgeSeconds !== null && evidence.oldestDueAgeSeconds >= options.failAfterSeconds)
+  if (evidence.oldestDueAgeSeconds !== null && evidence.oldestDueAgeSeconds >= options.failAfterSeconds && evidence.ready >= (options.failMinimumReady ?? 1))
     return fail('Due queue work exceeded its failure threshold.', { ...evidence })
   if (evidence.oldestDueAgeSeconds !== null && evidence.oldestDueAgeSeconds >= options.warnAfterSeconds)
     return warn('Due queue work exceeded its warning threshold.', { ...evidence })
   return pass({ ...evidence })
 }
 
-async function collectQueue(context: CheckContext, options: QueueCheckOptions): Promise<QueueEvidence | undefined> {
+export async function collectQueueEvidence(context: CheckContext, binding: string): Promise<readonly QueueEvidence[] | undefined> {
   const env = context.event ? resolveCloudflareBindings<Record<string, unknown>>(context.event) : undefined
-  const db = env?.[options.d1Binding] as { prepare?: (sql: string) => { all: () => Promise<unknown> } } | undefined
+  const db = env?.[binding] as { prepare?: (sql: string) => { all: () => Promise<unknown> } } | undefined
   if (typeof db?.prepare !== 'function')
     return undefined
-  const response = await db.prepare(backpressureSql()).all()
-  if (!response || typeof response !== 'object' || !('results' in response) || !Array.isArray(response.results) || ('success' in response && response.success === false))
-    throw new Error('Queue query returned invalid data.')
-  const raw = response.results.find((row: unknown) => row !== null && typeof row === 'object' && 'queue' in row && row.queue === options.queue)
-  if (raw === undefined)
-    return { queue: options.queue, ready: 0, reserved: 0, delayed: 0, oldestDueAgeSeconds: null, oldestReservationAgeSeconds: null }
+  const prepare = db.prepare.bind(db)
+  return context.collect(db, 'cf-jobs.backpressure', async () => {
+    const response = await prepare(backpressureSql(undefined, context.now.getTime() / 1000)).all()
+    if (!response || typeof response !== 'object' || !('results' in response) || !Array.isArray(response.results) || ('success' in response && response.success === false))
+      throw new Error('Queue query returned invalid data.')
+    const rows = response.results.map(raw => parseQueueEvidence(raw, context.now.getTime() / 1000))
+    if (new Set(rows.map(row => row.queue)).size !== rows.length)
+      throw new Error('Queue query returned duplicate queues.')
+    const meta = 'meta' in response ? response.meta as { rows_read?: number } | undefined : undefined
+    return { value: rows, metrics: { requests: 1, ...(meta?.rows_read === undefined ? {} : { rowsRead: meta.rows_read }) } }
+  })
+}
+
+function parseQueueEvidence(raw: unknown, nowSeconds: number): QueueEvidence {
+  if (!raw || typeof raw !== 'object' || !('queue' in raw) || typeof raw.queue !== 'string' || !raw.queue.trim())
+    throw new Error('Queue query returned an invalid queue.')
   const row = raw as Record<string, unknown>
   const count = (key: string) => {
     const value = row[key]
@@ -55,7 +66,7 @@ async function collectQueue(context: CheckContext, options: QueueCheckOptions): 
       return null
     if (typeof value !== 'number' || !Number.isFinite(value))
       throw new Error('Queue timestamp is invalid.')
-    return Math.max(0, context.now.getTime() / 1000 - value)
+    return Math.max(0, nowSeconds - value)
   }
   const ready = count('ready')
   const reserved = count('reserved')
@@ -63,7 +74,7 @@ async function collectQueue(context: CheckContext, options: QueueCheckOptions): 
   const oldestReservationAgeSeconds = age('oldest_reserved_at')
   if ((ready > 0) !== (oldestDueAgeSeconds !== null) || (reserved > 0) !== (oldestReservationAgeSeconds !== null))
     throw new Error('Queue counts and timestamps disagree.')
-  return { queue: options.queue, ready, reserved, delayed: count('delayed'), oldestDueAgeSeconds, oldestReservationAgeSeconds }
+  return { queue: raw.queue, ready, reserved, delayed: count('delayed'), oldestDueAgeSeconds, oldestReservationAgeSeconds }
 }
 
 export function defineQueueCheck(options: QueueCheckOptions): Check {
@@ -71,6 +82,8 @@ export function defineQueueCheck(options: QueueCheckOptions): Check {
     if (!Number.isFinite(value) || value <= 0)
       throw new TypeError('Queue thresholds must be positive seconds.')
   }
+  if (options.failMinimumReady !== undefined && (!Number.isSafeInteger(options.failMinimumReady) || options.failMinimumReady < 1))
+    throw new TypeError('Queue failure volume must be a positive integer.')
   if (options.warnAfterSeconds > options.failAfterSeconds)
     throw new TypeError('Queue warning threshold must not exceed its failure threshold.')
   if (!options.queue?.trim() || !options.d1Binding?.trim())
@@ -78,8 +91,12 @@ export function defineQueueCheck(options: QueueCheckOptions): Check {
   return defineCheck({
     id: options.id,
     async run(context) {
-      const evidence = await collectQueue(context, options)
-      return evidence ? evaluateQueueCheck(evidence, options) : unavailable('Queue D1 binding is unavailable.')
+      const rows = await collectQueueEvidence(context, options.d1Binding)
+      if (!rows)
+        return unavailable('Queue D1 binding is unavailable.')
+      const evidence = rows.find(row => row.queue === options.queue)
+        ?? { queue: options.queue, ready: 0, reserved: 0, delayed: 0, oldestDueAgeSeconds: null, oldestReservationAgeSeconds: null }
+      return evaluateQueueCheck(evidence, options)
     },
   })
 }

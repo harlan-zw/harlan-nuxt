@@ -55,7 +55,14 @@ import { requireAdmin } from '../../utils/auth'
 
 export default defineEventHandler(async (event) => {
   await requireAdmin(event)
-  return runChecks(checks, { event, concurrency: 4, timeoutMs: 10_000 })
+  return runChecks(checks, {
+    event,
+    identity: { site: 'example.com', environment: 'production', deployment: useRuntimeConfig(event).deploymentVersion },
+    required: ['catalog.freshness'],
+    concurrency: 4,
+    timeoutMs: 10_000,
+    totalTimeoutMs: 30_000,
+  })
 })
 ```
 
@@ -74,15 +81,19 @@ The registry refreshes when watched check files change during development.
 | `unavailable(reason)` | Evidence could not establish health. |
 | `skipped(reason)` | An explicit applicability decision prevented execution. |
 
-The report contains `observedAt`, `severity`, `coverage`, and ordered `results`.
+The versioned report contains `identity`, `observedAt`, `severity`, `coverage`, ordered `results`, and `collections`.
 Each result includes its ID and duration.
 A failure stays visible even when another check has unavailable evidence.
+Warn and Fail results can set `coverage: 'incomplete'` when their evidence is partial.
 An empty registry has incomplete coverage.
+Missing IDs from `required` produce explicit unavailable results. Maintain this list independently from discovery.
 Never interpret `severity: pass` without checking `coverage`.
 
 Thrown exceptions become `Unavailable`. Raw exceptions stay out of the returned report.
 Use `onError(error, id)` to record them privately. Exceptions in that callback propagate.
 Evidence must contain JSON values. Check authors own evidence redaction.
+The default total deadline is 30 seconds. Expiry stops queued checks and cancels shared collection.
+Independent checks have a separate ten-second default deadline.
 Pass an AbortSignal to cancel a run. Checks must cooperate with cancellation for underlying work to stop.
 Do not use checks to perform repairs, deploy, send messages, or change Sentry state.
 
@@ -127,11 +138,19 @@ Never put tokens in Nuxt module options. Options enter the generated registry.
 
 The D1 factory proves a read through the request's binding.
 The queue factory uses existing Queue Job backpressure SQL and excludes future scheduled work.
+It collects every queue once per database per run, using the supplied observation clock.
+Set `failMinimumReady` when failure requires both age and volume. Reservation rules remain independent.
 It expects the module's standard D1 tables. Missing or incompatible tables produce unavailable evidence.
-The Sentry factory reads unresolved issues active in the last 14 days and follows pagination.
+The Sentry factory reads retained unresolved issues through the organization endpoint and follows pagination.
+It explicitly selects the project and queries from the Unix epoch by default.
+Use `environment` and `region` (`us` or `de`) to scope production collection.
+Use `lookbackDays` only when deliberately checking a narrower window.
 It warns on unresolved issues. It does not infer user impact or investigate stacks.
-The default ten-page limit produces incomplete coverage when exceeded.
-This check does not replace a complete historical Sentry backlog audit.
+The default hundred-page limit and total deadline bound collection. Truncation produces incomplete coverage.
+Known issues remain warnings with incomplete coverage when a later page returns an HTTP error.
+A transient HTTP error receives at most one retry, respecting Retry-After waits up to five seconds.
+Longer waits return unavailable evidence. Authorization failures are not retried.
+Validate live project access and retained-issue coverage before retiring an existing Sentry routine.
 
 Direct usage has the same behavior:
 
@@ -173,3 +192,52 @@ Cloudflare request bindings belong in authenticated route checks.
 GitHub, provider administration, and broad Sentry credentials belong in an external runner where possible.
 External callers import public factories and call `runChecks` directly; they do not need the virtual registry.
 The core runtime imports no Nuxt, Node, or provider SDK code.
+
+## Shared collection
+
+Checks receive `collect(resource, key, load)` for collection shared within one run.
+The resource is an object identifying the client or database. The key identifies the evidence being collected.
+Keys must not include credentials or personal data; they appear in collection metrics.
+
+```ts
+const summary = await context.collect(db, 'catalog.summary', async signal => ({
+  value: await readCatalogSummary(db, { signal, now: context.now }),
+  metrics: { requests: 1 },
+}))
+```
+
+Repeated calls share the same promise, including failures. Different collections against one resource run sequentially.
+Collection receives the run's signal. One consumer timing out does not cancel evidence needed by another.
+The run cancels outstanding collection when it finishes. Underlying operations must support cancellation to stop work.
+No collection cache survives between runs. Credentials are copied and frozen for each run.
+
+`collections` reports duration, completion, and available request, rows-read, and byte counts.
+Missing measurements are unknown. A completed collection can still return an unhealthy or unavailable Check Result.
+Queue collections include D1 rows-read metadata when the binding returns it.
+
+Direct callers can import `collectQueueEvidence` and `evaluateQueueCheck` from `@harlan-zw/nuxt-cf-jobs/checks`.
+Sentry callers can import `collectSentryIssues` from `@harlan-zw/nuxt-sentry/checks`.
+These are the same collectors used by module registration.
+
+## External report validation
+
+The external runner owns schedules, credentials, storage, and independently maintained required IDs.
+`checkReport` validates an untrusted report against those expectations without accessing the network or storage.
+
+```ts
+import { checkReport } from '@harlan-zw/nuxt-checkin/server'
+
+const result = checkReport(await loadLatestReport(), {
+  identity: { site: 'example.com', environment: 'production', deployment: expectedDeployment },
+  required: ['catalog.freshness', 'queue.indexing'],
+  maxAgeMs: 26 * 60 * 60 * 1000,
+})
+```
+
+Missing and stale reports are unavailable. Wrong identity, unknown schema versions, and missing required results are unavailable.
+The validator recomputes health from individual results. Known failures retain incomplete coverage when other evidence is missing.
+An identity is optional for local `runChecks` calls; external validation always requires a matching identity.
+
+Run this validation from an independent schedule to detect a site check-in that stopped running.
+Retain the previous complete report with its original timestamp when a new run fails.
+This package does not install a scheduler, persistence service, or public route.

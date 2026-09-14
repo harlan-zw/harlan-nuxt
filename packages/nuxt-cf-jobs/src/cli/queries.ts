@@ -67,13 +67,14 @@ export interface BackpressureRow {
 }
 
 /** One row per queue: live counts split by state plus the oldest timestamps. */
-export function backpressureSql(t: TableNames = defaultTableNames): string {
+export function backpressureSql(t: TableNames = defaultTableNames, nowSeconds?: number): string {
+  const now = nowSeconds === undefined ? 'unixepoch()' : String(sqlInt(nowSeconds))
   return `SELECT queue,
   COUNT(*) AS total,
-  SUM(CASE WHEN reserved_at IS NULL AND available_at <= unixepoch() THEN 1 ELSE 0 END) AS ready,
+  SUM(CASE WHEN reserved_at IS NULL AND available_at <= ${now} THEN 1 ELSE 0 END) AS ready,
   SUM(CASE WHEN reserved_at IS NOT NULL THEN 1 ELSE 0 END) AS reserved,
-  SUM(CASE WHEN reserved_at IS NULL AND available_at > unixepoch() THEN 1 ELSE 0 END) AS delayed,
-  MIN(CASE WHEN reserved_at IS NULL AND available_at <= unixepoch() THEN available_at END) AS oldest_available_at,
+  SUM(CASE WHEN reserved_at IS NULL AND available_at > ${now} THEN 1 ELSE 0 END) AS delayed,
+  MIN(CASE WHEN reserved_at IS NULL AND available_at <= ${now} THEN available_at END) AS oldest_available_at,
   MIN(reserved_at) AS oldest_reserved_at
 FROM ${t.jobs}
 WHERE ${ACTIVE}

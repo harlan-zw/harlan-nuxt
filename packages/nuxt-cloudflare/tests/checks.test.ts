@@ -18,3 +18,15 @@ describe('public D1 check', () => {
     expect((await runChecks([defineD1Check({ id: 'd1.read', binding: 'DB' })])).coverage).toBe('incomplete')
   })
 })
+
+it('shares a D1 read for duplicate binding checks', async () => {
+  let reads = 0
+  const DB = { prepare: () => ({ first: async () => {
+    reads++
+    return { checkin_ready: 1 }
+  } }) }
+  const event = { context: { cloudflare: { env: { DB } } } }
+  const report = await runChecks(['a', 'b'].map(id => defineD1Check({ id, binding: 'DB' })), { event })
+  expect(reads).toBe(1)
+  expect(report.collections).toMatchObject([{ requests: 1 }])
+})

@@ -8,7 +8,7 @@ describe('built Nuxt check route', async () => {
 
   it('runs site and layer checks from the virtual module', async () => {
     const report = await $fetch<CheckReport>('/api/checks')
-    expect(report).toMatchObject({ severity: 'warn', coverage: 'incomplete' })
+    expect(report).toMatchObject({ schemaVersion: 1, identity: { site: 'fixture', environment: 'test', deployment: 'fixture-v1' }, severity: 'warn', coverage: 'incomplete' })
     expect(report.results).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'catalog.freshness', result: { _tag: 'Warn', reason: 'Catalog is stale.', evidence: { hours: 6 } } }),
       expect.objectContaining({ id: 'd1.read', result: { _tag: 'Pass', evidence: { binding: 'DB', readable: true } } }),

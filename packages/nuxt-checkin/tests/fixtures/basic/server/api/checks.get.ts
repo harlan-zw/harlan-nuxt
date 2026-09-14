@@ -6,5 +6,5 @@ export default defineEventHandler((event) => {
     first: async () => ({ checkin_ready: 1 }),
     all: async () => ({ success: true, results: [] }),
   }) } } }
-  return runChecks(checks, { event })
+  return runChecks(checks, { event, identity: { site: 'fixture', environment: 'test', deployment: 'fixture-v1' }, required: ['catalog.freshness', 'content.ready', 'd1.read', 'queue.indexing', 'sentry.site'], totalTimeoutMs: 5000 })
 })
