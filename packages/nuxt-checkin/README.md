@@ -340,3 +340,15 @@ flowchart LR
   cli --> providers[Provider APIs]
   cli --> report[JSON report and optional archive]
 ```
+
+
+## Pending stable release
+
+This branch prepares Check-in 0.2.0 and compatible integration releases:
+Cloudflare 0.4.2, Sentry 0.1.6, and Queue Jobs 0.2.4.
+These integration versions accept both Check-in 0.1 and 0.2, including the current 0.2 prerelease.
+
+Draft consumers currently use Check-in 0.2.0-alpha.0 with the previously released integrations.
+Their exact dependency override prevents pnpm from installing another Check-in version for an integration peer.
+After upgrading the integrations you use, remove that temporary override and use Check-in 0.2.0.
+The published alpha archive remains unchanged.

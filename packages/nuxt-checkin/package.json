@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-checkin",
   "type": "module",
-  "version": "0.2.0-alpha.0",
+  "version": "0.2.0",
   "description": "Deterministic server checks discovered from Nuxt sites and modules.",
   "author": {
     "name": "Harlan Wilton",
