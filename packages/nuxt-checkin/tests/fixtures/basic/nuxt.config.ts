@@ -1,6 +1,7 @@
-import Jobs from '../../../../nuxt-cf-jobs/src/module'
-import Cloudflare from '../../../../nuxt-cloudflare/src/module'
-import Sentry from '../../../../nuxt-sentry/src/module'
+import { fileURLToPath } from 'node:url'
+import Jobs from '@harlan-zw/nuxt-cf-jobs'
+import Cloudflare from '@harlan-zw/nuxt-cloudflare'
+import Sentry from '@harlan-zw/nuxt-sentry'
 import Checkin from '../../../src/module'
 
 export default defineNuxtConfig({
@@ -14,5 +15,11 @@ export default defineNuxtConfig({
   compatibilityDate: '2026-09-01',
   devtools: { enabled: false },
   ssr: true,
-  nitro: { preset: 'node-server' },
+  nitro: {
+    preset: 'node-server',
+    // Linked workspace runtimes need Nitro's virtual imports compiled during development.
+    externals: {
+      inline: ['nuxt-cf-jobs', 'nuxt-cloudflare', 'nuxt-sentry'].map(name => fileURLToPath(new URL(`../../../../${name}/`, import.meta.url))),
+    },
+  },
 })

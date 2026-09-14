@@ -327,6 +327,21 @@ importers:
         specifier: 'catalog:'
         version: 3.5.41(typescript@5.9.3)
 
+  packages/nuxt-checkin/tests/fixtures/basic:
+    dependencies:
+      '@harlan-zw/nuxt-cf-jobs':
+        specifier: workspace:*
+        version: link:../../../../nuxt-cf-jobs
+      '@harlan-zw/nuxt-checkin':
+        specifier: workspace:*
+        version: link:../../..
+      '@harlan-zw/nuxt-cloudflare':
+        specifier: workspace:*
+        version: link:../../../../nuxt-cloudflare
+      '@harlan-zw/nuxt-sentry':
+        specifier: workspace:*
+        version: link:../../../../nuxt-sentry
+
   packages/nuxt-cloudflare:
     dependencies:
       '@nuxt/kit':
