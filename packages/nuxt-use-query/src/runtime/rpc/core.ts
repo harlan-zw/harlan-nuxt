@@ -1,7 +1,6 @@
 import type { $Fetch } from 'nitropack'
-import type { z, ZodIssue } from 'zod'
+import type { z, ZodError, ZodIssue } from 'zod'
 import type { Outcome } from '../lifecycle'
-import { ZodError } from 'zod'
 import { runIsolatedHooks, toOutcome } from '../lifecycle'
 
 export type NuxtRpcKey = string | readonly [string, ...unknown[]]
@@ -644,8 +643,26 @@ export function createNuxtRpcClient(options: NuxtRpcClientOptions) {
   return { execute, executeSafe, query, querySafe }
 }
 
-function formatNuxtRpcValidationIssues(error: ZodError): NuxtRpcValidationIssue[] {
+function formatNuxtRpcValidationIssues(error: Pick<ZodError, 'issues'>): NuxtRpcValidationIssue[] {
   return error.issues.map(formatNuxtRpcValidationIssue)
+}
+
+/**
+ * Structural `ZodError` check. A value import of `zod` evaluates the whole
+ * library, and this module sits under the payload plugin in every app's entry
+ * chunk. Zod names its errors `ZodError` and always carries `issues`.
+ */
+function isZodError(error: unknown): error is ZodError {
+  return error instanceof Error
+    && error.name === 'ZodError'
+    && Array.isArray((error as { issues?: unknown }).issues)
+}
+
+function createCustomZodError(message: string): ZodError {
+  const error = new Error(message) as Error & { issues: ZodIssue[] }
+  error.name = 'ZodError'
+  error.issues = [{ code: 'custom', message, path: [], input: undefined }]
+  return error as unknown as ZodError
 }
 
 export function toHumanNuxtRpcError(error: unknown): string {
@@ -730,7 +747,7 @@ export function normalizeNuxtRpcError(error: unknown, zodType: 'request-validati
   // sees the same `Error` the server threw.
   if (isNuxtRpcErrorData(error))
     return createNuxtRpcError(error)
-  if (error instanceof ZodError) {
+  if (isZodError(error)) {
     return createNuxtRpcError({
       type: zodType,
       message: zodType === 'request-validation'
@@ -937,10 +954,10 @@ function safeParseZodLike(
     return { success: true, data: slot.parse(input) }
   }
   catch (error) {
-    if (error instanceof ZodError)
+    if (isZodError(error))
       return { success: false, error }
     const message = error instanceof Error ? error.message : String(error)
-    return { success: false, error: new ZodError([{ code: 'custom', message, path: [] }]) }
+    return { success: false, error: createCustomZodError(message) }
   }
 }
 
