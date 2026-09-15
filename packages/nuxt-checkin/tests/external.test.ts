@@ -40,3 +40,27 @@ it('preserves UTF-8 across subprocess output chunks', async () => {
   ])
   expect(result).toEqual({ _tag: 'Ok', stdout: '😀', stderr: '' })
 })
+
+it('carries prompt items without changing failed checks or executing their text', async () => {
+  const prompts = [{ id: 'feedback', prompt: 'Review customer feedback. Suggest one action per problem.' }]
+  const { report, exitCode } = await runExternalChecks([
+    { id: 'home', run: () => ({ _tag: 'Fail', reason: 'Homepage failed.', evidence: {} }) },
+  ], { required: ['home'], prompts })
+  expect(report.prompts).toEqual(prompts)
+  expect(report.results[0]?.result._tag).toBe('Fail')
+  expect(report.severity).toBe('fail')
+  expect(exitCode).toBe(1)
+})
+
+it.each([
+  [{ id: '', prompt: 'Review feedback.' }],
+  [{ id: 'feedback', prompt: ' ' }],
+  [{ id: 'feedback', prompt: 'One' }, { id: 'feedback', prompt: 'Two' }],
+])('rejects invalid prompt items before collecting evidence: %j', async (...prompts) => {
+  let collected = false
+  await expect(runExternalChecks([{ id: 'home', run: () => {
+    collected = true
+    return { _tag: 'Pass', evidence: {} }
+  } }], { required: ['home'], prompts })).rejects.toThrow(/Prompt/)
+  expect(collected).toBe(false)
+})

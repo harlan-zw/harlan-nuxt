@@ -85,7 +85,7 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
   const locatedArtifact = typeof locator?.path === 'string' ? locator.path : resolve(rootDir, '.nuxt/checkin/external.mjs')
   const loaded = await import(pathToFileURL(artifact ?? locatedArtifact).href) as { default: readonly Check<ExternalCheckEvent>[], options: ExternalOptions }
   const now = clock()
-  const directory = loaded.options.save ? resolve(rootDir, env[loaded.options.save.dirEnv ?? ''] || loaded.options.save.dir) : undefined
+  const directory = loaded.options.save ? resolve(rootDir, env[loaded.options.save.dirEnv ?? 'DAILY_CHECKIN_DIR'] || loaded.options.save.dir) : undefined
   const statePath = directory && loaded.options.save?.stateFile ? resolve(directory, loaded.options.save.stateFile) : undefined
   const previous = statePath ? await readState(statePath) : null
   const timestampKey = loaded.options.save?.timestampKey ?? 'observedAt'
