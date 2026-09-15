@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cloudflare",
   "type": "module",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Opinionated Cloudflare deployment defaults and diagnostics for Nuxt.",
   "author": {
     "name": "Harlan Wilton",
@@ -107,7 +107,7 @@
     "test:contract": "nuxt build tests/fixtures/cache-contract && vitest run tests/cache-contract.nitro.test.ts"
   },
   "peerDependencies": {
-    "@harlan-zw/nuxt-checkin": "^0.1.0 || ^0.2.0-0",
+    "@harlan-zw/nuxt-checkin": "^0.1.0 || ^0.2.0-0 || ^0.3.0",
     "nuxt": ">=4.5.0 <6.0.0",
     "wrangler": ">=4.120.0 <5.0.0"
   },

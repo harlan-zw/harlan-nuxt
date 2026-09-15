@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-sentry",
   "type": "module",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "One Sentry Report Policy for Nuxt: registration, gating, drop rules, and redaction.",
   "author": {
     "name": "Harlan Wilton",
@@ -74,7 +74,7 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "@harlan-zw/nuxt-checkin": "^0.1.0 || ^0.2.0-0",
+    "@harlan-zw/nuxt-checkin": "^0.1.0 || ^0.2.0-0 || ^0.3.0",
     "@sentry/cloudflare": "catalog:",
     "@sentry/nuxt": "catalog:",
     "nuxt": ">=4.5.0 <6.0.0"
