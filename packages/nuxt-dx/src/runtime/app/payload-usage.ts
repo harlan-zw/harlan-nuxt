@@ -114,11 +114,11 @@ function nestedRoots(roots: PropertyDescriptorMap): Set<object> | undefined {
     if (--remaining < 0)
       return
     visited.add(value)
+    // Vue proxies hide raw target references from own property descriptors.
+    if (!dataDescriptors(value))
+      return
     const prototype = Object.getPrototypeOf(value)
     if (prototype === Map.prototype || prototype === Set.prototype) {
-      // Vue collection proxies do not have the native collection internal slots.
-      if (!dataDescriptors(value))
-        return
       const entries = prototype === Map.prototype ? Map.prototype.entries.call(value) : Set.prototype.entries.call(value)
       for (const [key, entry] of entries) {
         if (--remaining < 0)

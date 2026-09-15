@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { reactive, ref, shallowRef } from 'vue'
+import { reactive, readonly, ref, shallowReactive, shallowReadonly, shallowRef, toRaw } from 'vue'
 import { trackPayloadUsage } from '../src/runtime/app/payload-usage'
 
 describe('payload reads', () => {
@@ -60,6 +60,18 @@ describe('payload reads', () => {
     expect(data.first).toBe(data.second)
     expect(data.first.title).toBe('Book')
     expect(tracker.finish().map(entry => entry.status === 'tracked' && entry.read)).toEqual([['title'], ['title']])
+  })
+
+  it.each([reactive, shallowReactive, readonly, shallowReadonly])('skips tracking when a Vue proxy hides a payload root reference (%#)', (wrap) => {
+    const shared = { title: 'Book', details: 'Details' }
+    const data = { product: shared, alias: wrap(shared) }
+    const tracker = trackPayloadUsage(data)
+    expect(data.product).toBe(toRaw(data.alias))
+    expect(data.alias.details).toBe('Details')
+    expect(tracker.finish()).toMatchObject([
+      { key: 'product', status: 'skipped' },
+      { key: 'alias', status: 'skipped' },
+    ])
   })
 
   it('reports unknown sizes for cycles without hiding the field', () => {
