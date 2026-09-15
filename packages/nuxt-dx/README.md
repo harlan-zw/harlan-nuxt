@@ -413,7 +413,8 @@ pnpm exec nuxt-dx payload http://localhost:3000/about --output payload-about.jso
 ```
 
 Each command opens a fresh browser and waits for Nuxt's initial hydration to finish.
-It adds `__nuxt_dx_payload=1` to request collection. Normal visits do not collect in production builds.
+The browser enables collection before app startup, without changing the route URL.
+Normal visits do not collect in production builds.
 Remove `prerender: true` before the deployment build to exclude the instrumentation entirely.
 Server rendering alone cannot determine client reads.
 

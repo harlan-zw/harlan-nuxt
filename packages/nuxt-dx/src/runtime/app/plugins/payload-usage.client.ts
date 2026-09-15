@@ -7,7 +7,7 @@ export default defineNuxtPlugin({
   dependsOn: ['nuxt:revive-payload:client'],
   setup(nuxtApp) {
     // A prerender build only collects when a browser audit explicitly requests it.
-    if (!import.meta.dev && !new URL(window.location.href).searchParams.has('__nuxt_dx_payload'))
+    if (!import.meta.dev && window.__NUXT_DX_PAYLOAD_ENABLED__ !== true)
       return
     if (!nuxtApp.payload.serverRendered) {
       window.__NUXT_DX_PAYLOAD__ = { status: 'unavailable', reason: 'This page did not render on the server.' }

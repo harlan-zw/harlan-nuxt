@@ -21,12 +21,14 @@ export const payload = defineCommand({
     const url = new URL(args.url)
     if (!['http:', 'https:'].includes(url.protocol))
       throw new Error('Provide an HTTP or HTTPS URL.')
-    url.searchParams.set('__nuxt_dx_payload', '1')
     const browser = await chromium.launch().catch((error: unknown) => {
       throw new Error('Chromium could not start. Run `pnpm exec nuxt-dx install-browser`.', { cause: error })
     })
     try {
       const page = await browser.newPage()
+      await page.addInitScript(() => {
+        window.__NUXT_DX_PAYLOAD_ENABLED__ = true
+      })
       const errors: string[] = []
       page.on('pageerror', error => errors.push(error.message))
       const response = await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout })

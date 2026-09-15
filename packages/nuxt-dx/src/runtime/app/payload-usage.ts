@@ -10,6 +10,7 @@ export type PayloadUsageReport
 
 declare global {
   interface Window {
+    __NUXT_DX_PAYLOAD_ENABLED__?: boolean
     __NUXT_DX_PAYLOAD__?: PayloadUsageReport
   }
 }
