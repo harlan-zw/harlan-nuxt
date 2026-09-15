@@ -320,8 +320,9 @@ The CLI prints the shared JSON report.
 Exit codes are `0` for complete passing coverage, `1` for warnings or failures, and `2` for incomplete coverage.
 Archives require `--save`. Files use mode `0600`; new directories use mode `0700`.
 Every attempt receives a unique archive file.
-A configured state file advances only after complete passing coverage.
-The daily policy preserves the first successful baseline for each UTC day.
+The latest policy advances state only after complete passing coverage.
+The daily policy preserves the first complete report for each UTC day, including warnings and failures.
+Incomplete coverage never advances either baseline. Health verdicts and exit codes remain unchanged.
 Omit `stateFile` for archives without baseline state.
 `dirEnv` can override the archive directory at execution time.
 

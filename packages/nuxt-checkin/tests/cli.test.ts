@@ -7,11 +7,11 @@ import { runCli } from '../src/cli/run'
 async function fixture(result: string) {
   const root = await mkdtemp(join(tmpdir(), 'checkin-cli-'))
   const artifact = join(root, 'checks.mjs')
-  await writeFile(artifact, `export default [{id:'one',run:()=>(${result})}];export const options={required:['one'],save:{dir:'archive',stateFile:'state.json',timestampKey:'lastRun',baseline:'daily'}}`)
+  await writeFile(artifact, `export default [{id:'one',run:(context)=>(${result})}];export const options={required:['one'],save:{dir:'archive',stateFile:'state.json',timestampKey:'lastRun',baseline:'daily'}}`)
   return { root, artifact }
 }
 describe('shared CLI', () => {
-  it('archives every attempt and preserves the first successful daily baseline', async () => {
+  it('archives every attempt and preserves the first complete daily baseline', async () => {
     const { root, artifact } = await fixture('{_tag:\'Pass\',evidence:{}}')
     try {
       const stdout = (text: string) => {
@@ -39,6 +39,37 @@ it('rejects a future collection window before any check executes', async () => {
     await expect(runCli(['--artifact', artifact, '--since', '2026-09-16T00:00:00Z'], { cwd: root, clock: () => new Date('2026-09-15T00:00:00Z'), stdout: () => {
       throw new Error('Unexpected output')
     } })).rejects.toThrow('Check start time is in the future.')
+  }
+  finally { await rm(root, { recursive: true }) }
+})
+
+it.each(['Warn', 'Fail'])('advances complete daily evidence after a %s result', async (tag) => {
+  const { root, artifact } = await fixture(`{_tag:'${tag}',reason:'Existing finding.',evidence:{since:context.event.since.toISOString()}}`)
+  const stdout = () => {}
+  try {
+    expect(await runCli(['--artifact', artifact, '--save'], { cwd: root, stdout, clock: () => new Date('2026-09-14T07:00:00Z') })).toBe(1)
+    expect(await runCli(['--artifact', artifact, '--save'], { cwd: root, stdout, clock: () => new Date('2026-09-15T07:00:00Z') })).toBe(1)
+    const state = JSON.parse(await readFile(join(root, 'archive/state.json'), 'utf8'))
+    expect(state.lastRun).toBe('2026-09-15T07:00:00.000Z')
+    expect(state.coverage).toBe('complete')
+    expect(state.results[0].result.evidence.since).toBe('2026-09-14T07:00:00.000Z')
+    expect(state.severity).toBe(tag.toLowerCase())
+    // A same-day rerun must not move the morning comparison window.
+    await runCli(['--artifact', artifact, '--save'], { cwd: root, stdout, clock: () => new Date('2026-09-15T08:00:00Z') })
+    expect(JSON.parse(await readFile(join(root, 'archive/state.json'), 'utf8')).lastRun).toBe(state.lastRun)
+  }
+  finally { await rm(root, { recursive: true }) }
+})
+
+it('preserves complete daily evidence when the next run has partial warning evidence', async () => {
+  const { root, artifact } = await fixture('{_tag:\'Warn\',reason:\'Existing finding.\',evidence:{}}')
+  try {
+    const output = () => {}
+    await runCli(['--artifact', artifact, '--save'], { cwd: root, stdout: output, clock: () => new Date('2026-09-14T07:00:00Z') })
+    const incomplete = join(root, 'incomplete.mjs')
+    await writeFile(incomplete, 'export default [{id:\'one\',run:()=>({_tag:\'Warn\',reason:\'Partial evidence.\',evidence:{},coverage:\'incomplete\'})}];export const options={required:[\'one\'],save:{dir:\'archive\',stateFile:\'state.json\',timestampKey:\'lastRun\',baseline:\'daily\'}}')
+    expect(await runCli(['--artifact', incomplete, '--save'], { cwd: root, stdout: output, clock: () => new Date('2026-09-15T07:00:00Z') })).toBe(2)
+    expect(JSON.parse(await readFile(join(root, 'archive/state.json'), 'utf8')).lastRun).toBe('2026-09-14T07:00:00.000Z')
   }
   finally { await rm(root, { recursive: true }) }
 })

@@ -102,7 +102,10 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
     if (!directory)
       throw new Error('Check archive directory is not configured.')
     await saveReport(directory, report)
-    if (statePath && exitCode === 0) {
+    // Daily comparisons need the previous complete observation, even when unhealthy.
+    // The latest policy keeps its existing last-passing-report contract.
+    const advance = loaded.options.save?.baseline === 'daily' ? report.coverage === 'complete' : exitCode === 0
+    if (statePath && advance) {
       const sameDay = typeof previous?.[timestampKey] === 'string' && (previous[timestampKey] as string).slice(0, 10) === report.observedAt.slice(0, 10)
       if (loaded.options.save?.baseline !== 'daily' || !sameDay)
         await atomicWrite(statePath, { ...report, [timestampKey]: report.observedAt })
