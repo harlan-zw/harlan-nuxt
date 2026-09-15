@@ -52,7 +52,7 @@ function jsonSafe(value: unknown, budget: { nodes: number, bytes: number }, seen
     return false
   if (value === null || ['string', 'boolean', 'number'].includes(typeof value))
     return true
-  if ((!plain(value) && !Array.isArray(value)) || seen.has(value))
+  if ((!plain(value) && !(Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype)) || seen.has(value))
     return false
   seen.add(value)
   const descriptors = dataDescriptors(value)
@@ -127,7 +127,7 @@ function nestedRoots(roots: PropertyDescriptorMap): Set<object> | undefined {
           return
       }
     }
-    else if (!plain(value) && !Array.isArray(value)) {
+    else if (!plain(value) && !(Array.isArray(value) && prototype === Array.prototype)) {
       // Custom objects can hide references in internal slots.
       return
     }
@@ -152,8 +152,17 @@ export function trackPayloadUsage(data: Record<string, unknown>) {
   const skipped: PayloadUsageEntry[] = []
   const aliases = new Map<object, { proxy: object, read: Set<string> }>()
 
-  const roots = Object.getOwnPropertyDescriptors(data)
+  const roots: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(data)
   const nested = nestedRoots(roots)
+  // Every alias must be replaceable before any root receives a proxy.
+  const unwrapped = new Set<object>()
+  for (const key of Reflect.ownKeys(roots)) {
+    const root = roots[key]!
+    if ('value' in root && root.value !== null && typeof root.value === 'object'
+      && (typeof key !== 'string' || !root.enumerable || !root.writable)) {
+      unwrapped.add(root.value)
+    }
+  }
   for (const key of Object.keys(data)) {
     const root = roots[key]!
     const value: unknown = 'value' in root ? root.value : undefined
@@ -162,7 +171,7 @@ export function trackPayloadUsage(data: Record<string, unknown>) {
       continue
     }
     const descriptors = plain(value) ? dataDescriptors(value) : undefined
-    if (!descriptors || !plain(value) || !root.writable || !Object.isExtensible(value)
+    if (!descriptors || !plain(value) || unwrapped.has(value) || !Object.isExtensible(value)
       || Object.values(descriptors).some(descriptor => !descriptor.configurable || !descriptor.writable)) {
       skipped.push({ key, status: 'skipped', reason: 'Only writable roots containing extensible, configurable plain data objects are tracked.' })
       continue

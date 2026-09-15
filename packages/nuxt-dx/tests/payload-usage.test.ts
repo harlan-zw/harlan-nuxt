@@ -250,7 +250,7 @@ it.each(['__v_raw', '__v_isRef'])('does not invoke inherited array marker getter
   } })
   const value = Object.setPrototypeOf(['Details'], Object.create(ancestor))
   const data = { product: { nested: value } }
-  expect(trackPayloadUsage(data).finish()).toMatchObject([{ unread: [{ key: 'nested', bytes: null }] }])
+  expect(trackPayloadUsage(data).finish()).toMatchObject([{ status: 'skipped' }])
   expect(calls).toBe(0)
 })
 
@@ -290,6 +290,58 @@ it.each(['method', 'getter'])('never executes an inherited toJSON %s while estim
   }
   Object.defineProperty(prototype, 'toJSON', kind === 'method' ? { value: toJSON } : { get: toJSON })
   const value = Object.setPrototypeOf(['Details'], prototype)
-  expect(trackPayloadUsage({ product: { nested: value } }).finish()).toMatchObject([{ unread: [{ key: 'nested', bytes: null }] }])
+  expect(trackPayloadUsage({ product: { nested: value } }).finish()).toMatchObject([{ status: 'skipped' }])
   expect(calls).toBe(0)
+})
+
+it.each(['readonly', 'nonenumerable', 'symbol'])('preserves every cache alias when one alias is %s', (kind) => {
+  const shared = { details: 'Details' }
+  const alias = kind === 'symbol' ? Symbol('alias') : 'alias'
+  const data = { product: shared } as Record<PropertyKey, typeof shared>
+  Object.defineProperty(data, alias, {
+    value: shared,
+    writable: kind !== 'readonly',
+    enumerable: kind !== 'nonenumerable',
+    configurable: true,
+  })
+  const tracker = trackPayloadUsage(data)
+  expect(data.product).toBe(data[alias])
+  expect(data[alias]!.details).toBe('Details')
+  expect(tracker.finish().every(entry => entry.status === 'skipped')).toBe(true)
+})
+
+it('never evaluates inherited sparse-array index getters', () => {
+  let calls = 0
+  const prototype = Object.create(Array.prototype)
+  Object.defineProperty(prototype, '0', { get() {
+    calls++
+    throw new Error('Index getter called')
+  } })
+  const sparse = Array.from({ length: 1 })
+  delete sparse[0]
+  Object.setPrototypeOf(sparse, prototype)
+  const data = { product: { sparse } }
+  const tracker = trackPayloadUsage(data)
+  expect(calls).toBe(0)
+  expect(tracker.finish()).toMatchObject([{ status: 'skipped' }])
+})
+
+it('preserves root aliases inherited by sparse arrays', () => {
+  const shared = { details: 'Details' }
+  const sparse = Array.from({ length: 1 })
+  delete sparse[0]
+  Object.setPrototypeOf(sparse, Object.assign(Object.create(Array.prototype), { 0: shared }))
+  const data = { product: shared, basket: { sparse } }
+  const tracker = trackPayloadUsage(data)
+  expect(data.product).toBe(data.basket.sparse[0])
+  expect(tracker.finish().every(entry => entry.status === 'skipped')).toBe(true)
+})
+
+it('estimates ordinary sparse arrays without changing their holes', () => {
+  const sparse = Array.from({ length: 1 })
+  delete sparse[0]
+  const data = { product: { sparse } }
+  const tracker = trackPayloadUsage(data)
+  expect(tracker.finish()).toMatchObject([{ unread: [{ key: 'sparse', bytes: 17 }] }])
+  expect(0 in data.product.sparse).toBe(false)
 })
