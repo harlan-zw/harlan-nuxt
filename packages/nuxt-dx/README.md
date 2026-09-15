@@ -255,7 +255,7 @@ on:
 
 permissions:
   contents: read
-  # the action lists workflow runs and downloads the baseline report from one
+  # the action lists artifacts and downloads a compatible baseline
   actions: read
   # the action posts the diff as a pull request comment, and replaces its own
   pull-requests: write
@@ -280,9 +280,19 @@ jobs:
           threshold-kb: 10
 ```
 
-The baseline is the report left behind by the last successful run of the same workflow on the base branch, downloaded from that run's artifact. Every run uploads its own report, so a green run on `main` becomes the baseline for the pull requests that follow. Nothing is committed to your repository, so there is no baseline file to go stale or to conflict on every pull request.
+The action reuses the report from an existing build. Avoid a separate build just to run it.
 
-A run with no baseline says so in the job summary and passes. That covers the first ever run, a branch whose artifact has passed its retention window, and a workflow that has never been green on the base branch. A missing baseline never fails a pull request.
+Use a different `artifact-name` for each app and environment. The action appends the checked-out commit to this prefix.
+It searches retained artifacts on the base branch, including reports from other workflows.
+It selects an earlier run at the same source commit or an ancestor. Future runs cannot become its baseline.
+This also covers content updates that rebuild the same commit.
+
+A first run starts a new baseline and says so in the summary. Older artifacts without source commits are ignored.
+API failures and failed downloads fail reporting. Only valid reports are uploaded, including reports that exceed the threshold.
+
+For advisory deploy reporting, run the action after deployment with `continue-on-error: true` and `comment: 'false'`.
+Surface a failed action using its step outcome. Set a step timeout to bound runner time.
+The action reads artifacts directly through GitHub's API. GitHub CLI is needed only when PR comments are enabled.
 
 On a pull request the diff lands twice: in `$GITHUB_STEP_SUMMARY`, and as one comment on the pull request. The comment is keyed to the action, so every push edits the same comment rather than adding another. Turn it off with `comment: false`.
 
@@ -294,7 +304,7 @@ The step reports growth, it does not block. Set `fail-on-breach: true` to fail t
 | --- | --- | --- |
 | `report-path` | `.nuxt/dx/size-budget.json` | Report your build wrote, relative to `working-directory` |
 | `threshold-kb` | `10` | Growth allowed for a single target |
-| `artifact-name` | `nuxt-dx-size-budget-v2` | Artifact the report is uploaded to and read back from |
+| `artifact-name` | `nuxt-dx-size-budget-v3` | Artifact prefix for the app and environment |
 | `base-branch` | pull request base, then the default branch | Branch the baseline comes from |
 | `working-directory` | `.` | Directory the app was built in |
 | `comment` | `true` | Post the diff as a pull request comment, replacing this action's previous one |

@@ -84,6 +84,7 @@ const compare = defineCommand({
   async run({ args }) {
     try {
       const threshold = thresholdBytes(args['threshold-kb'])
+      const head = await readSnapshot(args.head)
       const baseline = await readBaseline(args.base)
       if (baseline._tag !== 'usable') {
         const reason = baseline._tag === 'unusable' ? baseline.reason : undefined
@@ -94,7 +95,7 @@ const compare = defineCommand({
         process.stderr.write(`${colors.yellow(`… ${reason ?? `no baseline report at ${args.base}`}, nothing compared`)}\n`)
         return
       }
-      const diff = diffSnapshots(baseline.snapshot, await readSnapshot(args.head), threshold)
+      const diff = diffSnapshots(baseline.snapshot, head, threshold)
       // Markdown on stdout so it can be redirected straight into a step summary,
       // the verdict on stderr so a local run still reads as a pass or a fail.
       process.stdout.write(`${formatDiffMarkdown(diff)}\n`)

@@ -86,6 +86,15 @@ describe('nuxt-dx compare', () => {
     expect((await compare([base, head, '--allow-missing-base'])).code).toBe(0)
   })
 
+  it('rejects a malformed first report when no baseline exists', async () => {
+    await writeFile(head, '{"version":3,"entries":[')
+    expect((await compare([base, head, '--allow-missing-base'])).code).toBe(2)
+  })
+
+  it('rejects a missing first report when no baseline exists', async () => {
+    expect((await compare([base, head, '--allow-missing-base'])).code).toBe(2)
+  })
+
   it('treats an absent baseline as no baseline', async () => {
     await writeFile(head, JSON.stringify(snapshot(400_000)))
     const { code, stdout } = await compare([base, head, '--allow-missing-base'])
