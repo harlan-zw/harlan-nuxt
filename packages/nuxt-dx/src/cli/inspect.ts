@@ -33,6 +33,8 @@ export const inspect = defineCommand({
       const page = await browser.newPage()
       await page.addInitScript(() => {
         window.__NUXT_DX_PAYLOAD_ENABLED__ = true
+        // DevTools deeply watches the payload, which would count unread fields as used.
+        Object.assign(window, { __NUXT_DEVTOOLS_DISABLE__: true })
       })
       const captured: DiagnosticIssue[] = []
       let dropped = false

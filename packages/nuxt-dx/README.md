@@ -67,6 +67,9 @@ The report combines client errors, console warnings, hydration mismatches, and p
 It also includes diagnostics that modules send to the dev overlay.
 It does not click through interactions or include server logs and build size budgets.
 
+The inspection browser disables Nuxt DevTools because its payload reads can hide unread fields.
+Normal browser sessions keep DevTools enabled.
+
 The terminal shows a readable report. Use `--json` for scripts or `--output report.json` to save JSON.
 Exit code `1` means the page reported errors or the command could not run.
 Exit code `2` means observation was incomplete without recorded errors.
