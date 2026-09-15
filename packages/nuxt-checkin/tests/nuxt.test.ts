@@ -2,6 +2,7 @@ import type { CheckReport } from '../src/runtime/server'
 import { fileURLToPath } from 'node:url'
 import { $fetch, setup } from '@nuxt/test-utils/e2e'
 import { describe, expect, it } from 'vitest'
+import { runCli } from '../src/cli/run'
 
 describe('built Nuxt check route', async () => {
   await setup({ rootDir: fileURLToPath(new URL('./fixtures/basic', import.meta.url)), dev: false, browser: false })
@@ -16,5 +17,16 @@ describe('built Nuxt check route', async () => {
       expect.objectContaining({ id: 'sentry.site', result: { _tag: 'Unavailable', reason: 'Sentry read credential is unavailable.' } }),
       expect.objectContaining({ id: 'content.ready', result: { _tag: 'Pass', evidence: { pages: 3 } } }),
     ]))
+  })
+  it('carries configured prompt items through the generated module artifact into CLI JSON', async () => {
+    let output = ''
+    await runCli([], {
+      cwd: fileURLToPath(new URL('./fixtures/basic', import.meta.url)),
+      env: {},
+      stdout: (text) => { output = text },
+    })
+    expect(JSON.parse(output).prompts).toEqual([
+      { id: 'fixture.analysis', prompt: 'Explain the collected activity changes.' },
+    ])
   })
 })

@@ -8,6 +8,7 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 | --- | --- | --- | --- | --- |
 | Check | `@harlan-zw/nuxt-checkin/server` | planned | site and module server code | "check" |
 | Check Result | `@harlan-zw/nuxt-checkin/server` | planned | routes and external runners | "result" |
+| Prompt item | `@harlan-zw/nuxt-checkin/external` | planned | check-in agents | "prompt item" |
 | Queue Job | `@harlan-zw/nuxt-cf-jobs` | published | Nuxt server code | "job" |
 | Query | `@harlan-zw/nuxt-use-query/query` | published | Nuxt app code | "query" |
 | Mutation | `@harlan-zw/nuxt-use-query/mutation` | published | Nuxt app code | "mutation" |
@@ -46,6 +47,13 @@ Collisions
 **Use for:** runner output and severity/coverage decisions.
 **Never:** Error Report, alert, finding as the public concept.
 **Casing:** `Check Result` in headings, `result` in prose, and `CheckResult` in types.
+
+### Prompt item
+
+**Is:** a named instruction included in an external check report for an agent to interpret.
+**Use for:** site-specific analysis that needs judgment, alongside deterministic Check Results.
+**Never:** Check Result, health verdict, executable check.
+**Casing:** `Prompt item` in headings, `prompt item` in prose, `PromptItem` in types.
 
 ### Wide Event
 

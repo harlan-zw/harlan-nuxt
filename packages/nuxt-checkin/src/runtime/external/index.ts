@@ -17,7 +17,18 @@ export interface ExternalCheckEvent {
   clock: () => Date
 }
 export type ExternalCheckContext = CheckContext<ExternalCheckEvent> & ExternalCheckEvent
+export interface PromptItem {
+  id: string
+  prompt: string
+}
+
+export interface ExternalCheckReport extends CheckReport {
+  prompts: readonly PromptItem[]
+}
+
 export interface ExternalOptions {
+  /** Site instructions for the agent reading the report. These never affect check outcomes. */
+  prompts?: readonly PromptItem[]
   required: readonly string[]
   credentials?: Record<string, string | { env: string, files?: Array<{ path: string, key: string, section?: string }> }>
   identity?: Omit<ReportIdentity, 'deployment'> & { deploymentEnv: string, environmentEnv?: string }
@@ -25,6 +36,7 @@ export interface ExternalOptions {
   totalTimeoutMs?: number
   save?: {
     dir: string
+    /** Archive directory environment variable. Defaults to DAILY_CHECKIN_DIR. */
     dirEnv?: string
     stateFile?: string
     timestampKey?: string
@@ -41,7 +53,8 @@ export function defineExternalCheck(check: { id: string, run: (context: External
   } })
 }
 
-export async function runExternalChecks(checks: readonly Check<ExternalCheckEvent>[], options: ExternalOptions, input: Partial<ExternalCheckEvent> & { now?: Date } = {}): Promise<{ report: CheckReport, exitCode: number }> {
+export async function runExternalChecks(checks: readonly Check<ExternalCheckEvent>[], options: ExternalOptions, input: Partial<ExternalCheckEvent> & { now?: Date } = {}): Promise<{ report: ExternalCheckReport, exitCode: number }> {
+  const prompts = parsePrompts(options.prompts ?? [])
   const clock = input.clock ?? (() => new Date())
   const now = input.now ?? clock()
   const env = input.env ?? process.env
@@ -54,7 +67,23 @@ export async function runExternalChecks(checks: readonly Check<ExternalCheckEven
   }
   const identity = options.identity ? { site: options.identity.site, environment: env[options.identity.environmentEnv ?? ''] ?? options.identity.environment, deployment: env[options.identity.deploymentEnv] ?? '' } : undefined
   const report = await runChecks(checks, { event, now, credentials, identity: identity?.deployment ? identity : undefined, required: options.required, timeoutMs: options.timeoutMs, totalTimeoutMs: options.totalTimeoutMs })
-  return { report, exitCode: report.coverage !== 'complete' ? 2 : report.severity === 'pass' ? 0 : 1 }
+  return { report: { ...report, prompts }, exitCode: report.coverage !== 'complete' ? 2 : report.severity === 'pass' ? 0 : 1 }
+}
+
+function parsePrompts(value: unknown): PromptItem[] {
+  if (!Array.isArray(value))
+    throw new TypeError('Prompt items must be an array.')
+  const ids = new Set<string>()
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== 'object' || !('id' in item) || typeof item.id !== 'string' || !/^[\w.-]+$/.test(item.id))
+      throw new TypeError('Prompt item ID must contain letters, digits, underscores, dots, or hyphens.')
+    if (!('prompt' in item) || typeof item.prompt !== 'string' || !item.prompt.trim())
+      throw new TypeError('Prompt item text must be a non-empty string.')
+    if (ids.has(item.id))
+      throw new TypeError(`Duplicate Prompt item ID: ${item.id}`)
+    ids.add(item.id)
+    return { id: item.id, prompt: item.prompt }
+  })
 }
 
 interface RequestDependencies { request?: typeof fetch, clock?: () => Date }
