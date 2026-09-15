@@ -74,7 +74,7 @@ it('does not read nested getters when estimating sizes', () => {
   const data = { product: { nested: { get value(): string {
     throw new Error('Getter called')
   } } } }
-  expect(trackPayloadUsage(data).finish()).toMatchObject([{ unread: [{ key: 'nested', bytes: null }] }])
+  expect(trackPayloadUsage(data).finish()).toMatchObject([{ status: 'skipped' }])
 })
 
 it('counts writes conservatively and preserves deletion', () => {
@@ -121,9 +121,7 @@ it.each([
     throw new Error('Marker called')
   } })
   const data = { product: position === 'root' ? value : { nested: value } }
-  expect(trackPayloadUsage(data).finish()).toMatchObject([position === 'root'
-    ? { status: 'skipped' }
-    : { unread: [{ key: 'nested', bytes: null }] }])
+  expect(trackPayloadUsage(data).finish()).toMatchObject([{ status: 'skipped' }])
   expect(calls).toBe(0)
 })
 
@@ -241,4 +239,57 @@ it('skips tracking when custom objects can hide root references', () => {
   const data = { product: shared, hidden }
   expect(trackPayloadUsage(data).finish().every(entry => entry.status === 'skipped')).toBe(true)
   expect(data.product).toBe(shared)
+})
+
+it.each(['__v_raw', '__v_isRef'])('does not invoke inherited array marker getters: %s', (marker) => {
+  let calls = 0
+  const ancestor = Object.create(Array.prototype)
+  Object.defineProperty(ancestor, marker, { get() {
+    calls++
+    throw new Error('Marker called')
+  } })
+  const value = Object.setPrototypeOf(['Details'], Object.create(ancestor))
+  const data = { product: { nested: value } }
+  expect(trackPayloadUsage(data).finish()).toMatchObject([{ unread: [{ key: 'nested', bytes: null }] }])
+  expect(calls).toBe(0)
+})
+
+it.each(['nested', 'outer'])('skips roots when a %s accessor can hide an alias', (position) => {
+  let calls = 0
+  const shared = { details: 'Details' }
+  const alias = { get product() {
+    calls++
+    return shared
+  } }
+  const data = position === 'nested'
+    ? { product: shared, basket: alias }
+    : Object.defineProperty({ product: shared }, 'alias', Object.getOwnPropertyDescriptor(alias, 'product')!)
+  const tracker = trackPayloadUsage(data)
+  expect(calls).toBe(0)
+  expect(tracker.finish().every(entry => entry.status === 'skipped')).toBe(true)
+  expect(data.product).toBe(shared)
+  expect(data.product).toBe(alias.product)
+  expect(calls).toBe(1)
+})
+
+it.each(['outer', 'nested', 'map'])('skips tracking when a %s function can hide a reference', (position) => {
+  const shared = { details: 'Details' }
+  const getProduct = () => shared
+  const hidden = position === 'outer' ? getProduct : position === 'nested' ? { getProduct } : new Map([['getProduct', getProduct]])
+  const data = { product: shared, hidden }
+  expect(trackPayloadUsage(data).finish().every(entry => entry.status === 'skipped')).toBe(true)
+  expect(data.product).toBe(getProduct())
+})
+
+it.each(['method', 'getter'])('never executes an inherited toJSON %s while estimating bytes', (kind) => {
+  let calls = 0
+  const prototype = Object.create(Array.prototype)
+  const toJSON = () => {
+    calls++
+    throw new Error('Serialization called')
+  }
+  Object.defineProperty(prototype, 'toJSON', kind === 'method' ? { value: toJSON } : { get: toJSON })
+  const value = Object.setPrototypeOf(['Details'], prototype)
+  expect(trackPayloadUsage({ product: { nested: value } }).finish()).toMatchObject([{ unread: [{ key: 'nested', bytes: null }] }])
+  expect(calls).toBe(0)
 })

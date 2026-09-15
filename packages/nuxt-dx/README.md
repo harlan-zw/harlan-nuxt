@@ -429,7 +429,7 @@ Use `--timeout 60000` for routes that need more than 30 seconds.
 - Objects with nonconfigurable or readonly properties are also skipped. Payload cache entries must be writable.
 - Roots referenced through nested data properties, Map entries, or Set entries are skipped to preserve identity.
 - An incomplete reference scan skips all tracking. The scan stops after 10,000 objects, properties, or collection entries.
-- Custom objects with hidden references prevent scanning. Accessor results and references outside `payload.data` are outside support.
+- Custom objects, functions, and accessor properties prevent complete scanning. References outside `payload.data` are outside support.
 - Enable tracking only when code has no pre-existing external references to payload objects. Proxies change root identity.
 - Nested fields, `useState`, Pinia, and custom root payload entries are outside this version's scope.
 - Enumeration, membership checks, writes, and framework reads count conservatively. They can hide candidates.

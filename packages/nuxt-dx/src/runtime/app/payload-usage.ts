@@ -25,11 +25,19 @@ function dataDescriptors(value: object): PropertyDescriptorMap | undefined {
   const descriptors = Object.getOwnPropertyDescriptors(value)
   if (Object.values(descriptors).some(descriptor => !('value' in descriptor)))
     return
-  for (const marker of ['__v_raw', '__v_isRef']) {
-    const prototype = Object.getPrototypeOf(value)
-    const descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, marker)
-    if (descriptor && !('value' in descriptor))
+  let prototype = Object.getPrototypeOf(value)
+  let remaining = 64
+  while (prototype) {
+    if (--remaining < 0)
       return
+    if (Object.getOwnPropertyDescriptor(prototype, 'toJSON'))
+      return
+    for (const marker of ['__v_raw', '__v_isRef']) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, marker)
+      if (descriptor && !('value' in descriptor))
+        return
+    }
+    prototype = Object.getPrototypeOf(prototype)
   }
   if (!isProxy(value) && !isRef(value))
     return descriptors
@@ -77,21 +85,27 @@ function estimateBytes(key: string, value: unknown): number | null {
 /** Find roots reached through nested data properties or collection entries without reading getters. */
 function nestedRoots(roots: PropertyDescriptorMap): Set<object> | undefined {
   const rootValues = new Set<object>()
-  for (const descriptor of Object.values(roots)) {
-    if ('value' in descriptor && descriptor.value !== null && typeof descriptor.value === 'object')
+  for (const key of Reflect.ownKeys(roots)) {
+    const descriptor = roots[key]!
+    if (!('value' in descriptor) || typeof descriptor.value === 'function')
+      return
+    if (descriptor.value !== null && typeof descriptor.value === 'object')
       rootValues.add(descriptor.value)
   }
   const nested = new Set<object>()
   const visited = new Set<object>()
   const pending = [...rootValues]
   let remaining = 10000
-  const visit = (value: unknown) => {
+  const visit = (value: unknown): boolean => {
+    if (typeof value === 'function')
+      return false
     if (value !== null && typeof value === 'object') {
       if (rootValues.has(value))
         nested.add(value)
       if (!visited.has(value))
         pending.push(value)
     }
+    return true
   }
   while (pending.length) {
     const value = pending.pop()!
@@ -109,8 +123,8 @@ function nestedRoots(roots: PropertyDescriptorMap): Set<object> | undefined {
       for (const [key, entry] of entries) {
         if (--remaining < 0)
           return
-        visit(key)
-        visit(entry)
+        if (!visit(key) || !visit(entry))
+          return
       }
     }
     else if (!plain(value) && !Array.isArray(value)) {
@@ -121,8 +135,10 @@ function nestedRoots(roots: PropertyDescriptorMap): Set<object> | undefined {
       if (--remaining < 0)
         return
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!
-      if ('value' in descriptor)
-        visit(descriptor.value)
+      if (!('value' in descriptor))
+        return
+      if (!visit(descriptor.value))
+        return
     }
   }
   return nested
