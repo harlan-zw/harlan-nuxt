@@ -1,9 +1,5 @@
 #!/usr/bin/env node
-/**
- * `nuxt-dx` reads the size budget reports two builds wrote and says what moved.
- * Absolute budgets catch a bundle that is already too big; this catches the pull
- * request that quietly added 40 kB to one that was fine.
- */
+/** Inspect Nuxt routes and compare runtime size budgets. */
 import type { CommandDef } from 'citty'
 import type { SizeBudgetSnapshot } from '../size-budget/snapshot'
 import { realpathSync } from 'node:fs'
@@ -16,7 +12,7 @@ import { diffSnapshots } from '../size-budget/diff'
 import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../size-budget/diff-report'
 import { kilobytesToBytes } from '../size-budget/size'
 import { parseSnapshot } from '../size-budget/snapshot'
-import { installBrowser, payload } from './payload'
+import { inspect, installBrowser } from './inspect'
 
 /** A target growing by more than this fails the comparison. */
 const DEFAULT_THRESHOLD_KB = 10
@@ -115,9 +111,9 @@ const compare = defineCommand({
 const main: CommandDef = defineCommand({
   meta: {
     name: 'nuxt-dx',
-    description: 'JavaScript size budgets for Nuxt and Nitro runtime entries',
+    description: 'Client diagnostics and runtime size budgets for Nuxt',
   },
-  subCommands: { compare, payload, 'install-browser': installBrowser },
+  subCommands: { compare, inspect, 'install-browser': installBrowser },
 })
 
 export { main }

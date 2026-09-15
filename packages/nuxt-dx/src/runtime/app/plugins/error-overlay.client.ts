@@ -1,5 +1,5 @@
 import type { ComponentPublicInstance } from 'vue'
-import type { DiagnosticIssue } from '../report'
+import type { BrowserDiagnostics, DiagnosticIssue } from '../report'
 import { useEventListener, useStorage } from '@vueuse/core'
 import { effectScope } from 'vue'
 import { defineNuxtPlugin, useRoute, useRuntimeConfig } from '#app'
@@ -408,6 +408,8 @@ export default defineNuxtPlugin({
     const runtimeConfig = useRuntimeConfig()
     const config = (runtimeConfig.public as Record<string, unknown>).nuxtDx as DxConfig
     const issues: DiagnosticIssue[] = []
+    const diagnostics: BrowserDiagnostics = { status: 'pending', issues }
+    window.__NUXT_DX_DIAGNOSTICS__ = diagnostics
     const seen = new Set<string>()
     const runtimeScope = effectScope()
     const persistedPosition = runtimeScope.run(() => useStorage<OverlayPosition>(
@@ -573,6 +575,10 @@ export default defineNuxtPlugin({
     }
 
     const removeIssueHook = nuxtApp.hook('nuxt-dx:issue', addIssue)
+    const removeAppErrorHook = nuxtApp.hook('app:error', (error) => {
+      addIssue({ kind: 'error', message: error instanceof Error ? error.message : String(error) })
+      diagnostics.status = 'failed'
+    })
 
     const setPanelOpen = (open: boolean, restoreFocus = false) => {
       panel.hidden = !open
@@ -651,6 +657,8 @@ export default defineNuxtPlugin({
      * reach Nuxt's startup handler and turn into the error page.
      */
     const removeSuspenseHook = nuxtApp.hook('app:suspense:resolve', () => {
+      if (diagnostics.status === 'pending')
+        diagnostics.status = 'complete'
       if ((errorChain.next() as NuxtDefaultErrorHandler | undefined)?.__nuxt_default)
         errorChain.setNext(undefined)
     })
@@ -767,6 +775,9 @@ export default defineNuxtPlugin({
     const cleanup = () => {
       runtimeScope.stop()
       removeIssueHook()
+      removeAppErrorHook()
+      if (window.__NUXT_DX_DIAGNOSTICS__ === diagnostics)
+        delete window.__NUXT_DX_DIAGNOSTICS__
       if (copyResetTimer)
         clearTimeout(copyResetTimer)
       if (console.error === patchedConsoleError)

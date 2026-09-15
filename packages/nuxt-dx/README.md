@@ -24,6 +24,7 @@ Status: experimental. APIs may change before the first release.
 - 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
 - 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
+- **[Inspect a route](#inspect-a-route):** collect client diagnostics with `nuxt-dx inspect`, using the running dev server.
 - **[Payload Diagnostics](#payload-diagnostics):** find fields the client did not read during hydration, in dev or prerendered pages.
 - 📦 **Runtime size budgets:** warn when a Nuxt plugin, route middleware, Nitro plugin, or Nitro middleware pulls too much JavaScript into its bundle.
 - 📈 **Regression diffs:** write a machine-readable report, then compare builds with the CLI or GitHub action before added JavaScript lands.
@@ -45,6 +46,41 @@ export default defineNuxtConfig({
   modules: ['@harlan-zw/nuxt-dx'],
 })
 ```
+
+## Inspect a route
+
+Run this from your app directory while Nuxt dev is running:
+
+```sh
+pnpm exec nuxt-dx install-browser # once, to install Chromium
+pnpm exec nuxt-dx inspect
+```
+
+The command finds the running server and inspects the home page.
+Pass a path to inspect another route:
+
+```sh
+pnpm exec nuxt-dx inspect /about
+```
+
+The report combines client errors, console warnings, hydration mismatches, and payload diagnostics from the initial page load.
+It also includes diagnostics that modules send to the dev overlay.
+It does not click through interactions or include server logs and build size budgets.
+
+The terminal shows a readable report. Use `--json` for scripts or `--output report.json` to save JSON.
+Exit code `1` means the page reported errors or the command could not run.
+Exit code `2` means observation was incomplete without recorded errors.
+Warnings alone leave the exit code at `0`.
+
+If your app lives in another directory, pass `--cwd apps/web`.
+For a preview server or remote site, pass a full URL:
+
+```sh
+pnpm exec nuxt-dx inspect http://localhost:3000/about
+```
+
+Prerendered pages need the [payload option below](#prerendered-pages) to report hydration completion and unread fields.
+Vue source context comes from the dev overlay and is unavailable in production builds.
 
 ## Error overlay
 
@@ -107,17 +143,17 @@ Node, text, children, class, style, and attribute mismatches are all recognised.
 A page can fetch a whole product and only render its title.
 Payload diagnostics show which top-level fields the client did not read during initial hydration.
 
-Tracking is off by default. Enable it in development:
+Tracking runs by default in development. To disable it:
 
 ```ts
 export default defineNuxtConfig({
   nuxtDx: {
-    payloadUsage: true,
+    payloadUsage: false,
   },
 })
 ```
 
-Reload the page. The overlay lists unread fields from plain `payload.data[key]` objects, with estimated JSON sizes.
+With tracking enabled, reload the page. The overlay lists unread fields from plain `payload.data[key]` objects, with estimated JSON sizes.
 Tracking starts after Nuxt restores the payload, before ordinary app plugins run.
 It stops when initial hydration finishes.
 
@@ -140,7 +176,7 @@ Tracking adds overhead. Measure load time with tracking disabled after making yo
 
 Prerendering alone cannot tell you what the browser reads. Run each generated route through Chromium to collect a report.
 
-For this build, replace `payloadUsage: true` with:
+For the diagnostic build, enable browser collection:
 
 ```ts
 export default defineNuxtConfig({
@@ -161,13 +197,13 @@ pnpm exec nuxt preview --port 3000
 In another terminal, check each route you want to inspect:
 
 ```sh
-pnpm exec nuxt-dx payload http://localhost:3000/ --output payload-home.json
-pnpm exec nuxt-dx payload http://localhost:3000/about --output payload-about.json
+pnpm exec nuxt-dx inspect http://localhost:3000/ --output home.json
+pnpm exec nuxt-dx inspect http://localhost:3000/about --output about.json
 ```
 
 Each command opens a fresh browser and waits for initial hydration.
 The JSON contains read fields, unread fields, and reasons for skipped entries. It excludes payload values.
-Browser errors, HTTP errors, and missing instrumentation fail the command.
+The report includes browser and HTTP errors. Missing instrumentation marks the report as incomplete.
 If hydration needs more than 30 seconds, add `--timeout 60000`.
 
 The command enables collection before app startup and leaves the route URL unchanged.
@@ -177,7 +213,7 @@ Remove the `prerender` option before your deployment build to leave out the trac
 <details>
 <summary>Skipped data and scan limits</summary>
 
-Tracking wraps payload objects in proxies. Only enable it when earlier code holds no references to those objects outside `payload.data`.
+Tracking wraps payload objects in proxies. If earlier code holds references outside `payload.data`, set `payloadUsage: false`.
 Those earlier references cannot be tracked, and their identity will differ from the proxy.
 
 - Tracking skips arrays, primitives, reactive objects, refs, frozen objects, getters, and readonly or nonconfigurable properties.

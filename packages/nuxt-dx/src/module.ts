@@ -9,6 +9,7 @@ import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveModule, useLogger } from '@nuxt/kit'
+import { recordDevServer } from './dev-server'
 import { budgetFor, smallestBudget } from './size-budget/budget'
 import { moduleOwnerOf, moduleRoot } from './size-budget/module-owner'
 import { createOverrideUsage } from './size-budget/override-usage'
@@ -64,7 +65,7 @@ export interface ReportOptions {
 
 export interface ModuleOptions {
   enabled?: boolean
-  /** Opt in to top-level payload field tracking in dev. Use prerender for browser audits. */
+  /** Track top-level payload fields in dev by default. Use prerender for browser inspection. */
   payloadUsage?: boolean | { prerender?: boolean }
   position?: 'bottom-left' | 'bottom-right'
   sourceRoot?: string
@@ -347,6 +348,7 @@ export default defineNuxtModule<ModuleOptions>({
   },
   defaults: {
     enabled: true,
+    payloadUsage: true,
     position: 'bottom-right',
   },
   setup(options, nuxt) {
@@ -378,11 +380,16 @@ export {}
 
     const resolver = createResolver(import.meta.url)
     const prerenderUsage = typeof options.payloadUsage === 'object' && options.payloadUsage.prerender === true
-    if ((options.payloadUsage === true && nuxt.options.dev) || prerenderUsage)
+    if ((options.payloadUsage !== false && nuxt.options.dev) || prerenderUsage)
       addPlugin({ mode: 'client', src: resolver.resolve('./runtime/app/plugins/payload-usage.client') })
 
     if (!nuxt.options.dev)
       return
+
+    nuxt.hook('listen', async (_server, listener) => {
+      const cleanup = await recordDevServer(nuxt.options.rootDir, listener.url, nuxt.options.app.baseURL)
+      nuxt.hook('close', cleanup)
+    })
 
     const publicConfig = nuxt.options.runtimeConfig.public as Record<string, unknown>
     publicConfig.nuxtDx = {
