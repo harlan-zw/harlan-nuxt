@@ -1,7 +1,8 @@
 /** Select a retained report from an earlier run, across workflows. */
 async function findBaseline({ github, repo, repositoryId, runId, artifactName, baseBranch, headSha }) {
   const prefix = `${artifactName}--`
-  for await (const response of github.paginate.iterator(github.rest.actions.listArtifacts, { ...repo, per_page: 100 })) {
+  for (let page = 1; ; page++) {
+    const response = await github.rest.actions.listArtifacts({ ...repo, per_page: 100, page })
     for (const artifact of response.data.artifacts) {
       const run = artifact.workflow_run
       if (artifact.expired || !artifact.name.startsWith(prefix)
@@ -13,8 +14,8 @@ async function findBaseline({ github, repo, repositoryId, runId, artifactName, b
       // Completion order can differ from commit order. Never compare backwards.
       if (data.status === 'ahead' || data.status === 'identical') return { id: artifact.id, runId: run.id, name: artifact.name, sha }
     }
+    if (!response.headers.link?.includes('rel="next"')) return null
   }
-  return null
 }
 
 module.exports = { findBaseline }
