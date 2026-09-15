@@ -10,7 +10,13 @@ async function findBaseline({ github, repo, repositoryId, runId, artifactName, b
         || run.head_repository_id !== repositoryId) continue
       const sha = artifact.name.slice(prefix.length)
       if (!/^[a-f0-9]{40}$/.test(sha)) continue
-      const { data } = await github.rest.repos.compareCommitsWithBasehead({ ...repo, basehead: `${sha}...${headSha}` })
+      const comparison = await github.rest.repos.compareCommitsWithBasehead({ ...repo, basehead: `${sha}...${headSha}` }).catch((error) => {
+        // Fork heads may be unavailable in the base repository. The caller notices a missing baseline.
+        if (error.status === 404) return null
+        throw error
+      })
+      if (!comparison) return null
+      const { data } = comparison
       // Completion order can differ from commit order. Never compare backwards.
       if (data.status === 'ahead' || data.status === 'identical') return { id: artifact.id, runId: run.id, name: artifact.name, sha }
     }

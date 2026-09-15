@@ -59,6 +59,27 @@ test('surfaces API failures instead of claiming a missing baseline', async () =>
   await assert.rejects(findBaseline(input), /unauthorized/)
 })
 
+test('stops baseline lookup when a fork head cannot be resolved', async () => {
+  const compared = []
+  const result = await findBaseline(options([[artifact(older), artifact(future)]], async ({ basehead }) => {
+    compared.push(basehead)
+    throw Object.assign(new Error('Not Found'), { status: 404 })
+  }))
+  assert.equal(result, null)
+  assert.deepEqual(compared, [`${older}...${head}`])
+})
+
+test('only treats comparison 404 responses as a missing baseline', async () => {
+  for (const status of [401, 403, 429, 500]) {
+    const error = Object.assign(new Error('API failure'), { status })
+    await assert.rejects(findBaseline(options([[artifact(older)]], async () => { throw error })), error)
+  }
+  const input = options([])
+  const error = Object.assign(new Error('Not Found'), { status: 404 })
+  input.github.rest.actions.listArtifacts = async () => { throw error }
+  await assert.rejects(findBaseline(input), error)
+})
+
 test('rejects malformed source identifiers without querying commits', async () => {
   const result = await findBaseline(options([[artifact('../main')]], async () => { throw new Error('unexpected comparison') }))
   assert.equal(result, null)
