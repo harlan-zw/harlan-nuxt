@@ -64,7 +64,7 @@ export interface ReportOptions {
 
 export interface ModuleOptions {
   enabled?: boolean
-  /** Track top-level payload data fields in dev. Use prerender for opt-in browser audits. */
+  /** Opt in to top-level payload field tracking in dev. Use prerender for browser audits. */
   payloadUsage?: boolean | { prerender?: boolean }
   position?: 'bottom-left' | 'bottom-right'
   sourceRoot?: string
@@ -378,7 +378,7 @@ export {}
 
     const resolver = createResolver(import.meta.url)
     const prerenderUsage = typeof options.payloadUsage === 'object' && options.payloadUsage.prerender === true
-    if (options.payloadUsage !== false && (nuxt.options.dev || prerenderUsage))
+    if ((options.payloadUsage === true && nuxt.options.dev) || prerenderUsage)
       addPlugin({ mode: 'client', src: resolver.resolve('./runtime/app/plugins/payload-usage.client') })
 
     if (!nuxt.options.dev)

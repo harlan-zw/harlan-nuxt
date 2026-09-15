@@ -96,7 +96,9 @@ it('preserves nested aliases and cycles without reporting indirect reads as unus
   expect(data.product).toBe(data.basket.product)
   expect(data.cycle.self).toBe(data.cycle)
   expect(data.basket.product.details).toBe('Details')
-  expect(tracker.finish()[0]).toMatchObject({ read: ['details'], unread: [{ key: 'title' }] })
+  const report = tracker.finish()
+  expect(report.find(entry => entry.key === 'product')).toMatchObject({ status: 'skipped' })
+  expect(report.find(entry => entry.key === 'cycle')).toMatchObject({ status: 'skipped' })
   expect(data.product).toBe(shared)
   expect(data.cycle.self).toBe(data.cycle)
   expect(Object.getOwnPropertyDescriptor(shared, 'details')).toEqual({
@@ -135,7 +137,7 @@ it('returns unavailable size when a compact shared graph exceeds the estimation 
 
 it('returns unavailable size for deep values and oversized strings', () => {
   let value: object = {}
-  for (let index = 0; index < 10000; index++)
+  for (let index = 0; index < 1000; index++)
     value = { child: value }
   const data = { product: { deep: value, large: 'x'.repeat(2 ** 20) } }
   expect(trackPayloadUsage(data).finish()).toMatchObject([{ unread: [
@@ -144,7 +146,7 @@ it('returns unavailable size for deep values and oversized strings', () => {
   ] }])
 })
 
-it('restores data descriptors while preserving writes, deletion, and redefinition', () => {
+it('preserves data descriptors during writes, deletion, and redefinition', () => {
   const data: Record<string, Record<string, string>> = { product: { title: 'Book', details: 'Details', extra: 'Extra' } }
   const tracker = trackPayloadUsage(data)
   data.product!.title = 'Changed'
@@ -179,13 +181,64 @@ it('skips readonly and nonconfigurable properties without changing their descrip
   expect([readonly, fixed].map(value => Object.getOwnPropertyDescriptor(value, 'title'))).toEqual(before)
 })
 
-it.each([Object.freeze, Object.seal])('finishes collection after descriptors become nonconfigurable', (lock) => {
-  const data = { product: { title: 'Book' } }
+it('preserves sealed writes and rejects frozen writes during and after collection', () => {
+  const data = { sealed: { title: 'Book' }, frozen: { title: 'Book' } }
   const tracker = trackPayloadUsage(data)
-  lock(data.product)
-  expect(tracker.finish()).toMatchObject([{ unread: [{ key: 'title' }] }])
+  Object.seal(data.sealed)
+  Object.freeze(data.frozen)
+  data.sealed.title = 'Changed'
+  expect(data.sealed.title).toBe('Changed')
   expect(() => {
-    data.product.title = 'Changed'
+    data.frozen.title = 'Changed'
   }).toThrow(TypeError)
-  expect(data.product.title).toBe('Book')
+  expect(tracker.finish().every(entry => entry.status === 'tracked')).toBe(true)
+  data.sealed.title = 'After'
+  expect(data.sealed.title).toBe('After')
+  expect(() => {
+    data.frozen.title = 'After'
+  }).toThrow(TypeError)
+  expect(data.frozen.title).toBe('Book')
+})
+
+it('skips tracking when the reference scan budget cannot establish root identity', () => {
+  let value: object = {}
+  for (let index = 0; index < 11000; index++)
+    value = { child: value }
+  const original = { value }
+  const data = { product: original }
+  expect(trackPayloadUsage(data).finish()).toMatchObject([{ status: 'skipped' }])
+  expect(data.product).toBe(original)
+})
+
+it.each(['map value', 'map key', 'set'])('skips roots referenced by %s without changing collection identity', (kind) => {
+  const shared = { details: 'Details' }
+  const collection = kind === 'set'
+    ? new Set([shared])
+    : kind === 'map key' ? new Map([[shared, 'item']]) : new Map([['item', shared]])
+  const data = { product: shared, basket: { collection } }
+  const tracker = trackPayloadUsage(data)
+  expect(data.product).toBe(shared)
+  expect(data.basket.collection).toBe(collection)
+  expect(tracker.finish().find(entry => entry.key === 'product')).toMatchObject({ status: 'skipped' })
+  expect(data.product).toBe(shared)
+})
+
+it('uses native collection iteration without invoking overridden methods', () => {
+  const shared = { details: 'Details' }
+  const map = new Map([['item', shared]])
+  Object.defineProperty(map, 'entries', { get() {
+    throw new Error('Getter called')
+  } })
+  const data = { product: shared, map }
+  expect(trackPayloadUsage(data).finish().every(entry => entry.status === 'skipped')).toBe(true)
+  expect(data.product).toBe(shared)
+})
+
+it('skips tracking when custom objects can hide root references', () => {
+  const shared = { details: 'Details' }
+  const hidden = Object.create({})
+  hidden.product = shared
+  const data = { product: shared, hidden }
+  expect(trackPayloadUsage(data).finish().every(entry => entry.status === 'skipped')).toBe(true)
+  expect(data.product).toBe(shared)
 })

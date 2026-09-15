@@ -380,9 +380,9 @@ Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/m
 
 ## Payload diagnostics
 
-In dev, Nuxt DX tracks top-level fields inside each plain `payload.data[key]` object during initial hydration.
+In dev, set `nuxtDx.payloadUsage: true` to track top-level fields inside plain `payload.data[key]` objects during initial hydration.
 The overlay reports fields that were not read, with estimated UTF-8 JSON bytes.
-Disable this with `nuxtDx.payloadUsage: false`.
+Tracking is off by default.
 
 For example, reading `product.title` leaves `product.details` as a candidate for `pick` or deferred fetching.
 Review each candidate. Later interactions and lazy components may need it.
@@ -426,14 +426,14 @@ Use `--timeout 60000` for routes that need more than 30 seconds.
 
 - Only the initial hydration is observed. Client navigation and delayed hydration are outside the observation window.
 - Arrays, primitives, reactive objects, refs, frozen objects, and objects with getters are skipped.
-- Objects with nonconfigurable or readonly properties are also skipped.
+- Objects with nonconfigurable or readonly properties are also skipped. Payload cache entries must be writable.
+- Roots referenced through nested data properties, Map entries, or Set entries are skipped to preserve identity.
+- An incomplete reference scan skips all tracking. The scan stops after 10,000 objects, properties, or collection entries.
+- Custom objects with hidden references prevent scanning. Accessor results and references outside `payload.data` are outside support.
+- Enable tracking only when code has no pre-existing external references to payload objects. Proxies change root identity.
 - Nested fields, `useState`, Pinia, and custom root payload entries are outside this version's scope.
-- Value reads, writes, and framework reads count conservatively. Deleted or replaced fields are excluded from candidates.
-- Membership checks and key enumeration without value reads are unobserved. Review these before changing payload data.
+- Enumeration, membership checks, writes, and framework reads count conservatively. They can hide candidates.
 - Bytes estimate each field as a standalone JSON object. They are not compressed savings and should not be summed.
-- Cyclic, shared, or non-JSON field values have unavailable size estimates. Their field reads are still tracked.
+- For tracked roots, cyclic, shared, or non-JSON field values have unavailable size estimates.
 - Size estimates stop at 64 levels, 10,000 traversal steps, or a conservative 1 MiB JSON output bound.
-- Temporary accessors preserve object identity and restore data properties after collection. They add overhead during diagnosis.
-- Property descriptors change during collection. Freezing or sealing tracked objects prevents cleanup and disables writes to tracked fields.
-- Disable payload tracking when hydration seals objects that must remain writable.
-- Measure performance with instrumentation disabled.
+- Proxies add overhead during diagnosis. Measure performance with instrumentation disabled.
