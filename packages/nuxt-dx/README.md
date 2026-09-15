@@ -24,6 +24,7 @@ Status: experimental. APIs may change before the first release.
 - 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
 - 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
 - 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
+- **[Payload Diagnostics](#payload-diagnostics):** find fields the client did not read during hydration, in dev or prerendered pages.
 - 📦 **Runtime size budgets:** warn when a Nuxt plugin, route middleware, Nitro plugin, or Nitro middleware pulls too much JavaScript into its bundle.
 - 📈 **Regression diffs:** write a machine-readable report, then compare builds with the CLI or GitHub action before added JavaScript lands.
 
@@ -100,6 +101,96 @@ The copied report gets the same treatment, one heading per mismatch:
 ```
 
 Node, text, children, class, style, and attribute mismatches are all recognised. Vue's follow-up `Hydration completed but contains mismatches.` console error is dropped, since every mismatch behind it is already listed. Two reports of the same mismatch collapse into one entry: a mismatch is identified by where it happened rather than by the values it printed, so a clock rendering `Date.now()` does not stack up a new entry every time it drifts.
+
+## Payload Diagnostics
+
+A page can fetch a whole product and only render its title.
+Payload diagnostics show which top-level fields the client did not read during initial hydration.
+
+Tracking is off by default. Enable it in development:
+
+```ts
+export default defineNuxtConfig({
+  nuxtDx: {
+    payloadUsage: true,
+  },
+})
+```
+
+Reload the page. The overlay lists unread fields from plain `payload.data[key]` objects, with estimated JSON sizes.
+Tracking starts after Nuxt restores the payload, before ordinary app plugins run.
+It stops when initial hydration finishes.
+
+If the page reads `product.title`, the report can flag `product.details`.
+If nothing needs `details`, omit it from the fetch result.
+If a later interaction needs it, consider fetching it when that interaction happens.
+Nuxt DX keeps the data intact.
+
+### Reading the results
+
+Only top-level fields count. Reading `product.author.name` counts as reading the whole `author` field.
+The report does not cover later navigation, delayed hydration, `useState`, or Pinia.
+Framework reads can also count, so the report may miss fields your components never use.
+
+Unread fields may still serve lazy components or later interactions. Check those uses before removing data.
+Byte estimates describe each field as a standalone JSON object. Do not add them together or treat them as compressed savings.
+Tracking adds overhead. Measure load time with tracking disabled after making your changes.
+
+### Prerendered pages
+
+Prerendering alone cannot tell you what the browser reads. Run each generated route through Chromium to collect a report.
+
+For this build, replace `payloadUsage: true` with:
+
+```ts
+export default defineNuxtConfig({
+  nuxtDx: {
+    payloadUsage: { prerender: true },
+  },
+})
+```
+
+Generate the site, install Chromium once, and start the preview server:
+
+```sh
+pnpm exec nuxt generate
+pnpm exec nuxt-dx install-browser
+pnpm exec nuxt preview --port 3000
+```
+
+In another terminal, check each route you want to inspect:
+
+```sh
+pnpm exec nuxt-dx payload http://localhost:3000/ --output payload-home.json
+pnpm exec nuxt-dx payload http://localhost:3000/about --output payload-about.json
+```
+
+Each command opens a fresh browser and waits for initial hydration.
+The JSON contains read fields, unread fields, and reasons for skipped entries. It excludes payload values.
+Browser errors, HTTP errors, and missing instrumentation fail the command.
+If hydration needs more than 30 seconds, add `--timeout 60000`.
+
+The command enables collection before app startup and leaves the route URL unchanged.
+Normal production visits do not collect a report.
+Remove the `prerender` option before your deployment build to leave out the tracking code.
+
+<details>
+<summary>Skipped data and scan limits</summary>
+
+Tracking wraps payload objects in proxies. Only enable it when earlier code holds no references to those objects outside `payload.data`.
+Those earlier references cannot be tracked, and their identity will differ from the proxy.
+
+- Tracking skips arrays, primitives, reactive objects, refs, frozen objects, getters, and readonly or nonconfigurable properties.
+- Payload cache entries must be writable. Nested references, including Map and Set entries, can cause an object to be skipped.
+- If the reference scan cannot finish, all entries are skipped.
+  Custom objects, functions, accessors, and hidden Vue proxy references can stop the scan.
+  The scan also stops after 10,000 objects, properties, or collection entries.
+- Enumeration, membership checks, writes, and framework reads count as use. They can hide unread fields.
+- Nested fields and custom root payload entries are not tracked.
+- Cyclic, shared, or non-JSON field values have no size estimate.
+  Estimates stop at 64 levels, 10,000 traversal steps, or a conservative 1 MiB JSON output bound.
+
+</details>
 
 ## Runtime size budgets
 
@@ -377,63 +468,3 @@ Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/m
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com
-
-## Payload diagnostics
-
-In dev, set `nuxtDx.payloadUsage: true` to track top-level fields inside plain `payload.data[key]` objects during initial hydration.
-The overlay reports fields that were not read, with estimated UTF-8 JSON bytes.
-Tracking is off by default.
-
-For example, reading `product.title` leaves `product.details` as a candidate for `pick` or deferred fetching.
-Review each candidate. Later interactions and lazy components may need it.
-Nuxt DX never removes payload data.
-
-### Prerender browser checks
-
-Enable instrumentation in a build used for diagnostics:
-
-```ts
-export default defineNuxtConfig({
-  modules: ['@harlan-zw/nuxt-dx'],
-  nuxtDx: {
-    payloadUsage: { prerender: true },
-  },
-})
-```
-
-Generate and serve the site. Install Chromium once, then check each served route:
-
-```sh
-pnpm exec nuxt generate
-pnpm exec nuxt-dx install-browser
-pnpm exec nuxt preview --port 3000
-# In another terminal:
-pnpm exec nuxt-dx payload http://localhost:3000/ --output payload-home.json
-pnpm exec nuxt-dx payload http://localhost:3000/about --output payload-about.json
-```
-
-Each command opens a fresh browser and waits for Nuxt's initial hydration to finish.
-The browser enables collection before app startup, without changing the route URL.
-Normal visits do not collect in production builds.
-Remove `prerender: true` before the deployment build to exclude the instrumentation entirely.
-Server rendering alone cannot determine client reads.
-
-The JSON lists read fields, unread fields, and skipped entries. It contains no payload values.
-Browser errors, HTTP errors, and missing instrumentation fail the command.
-Use `--timeout 60000` for routes that need more than 30 seconds.
-
-### Limits
-
-- Only the initial hydration is observed. Client navigation and delayed hydration are outside the observation window.
-- Arrays, primitives, reactive objects, refs, frozen objects, and objects with getters are skipped.
-- Objects with nonconfigurable or readonly properties are also skipped. Payload cache entries must be writable.
-- Roots referenced through nested data properties, Map entries, or Set entries are skipped to preserve identity.
-- An incomplete reference scan skips all tracking. The scan stops after 10,000 objects, properties, or collection entries.
-- Custom objects, functions, and accessor properties prevent complete scanning. References outside `payload.data` are outside support.
-- Enable tracking only when code has no pre-existing external references to payload objects. Proxies change root identity.
-- Nested fields, `useState`, Pinia, and custom root payload entries are outside this version's scope.
-- Enumeration, membership checks, writes, and framework reads count conservatively. They can hide candidates.
-- Bytes estimate each field as a standalone JSON object. They are not compressed savings and should not be summed.
-- For tracked roots, cyclic, shared, or non-JSON field values have unavailable size estimates.
-- Size estimates stop at 64 levels, 10,000 traversal steps, or a conservative 1 MiB JSON output bound.
-- Proxies add overhead during diagnosis. Measure performance with instrumentation disabled.
