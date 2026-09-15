@@ -64,6 +64,8 @@ export interface ReportOptions {
 
 export interface ModuleOptions {
   enabled?: boolean
+  /** Opt in to top-level payload field tracking in dev. Use prerender for browser audits. */
+  payloadUsage?: boolean | { prerender?: boolean }
   position?: 'bottom-left' | 'bottom-right'
   sourceRoot?: string
   /** Warn when a runtime entry's exclusive import graph exceeds a bundle size budget. */
@@ -374,6 +376,11 @@ export {}
 `,
     })
 
+    const resolver = createResolver(import.meta.url)
+    const prerenderUsage = typeof options.payloadUsage === 'object' && options.payloadUsage.prerender === true
+    if ((options.payloadUsage === true && nuxt.options.dev) || prerenderUsage)
+      addPlugin({ mode: 'client', src: resolver.resolve('./runtime/app/plugins/payload-usage.client') })
+
     if (!nuxt.options.dev)
       return
 
@@ -383,7 +390,6 @@ export {}
       sourceRoot: options.sourceRoot ?? nuxt.options.rootDir,
     }
 
-    const resolver = createResolver(import.meta.url)
     addPlugin({ mode: 'client', src: resolver.resolve('./runtime/app/plugins/error-overlay.client') })
   },
 })

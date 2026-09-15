@@ -59,7 +59,8 @@
     "@nuxt/kit": "catalog:",
     "@vueuse/core": "catalog:",
     "citty": "catalog:",
-    "consola": "catalog:"
+    "consola": "catalog:",
+    "playwright": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
