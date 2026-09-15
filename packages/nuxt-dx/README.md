@@ -426,8 +426,14 @@ Use `--timeout 60000` for routes that need more than 30 seconds.
 
 - Only the initial hydration is observed. Client navigation and delayed hydration are outside the observation window.
 - Arrays, primitives, reactive objects, refs, frozen objects, and objects with getters are skipped.
+- Objects with nonconfigurable or readonly properties are also skipped.
 - Nested fields, `useState`, Pinia, and custom root payload entries are outside this version's scope.
-- Enumeration, writes, and framework reads count conservatively. They can hide candidates.
+- Value reads, writes, and framework reads count conservatively. Deleted or replaced fields are excluded from candidates.
+- Membership checks and key enumeration without value reads are unobserved. Review these before changing payload data.
 - Bytes estimate each field as a standalone JSON object. They are not compressed savings and should not be summed.
-- Cyclic or non-JSON values have unavailable size estimates. Their field reads are still tracked.
-- Proxies add overhead during diagnosis. Measure performance with instrumentation disabled.
+- Cyclic, shared, or non-JSON field values have unavailable size estimates. Their field reads are still tracked.
+- Size estimates stop at 64 levels, 10,000 traversal steps, or a conservative 1 MiB JSON output bound.
+- Temporary accessors preserve object identity and restore data properties after collection. They add overhead during diagnosis.
+- Property descriptors change during collection. Freezing or sealing tracked objects prevents cleanup and disables writes to tracked fields.
+- Disable payload tracking when hydration seals objects that must remain writable.
+- Measure performance with instrumentation disabled.

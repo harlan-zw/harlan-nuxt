@@ -20,83 +20,127 @@ function plain(value: unknown): value is Record<string, unknown> {
     && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
 }
 
-/** Only inspect data properties. Size measurement must never execute user getters or toJSON methods. */
-function jsonSafe(value: unknown, seen = new Set<object>()): boolean {
+/** Inspect descriptors before Vue helpers, which read marker properties. */
+function dataDescriptors(value: object): PropertyDescriptorMap | undefined {
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  if (Object.values(descriptors).some(descriptor => !('value' in descriptor)))
+    return
+  for (const marker of ['__v_raw', '__v_isRef']) {
+    const prototype = Object.getPrototypeOf(value)
+    const descriptor = prototype && Object.getOwnPropertyDescriptor(prototype, marker)
+    if (descriptor && !('value' in descriptor))
+      return
+  }
+  if (!isProxy(value) && !isRef(value))
+    return descriptors
+}
+
+/** Bound traversal, depth, and worst-case JSON output before serializing. */
+function jsonSafe(value: unknown, budget: { nodes: number, bytes: number }, seen = new Set<object>(), depth = 0): boolean {
+  if (--budget.nodes < 0 || depth > 64)
+    return false
+  budget.bytes -= typeof value === 'string' ? value.length * 6 + 2 : 32
+  if (budget.bytes < 0)
+    return false
   if (value === null || ['string', 'boolean', 'number'].includes(typeof value))
     return true
-  if ((!plain(value) && !Array.isArray(value)) || isProxy(value) || isRef(value) || seen.has(value))
+  if ((!plain(value) && !Array.isArray(value)) || seen.has(value))
     return false
   seen.add(value)
-  const safe = Object.values(Object.getOwnPropertyDescriptors(value)).every(descriptor =>
-    'value' in descriptor && jsonSafe(descriptor.value, seen),
-  )
-  seen.delete(value)
-  return safe
+  const descriptors = dataDescriptors(value)
+  if (!descriptors)
+    return false
+  // Never revisit aliases. JSON duplicates them, so compact graphs can expand exponentially.
+  // Array length bounds sparse arrays, whose holes also produce serialized output.
+  if (Array.isArray(value)) {
+    budget.nodes -= value.length
+    budget.bytes -= value.length * 5
+    if (budget.nodes < 0 || budget.bytes < 0)
+      return false
+  }
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    budget.bytes -= key.length * 6 + 4
+    if (budget.bytes < 0 || !jsonSafe(descriptor.value, budget, seen, depth + 1))
+      return false
+  }
+  return true
 }
 
 /** Standalone UTF-8 JSON bytes, not compressed transfer savings or additive devalue bytes. */
 function estimateBytes(key: string, value: unknown): number | null {
-  if (!jsonSafe(value))
+  const budget = { nodes: 10000, bytes: 1024 * 1024 - key.length * 6 - 8 }
+  if (!jsonSafe(value, budget))
     return null
   return new TextEncoder().encode(JSON.stringify({ [key]: value })).byteLength
 }
 
-/** Wrap only existing, plain payload data objects. Reads of the outer cache do not count. */
+/** Observe value reads in place so aliases and cycles retain their original identity. */
 export function trackPayloadUsage(data: Record<string, unknown>) {
   let active = true
   let result: PayloadUsageEntry[] | undefined
   const records: { key: string, fields: string[], read: Set<string>, sizes: Map<string, number | null> }[] = []
   const skipped: PayloadUsageEntry[] = []
-  const aliases = new Map<object, { proxy: object, read: Set<string> }>()
+  const objects = new Map<object, { descriptors: PropertyDescriptorMap, fields: string[], read: Set<string> }>()
+  const cleanup: (() => void)[] = []
 
+  // Estimate all values before installing accessors, including values shared between roots.
   for (const key of Object.keys(data)) {
-    const value = data[key]
-    if (!plain(value) || isProxy(value) || isRef(value) || !Object.isExtensible(value)
-      || Object.values(Object.getOwnPropertyDescriptors(value)).some(descriptor => !('value' in descriptor))) {
-      skipped.push({ key, status: 'skipped', reason: 'Only extensible plain data objects are tracked.' })
+    const root = Object.getOwnPropertyDescriptor(data, key)
+    const value: unknown = root && 'value' in root ? root.value : undefined
+    const descriptors = plain(value) ? dataDescriptors(value) : undefined
+    if (!descriptors || !plain(value) || !Object.isExtensible(value)
+      || Object.values(descriptors).some(descriptor => !descriptor.configurable || !descriptor.writable)) {
+      skipped.push({ key, status: 'skipped', reason: 'Only extensible plain objects with configurable, writable data properties are tracked.' })
       continue
     }
     const fields = Object.keys(value)
-    const sizes = new Map(fields.map(field => [field, estimateBytes(field, value[field])]))
-    const existing = aliases.get(value)
-    const read = existing?.read ?? new Set<string>()
-    const mark = (field: PropertyKey) => {
-      if (active && typeof field === 'string' && sizes.has(field))
-        read.add(field)
-    }
-    const proxy = existing?.proxy ?? new Proxy(value, {
-      get(target, field, receiver) {
-        mark(field)
-        return Reflect.get(target, field, receiver)
-      },
-      has(target, field) {
-        mark(field)
-        return Reflect.has(target, field)
-      },
-      ownKeys(target) {
-        // Enumeration can control rendering without reading values. Count it conservatively.
-        fields.forEach(mark)
-        return Reflect.ownKeys(target)
-      },
-      set(target, field, value, receiver) {
-        // A write obscures whether the original server value was needed.
-        mark(field)
-        return Reflect.set(target, field, value, receiver)
-      },
-      deleteProperty(target, field) {
-        mark(field)
-        return Reflect.deleteProperty(target, field)
-      },
-    })
-    aliases.set(value, { proxy, read })
-    data[key] = proxy
+    const sizes = new Map(fields.map(field => [field, estimateBytes(field, descriptors[field]!.value)]))
+    const read = objects.get(value)?.read ?? new Set<string>()
+    objects.set(value, { descriptors, fields, read })
     records.push({ key, fields, read, sizes })
+  }
+
+  for (const [value, { descriptors, fields, read }] of objects) {
+    for (const field of fields) {
+      const original = descriptors[field]!
+      let current: unknown = original.value
+      const get = () => {
+        if (active)
+          read.add(field)
+        return current
+      }
+      const set = function (this: object, next: unknown) {
+        // Freeze and seal both lock accessor descriptors. Never retain a writable frozen value.
+        if (!Object.getOwnPropertyDescriptor(value, field)?.configurable)
+          throw new TypeError('Cannot write a payload property after it becomes nonconfigurable.')
+        if (active)
+          read.add(field)
+        if (this === value)
+          current = next
+        else
+          Object.defineProperty(this, field, { value: next, writable: true, enumerable: true, configurable: true })
+      }
+      Object.defineProperty(value, field, { configurable: true, enumerable: original.enumerable, get, set })
+      cleanup.push(() => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, field)
+        if (descriptor?.get !== get || descriptor.set !== set) {
+          // Deletion or replacement obscures whether the server value was needed.
+          read.add(field)
+          return
+        }
+        if (descriptor.configurable)
+          Object.defineProperty(value, field, { ...original, value: current })
+      })
+    }
   }
 
   return {
     finish(): PayloadUsageEntry[] {
+      if (result)
+        return result
       active = false
-      result ??= [
+      cleanup.forEach(restore => restore())
+      result = [
         ...records.map(({ key, fields, read, sizes }): PayloadUsageEntry => ({
           key,
           status: 'tracked',
