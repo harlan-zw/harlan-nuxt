@@ -16,6 +16,7 @@ import { diffSnapshots } from '../size-budget/diff'
 import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../size-budget/diff-report'
 import { kilobytesToBytes } from '../size-budget/size'
 import { parseSnapshot } from '../size-budget/snapshot'
+import { installBrowser, payload } from './payload'
 
 /** A target growing by more than this fails the comparison. */
 const DEFAULT_THRESHOLD_KB = 10
@@ -116,7 +117,7 @@ const main: CommandDef = defineCommand({
     name: 'nuxt-dx',
     description: 'JavaScript size budgets for Nuxt and Nitro runtime entries',
   },
-  subCommands: { compare },
+  subCommands: { compare, payload, 'install-browser': installBrowser },
 })
 
 export { main }

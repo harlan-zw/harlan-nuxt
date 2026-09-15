@@ -377,3 +377,56 @@ Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/m
 
 [nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
 [nuxt-href]: https://nuxt.com
+
+## Payload diagnostics
+
+In dev, Nuxt DX tracks top-level fields inside each plain `payload.data[key]` object during initial hydration.
+The overlay reports fields that were not read, with estimated UTF-8 JSON bytes.
+Disable this with `nuxtDx.payloadUsage: false`.
+
+For example, reading `product.title` leaves `product.details` as a candidate for `pick` or deferred fetching.
+Review each candidate. Later interactions and lazy components may need it.
+Nuxt DX never removes payload data.
+
+### Prerender browser checks
+
+Enable instrumentation in a build used for diagnostics:
+
+```ts
+export default defineNuxtConfig({
+  modules: ['@harlan-zw/nuxt-dx'],
+  nuxtDx: {
+    payloadUsage: { prerender: true },
+  },
+})
+```
+
+Generate and serve the site. Install Chromium once, then check each served route:
+
+```sh
+pnpm exec nuxt generate
+pnpm exec nuxt-dx install-browser
+pnpm exec nuxt preview --port 3000
+# In another terminal:
+pnpm exec nuxt-dx payload http://localhost:3000/ --output payload-home.json
+pnpm exec nuxt-dx payload http://localhost:3000/about --output payload-about.json
+```
+
+Each command opens a fresh browser and waits for Nuxt's initial hydration to finish.
+It adds `__nuxt_dx_payload=1` to request collection. Normal visits do not collect in production builds.
+Remove `prerender: true` before the deployment build to exclude the instrumentation entirely.
+Server rendering alone cannot determine client reads.
+
+The JSON lists read fields, unread fields, and skipped entries. It contains no payload values.
+Browser errors, HTTP errors, and missing instrumentation fail the command.
+Use `--timeout 60000` for routes that need more than 30 seconds.
+
+### Limits
+
+- Only the initial hydration is observed. Client navigation and delayed hydration are outside the observation window.
+- Arrays, primitives, reactive objects, refs, frozen objects, and objects with getters are skipped.
+- Nested fields, `useState`, Pinia, and custom root payload entries are outside this version's scope.
+- Enumeration, writes, and framework reads count conservatively. They can hide candidates.
+- Bytes estimate each field as a standalone JSON object. They are not compressed savings and should not be summed.
+- Cyclic or non-JSON values have unavailable size estimates. Their field reads are still tracked.
+- Proxies add overhead during diagnosis. Measure performance with instrumentation disabled.

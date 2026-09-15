@@ -49,6 +49,7 @@ catalog:
   wrangler: ^4.120.1
   yaml: ^2.9.0
   zod: ^4.4.3
+  playwright: ^1.63.0
 
 ignoredBuiltDependencies:
   - esbuild
