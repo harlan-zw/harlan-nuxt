@@ -24,6 +24,17 @@ export interface DiagnosticReportInput {
   issues: readonly DiagnosticIssue[]
 }
 
+export interface BrowserDiagnostics {
+  status: 'pending' | 'complete' | 'failed'
+  issues: DiagnosticIssue[]
+}
+
+declare global {
+  interface Window {
+    __NUXT_DX_DIAGNOSTICS__?: BrowserDiagnostics
+  }
+}
+
 export function relativeSourcePath(file: string, sourceRoot: string): string {
   const normalizedFile = file.replace(/\\/g, '/')
   const normalizedRoot = sourceRoot.replace(/\\/g, '/').replace(/\/$/, '')
