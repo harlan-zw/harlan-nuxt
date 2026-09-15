@@ -11,6 +11,7 @@ export default defineNuxtConfig({
     [Jobs, { queues: { indexing: 'INDEXING' }, checks: [{ id: 'queue.indexing', d1Binding: 'DB', queue: 'indexing', warnAfterSeconds: 60, failAfterSeconds: 120 }] }],
     [Sentry, { dsn: 'https://public@example.com/1', org: 'example', project: 'site', sourceMaps: false, tasks: false, checks: [{ id: 'sentry.site', org: 'example', project: 'site' }] }],
   ],
+  checkin: { external: { required: [], prompts: [{ id: 'fixture.analysis', prompt: 'Explain the collected activity changes.' }] } },
   extends: ['./layers/content'],
   compatibilityDate: '2026-09-01',
   devtools: { enabled: false },

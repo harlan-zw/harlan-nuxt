@@ -324,7 +324,35 @@ The latest policy advances state only after complete passing coverage.
 The daily policy preserves the first complete report for each UTC day, including warnings and failures.
 Incomplete coverage never advances either baseline. Health verdicts and exit codes remain unchanged.
 Omit `stateFile` for archives without baseline state.
-`dirEnv` can override the archive directory at execution time.
+`DAILY_CHECKIN_DIR` overrides `save.dir` at execution time by default.
+The controller supplies this directory outside disposable worktrees.
+Set `dirEnv` to use another environment variable.
+If the selected variable is empty or unset, the CLI uses `save.dir`.
+
+### Prompt items
+
+Sites can configure analysis instructions alongside their external checks:
+
+```ts
+export default defineNuxtConfig({
+  checkin: {
+    external: {
+      required: ['site.activity'],
+      prompts: [{
+        id: 'feedback',
+        prompt: 'Review new user feedback in site.activity. Group problems and suggest one action per problem.',
+      }],
+    },
+  },
+})
+```
+
+The CLI copies these items into the top-level `prompts` array in its JSON report and archive.
+The check-in agent interprets them using collected evidence.
+The module never executes prompt text or sends it to a model.
+Prompt items cannot change check severity, coverage, or exit codes.
+The central daily-checkin Skill owns collection, storage, report writing, and publication rules.
+Sites keep their checks, thresholds, credentials, and prompt items in module configuration.
 
 Credentials resolve at execution time. Configuration contains environment names, never credential values.
 For file fallback, use `{ env: 'SENTRY_AUTH_TOKEN', files: [{ path: '~/.sentryclirc', section: 'auth', key: 'token' }] }`.
