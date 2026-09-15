@@ -2,7 +2,7 @@
 async function findBaseline({ github, repo, repositoryId, runId, artifactName, baseBranch, headSha }) {
   const prefix = `${artifactName}--`
   for (let page = 1; ; page++) {
-    const response = await github.rest.actions.listArtifacts({ ...repo, per_page: 100, page })
+    const response = await github.rest.actions.listArtifactsForRepo({ ...repo, per_page: 100, page })
     for (const artifact of response.data.artifacts) {
       const run = artifact.workflow_run
       if (artifact.expired || !artifact.name.startsWith(prefix)

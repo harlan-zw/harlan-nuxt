@@ -15,7 +15,7 @@ function options(pages, compare = async () => ({ data: { status: 'ahead' } })) {
   return {
     github: {
       rest: {
-        actions: { async listArtifacts({ page }) {
+        actions: { async listArtifactsForRepo({ page }) {
           return { data: { artifacts: pages[page - 1] ?? [] }, headers: { link: page < pages.length ? '<https://api.github.com/next>; rel="next"' : '' } }
         } },
         repos: { compareCommitsWithBasehead: compare },
@@ -55,7 +55,7 @@ test('does not read legacy artifacts with unknown source commits', async () => {
 test('surfaces API failures instead of claiming a missing baseline', async () => {
   await assert.rejects(findBaseline(options([[artifact(older)]], async () => { throw new Error('rate limited') })), /rate limited/)
   const input = options([])
-  input.github.rest.actions.listArtifacts = async () => { throw new Error('unauthorized') }
+  input.github.rest.actions.listArtifactsForRepo = async () => { throw new Error('unauthorized') }
   await assert.rejects(findBaseline(input), /unauthorized/)
 })
 
@@ -76,7 +76,7 @@ test('only treats comparison 404 responses as a missing baseline', async () => {
   }
   const input = options([])
   const error = Object.assign(new Error('Not Found'), { status: 404 })
-  input.github.rest.actions.listArtifacts = async () => { throw error }
+  input.github.rest.actions.listArtifactsForRepo = async () => { throw error }
   await assert.rejects(findBaseline(input), error)
 })
 
