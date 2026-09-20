@@ -601,7 +601,7 @@ importers:
   packages/nuxt-jev:
     dependencies:
       '@harlan-zw/jev':
-        specifier: workspace:*
+        specifier: ^0.1.0
         version: link:../jev
       '@nuxt/kit':
         specifier: 'catalog:'

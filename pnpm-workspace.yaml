@@ -2,6 +2,11 @@ packages:
   - packages/*
   - packages/nuxt-checkin/tests/fixtures/basic
 
+# `@harlan-zw/nuxt-jev` depends on `@harlan-zw/jev` with a registry spec so the
+# published tarball is installable; inside this workspace the local package
+# satisfies it, including before the first registry publish.
+linkWorkspacePackages: true
+
 shellEmulator: true
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800

@@ -86,6 +86,14 @@ jobs:
         if: startsWith(github.ref_name, 'nuxt-sentry-v')
         run: npm publish packages/nuxt-sentry/.pack/*.tgz --access public --provenance
 
+      - name: Publish jev
+        if: startsWith(github.ref_name, 'jev-v')
+        run: npm publish packages/jev/.pack/*.tgz --access public --provenance
+
+      - name: Publish nuxt-jev
+        if: startsWith(github.ref_name, 'nuxt-jev-v')
+        run: npm publish packages/nuxt-jev/.pack/*.tgz --access public --provenance
+
       - name: Publish comark-content
         if: startsWith(github.ref_name, 'comark-content-v')
         run: npm publish packages/comark-content/.pack/*.tgz --access public --provenance

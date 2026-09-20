@@ -64,7 +64,7 @@
     "nuxt": ">=4.5.0 <6.0.0"
   },
   "dependencies": {
-    "@harlan-zw/jev": "workspace:*",
+    "@harlan-zw/jev": "^0.1.0",
     "@nuxt/kit": "catalog:",
     "defu": "catalog:",
     "drizzle-orm": "catalog:"
