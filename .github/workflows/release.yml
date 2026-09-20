@@ -12,6 +12,8 @@ on:
       - 'nuxt-cloudflare-v*'
       - 'nuxt-wide-events-v*'
       - 'nuxt-sentry-v*'
+      - 'jev-v*'
+      - 'nuxt-jev-v*'
       - 'comark-content-v*'
 
 permissions:
