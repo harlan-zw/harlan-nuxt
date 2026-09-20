@@ -1,4 +1,6 @@
+export * from './ask'
 export * from './client'
 export * from './digest'
+export * from './eval'
 export * from './modes'
 export * from './questions'

@@ -1,8 +1,8 @@
-import type { Fetcher } from '../src/runtime/core/client'
-import type { ScoreCriteria, SystemOneResult } from '../src/runtime/core/questions'
+import type { Fetcher } from '../src/client'
+import type { ScoreCriteria, SystemOneResult } from '../src/questions'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createJevHttpClient } from '../src/runtime/core/client'
-import { choice, noul, score } from '../src/runtime/core/questions'
+import { createJevHttpClient } from '../src/client'
+import { choice, noul, score } from '../src/questions'
 
 function jevResponse(answers: Record<string, unknown>): Response {
   return new Response(JSON.stringify({

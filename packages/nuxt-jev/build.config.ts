@@ -5,7 +5,6 @@ export default defineBuildConfig({
   entries: [
     'src/module',
     'src/schema',
-    'src/eval',
   ],
   externals: [
     '#imports',

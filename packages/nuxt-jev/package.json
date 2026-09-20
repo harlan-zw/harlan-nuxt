@@ -28,10 +28,6 @@
       "types": "./dist/types.d.mts",
       "import": "./dist/module.mjs"
     },
-    "./core": {
-      "types": "./dist/runtime/core/index.d.ts",
-      "import": "./dist/runtime/core/index.js"
-    },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
       "import": "./dist/runtime/server/index.js"
@@ -39,20 +35,14 @@
     "./schema": {
       "types": "./dist/schema.d.mts",
       "import": "./dist/schema.mjs"
-    },
-    "./eval": {
-      "types": "./dist/eval.d.mts",
-      "import": "./dist/eval.mjs"
     }
   },
   "main": "./dist/module.mjs",
   "types": "./dist/types.d.mts",
   "typesVersions": {
     "*": {
-      "core": ["dist/runtime/core/index.d.ts"],
       "server": ["dist/runtime/server/index.d.ts"],
-      "schema": ["dist/schema.d.mts"],
-      "eval": ["dist/eval.d.mts"]
+      "schema": ["dist/schema.d.mts"]
     }
   },
   "files": ["dist"],
@@ -74,6 +64,7 @@
     "nuxt": ">=4.5.0 <6.0.0"
   },
   "dependencies": {
+    "@harlan-zw/jev": "workspace:*",
     "@nuxt/kit": "catalog:",
     "defu": "catalog:",
     "drizzle-orm": "catalog:"

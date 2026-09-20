@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalJson, sha256Hex } from '../src/runtime/core/digest'
+import { canonicalJson, sha256Hex } from '../src/digest'
 
 describe('canonicalJson', () => {
   it('sorts keys recursively, so key order cannot change the digest input', () => {

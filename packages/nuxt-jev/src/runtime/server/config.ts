@@ -1,6 +1,5 @@
-import type { JevSeatMode } from '../core/modes'
-import { DEFAULT_JEV_MODEL } from '../core/client'
-import { DEFAULT_JEV_SEAT_MODE } from '../core/modes'
+import type { JevSeatMode } from '@harlan-zw/jev'
+import { DEFAULT_JEV_MODEL, DEFAULT_JEV_SEAT_MODE } from '@harlan-zw/jev'
 
 export interface JevResolvedConfig {
   configured: boolean

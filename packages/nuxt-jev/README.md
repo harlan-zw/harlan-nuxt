@@ -1,16 +1,15 @@
 # @harlan-zw/nuxt-jev
 
-One shared implementation of the Jev typed-judgement client, the decision runner with journal reuse, and the eval replay math. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
+The Nuxt layer for Jev typed judgements: module config, a decision runner with journal reuse, and the drizzle schema. The client, question builders, ask tags, and eval math live in [`@harlan-zw/jev`](../jev), a nuxt-free base package. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
 
 ## Exports
 
 | Export | What it gives you |
 | --- | --- |
 | `@harlan-zw/nuxt-jev` | The Nuxt module. Registers `runtimeConfig.jev` defaults. |
-| `@harlan-zw/nuxt-jev/core` | Pure runtime, worker-safe, no Nuxt imports: the HTTP client, question builders, digest helpers. |
 | `@harlan-zw/nuxt-jev/server` | Config and seat-mode resolution, plus the `decideJev` runner over an injected journal. |
 | `@harlan-zw/nuxt-jev/schema` | `createJevDecisionsTable(extraColumns?)`: the drizzle sqlite table factory. |
-| `@harlan-zw/nuxt-jev/eval` | Pure eval math: `agreement`, `summarizeReplay`, `suggestBand`, `replayAnswer`. |
+| `@harlan-zw/jev` | The nuxt-free base: HTTP client, question builders, ask tags, digest helpers, eval math. |
 
 ## Safety rules
 
@@ -58,7 +57,7 @@ export const jevDecisions = createJevDecisionsTable()
 
 ```ts
 // any server code
-import { noul } from '@harlan-zw/nuxt-jev/core'
+import { noul } from '@harlan-zw/jev'
 import { createInMemoryJevJournal, decideJev, resolveJevConfig, resolveJevSeatMode } from '@harlan-zw/nuxt-jev/server'
 
 const config = resolveJevConfig(useRuntimeConfig().jev)

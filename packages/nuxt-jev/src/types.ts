@@ -1,4 +1,4 @@
-import type { JevSeatMode } from './runtime/core/modes'
+import type { JevSeatMode } from '@harlan-zw/jev'
 
 export type { JevSeatMode }
 

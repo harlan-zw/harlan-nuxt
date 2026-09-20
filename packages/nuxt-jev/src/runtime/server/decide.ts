@@ -1,4 +1,4 @@
-import type { Fetcher, JevFailure, JevHttpClient } from '../core/client'
+import type { Entry, Fetcher, JevFailure, JevHttpClient, Questions, SystemOneResult } from '@harlan-zw/jev'
 // The decision runner: the one path every jev judgement takes.
 //
 //   config -> journal reuse -> ask -> record
@@ -7,10 +7,8 @@ import type { Fetcher, JevFailure, JevHttpClient } from '../core/client'
 // `Unconfigured` means no rows and today's behaviour. Reuse by digest happens
 // before any network call. The journal is an injected adapter, so the runner
 // stays pure: no drizzle, no nitro, no hidden singletons.
-import type { Entry, Questions, SystemOneResult } from '../core/questions'
 import type { JevResolvedConfig } from './config'
-import { createJevHttpClient } from '../core/client'
-import { canonicalJson, sha256Hex } from '../core/digest'
+import { canonicalJson, createJevHttpClient, sha256Hex } from '@harlan-zw/jev'
 
 export type JevDecision<Q extends Questions = Questions>
   = | { readonly _tag: 'Answer', readonly answers: SystemOneResult<Q>['answers'], readonly provenance: 'model' | 'reuse', readonly decisionId: string }

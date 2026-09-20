@@ -20,7 +20,7 @@ export interface EvalScalar {
   value: string | number
 }
 
-/** A raw jev answer, as `./core` returns it. */
+/** A raw jev answer, as the client returns it. */
 export interface EvalAnswerInput {
   type: EvalQuestionKind
   choice?: string

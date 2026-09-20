@@ -1,7 +1,7 @@
-import type { SystemOneResult } from '../src/runtime/core/questions'
+import type { SystemOneResult } from '@harlan-zw/jev'
 import type { JevJournal, NewDecision } from '../src/runtime/server/decide'
+import { noul } from '@harlan-zw/jev'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { noul } from '../src/runtime/core/questions'
 import { resolveJevConfig } from '../src/runtime/server/config'
 import { createInMemoryJevJournal, decideJev } from '../src/runtime/server/decide'
 
