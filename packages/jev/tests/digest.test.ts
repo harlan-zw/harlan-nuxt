@@ -12,6 +12,10 @@ describe('canonicalJson', () => {
     expect(canonicalJson({ a: 1, b: undefined })).toBe('{"a":1}')
   })
 
+  it('sorts keys by code unit, never by locale, so digests are runtime-independent', () => {
+    expect(canonicalJson({ Z: 1, a: 2, é: 3 })).toBe('{"Z":1,"a":2,"é":3}')
+  })
+
   it('serializes scalars and null', () => {
     expect(canonicalJson(null)).toBe('null')
     expect(canonicalJson(1.5)).toBe('1.5')

@@ -252,6 +252,25 @@ describe('ask', () => {
   })
 })
 
+it('skips answer names it never asked about instead of crashing', async () => {
+  const ghost: typeof globalThis.fetch = async () => Response.json({
+    model: 'jev-1.13.0',
+    answers: {
+      brand: mock.noul,
+      ghost: { type: 'score', score: 'not-a-number', confidence: 'bogus' },
+    },
+    usage: { input_tokens: 0, output_tokens: 0 },
+  })
+  const result = await ask(
+    { query: 'nuxt seo' },
+    { brand: 'Is this the site brand?' },
+    { ...options, fetcher: ghost },
+  )
+  expect(result._tag).toBe('Ok')
+  if (result._tag === 'Ok')
+    expect(Object.keys(result.answers)).toEqual(['brand'])
+})
+
 describe('ask failures', () => {
   it('resolves one tagged failure when the gateway errors', async () => {
     const failing: typeof globalThis.fetch = async () => new Response('boom', { status: 500 })

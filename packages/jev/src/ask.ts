@@ -117,15 +117,19 @@ export async function ask<const Q extends AskQuestions>(
   if (call._tag === 'Err')
     return { _tag: 'Err', failure: call.failure }
   const out: { [name: string]: unknown } = {}
-  for (const [name, a] of Object.entries(call.result.answers)) {
-    const q = questions[name]!
+  // Iterate the requested questions, not the returned answers: an answer name
+  // we never asked about (or a missing one) must never crash the mapping.
+  for (const [name, q] of Object.entries(questions)) {
+    const a = (call.result.answers as Record<string, { type?: string } | undefined>)[name]
+    if (a === undefined || typeof a.type !== 'string')
+      continue
     out[name]
       = a.type === 'noul'
         ? typeof q === 'object' && q.type === 'if'
-          ? a.noul > q.threshold
-          : { type: 'chance', chance: a.noul }
+          ? (a as { noul: number }).noul > q.threshold
+          : { type: 'chance', chance: (a as { noul: number }).noul }
         : a.type === 'score'
-          ? { ...a, ratio: a.score / ((wire[name] as ScoreQuestion).criteria.length - 1) }
+          ? { ...a, ratio: (a as { score: number }).score / ((wire[name] as ScoreQuestion).criteria.length - 1) }
           : a
   }
   return { _tag: 'Ok', answers: out as Answers<Q> }
