@@ -55,6 +55,19 @@ if (call._tag === 'Ok')
   call.result.answers.brand.noul
 ```
 
+## Jev 1.13 jagged edges
+
+The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). The rules this package and its consumers follow:
+
+- **Math, counting, dates stay in code.** Never ask the model to tally, compare numbers, or order dates. Compute counts and buckets in code; pass the computed value or a named bucket in state. Score answers rank and threshold; never interpolate a magnitude between two rubric levels.
+- **Literal reading.** Write the exact condition in `instructions`; put boundary cases in `criteria`. Where interpretation is unavoidable, split into two literal questions and combine in code.
+- **Criteria extend the instruction.** A `true` that means "no" performs worse. Align them.
+- **Thresholds do not carry across question types.** A Noul band and a Choice confidence answer different questions (`noul` compares with `probabilities['yes']`, not with `confidence`); the same question and its negation do not sum to 1. Tune each threshold on its own question; never enforce arithmetic identities between separate answers.
+- **Choice settles "which"; Noul settles "whether".** A Choice is relative (picks one option); each Noul is absolute (can be low for all). Use both on the same shortlist when you need both answers.
+- **Filter state before sending.** Unrelated detail costs accuracy (context rot) and the context window is bounded. Send only the fields the question names.
+- **Adversarial content is data the model does not treat as hostile.** Frame untrusted text explicitly as measurements to judge, never as instructions, and test those edges before acting on answers in production.
+- **No generation.** When the answer space is bounded, extract options in code or with a generative model and let Jev pick. It writes no text.
+
 ## License
 
 MIT, see [LICENSE.md](./LICENSE.md). Forked from pithings/advocaat (MIT); question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js.

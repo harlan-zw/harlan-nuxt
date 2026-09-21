@@ -34,7 +34,7 @@ export type Answer<Q extends AskQuestion> = Q extends IfQuestion
   : Q extends string | NoulQuestion
     ? ChanceAnswer
     : Q extends ScoreQuestion<infer S>
-      ? ScoreAnswer<S> & { /** Score scaled to 0 to 1. */ readonly ratio: number }
+      ? ScoreAnswer<S> & { /** Score scaled to 0 to 1. For ranking and thresholds only: jev-1.13 score levels are weakly calibrated numerically, never interpolate a magnitude between levels. */ readonly ratio: number }
       : Q extends ChoiceQuestion<infer C>
         ? ChoiceAnswer<C>
         : never
