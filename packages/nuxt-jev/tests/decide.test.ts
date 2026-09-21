@@ -1,6 +1,6 @@
 import type { SystemOneResult } from '@harlan-zw/jev'
 import type { JevJournal, NewDecision } from '../src/runtime/server/decide'
-import { noul } from '@harlan-zw/jev'
+import { canonicalJson, digestKey, noul } from '@harlan-zw/jev'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveJevConfig } from '../src/runtime/server/config'
 import { createInMemoryJevJournal, decideJev } from '../src/runtime/server/decide'
@@ -43,13 +43,14 @@ afterEach(() => {
 describe('decideJev', () => {
   it('asks, records the decision, and reuses the row on the same input without a second call', async () => {
     const { journal, inserted } = recordingJournal()
+    const state = { query: 'nuxtseo', brandTerms: ['nuxt seo'] }
     const base = {
       journal,
       config: CONFIGURED,
       seat: 'brand-query',
       questionVersion: 'v1',
       subject: 'q:nuxtseo',
-      state: { query: 'nuxtseo', brandTerms: ['nuxt seo'] },
+      state,
       questions: { brand: noul('Is `query` a search for the site brand?') },
       siteId: 's_1',
     }
@@ -72,8 +73,8 @@ describe('decideJev', () => {
       inputTokens: 10,
       outputTokens: 5,
       latencyMs: expect.any(Number),
-      subjectDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-      stateDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      subjectDigest: digestKey(canonicalJson({ seat: 'brand-query', subject: 'q:nuxtseo', state, questionVersion: 'v1' })),
+      stateDigest: digestKey(canonicalJson(state)),
     })
     expect(inserted[0]?.stateSnapshot).toEqual({ query: 'nuxtseo', brandTerms: ['nuxt seo'] })
     expect(inserted[0]?.answers).toEqual({ brand: noulAnswer(0.91), q: noulAnswer(0.91) })

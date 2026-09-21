@@ -8,7 +8,7 @@ import type { Entry, Fetcher, JevFailure, JevHttpClient, Questions, SystemOneRes
 // before any network call. The journal is an injected adapter, so the runner
 // stays pure: no drizzle, no nitro, no hidden singletons.
 import type { JevResolvedConfig } from './config'
-import { canonicalJson, createJevHttpClient, sha256Hex } from '@harlan-zw/jev'
+import { canonicalJson, createJevHttpClient, digestKey } from '@harlan-zw/jev'
 
 export type JevDecision<Q extends Questions = Questions>
   = | { readonly _tag: 'Answer', readonly answers: SystemOneResult<Q>['answers'], readonly provenance: 'model' | 'reuse', readonly decisionId: string }
@@ -89,7 +89,7 @@ export async function decideJev<Q extends Questions>(options: DecideJevOptions<Q
   if (!options.config.configured)
     return { _tag: 'Unconfigured' }
 
-  const subjectDigest = await sha256Hex(canonicalJson({
+  const subjectDigest = digestKey(canonicalJson({
     seat: options.seat,
     subject: options.subject,
     state: options.state,
@@ -124,7 +124,7 @@ export async function decideJev<Q extends Questions>(options: DecideJevOptions<Q
       seat: options.seat,
       subjectDigest,
       questionVersion: options.questionVersion,
-      stateDigest: await sha256Hex(canonicalJson(options.state)),
+      stateDigest: digestKey(canonicalJson(options.state)),
       stateSnapshot: options.state,
       answers: result.answers as Record<string, unknown>,
       provenance: 'model',

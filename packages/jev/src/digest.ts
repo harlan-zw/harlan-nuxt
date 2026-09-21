@@ -1,8 +1,4 @@
-export async function sha256Hex(input: string): Promise<string> {
-  const bytes = new TextEncoder().encode(input)
-  const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')
-}
+import { digest } from 'ohash'
 
 // Digest keys must be stable across processes and key order: sort recursively.
 export function canonicalJson(value: unknown): string {
@@ -15,4 +11,8 @@ export function canonicalJson(value: unknown): string {
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`
   }
   return JSON.stringify(value) ?? 'null'
+}
+
+export function digestKey(input: string): string {
+  return digest(input)
 }

@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-jev",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Typed Jev judgements: one client, one decision runner with journal reuse, and eval replay math.",
   "author": {
     "name": "Harlan Wilton",

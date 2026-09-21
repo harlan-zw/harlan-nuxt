@@ -2,7 +2,7 @@
 
 Nuxt-free Jev judgements: one client, the `ask` tag API, digest helpers, and eval replay math. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
 
-Pure TypeScript with zero runtime dependencies: no Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. Use `@harlan-zw/nuxt-jev` for the Nuxt module, the decision runner, and the drizzle schema.
+Pure TypeScript with one dependency, ohash, for sync digests: no Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. Use `@harlan-zw/nuxt-jev` for the Nuxt module, the decision runner, and the drizzle schema.
 
 ## What you get
 
@@ -11,7 +11,7 @@ Pure TypeScript with zero runtime dependencies: no Nuxt, no Nitro, no h3. Runs o
 | `createJevHttpClient` | The tagged-failure HTTP client over Cloudflare `/ai/run`: retries, backoff, one timeout window, and answer validation. |
 | `noul`, `choice`, `score` | Question builders with typed answers. |
 | `ask`, `ask.choice`, `ask.score`, `ask.chance`, `askIf` | Tagged-template sugar over the client. |
-| `sha256Hex`, `canonicalJson` | Order-stable digests for journal keys. |
+| `digestKey`, `canonicalJson` | Order-stable digests for journal keys. |
 | `agreement`, `summarizeReplay`, `suggestBand`, `replayAnswer` | Pure eval replay math. |
 
 ## Failure style

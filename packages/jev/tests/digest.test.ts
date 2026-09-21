@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canonicalJson, sha256Hex } from '../src/digest'
+import { canonicalJson, digestKey } from '../src/digest'
 
 describe('canonicalJson', () => {
   it('sorts keys recursively, so key order cannot change the digest input', () => {
@@ -23,20 +23,21 @@ describe('canonicalJson', () => {
   })
 })
 
-describe('sha256Hex', () => {
-  it('matches a known vector', async () => {
-    expect(await sha256Hex('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+describe('digestKey', () => {
+  it('is deterministic: the same input gives the same digest on every call', () => {
+    const input = canonicalJson({ a: 1, b: { c: 2, d: [3, 4] } })
+    expect(digestKey(input)).toBe(digestKey(input))
   })
 
-  it('gives the same digest for equal objects in different key order', async () => {
-    const one = await sha256Hex(canonicalJson({ a: 1, b: { c: 2, d: [3, 4] } }))
-    const two = await sha256Hex(canonicalJson({ b: { d: [3, 4], c: 2 }, a: 1 }))
+  it('gives the same digest for equal objects in different key order', () => {
+    const one = digestKey(canonicalJson({ a: 1, b: { c: 2, d: [3, 4] } }))
+    const two = digestKey(canonicalJson({ b: { d: [3, 4], c: 2 }, a: 1 }))
     expect(two).toBe(one)
   })
 
-  it('gives a different digest for different content', async () => {
-    const one = await sha256Hex(canonicalJson({ a: 1 }))
-    const two = await sha256Hex(canonicalJson({ a: 2 }))
+  it('gives a different digest for different content', () => {
+    const one = digestKey(canonicalJson({ a: 1 }))
+    const two = digestKey(canonicalJson({ a: 2 }))
     expect(two).not.toBe(one)
   })
 })

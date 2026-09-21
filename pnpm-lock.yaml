@@ -16,8 +16,8 @@ catalogs:
       specifier: ^5.20260811.1
       version: 5.20260811.1
     '@harlan-zw/jev':
-      specifier: ^0.1.0
-      version: 0.1.0
+      specifier: ^0.2.0
+      version: 0.2.0
     '@nuxt/kit':
       specifier: ^4.5.2
       version: 4.5.2
@@ -93,6 +93,9 @@ catalogs:
     nuxt:
       specifier: ^4.5.2
       version: 4.5.2
+    ohash:
+      specifier: ^2.0.11
+      version: 2.0.11
     pathe:
       specifier: ^2.0.3
       version: 2.0.3
@@ -197,6 +200,10 @@ importers:
         version: 3.5.41(typescript@5.9.3)
 
   packages/jev:
+    dependencies:
+      ohash:
+        specifier: 'catalog:'
+        version: 2.0.11
     devDependencies:
       '@antfu/eslint-config':
         specifier: 'catalog:'
