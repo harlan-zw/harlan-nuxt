@@ -38,6 +38,11 @@ name: Harlan Desktop site CI
 # gate would pass green having run nothing. On any event other than
 # `pull_request` the gate passes `--full` and runs every project.
 #
+# That test reads backwards on purpose. `A && B || C` returns C whenever B is
+# falsy, and an empty string is falsy, so the natural spelling
+# `event == 'pull_request' && '' || '--full'` yields `--full` on every event.
+# Put the non-empty value in the B position and negate the test.
+#
 # WHY THE SETUP STEPS ARE INLINE
 #
 # `.github/actions/setup` holds the same three steps, and a deploy workflow
@@ -148,7 +153,7 @@ jobs:
       # ESLint does no type-aware linting on these sites, so it never reads a
       # `.nuxt` directory and `prepare-command` is pure cost here.
       - if: ${{ inputs.task-cache }}
-        run: pnpm pipeline lint ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+        run: pnpm pipeline lint ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
       - if: ${{ !inputs.task-cache }}
         run: ${{ inputs.lint-command }}
 
@@ -172,7 +177,7 @@ jobs:
       - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
         run: ${{ inputs.prepare-command }}
       - if: ${{ inputs.task-cache }}
-        run: pnpm pipeline typecheck ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+        run: pnpm pipeline typecheck ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
         env:
           NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
       - if: ${{ !inputs.task-cache }}
@@ -200,6 +205,6 @@ jobs:
       - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
         run: ${{ inputs.prepare-command }}
       - if: ${{ inputs.task-cache }}
-        run: pnpm pipeline test ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+        run: pnpm pipeline test ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
       - if: ${{ !inputs.task-cache }}
         run: ${{ inputs.test-command }}
