@@ -163,4 +163,32 @@ describe('createJevHttpClient', () => {
     const result = await client.systemOne({ state: null, questions: { q: choice('Pick one', { yes: 'y', no: 'n' }) } })
     expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('does not name one of its criteria') } })
   })
+
+  it('rejects a noul probability outside zero to one', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'noul', noul: 1.5 } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: noul('Is it brand?') } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('between zero and one') } })
+  })
+
+  it('rejects a choice probability outside zero to one', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'choice', choice: 'yes', confidence: 0.9, probabilities: { yes: 1.2, no: -0.2 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: choice('Pick one', { yes: 'y', no: 'n' }) } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('outside zero to one') } })
+  })
+
+  it('rejects a score beyond its top level', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'score', score: 3, confidence: 0.9, probabilities: { 0: 0.1, 1: 0.2, 2: 0.7 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: score('Rate it', ['low', 'mid', 'high']) } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('outside its levels') } })
+  })
+
+  it('accepts in-range floats, including a score between levels', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'score', score: 1.5, confidence: 0.4, probabilities: { 0: 0.25, 1: 0.5, 2: 0.25 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: score('Rate it', ['low', 'mid', 'high']) } })
+    expect(result).toMatchObject({ _tag: 'Ok', result: { answers: { q: { score: 1.5 } } } })
+  })
 })

@@ -16,8 +16,8 @@ catalogs:
       specifier: ^5.20260811.1
       version: 5.20260811.1
     '@harlan-zw/jev':
-      specifier: ^0.2.1
-      version: 0.2.1
+      specifier: ^0.2.2
+      version: 0.2.2
     '@nuxt/kit':
       specifier: ^4.5.2
       version: 4.5.2

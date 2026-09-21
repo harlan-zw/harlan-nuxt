@@ -160,20 +160,37 @@ export function validateAnswers<Q extends Questions>(questions: Q, answers: Reco
     const answer = answers[name]
     if (typeof answer !== 'object' || answer === null || typeof (answer as { type?: unknown }).type !== 'string')
       return `Answer "${name}" is not a typed answer.`
+    const probabilities = (answer as { probabilities?: Record<string, unknown> }).probabilities
     if (question.type === 'choice') {
       const { choice, confidence } = answer as { choice?: unknown, confidence?: unknown }
       if (typeof choice !== 'string' || !(choice in question.criteria))
         return `Answer "${name}" does not name one of its criteria.`
-      if (!Number.isFinite(confidence) || (confidence as number) < 0 || (confidence as number) > 1)
+      if (!inUnitRange(confidence))
         return `Answer "${name}" carries no confidence between zero and one.`
+      for (const label of Object.keys(question.criteria)) {
+        if (!inUnitRange(probabilities?.[label]))
+          return `Answer "${name}" carries a probability outside zero to one.`
+      }
     }
     else if (question.type === 'score') {
-      if (!Number.isFinite((answer as { score?: unknown }).score))
+      const top = question.criteria.length - 1
+      const { score } = answer as { score?: unknown }
+      if (typeof score !== 'number' || !Number.isFinite(score))
         return `Answer "${name}" carries no numeric score.`
+      if (score < 0 || score > top)
+        return `Answer "${name}" carries a score outside its levels.`
+      for (let level = 0; level <= top; level++) {
+        if (!inUnitRange(probabilities?.[level]))
+          return `Answer "${name}" carries a probability outside zero to one.`
+      }
     }
-    else if (!Number.isFinite((answer as { noul?: unknown }).noul)) {
-      return `Answer "${name}" carries no numeric probability.`
+    else if (!inUnitRange((answer as { noul?: unknown }).noul)) {
+      return `Answer "${name}" carries no probability between zero and one.`
     }
   }
   return null
+}
+
+function inUnitRange(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
 }
