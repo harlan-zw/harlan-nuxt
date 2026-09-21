@@ -2,6 +2,11 @@ packages:
   - packages/*
   - packages/nuxt-checkin/tests/fixtures/basic
 
+# `@harlan-zw/nuxt-jev` depends on `@harlan-zw/jev` with a registry spec so the
+# published tarball is installable; inside this workspace the local package
+# satisfies it, including before the first registry publish.
+linkWorkspacePackages: true
+
 shellEmulator: true
 trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
@@ -10,6 +15,7 @@ catalog:
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
   '@cloudflare/workers-types': ^5.20260811.1
+  '@harlan-zw/jev': ^0.2.4
   '@sentry/cloudflare': ^10.70.0
   '@sentry/nuxt': ^10.70.0
   '@nuxt/kit': ^4.5.2
@@ -24,6 +30,7 @@ catalog:
   comark: 0.6.2
   confbox: ^0.2.4
   consola: ^3.4.2
+  defu: ^6.1.7
   drizzle-orm: 1.0.0-rc.4
   eslint: ^10.8.1
   eslint-plugin-harlanzw: ^0.17.1
@@ -34,6 +41,7 @@ catalog:
   jiti: ^2.7.0
   nitropack: ^2.13.4
   nuxt: ^4.5.2
+  ohash: ^2.0.11
   pathe: ^2.0.3
   pino: ^10.3.1
   rangi: ^2.2.0

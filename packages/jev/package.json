@@ -1,0 +1,61 @@
+{
+  "name": "@harlan-zw/jev",
+  "type": "module",
+  "version": "0.2.4",
+  "description": "Nuxt-free Jev judgements: one client, the ask tag API, digest helpers, and eval replay math.",
+  "author": {
+    "name": "Harlan Wilton",
+    "email": "harlan@harlanzw.com",
+    "url": "https://harlanzw.com/"
+  },
+  "license": "MIT",
+  "funding": "https://github.com/sponsors/harlan-zw",
+  "homepage": "https://github.com/harlan-zw/harlan-nuxt/tree/main/packages/jev#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harlan-zw/harlan-nuxt.git",
+    "directory": "packages/jev"
+  },
+  "bugs": {
+    "url": "https://github.com/harlan-zw/harlan-nuxt/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "files": ["dist"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "unbuild",
+    "dev:prepare": "unbuild",
+    "prepack": "pnpm run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.check.json",
+    "test:attw": "attw --pack",
+    "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
+  },
+  "dependencies": {
+    "ohash": "catalog:"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@arethetypeswrong/cli": "catalog:",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "unbuild": "catalog:",
+    "vitest": "catalog:"
+  }
+}
