@@ -206,6 +206,34 @@ describe('createJevHttpClient', () => {
     expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('does not name one of its criteria') } })
   })
 
+  it('carries the raw body and ray when a 2xx envelope is marked failed', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ success: false, errors: [{ message: 'authentication invalid' }] }), { status: 200, headers: { 'content-type': 'application/json', 'cf-ray': 'ray-9' } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: noul() } })
+    expect(result).toMatchObject({
+      _tag: 'Err',
+      failure: {
+        _tag: 'Invalid',
+        requestId: 'ray-9',
+        body: { success: false, errors: [{ message: 'authentication invalid' }] },
+      },
+    })
+  })
+
+  it('carries the raw body and ray when a 2xx body carries no answers', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ success: true, result: { state: 'Completed' } }), { status: 200, headers: { 'content-type': 'application/json', 'cf-ray': 'ray-10' } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: noul() } })
+    expect(result).toMatchObject({
+      _tag: 'Err',
+      failure: {
+        _tag: 'Invalid',
+        requestId: 'ray-10',
+        body: { success: true, result: { state: 'Completed' } },
+      },
+    })
+  })
+
   it('accepts in-range floats, including a score between levels', async () => {
     const fetcher = vi.fn(async () => jevResponse({ q: { type: 'score', score: 1.5, confidence: 0.4, probabilities: { 0: 0.25, 1: 0.5, 2: 0.25 } } }))
     const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })

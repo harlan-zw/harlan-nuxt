@@ -15,7 +15,7 @@ export const DEFAULT_JEV_TIMEOUT_MS = 8000
 
 export type JevFailure
   = | { readonly _tag: 'Http', readonly status: number, readonly message: string, readonly requestId?: string, readonly details?: unknown }
-    | { readonly _tag: 'Invalid', readonly message: string }
+    | { readonly _tag: 'Invalid', readonly message: string, readonly body?: unknown, readonly requestId?: string }
     | { readonly _tag: 'Network', readonly message: string }
     | { readonly _tag: 'Timeout', readonly message: string }
 
@@ -104,7 +104,7 @@ export function createJevHttpClient(options: JevHttpClientOptions) {
       }
     }
 
-    const unwrapped = unwrap(parsed)
+    const unwrapped = unwrap(parsed, res)
     if (unwrapped._tag === 'Err')
       return { _tag: 'Err', failure: unwrapped.failure }
 
@@ -139,19 +139,20 @@ function failureFromError(error: unknown): JevFailure {
 // Cloudflare answers REST calls with `{ success, errors, result }` and, on
 // /ai/run, wraps the model answer once more inside `{ state, result,
 // gatewayMetadata }`. The System One result with its `answers` must come out,
-// or the call failed.
-function unwrap(parsed: unknown): { _tag: 'Ok', result: SystemOneResult } | { _tag: 'Err', failure: { readonly _tag: 'Invalid', readonly message: string } } {
+// or the call failed. A 2xx failure keeps its wire provenance: the raw body
+// and the ray, so throwing callers can log what Cloudflare actually sent.
+function unwrap(parsed: unknown, res: Response): { _tag: 'Ok', result: SystemOneResult } | { _tag: 'Err', failure: { readonly _tag: 'Invalid', readonly message: string, readonly body?: unknown, readonly requestId?: string } } {
   let value = parsed
   if (isEnvelope(value)) {
     const envelope = value as { success: boolean, errors?: unknown, result?: unknown }
     if (!envelope.success)
-      return { _tag: 'Err', failure: { _tag: 'Invalid', message: `cf envelope failed: ${describeBody(envelope.errors ?? envelope)}` } }
+      return { _tag: 'Err', failure: { _tag: 'Invalid', message: `cf envelope failed: ${describeBody(envelope.errors ?? envelope)}`, body: parsed, requestId: rayOf(res) } }
     value = envelope.result ?? parsed
   }
   if (isRunWrapper(value))
     value = (value as JevModelResult).result
   if (typeof value !== 'object' || value === null || typeof (value as { answers?: unknown }).answers !== 'object' || (value as { answers?: unknown }).answers === null)
-    return { _tag: 'Err', failure: { _tag: 'Invalid', message: `response carries no answers object: ${describeBody(parsed)}` } }
+    return { _tag: 'Err', failure: { _tag: 'Invalid', message: `response carries no answers object: ${describeBody(parsed)}`, body: parsed, requestId: rayOf(res) } }
   const result = value as SystemOneResult
   // A model response may omit usage in full or in part. Zero the gaps, so no
   // caller downstream of the client ever reads `usage` off an undefined.
@@ -167,6 +168,10 @@ function normalizeUsage(usage: { input_tokens?: number, output_tokens?: number }
 
 function tokenCount(value: number | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function rayOf(res: Response): string | undefined {
+  return res.headers.get('cf-ray') ?? undefined
 }
 
 function isEnvelope(value: unknown): boolean {
