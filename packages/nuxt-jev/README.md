@@ -15,6 +15,7 @@ The Nuxt layer for Jev typed judgements: module config, a decision runner with j
 
 | Situation | Behaviour |
 | --- | --- |
+| `state` null or undefined | `decideJev` throws a `TypeError` before any network call: a programming error, not a judgement. |
 | No `apiToken` and `accountId` | `Unconfigured`. No rows, no network, caller keeps today's behaviour. |
 | HTTP, network, timeout, or invalid answer | `Unavailable`. No row written, caller keeps its safe direction. |
 | Same seat, subject, state, and question version | `reuse`. The journaled row answers; no network call. |

@@ -185,6 +185,27 @@ describe('createJevHttpClient', () => {
     expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('outside its levels') } })
   })
 
+  it('rejects an answer tagged with another question type', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'noul', noul: 0.5, choice: 'yes', confidence: 0.9, probabilities: { yes: 0.6, no: 0.4 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: choice('Pick one', { yes: 'y', no: 'n' }) } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('is tagged') } })
+  })
+
+  it('rejects a score confidence outside zero to one', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'score', score: 1, confidence: 1.4, probabilities: { 0: 0.2, 1: 0.8 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: score('Rate it', ['low', 'mid', 'high']) } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('confidence') } })
+  })
+
+  it('rejects a choice label inherited from Object.prototype', async () => {
+    const fetcher = vi.fn(async () => jevResponse({ q: { type: 'choice', choice: 'toString', confidence: 0.9, probabilities: { yes: 0.5, no: 0.5 } } }))
+    const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })
+    const result = await client.systemOne({ state: null, questions: { q: choice('Pick one', { yes: 'y', no: 'n' }) } })
+    expect(result).toMatchObject({ _tag: 'Err', failure: { _tag: 'Invalid', message: expect.stringContaining('does not name one of its criteria') } })
+  })
+
   it('accepts in-range floats, including a score between levels', async () => {
     const fetcher = vi.fn(async () => jevResponse({ q: { type: 'score', score: 1.5, confidence: 0.4, probabilities: { 0: 0.25, 1: 0.5, 2: 0.25 } } }))
     const client = createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher })

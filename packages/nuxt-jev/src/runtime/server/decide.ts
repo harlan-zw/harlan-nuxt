@@ -77,7 +77,7 @@ export interface DecideJevOptions<Q extends Questions> {
   seat: string
   questionVersion: string
   subject: string
-  state: Entry
+  state: NonNullable<Entry>
   questions: Q
   siteId?: string
   subjectRef?: string
@@ -85,7 +85,15 @@ export interface DecideJevOptions<Q extends Questions> {
   fetcher?: Fetcher
 }
 
-export async function decideJev<Q extends Questions>(options: DecideJevOptions<Q>): Promise<JevDecision<Q>> {
+export function decideJev<Q extends Questions>(options: DecideJevOptions<Q>): Promise<JevDecision<Q>> {
+  // A null or undefined state is a caller bug, not a judgement: it would digest
+  // and journal a decision about nothing. Fail before any network call.
+  if (options.state === null || options.state === undefined)
+    throw new TypeError(`decideJev seat "${options.seat}": state is null or undefined.`)
+  return runDecision(options)
+}
+
+async function runDecision<Q extends Questions>(options: DecideJevOptions<Q>): Promise<JevDecision<Q>> {
   if (!options.config.configured)
     return { _tag: 'Unconfigured' }
 

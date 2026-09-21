@@ -191,6 +191,23 @@ describe('decideJev', () => {
     expect(vi.mocked(globalThis.fetch)).toHaveBeenCalledTimes(2)
   })
 
+  it('throws a TypeError before the network when state is null or undefined', async () => {
+    const { journal } = recordingJournal()
+    const ask = {
+      journal,
+      config: CONFIGURED,
+      seat: 'brand-query',
+      questionVersion: 'v1',
+      subject: 'q:null',
+      state: null,
+      questions: { brand: noul() },
+    } as unknown as Parameters<typeof decideJev>[0]
+    expect(() => decideJev(ask)).toThrow(TypeError)
+    const missing = { ...ask, state: undefined } as unknown as Parameters<typeof decideJev>[0]
+    expect(() => decideJev(missing)).toThrow(TypeError)
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled()
+  })
+
   it('propagates journal errors that are not unique violations', async () => {
     const failing: JevJournal = {
       find: async () => undefined,
@@ -205,7 +222,7 @@ describe('decideJev', () => {
       seat: 's',
       questionVersion: 'v1',
       subject: 'sub',
-      state: null,
+      state: { a: 1 },
       questions: { q: noul() },
     })).rejects.toThrow('db offline')
   })

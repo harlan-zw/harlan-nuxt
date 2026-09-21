@@ -160,10 +160,12 @@ export function validateAnswers<Q extends Questions>(questions: Q, answers: Reco
     const answer = answers[name]
     if (typeof answer !== 'object' || answer === null || typeof (answer as { type?: unknown }).type !== 'string')
       return `Answer "${name}" is not a typed answer.`
+    if ((answer as { type: string }).type !== question.type)
+      return `Answer "${name}" is tagged "${(answer as { type: string }).type}", not "${question.type}".`
     const probabilities = (answer as { probabilities?: Record<string, unknown> }).probabilities
     if (question.type === 'choice') {
       const { choice, confidence } = answer as { choice?: unknown, confidence?: unknown }
-      if (typeof choice !== 'string' || !(choice in question.criteria))
+      if (typeof choice !== 'string' || !Object.hasOwn(question.criteria, choice))
         return `Answer "${name}" does not name one of its criteria.`
       if (!inUnitRange(confidence))
         return `Answer "${name}" carries no confidence between zero and one.`
@@ -174,11 +176,13 @@ export function validateAnswers<Q extends Questions>(questions: Q, answers: Reco
     }
     else if (question.type === 'score') {
       const top = question.criteria.length - 1
-      const { score } = answer as { score?: unknown }
+      const { score, confidence } = answer as { score?: unknown, confidence?: unknown }
       if (typeof score !== 'number' || !Number.isFinite(score))
         return `Answer "${name}" carries no numeric score.`
       if (score < 0 || score > top)
         return `Answer "${name}" carries a score outside its levels.`
+      if (!inUnitRange(confidence))
+        return `Answer "${name}" carries no confidence between zero and one.`
       for (let level = 0; level <= top; level++) {
         if (!inUnitRange(probabilities?.[level]))
           return `Answer "${name}" carries a probability outside zero to one.`
