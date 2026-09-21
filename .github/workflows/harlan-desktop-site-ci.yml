@@ -18,6 +18,26 @@ name: Harlan Desktop site CI
 #
 #   runs-on: '["self-hosted", "linux", "x64", "harlan-desktop-ci"]'
 #
+# TASK CACHE MODE
+#
+# `task-cache: true` runs each check through `pnpm pipeline` instead of a bare
+# script. The pipeline does its own frozen install, then restores each task
+# whose key the runner has seen before, so an unchanged task replays its log
+# instead of re-running. The cache lives in the pool's shared `/pnpm-cache`
+# volume, which the runner supervisor mounts; a GitHub-hosted runner has no
+# such volume, so task cache mode is for the self-hosted pool only.
+#
+# The repository owns the graph. It declares, in pnpm-workspace.yaml on pnpm
+# 12.4+, one pipeline per check: `lint`, `typecheck`, `test`. Each pipeline names
+# its own tasks, so a Nuxt prepare becomes a cacheable task with `.nuxt/**`
+# outputs rather than a per-job prepare step. The command and prepare inputs are
+# ignored in this mode.
+#
+# `pnpm pipeline` selects only the projects affected since `origin/main`. That
+# selection is empty on a push to main, because HEAD is the merge base, so the
+# gate would pass green having run nothing. On any event other than
+# `pull_request` the gate passes `--full` and runs every project.
+#
 # WHY THE SETUP STEPS ARE INLINE
 #
 # `.github/actions/setup` holds the same three steps, and a deploy workflow
@@ -46,10 +66,27 @@ on:
           Extra `pnpm install` flags, on top of `--frozen-lockfile`.
           `--ignore-scripts` is the default because a Nuxt workspace's postinstall
           cascade can cost minutes that most jobs never use. Pass `''` for a
-          repository whose checks depend on a `postinstall: nuxt prepare`.
+          repository whose checks depend on a `postinstall: nuxt prepare`. In
+          task cache mode the flags go to `pnpm pipeline`, whose install step
+          honours the same ones.
         type: string
         required: false
         default: '--ignore-scripts'
+      task-cache:
+        description: >-
+          Run each check through `pnpm pipeline`, so task results restore from
+          the runner's shared cache volume instead of re-running. The repository
+          declares a `lint`, `typecheck`, and `test` pipeline in
+          pnpm-workspace.yaml on pnpm 12.4+, and `includeWorkspaceRoot: true`
+          when the repository is a single package. Ignored inputs in this mode:
+          prepare-command, lint-command, typecheck-command, test-command.
+          Self-hosted pool only; a hosted runner has no persistent cache, so
+          this mode only adds cost there. Affected selection applies to
+          `pull_request` events only. Any other event runs `--full`, because the
+          selection is empty on a push to main.
+        type: boolean
+        required: false
+        default: false
       prepare-command:
         description: >-
           Runs before typecheck and test, for generated output those checks need.
@@ -87,13 +124,17 @@ permissions:
 
 jobs:
   lint:
-    if: inputs.lint-command != ''
+    if: inputs.task-cache || inputs.lint-command != ''
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The affected selection diffs HEAD against its merge base with
+          # origin/main, which a shallow checkout cannot resolve. Other events
+          # run `--full`, which needs no history.
+          fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -102,47 +143,63 @@ jobs:
           # GitHub cache over it adds network work and can stall setup-node.
           cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
           package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
-      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      - if: ${{ !inputs.task-cache }}
+        run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       # ESLint does no type-aware linting on these sites, so it never reads a
       # `.nuxt` directory and `prepare-command` is pure cost here.
-      - run: ${{ inputs.lint-command }}
+      - if: ${{ inputs.task-cache }}
+        run: pnpm pipeline lint ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+      - if: ${{ !inputs.task-cache }}
+        run: ${{ inputs.lint-command }}
 
   typecheck:
-    if: inputs.typecheck-command != ''
+    if: inputs.task-cache || inputs.typecheck-command != ''
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
           package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
-      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
-      - if: inputs.prepare-command != ''
+      - if: ${{ !inputs.task-cache }}
+        run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
         run: ${{ inputs.prepare-command }}
-      - run: ${{ inputs.typecheck-command }}
+      - if: ${{ inputs.task-cache }}
+        run: pnpm pipeline typecheck ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+        env:
+          NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
+      - if: ${{ !inputs.task-cache }}
+        run: ${{ inputs.typecheck-command }}
         env:
           NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
 
   test:
-    if: inputs.test-command != ''
+    if: inputs.task-cache || inputs.test-command != ''
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
           package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
-      - run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
-      - if: inputs.prepare-command != ''
+      - if: ${{ !inputs.task-cache }}
+        run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
+      - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
         run: ${{ inputs.prepare-command }}
-      - run: ${{ inputs.test-command }}
+      - if: ${{ inputs.task-cache }}
+        run: pnpm pipeline test ${{ github.event_name == 'pull_request' && '' || '--full' }} ${{ inputs.install-args }}
+      - if: ${{ !inputs.task-cache }}
+        run: ${{ inputs.test-command }}
