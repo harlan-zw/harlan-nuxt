@@ -132,8 +132,8 @@ export async function decideJev<Q extends Questions>(options: DecideJevOptions<Q
       ...(options.siteId === undefined ? {} : { siteId: options.siteId }),
       ...(options.subjectRef === undefined ? {} : { subjectRef: options.subjectRef }),
       latencyMs,
-      inputTokens: result.usage.input_tokens,
-      outputTokens: result.usage.output_tokens,
+      inputTokens: result.usage?.input_tokens ?? 0,
+      outputTokens: result.usage?.output_tokens ?? 0,
     })
   }
   catch (error: unknown) {

@@ -32,6 +32,24 @@ describe('createJevHttpClient', () => {
     })
   })
 
+  it('zeroes a missing or partial usage block instead of failing', async () => {
+    const missing = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      result: { state: null, result: { model: 'typesafe/jev', answers: { q: { type: 'noul', noul: 0.9 } } } },
+    }), { status: 200 }))
+    const withoutUsage = await createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher: missing })
+      .systemOne({ state: null, questions: { q: noul() } })
+    expect(withoutUsage).toMatchObject({ _tag: 'Ok', result: { usage: { input_tokens: 0, output_tokens: 0 } } })
+
+    const partial = vi.fn(async () => new Response(JSON.stringify({
+      success: true,
+      result: { state: null, result: { model: 'typesafe/jev', answers: { q: { type: 'noul', noul: 0.9 } }, usage: { input_tokens: 7 } } },
+    }), { status: 200 }))
+    const withPartial = await createJevHttpClient({ apiToken: 't', accountId: 'a', fetcher: partial })
+      .systemOne({ state: null, questions: { q: noul() } })
+    expect(withPartial).toMatchObject({ _tag: 'Ok', result: { usage: { input_tokens: 7, output_tokens: 0 } } })
+  })
+
   it('treats a 2xx body without answers as a failure', async () => {
     const inner: Partial<SystemOneResult> = { model: 'typesafe/jev', usage: { input_tokens: 1, output_tokens: 1 } }
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ success: true, result: { state: null, result: inner } }), { status: 200 }))

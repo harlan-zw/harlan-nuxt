@@ -152,7 +152,21 @@ function unwrap(parsed: unknown): { _tag: 'Ok', result: SystemOneResult } | { _t
     value = (value as JevModelResult).result
   if (typeof value !== 'object' || value === null || typeof (value as { answers?: unknown }).answers !== 'object' || (value as { answers?: unknown }).answers === null)
     return { _tag: 'Err', failure: { _tag: 'Invalid', message: `response carries no answers object: ${describeBody(parsed)}` } }
-  return { _tag: 'Ok', result: value as SystemOneResult }
+  const result = value as SystemOneResult
+  // A model response may omit usage in full or in part. Zero the gaps, so no
+  // caller downstream of the client ever reads `usage` off an undefined.
+  return { _tag: 'Ok', result: { ...result, usage: normalizeUsage(result.usage) } }
+}
+
+function normalizeUsage(usage: { input_tokens?: number, output_tokens?: number } | undefined): { input_tokens: number, output_tokens: number } {
+  return {
+    input_tokens: tokenCount(usage?.input_tokens),
+    output_tokens: tokenCount(usage?.output_tokens),
+  }
+}
+
+function tokenCount(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function isEnvelope(value: unknown): boolean {
