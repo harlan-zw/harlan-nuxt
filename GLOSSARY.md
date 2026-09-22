@@ -21,6 +21,8 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 | Field | `@harlan-zw/nuxt-wide-events/server` | planned | Nuxt server code | "field" |
 | Wrangler Diagnostic | `@harlan-zw/nuxt-cloudflare` | published | developers and CI | "warning" |
 | Collection | `@harlan-zw/comark-content/server` | published | Nuxt server code | "collection" |
+| Policy Rule | `@harlan-zw/mcp-oauth` | planned | MCP OAuth server code | "rule" |
+| Policy Decision | `@harlan-zw/mcp-oauth` | planned | MCP OAuth server code | "decision" |
 | Error Report | `@harlan-zw/nuxt-sentry` | planned | Nuxt app and server code | "error" |
 | Report Policy | `@harlan-zw/nuxt-sentry` | planned | developers | "reporting rules" |
 | Drop Rule | `@harlan-zw/nuxt-sentry/server` | planned | developers | "filter" |
@@ -29,6 +31,8 @@ Canonical vocabulary for this project. Public APIs, docs, routes, and messages u
 Collisions
 
 `Diagnostic` belongs to `nuxt-dx`. `nuxt-cloudflare` always qualifies its findings as `Wrangler Diagnostic`.
+
+`Check` belongs to `nuxt-checkin`. `mcp-oauth` never says check, validate, or guard for a Policy Rule, and never says Check Result for a Policy Decision.
 
 `Event` belongs to `Wide Event` and `Domain Event`. Sentry's own word for a captured error is "event", so `nuxt-sentry` never carries that word into its API. It says `Error Report`.
 
@@ -185,3 +189,17 @@ Naming calls this file does not settle. Resolve one, fold the answer in, then de
    This bootstrap records frozen package concepts and the new logging vocabulary only.
    - Audit all public exports and docs now, which expands this package task.
    - Audit each package when its public API next changes.
+
+### Policy Rule
+
+**Is:** one pure decision function over the facts of a single OAuth request.
+**Use for:** PKCE requirements, reserved client names, scope grants, route classification, body caps.
+**Never:** check, validation, guard, policy on its own as the public concept.
+**Casing:** `Policy Rule` in headings, `rule` in prose, and `Rule` suffix in types.
+
+### Policy Decision
+
+**Is:** one Policy Rule's tagged `Ok` or `Err` answer, carrying the reason on rejection.
+**Use for:** the return of every Policy Rule, and the value a caller branches on.
+**Never:** Check Result, verdict, error as the public concept.
+**Casing:** `Policy Decision` in headings, `decision` in prose, and `Decision` suffix in types.
