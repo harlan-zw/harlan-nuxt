@@ -32,6 +32,7 @@ Every package here publishes to npm with provenance. Versions and release notes 
 | [`@harlan-zw/nuxt-jev`](./packages/nuxt-jev) | ⚖️ Jev decision runner with journal reuse and the drizzle decisions table, wired for Nuxt. |
 | [`@harlan-zw/nuxt-cloudflare`](./packages/nuxt-cloudflare) | 🌩️ Opinionated Cloudflare defaults, generated Wrangler config, and Wrangler diagnostics for Nuxt. |
 | [`@harlan-zw/nuxt-sentry`](./packages/nuxt-sentry) | 🛡️ One Sentry Report Policy: registration, enable gate, Drop Rules, and Redaction Rules for the client and the server. |
+| [`@harlan-zw/mcp-oauth`](./packages/mcp-oauth) | 🔐 Framework-free Policy Rules for an MCP OAuth 2.1 server: mandatory PKCE, consent identity, CSRF, bearer challenges. |
 | [`@harlan-zw/comark-content`](./packages/comark-content) | 📄 Markdown-only Nuxt content powered by Comark, with Collection queries, navigation, and search sections. |
 
 ## Development

@@ -15,6 +15,7 @@ on:
       - 'jev-v*'
       - 'nuxt-jev-v*'
       - 'comark-content-v*'
+      - 'mcp-oauth-v*'
 
 permissions:
   contents: read
@@ -97,3 +98,7 @@ jobs:
       - name: Publish comark-content
         if: startsWith(github.ref_name, 'comark-content-v')
         run: npm publish packages/comark-content/.pack/*.tgz --access public --provenance
+
+      - name: Publish mcp-oauth
+        if: startsWith(github.ref_name, 'mcp-oauth-v')
+        run: npm publish packages/mcp-oauth/.pack/*.tgz --access public --provenance
