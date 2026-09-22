@@ -67,6 +67,7 @@ describe('matchMcpOAuthRoute endpoints', () => {
     ['/mcp/pro', 'DELETE', 'ProtectedMcp'],
     ['/mcp/pro', 'OPTIONS', 'ProtectedMcp'],
     ['/mcp/pro', 'GET', 'ProtectedMcp'],
+    ['/mcp/pro', 'HEAD', 'ProtectedMcp'],
     ['/pro/oauth/authorize', 'POST', 'OAuthProvider'],
     ['/pro/oauth/authorize', 'OPTIONS', 'OAuthProvider'],
     ['/pro/oauth/token', 'OPTIONS', 'OAuthProvider'],
@@ -78,6 +79,9 @@ describe('matchMcpOAuthRoute endpoints', () => {
     // Streamable HTTP opens the server-to-client SSE stream. A server that
     // serves that GET and does not classify it streams to an unauthenticated
     // caller; one that answers 405 pays only a bearer check on a dead method.
+    // HEAD rides the same handler as GET whenever the MCP handler is
+    // registered without a method filter (h3 resolves handlers[method] ||
+    // handlers.all), so omitting it repeats the GET bypass one verb over.
     expect(matchMcpOAuthRoute(path, method, nested)).toEqual({ _tag: tag })
   })
 

@@ -39,6 +39,9 @@ export type McpOAuthRouteDecision
  * Streamable HTTP opens the server-to-client SSE stream there: a server that
  * serves it and does not classify it streams to an unauthenticated caller,
  * while a server that answers 405 pays only a bearer check on a dead method.
+ * `HEAD` is classified for the same reason: a router that registers the MCP
+ * handler without a method filter delivers HEAD to it too, so an unclassified
+ * HEAD is the GET bypass one verb over.
  *
  * `OPTIONS` on the protected resource is classified, NOT ignored: the provider
  * answers the preflight with the CORS headers a browser-hosted MCP client
@@ -56,7 +59,7 @@ export function matchMcpOAuthRoute(
   const path = normalizeMcpPath(rawPath)
 
   if (path === normalizeMcpPath(endpoints.resource))
-    return allow(verb, ['GET', 'POST', 'DELETE', 'OPTIONS'], { _tag: 'ProtectedMcp' })
+    return allow(verb, ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'], { _tag: 'ProtectedMcp' })
 
   if (path === normalizeMcpPath(endpoints.authorize))
     return allow(verb, ['GET', 'POST', 'OPTIONS'], { _tag: 'OAuthProvider' })
