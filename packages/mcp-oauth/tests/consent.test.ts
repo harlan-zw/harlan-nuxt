@@ -18,6 +18,13 @@ describe('createMcpConsentFormAction', () => {
     expect(createMcpConsentFormAction('cursor://anysphere.cursor-mcp/oauth/callback'))
       .toBe('\'self\' cursor:')
   })
+
+  it('degrades to this server for an unparseable callback', () => {
+    // RFC 7591 `redirect_uris` is client-supplied metadata, so a stored
+    // malformed callback must degrade to `'self'`, not crash the render.
+    expect(createMcpConsentFormAction('not a url'))
+      .toBe('\'self\'')
+  })
 })
 
 describe('createMcpConsentCacheControl', () => {

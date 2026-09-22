@@ -17,6 +17,10 @@
  * used instead, which is the narrowest value CSP accepts for it.
  */
 export function createMcpConsentFormAction(redirectUri: string): string {
+  // `redirect_uris` is client-supplied metadata (RFC 7591), so a stored
+  // malformed callback degrades to `'self'` instead of crashing the render.
+  if (!URL.canParse(redirectUri))
+    return `'self'`
   const redirect = new URL(redirectUri)
   const callback = redirect.origin === 'null' ? redirect.protocol : redirect.origin
   return `'self' ${callback}`
