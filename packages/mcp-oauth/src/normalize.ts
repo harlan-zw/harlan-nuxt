@@ -24,9 +24,15 @@
  * literal to others, and the safe reading is the one that matches.
  */
 export function normalizeMcpPath(path: string): string {
-  let decoded = path
+  // Query and fragment go FIRST, before decoding, so a percent-encoded `?`
+  // inside a real path segment cannot truncate the path. `event.path` in h3
+  // and a raw request target both carry the query string, so an adopter who
+  // passes either one straight in would otherwise have `/mcp?x=1` classify as
+  // Ignore: the same bypass class this normaliser exists to close.
+  const withoutQuery = path.split(/[?#]/)[0] ?? ''
+  let decoded = withoutQuery
   try {
-    decoded = decodeURIComponent(path)
+    decoded = decodeURIComponent(withoutQuery)
   }
   catch {
     // A malformed escape is not a reason to skip normalisation; the rest of
@@ -35,15 +41,22 @@ export function normalizeMcpPath(path: string): string {
   }
   // A NUL or control character never appears in a legitimate path and is a
   // classic truncation trick against whatever parses the value next.
-  // A NUL or C0 byte never appears in a legitimate path and is a truncation
-  // trick against whatever parses the value next, so matching them is the
-  // point of this expression.
+  // Control characters are STRIPPED rather than treated as terminators. No JS
+  // router truncates on NUL, so `/mcp%00x` normalises to `/mcpx` and is
+  // correctly not the endpoint. A runtime that did truncate would serve `/mcp`,
+  // and this module's own asymmetry doctrine would then want the truncating
+  // reading; the choice is recorded here rather than left implicit.
   // eslint-disable-next-line no-control-regex
   const cleaned = decoded.replaceAll(/[\0-\x1F\x7F]/g, '')
   const segments: string[] = []
-  for (const segment of cleaned.split('/')) {
+  // A backslash is a segment separator to WHATWG `new URL()` for special
+  // schemes, so a caller passing a raw request target must fold it here to
+  // agree with a caller passing `new URL(req.url).pathname`.
+  for (const segment of cleaned.replaceAll('\\', '/').split('/')) {
     // `;x` is a path parameter, which some routers strip before matching.
-    const bare = segment.split(';')[0] ?? ''
+    // A path parameter (`;jsessionid=…`) is stripped by some routers before
+    // matching. Surrounding whitespace is trimmed by others.
+    const bare = (segment.split(';')[0] ?? '').trim()
     if (bare === '' || bare === '.')
       continue
     if (bare === '..') {
@@ -94,9 +107,26 @@ export function mcpNameSkeleton(value: string): string {
  * adopter is most likely to write by hand, which is why it ships here.
  */
 export function isMcpHostOwnedBy(host: string, roots: readonly string[]): boolean {
-  const normalized = host.toLowerCase().replace(/\.$/, '')
+  const normalized = normalizeHost(host)
   return roots.some((root) => {
-    const owner = root.toLowerCase().replace(/\.$/, '')
+    const owner = normalizeHost(root)
+    // A blank root would match every host, including the empty hostname a
+    // non-special client id such as `urn:foo:bar` parses to, which then read
+    // as first-party. Same mistake `assessMcpClientName` guards for a blank
+    // reserved name.
+    if (owner === '')
+      return false
     return normalized === owner || normalized.endsWith(`.${owner}`)
   })
+}
+
+/**
+ * Lower-case, and drop the dots that carry no meaning at either end.
+ *
+ * A leading dot is the natural way to write a wildcard root (`.example.com`),
+ * and without stripping it `ownedHosts` written that way is dead config: every
+ * first-party client silently reads as unverified.
+ */
+function normalizeHost(value: string): string {
+  return value.trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '')
 }

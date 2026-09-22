@@ -11,6 +11,11 @@ describe('normalizeMcpPath', () => {
     ['/mcp%2Fpro', '/mcp/pro'],
     ['/mcp/pro;jsessionid=1', '/mcp/pro'],
     ['/mcp/pro/././', '/mcp/pro'],
+    ['/mcp/pro?foo=1', '/mcp/pro'],
+    ['/mcp/pro#frag', '/mcp/pro'],
+    ['/mcp/pro/?a=b', '/mcp/pro'],
+    ['/mcp/pro\\', '/mcp/pro'],
+    ['/mcp/pro ', '/mcp/pro'],
   ])('folds %s onto %s', (input, expected) => {
     // Every one of these was served by the router as the protected resource
     // while an exact-equality match classified it as "not the resource", so
@@ -61,6 +66,13 @@ describe('mcpNameSkeleton', () => {
     expect(mcpNameSkeleton(input)).toBe('acmecloud')
   })
 
+  it('does NOT fold a cross-script homoglyph', () => {
+    // Recorded as a known limit rather than implied by an absent case. A
+    // Cyrillic a survives NFKD, so `Cl\u0430ude` is not `claude`; catching it
+    // needs a confusables table and the unverified marker is the backstop.
+    expect(mcpNameSkeleton('Cl\u0430ude')).not.toBe('claude')
+  })
+
   it('keeps digits, so a numeric brand is comparable', () => {
     expect(mcpNameSkeleton('Web 2.0 Tools')).toBe('web20tools')
   })
@@ -77,6 +89,23 @@ describe('isMcpHostOwnedBy', () => {
     expect(isMcpHostOwnedBy('api.claude.ai', ['claude.ai'])).toBe(true)
     expect(isMcpHostOwnedBy('CLAUDE.AI', ['claude.ai'])).toBe(true)
     expect(isMcpHostOwnedBy('claude.ai.', ['claude.ai'])).toBe(true)
+  })
+
+  it('owns nothing for a blank root or a hostless client id', () => {
+    // A non-special client id such as `urn:foo:bar` parses to an empty
+    // hostname, which matched a blank root and read as first-party.
+    expect(isMcpHostOwnedBy('', [''])).toBe(false)
+    expect(isMcpHostOwnedBy('evil.example', [''])).toBe(false)
+    expect(isMcpHostOwnedBy('', ['claude.ai'])).toBe(false)
+    expect(isMcpHostOwnedBy('evil.example', ['  '])).toBe(false)
+  })
+
+  it('accepts a leading-dot root, the natural wildcard spelling', () => {
+    // Written `.claude.ai` this used to match nothing, so ownedHosts was dead
+    // config and every first-party client silently read as unverified.
+    expect(isMcpHostOwnedBy('claude.ai', ['.claude.ai'])).toBe(true)
+    expect(isMcpHostOwnedBy('api.claude.ai', ['.claude.ai'])).toBe(true)
+    expect(isMcpHostOwnedBy('evilclaude.ai', ['.claude.ai'])).toBe(false)
   })
 
   it('refuses a host that merely ends with the same characters', () => {

@@ -19,15 +19,33 @@ describe('exceedsMcpBodyLimit', () => {
     expect(exceedsMcpBodyLimit('   ')).toBe(false)
   })
 
-  it.each(['Infinity', '1e999', '2e6', '0x200000', '5, 2000000', '2000000abc', '1_000_000', '-5', 'abc'])(
-    'refuses a declaration of %j rather than reading it as small',
+  it.each(['Infinity', '1e999', '2000000abc', '1_000_000', '-5', '+5', 'abc'])(
+    'refuses an unparseable declaration of %j rather than reading it as small',
     (value) => {
-      // Every one of these passed the old Number.isFinite guard as "under the
-      // limit". `5, 2000000` is what a header getter yields when it joins
-      // duplicate Content-Length values, which some proxies emit.
+      // `Infinity` and `1e999` overflow, the rest are NaN, and every one
+      // passed the old Number.isFinite guard as "under the limit".
       expect(exceedsMcpBodyLimit(value)).toBe(true)
     },
   )
+
+  it('refuses conflicting duplicate declarations', () => {
+    // A header getter joins duplicate Content-Length values with ', '. Two
+    // different values are a request smuggling shape, not a small body.
+    expect(exceedsMcpBodyLimit('5, 2000000')).toBe(true)
+    expect(exceedsMcpBodyLimit('5, 6')).toBe(true)
+  })
+
+  it('accepts identical duplicate declarations', () => {
+    // RFC 9110 §8.6 lets a recipient collapse these, and undici and Workers
+    // both produce the joined form, so refusing it 413s a valid small request.
+    expect(exceedsMcpBodyLimit('5, 5')).toBe(false)
+    expect(exceedsMcpBodyLimit('5, 5, 5')).toBe(false)
+  })
+
+  it('accepts a padded or zero-prefixed decimal', () => {
+    expect(exceedsMcpBodyLimit(' 5 ')).toBe(false)
+    expect(exceedsMcpBodyLimit('0005')).toBe(false)
+  })
 
   it('honours a caller-supplied cap', () => {
     expect(exceedsMcpBodyLimit('2048', 1024)).toBe(true)

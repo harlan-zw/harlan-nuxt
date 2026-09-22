@@ -66,6 +66,17 @@ describe('createMcpBearerChallenge', () => {
     expect(challenge.match(/(^|[^\\])error="/g)).toHaveLength(1)
   })
 
+  it('strips every C0 control, not only the newline pair', () => {
+    // RFC 9110 §5.6.4 qdtext excludes all of them, and a mutant that removed
+    // only CR, LF and NUL let the rest through into a live header value.
+    const challenge = createMcpBearerChallenge({
+      resourceMetadataUrl: 'https://example.com/rm\u0001\u000B\u007F',
+      error: 'invalid_token',
+    })
+
+    expect(challenge).toBe('Bearer resource_metadata="https://example.com/rm", error="invalid_token"')
+  })
+
   it('cannot be made to split the header through the scope', () => {
     const challenge = createMcpBearerChallenge({
       resourceMetadataUrl: 'https://example.com/rm',

@@ -35,7 +35,10 @@ export type McpOAuthRouteDecision
  *
  * Method-aware, because the method changes the answer rather than merely
  * failing later. `GET` on the token endpoint is not a token request, so it is
- * left to the app.
+ * left to the app. `GET` on the protected resource IS classified, because MCP
+ * Streamable HTTP opens the server-to-client SSE stream there: a server that
+ * serves it and does not classify it streams to an unauthenticated caller,
+ * while a server that answers 405 pays only a bearer check on a dead method.
  *
  * `OPTIONS` on the protected resource is classified, NOT ignored: the provider
  * answers the preflight with the CORS headers a browser-hosted MCP client
@@ -53,7 +56,7 @@ export function matchMcpOAuthRoute(
   const path = normalizeMcpPath(rawPath)
 
   if (path === normalizeMcpPath(endpoints.resource))
-    return allow(verb, ['POST', 'DELETE', 'OPTIONS'], { _tag: 'ProtectedMcp' })
+    return allow(verb, ['GET', 'POST', 'DELETE', 'OPTIONS'], { _tag: 'ProtectedMcp' })
 
   if (path === normalizeMcpPath(endpoints.authorize))
     return allow(verb, ['GET', 'POST', 'OPTIONS'], { _tag: 'OAuthProvider' })

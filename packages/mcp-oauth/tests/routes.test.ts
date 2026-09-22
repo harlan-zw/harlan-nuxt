@@ -66,6 +66,7 @@ describe('matchMcpOAuthRoute endpoints', () => {
   it.each([
     ['/mcp/pro', 'DELETE', 'ProtectedMcp'],
     ['/mcp/pro', 'OPTIONS', 'ProtectedMcp'],
+    ['/mcp/pro', 'GET', 'ProtectedMcp'],
     ['/pro/oauth/authorize', 'POST', 'OAuthProvider'],
     ['/pro/oauth/authorize', 'OPTIONS', 'OAuthProvider'],
     ['/pro/oauth/token', 'OPTIONS', 'OAuthProvider'],
@@ -73,14 +74,16 @@ describe('matchMcpOAuthRoute endpoints', () => {
   ])('serves %s %s', (path, method, tag) => {
     // Each of these is a live break if its method is dropped from the allow
     // list: DELETE is MCP session teardown, OPTIONS is the CORS preflight a
-    // browser-hosted client sends before every call.
+    // browser-hosted client sends before every call, and GET is where MCP
+    // Streamable HTTP opens the server-to-client SSE stream. A server that
+    // serves that GET and does not classify it streams to an unauthenticated
+    // caller; one that answers 405 pays only a bearer check on a dead method.
     expect(matchMcpOAuthRoute(path, method, nested)).toEqual({ _tag: tag })
   })
 
   it.each([
     ['/pro/oauth/token', 'GET'],
     ['/pro/oauth/register', 'GET'],
-    ['/mcp/pro', 'GET'],
     ['/mcp/pro', 'PUT'],
     ['/pro/oauth/authorize', 'DELETE'],
   ])('ignores %s %s, which the endpoint does not serve', (path, method) => {

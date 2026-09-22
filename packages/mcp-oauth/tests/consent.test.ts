@@ -42,16 +42,29 @@ describe('createMcpConsentFormAction', () => {
     expect(createMcpConsentFormAction('')).toEqual({ _tag: 'Err', reason: 'unparseable_redirect_uri' })
   })
 
-  it('cannot be tricked into a second CSP directive', () => {
-    // An origin cannot contain a space or a semicolon, so this stays one
-    // directive; the assertion pins it rather than assuming it.
-    const decision = createMcpConsentFormAction('https://a%22%2Cx.com/cb')
+  it('cannot emit a comma, which would split the CSP into two policies', () => {
+    // WHATWG permits `"` and `,` in a host, so this callback registers and its
+    // origin reached the header. A comma there is a policy separator, so the
+    // allowance silently stopped applying. The previous version of this test
+    // asserted on `;` and a space count and therefore passed on this input.
+    expect(createMcpConsentFormAction('https://a%22%2Cx.com/cb'))
+      .toEqual({ _tag: 'Ok', formAction: '\'self\'' })
+  })
 
-    expect(decision).toMatchObject({ _tag: 'Ok' })
-    if (decision._tag === 'Ok') {
-      expect(decision.formAction).not.toContain(';')
-      expect(decision.formAction.split(' ')).toHaveLength(2)
+  it('emits nothing outside the host charset', () => {
+    for (const uri of ['https://a%22x.com/cb', 'https://a%2Cx.com/cb']) {
+      const decision = createMcpConsentFormAction(uri)
+
+      expect(decision).toEqual({ _tag: 'Ok', formAction: '\'self\'' })
     }
+  })
+
+  it('keeps a legitimate origin, including a port and IPv6', () => {
+    // The positive control for the charset gate: it must not reject real hosts.
+    expect(createMcpConsentFormAction('https://example.com:8443/cb'))
+      .toEqual({ _tag: 'Ok', formAction: '\'self\' https://example.com:8443' })
+    expect(createMcpConsentFormAction('https://[2001:db8::1]/cb'))
+      .toEqual({ _tag: 'Ok', formAction: '\'self\' https://[2001:db8::1]' })
   })
 })
 

@@ -55,13 +55,16 @@ export function createMcpBearerChallenge(input: McpBearerChallengeInput): string
 /**
  * Make a value safe inside an RFC 7230 quoted-string.
  *
- * CR, LF and NUL go entirely: they are header-splitting, and there is no
- * legitimate value that needs them. A `"` or `\` is backslash-escaped, which
- * is what a quoted-string permits and what keeps the parameter one parameter.
+ * Every C0 control and DEL goes entirely: CR and LF split the header, and the
+ * rest are not valid `qdtext` per RFC 9110 §5.6.4. A `"` or `\` is
+ * backslash-escaped, which is what a quoted-string permits and what keeps the
+ * parameter one parameter. A WHATWG-serialised URL contains none of these, so
+ * no legitimate value is altered.
  */
 function quoteAuthParam(value: string): string {
   return value
-    .replaceAll(/[\r\n\0]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replaceAll(/[\0-\x1F\x7F]/g, '')
     .replaceAll(/["\\]/g, match => `\\${match}`)
 }
 

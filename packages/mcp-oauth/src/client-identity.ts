@@ -29,6 +29,17 @@ export interface McpClientIdentityClaim {
   clientId: string
   clientName: unknown
   redirectUri: string
+  /**
+   * The operator vouches for this client out of band.
+   *
+   * The `ownedHosts` route to `verified` only works for a client whose id is a
+   * URL, which in practice means CIMD. An RFC 7591 client has an opaque
+   * server-generated id, so a first-party connector registered through DCR can
+   * never prove itself by host and would be permanently refused its own brand
+   * name. Set this for a client the operator created deliberately, for example
+   * one seeded through the provider's own `createClient`.
+   */
+  trusted?: boolean
 }
 
 export interface McpClientIdentityPolicy {
@@ -92,10 +103,19 @@ export function assessMcpClientIdentity(
   if (redirect._tag === 'Err')
     return redirect
 
+  // BOTH hosts must be owned. The client id host proves who published the
+  // metadata; it says nothing about where the code goes, and nothing in the
+  // CIMD rules ties that document's redirect_uris to its own host. Verifying
+  // on the id alone rendered "verified <brand>" over an attacker's callback,
+  // which is the hole this file's header already describes.
+  const owned = policy.ownedHosts ?? []
   const clientHost = readMcpUrlHost(claim.clientId)
-  const verified = clientHost !== null
-    && policy.ownedHosts !== undefined
-    && isMcpHostOwnedBy(clientHost, policy.ownedHosts)
+  const redirectHost = readMcpUrlHost(claim.redirectUri)
+  const verified = claim.trusted === true
+    || (clientHost !== null
+      && redirectHost !== null
+      && isMcpHostOwnedBy(clientHost, owned)
+      && isMcpHostOwnedBy(redirectHost, owned))
 
   // A verified first-party client is the legitimate holder of the brand name,
   // so the reserved-name rule must not lock the operator out of their own.
@@ -122,6 +142,11 @@ export type McpClientNameDecision
  * `client_name` is the headline of the consent page, so our own name over an
  * attacker's callback reads as first-party. Compared as skeletons: an earlier
  * version joined the words with `\s*` and was defeated by a single hyphen.
+ *
+ * A reserved entry matches as a SUBSTRING of the candidate's skeleton, so
+ * `Acme Cloud` catches `Acme Cloud Pro` and `Unofficial acmecloud`. That also
+ * means a short entry over-matches: reserving `Pro` refuses Proxyman,
+ * Prometheus and ProtonMail. Reserve the full brand, not a fragment of it.
  */
 export function assessMcpClientName(
   clientName: unknown,

@@ -28,7 +28,14 @@ export function exceedsMcpBodyLimit(
   const declared = contentLength.trim()
   if (declared === '')
     return false
-  if (!/^\d+$/.test(declared))
+  // RFC 9110 §8.6 lets a recipient collapse identical duplicate
+  // Content-Length values, and both undici and Workers join duplicate headers
+  // with ', '. So `5, 5` is a valid declaration of 5 bytes and must not 413.
+  // Differing values remain invalid and are refused.
+  const parts = declared.split(',').map(part => part.trim())
+  if (!parts.every(part => /^\d+$/.test(part)))
     return true
-  return Number(declared) > maxBytes
+  if (new Set(parts).size !== 1)
+    return true
+  return Number(parts[0]) > maxBytes
 }

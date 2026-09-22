@@ -23,6 +23,9 @@ export type McpConsentFormActionDecision
  */
 const SAFE_CALLBACK_SCHEMES = new Set(['http:', 'https:'])
 
+/** Scheme, a registrable host or a bracketed IPv6 literal, optional port. */
+const SAFE_ORIGIN_PATTERN = /^https?:\/\/(?:[\w.-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i
+
 /**
  * The CSP `form-action` value for a consent page.
  *
@@ -44,11 +47,16 @@ export function createMcpConsentFormAction(
   if (!allowedSchemes.has(url.protocol))
     return { _tag: 'Ok', formAction: '\'self\'' }
   // A loopback callback varies its port per launch, and CSP has no port
-  // wildcard, so the origin would pin the wrong one. `'self'` is correct and
-  // the post-approval redirect is unaffected.
+  // wildcard, so the origin would pin the wrong one. `'self'` is correct
+  // because `form-action` governs form submissions, not navigations, and the
+  // post-approval step is a 302 the authorization server issues.
   if (isMcpLoopbackCallback(redirectUri))
     return { _tag: 'Ok', formAction: '\'self\'' }
-  if (url.origin === 'null')
+  // A comma in a Content-Security-Policy value splits it into TWO policies,
+  // and WHATWG permits `"` and `,` in a host, so a registered callback could
+  // corrupt the header and silently void the allowance. Anything outside the
+  // host charset falls back to the safe floor rather than being emitted.
+  if (!SAFE_ORIGIN_PATTERN.test(url.origin))
     return { _tag: 'Ok', formAction: '\'self\'' }
   return { _tag: 'Ok', formAction: `'self' ${url.origin}` }
 }

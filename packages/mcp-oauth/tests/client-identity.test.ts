@@ -157,6 +157,41 @@ describe('assessMcpClientIdentity', () => {
     )).toMatchObject({ _tag: 'Err', reason: 'reserved_client_name' })
   })
 
+  it('refuses to verify a client whose callback is off the owned host', () => {
+    // The client id host proves who published the metadata and says nothing
+    // about where the code goes; nothing in the CIMD rules ties a document's
+    // redirect_uris to its own host. Verifying on the id alone rendered
+    // "verified Acme Cloud" over an attacker's callback.
+    expect(assessMcpClientIdentity(
+      { clientId: 'https://acmecloud.com/cimd.json', clientName: 'Helper', redirectUri: 'https://attacker.example/cb' },
+      full,
+    )).toEqual({ _tag: 'Ok', verification: 'unverified' })
+  })
+
+  it('refuses the reserved name when only the client id host is owned', () => {
+    expect(assessMcpClientIdentity(
+      { clientId: 'https://acmecloud.com/cimd.json', clientName: 'Acme Cloud', redirectUri: 'https://attacker.example/cb' },
+      full,
+    )).toMatchObject({ _tag: 'Err', reason: 'reserved_client_name' })
+  })
+
+  it('verifies an operator-vouched client that has no URL-shaped id', () => {
+    // An RFC 7591 client has an opaque server-generated id, so the ownedHosts
+    // route can never verify it and the operator's own DCR-registered
+    // connector would be permanently refused its own brand.
+    expect(assessMcpClientIdentity(
+      { clientId: 'C6o_YeNTyRaZmHjA', clientName: 'Acme Cloud', redirectUri: 'https://acmecloud.com/cb', trusted: true },
+      full,
+    )).toEqual({ _tag: 'Ok', verification: 'verified' })
+  })
+
+  it('does not let a hostless client id claim a blank owned host', () => {
+    expect(assessMcpClientIdentity(
+      { clientId: 'urn:foo:bar', clientName: 'Acme Cloud', redirectUri: 'https://x.example/cb' },
+      { ...policy, ownedHosts: [''] },
+    )).toMatchObject({ _tag: 'Err', reason: 'reserved_client_name' })
+  })
+
   it('refuses a look-alike owned host', () => {
     expect(assessMcpClientIdentity(
       { clientId: 'https://acmecloud.com.evil.example/c.json', clientName: 'Acme Cloud', redirectUri: 'https://evil.example/cb' },

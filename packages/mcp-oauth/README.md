@@ -23,14 +23,14 @@ These rules are the answers, extracted from two production servers so they exist
 | --- | --- |
 | `requireMcpPkce` | Mandatory S256 for every client, confidential included, plus the RFC 7636 challenge shape. |
 | `assessMcpClientIdentity` | One decision over a client's whole claimed identity: name, callback scheme, callback security, and whether anything verified it. |
-| `assessMcpClientName` | Refuses a client claiming a brand you reserve. Skeleton comparison, so punctuation, case, width, diacritics and zero-width characters do not evade it. |
+| `assessMcpClientName` | Refuses a client claiming a brand you reserve. Skeleton comparison, so punctuation, case, width, diacritics and zero-width characters do not evade it. Entries match as substrings, so reserve the full brand. |
 | `assessMcpCallbackScheme` | The same rule applied to a custom-scheme callback, which the consent page renders in place of a host. |
 | `assessMcpRedirectUri` | Refuses plaintext http to a remote host and a fragment; allows loopback http per RFC 8252. |
 | `describeMcpCallbackDestination` | The callback as a human reads it. Loopback becomes "this computer". **HTML-escape the result.** |
 | `isMcpLoopbackCallback`, `isMcpLoopbackUrl` | A real loopback callback over all of `127.0.0.0/8`, not a `127.0.0.1.attacker.example` look-alike. |
 | `isMcpHostOwnedBy` | Anchored host ownership. `host.endsWith(root)` hands `evilclaude.ai` the `claude.ai` treatment; this does not. |
 | `grantedMcpScopes` | Intersects the request with your policy, so a read-only client never receives a write scope. |
-| `mcpRefreshTokenTtl` | Withholds a refresh token when `offline_access` was not granted. |
+| `mcpRefreshTokenTtl` | The refresh-token lifetime a granted scope set earned: `0` when `offline_access` was not granted. |
 | `resolveMcpOAuthIdentity` | RFC 8707 / 8414 / 9728 identifiers derived from the request, so staging advertises itself. |
 | `matchMcpOAuthRoute` | Method-aware, **path-normalising** classification of your protocol, discovery and resource paths. |
 | `normalizeMcpPath`, `mcpNameSkeleton` | The two normalisers the rules above are built on, exported for your own comparisons. |
@@ -42,7 +42,7 @@ These rules are the answers, extracted from two production servers so they exist
 
 ## Decision style
 
-The rules that can refuse something return a tagged decision. Nothing throws and nothing does I/O; the only global read is the CSRF entropy source, which is injectable. The remaining exports are derivations and predicates that return a plain string, number or boolean.
+The rules that can refuse something return a tagged decision, and none of them throws. The remaining exports are derivations and predicates returning a plain string, number or boolean. Two caveats: `createMcpRandomToken` reads `crypto` and `btoa` unless you inject its randomness, and `resolveMcpOAuthIdentity` throws on an unparseable `requestUrl`, because there is no honest fallback identity to return. Pass it `request.url`, which is always a valid URL.
 
 ```ts
 import { requireMcpPkce } from '@harlan-zw/mcp-oauth'
@@ -79,6 +79,8 @@ renderConsent({ unverified: decision.verification === 'unverified' })
 **Call this at consent time, not only at registration.** A provider's registration callback covers RFC 7591 clients only. A Client-ID Metadata Document client — an https client id whose own host serves its metadata — never passes through registration, so a registration-only check is bypassed by choosing a client id instead of POSTing to `/register`. Nothing in the CIMD rules constrains that document's `redirect_uris` to the client-id host either. If you enable CIMD, run this rule on the resolved client before you render anything.
 
 CIMD does give you the one signal worth trusting: the client id is an https URL whose host actually served the document. That is what `ownedHosts` checks, and why a verified first-party client is allowed to use your reserved name.
+
+`verified` requires BOTH the client id host and the callback host to be yours, because the id proves who published the metadata and says nothing about where the code goes. For a first-party client registered through DCR, whose id is opaque, set `trusted: true` on the claim instead.
 
 Show the destination on the page unconditionally, escaped, and mark the client unverified whenever `verification` says so.
 
@@ -122,7 +124,23 @@ const granted = grantedMcpScopes(authRequest.scope, {
 
 The granted list comes back in policy order and deduplicated, so it is stable across clients and comparable once stored on a grant.
 
-Intersecting `offline_access` is not enough on its own: a provider mints a refresh token whenever its TTL is non-zero, without consulting scope. Pass `mcpRefreshTokenTtl(granted.scopes, { ttl })` per grant at the code exchange, or a user who declined offline access still issues a 30-day credential and your consent page promised otherwise.
+Intersecting `offline_access` is not enough on its own: a provider mints a refresh token whenever its TTL is non-zero, without consulting scope, so a user who declined offline access still issues a 30-day credential and your consent page promised otherwise.
+
+With `@cloudflare/workers-oauth-provider` the only hook that can set the lifetime per grant is `tokenExchangeCallback`, on the authorization-code exchange. `completeAuthorization` has no TTL field, so this is where the value goes:
+
+```ts
+const providerOptions = {
+  // ...
+  tokenExchangeCallback: ({ grantType, scope }) => {
+    // Only honoured on the code exchange; ignored on a refresh.
+    if (grantType !== 'authorization_code')
+      return undefined
+    return { refreshTokenTTL: mcpRefreshTokenTtl(scope, { ttl: 2_592_000 }) }
+  },
+}
+```
+
+A TTL of `0` skips the mint entirely and omits `refresh_token` from the response.
 
 ## What this package does not own
 
