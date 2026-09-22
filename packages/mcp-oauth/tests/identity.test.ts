@@ -32,13 +32,24 @@ describe('resolveMcpOAuthIdentity', () => {
     expect(identity.resource).toBe('https://example.com/mcp/pro')
   })
 
-  it('discards a configured origin that is blank or unparseable', () => {
+  it.each(['', '   ', 'not a url'])('discards a configured origin of %j', (configured) => {
     // Falling back to the request beats advertising a broken identifier.
-    for (const configured of ['', '   ', 'not a url']) {
-      expect(resolveMcpOAuthIdentity('https://real.example.com/x', endpoints, configured).authorizationServer)
-        .toBe('https://real.example.com')
-    }
+    expect(resolveMcpOAuthIdentity('https://real.example.com/x', endpoints, configured).authorizationServer)
+      .toBe('https://real.example.com')
   })
+
+  it.each(['file:///x', 'mailto:a@b.c', 'data:text/plain,x'])(
+    'discards a configured origin of %j, whose origin is opaque',
+    (configured) => {
+      // URL.canParse accepts these and their origin is the literal string
+      // 'null', so the server advertised authorizationServer: 'null' and
+      // resource: 'null/mcp/pro'. Ignoring the setting beats that.
+      const identity = resolveMcpOAuthIdentity('https://real.example.com/x', endpoints, configured)
+
+      expect(identity.authorizationServer).toBe('https://real.example.com')
+      expect(identity.resource).toBe('https://real.example.com/mcp/pro')
+    },
+  )
 
   it('takes only the origin of a configured value, ignoring its path', () => {
     expect(resolveMcpOAuthIdentity('https://real.example.com/x', endpoints, 'https://example.com/ignored/path').resource)

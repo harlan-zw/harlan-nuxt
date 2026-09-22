@@ -9,20 +9,32 @@
  */
 export interface McpOAuthEndpoints {
   /** The authorization endpoint, where consent is granted. */
-  authorize: string
+  readonly authorize: string
   /** The token endpoint, where a code is exchanged. */
-  token: string
+  readonly token: string
   /**
    * The RFC 7591 dynamic client registration endpoint, or `null` when this
    * server does not offer registration.
    */
-  register: string | null
+  readonly register: string | null
   /** The protected resource: the path the bearer token opens. */
-  resource: string
+  readonly resource: string
 }
 
 /** RFC 9728 §3.1 well-known prefix for protected-resource metadata. */
 export const PROTECTED_RESOURCE_WELL_KNOWN = '/.well-known/oauth-protected-resource'
 
-/** RFC 8414 well-known prefix for authorization-server metadata. */
+/**
+ * RFC 8414 §3 well-known path for authorization-server metadata.
+ *
+ * A complete path, not a prefix: RFC 8414 inserts this segment between the
+ * authority and the issuer's own path component, and an issuer with no path
+ * (what `resolveMcpOAuthIdentity` produces) has exactly this one URL.
+ */
 export const AUTHORIZATION_SERVER_WELL_KNOWN = '/.well-known/oauth-authorization-server'
+
+/**
+ * OpenID Connect discovery. Not served, but probed by real MCP clients, so it
+ * is classified rather than left to the app's HTML 404.
+ */
+export const OPENID_CONFIGURATION_WELL_KNOWN = '/.well-known/openid-configuration'

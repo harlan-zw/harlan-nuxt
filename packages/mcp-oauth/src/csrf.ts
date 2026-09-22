@@ -1,13 +1,18 @@
 /**
  * Consent-page secrets.
  *
- * The CSRF token and the CSP nonce are minted separately and deliberately.
- * Double-submit makes sharing one value safe today, but it prints the CSRF
- * secret into the page source as the nonce, and two secrets with different
- * lifetimes and different threat models must not share a value.
+ * The CSRF token and the CSP nonce must never be the same value. Double-submit
+ * makes sharing one technically safe today, but it prints the CSRF secret into
+ * the page source as the nonce, and two secrets with different lifetimes and
+ * different threat models must not share a value.
+ *
+ * `createMcpConsentSecrets` is the only way to get them, which is what makes
+ * the mistake unrepresentable. Two separately-named functions returning the
+ * same thing did not: nothing stopped a caller computing one and using it
+ * twice, which is the bug this module exists to prevent.
  */
 
-/** 32 random bytes, base64url, no padding. */
+/** 32 random bytes, base64url, no padding: 43 characters. */
 export function createMcpRandomToken(
   randomBytes: () => Uint8Array = () => crypto.getRandomValues(new Uint8Array(32)),
 ): string {
@@ -20,19 +25,39 @@ export function createMcpRandomToken(
     .replace(/=+$/, '')
 }
 
-export const createMcpCsrfToken = createMcpRandomToken
-export const createMcpCspNonce = createMcpRandomToken
+export interface McpConsentSecrets {
+  /** Goes in the `__Host-` cookie and the form's hidden field. Never rendered elsewhere. */
+  readonly csrfToken: string
+  /** Goes in the CSP `style-src`/`script-src` nonce. Safe to print in the page. */
+  readonly cspNonce: string
+}
+
+export function createMcpConsentSecrets(
+  randomBytes?: () => Uint8Array,
+): McpConsentSecrets {
+  return {
+    csrfToken: createMcpRandomToken(randomBytes),
+    cspNonce: createMcpRandomToken(randomBytes),
+  }
+}
 
 /**
  * Double-submit comparison for the consent decision.
  *
+ * Both halves must be strings. Without that guard two non-strings compared
+ * equal: `(1).length` is `undefined`, so the length check passed, the loop
+ * body never ran, and the function reported agreement on a mismatch.
+ *
  * Length first, then every character with no early return, so the comparison
- * does not leak the matching prefix through its own timing.
+ * does not leak the matching prefix through its own timing. The length itself
+ * leaks, which is why the tokens are fixed-width.
  */
 export function verifyMcpCsrfToken(
-  cookieToken: string | undefined,
-  submittedToken: string | undefined,
+  cookieToken: unknown,
+  submittedToken: unknown,
 ): boolean {
+  if (typeof cookieToken !== 'string' || typeof submittedToken !== 'string')
+    return false
   if (!cookieToken || !submittedToken || cookieToken.length !== submittedToken.length)
     return false
   let mismatch = 0

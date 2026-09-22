@@ -195,11 +195,11 @@ Naming calls this file does not settle. Resolve one, fold the answer in, then de
 **Is:** one pure decision function over the facts of a single OAuth request.
 **Use for:** PKCE requirements, reserved client names, scope grants, route classification, body caps.
 **Never:** check, validation, guard, policy on its own as the public concept.
-**Casing:** `Policy Rule` in headings, `rule` in prose, and `Rule` suffix in types.
+**Casing:** `Policy Rule` in headings and `rule` in prose. A Rule is a function, never a type: its input type takes a `Policy`, `Claim` or `Request` suffix and its answer takes `Decision`.
 
 ### Policy Decision
 
-**Is:** one Policy Rule's tagged `Ok` or `Err` answer, carrying the reason on rejection.
+**Is:** one Policy Rule's tagged answer, carrying the reason on rejection. Usually `Ok` or `Err`; a classification Rule may tag its answer differently.
 **Use for:** the return of every Policy Rule, and the value a caller branches on.
 **Never:** Check Result, verdict, error as the public concept.
 **Casing:** `Policy Decision` in headings, `decision` in prose, and `Decision` suffix in types.
