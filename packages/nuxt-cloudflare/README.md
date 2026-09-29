@@ -5,11 +5,9 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Cloudflare gives a Nuxt 4 app opinionated Cloudflare defaults, a generated Wrangler config, and diagnostics that fail a bad deploy before Cloudflare does.
+Nuxt Cloudflare gives a Nuxt 4 app Cloudflare defaults, a generated Wrangler config, and Wrangler diagnostics. A bad deploy fails in your build before Cloudflare rejects it.
 
 The defaults come from production patterns already running in Nuxt SEO and gscdump. The module owns platform policy. Your application topology stays yours.
-
-Status: experimental. APIs may change before the first release.
 
 <p align="center">
 <table>
@@ -23,13 +21,13 @@ Status: experimental. APIs may change before the first release.
 
 ## Features
 
-- ⚙️ **Generated Wrangler config:** Cloudflare preset, Node compatibility, and sane observability, with anything you authored left alone.
-- 🩺 **Deploy doctor:** audits Wrangler's effective config, including generated redirects and every named environment.
-- 💰 **Cost controls:** 1% log and trace sampling, asset-first routing, and warnings when a setting turns free requests into billed ones.
-- 🗄️ **Workers Caching:** version-isolated by default, with a fail-closed `private, no-store` for rendered HTML.
-- 📦 **Partial bundling:** chunks deploy as separate modules, which cut startup CPU on the Nuxt SEO Pro Worker from 118ms to 81ms.
-- 🔑 **Exact binding types:** `nuxt prepare` runs Wrangler and writes a compatibility-aware declaration, then production builds fail on drift.
-- 🧰 **D1 primitives:** recovering sessions, safe write retries, and parameter plans that respect the 100-bind limit.
+- ⚙️ **Generated Wrangler config:** you skip the Cloudflare boilerplate, and every key you wrote stays yours.
+- 🩺 **Deploy doctor:** a broken Wrangler config fails in CI, before a deploy reaches Cloudflare.
+- 💰 **Cost controls:** surprise bills from unsampled logs or newly billable asset requests get flagged before you deploy.
+- 🗄️ **Workers Caching:** one deploy never serves another deploy's cache, and rendered pages stay out of the shared cache by default.
+- 📦 **Partial bundling:** large Workers start faster; the Nuxt SEO Pro Worker dropped from 118ms to 81ms startup CPU.
+- 🔑 **Exact binding types:** a wrong binding name or stale binding type fails before it reaches production.
+- 🧰 **D1 primitives:** session resets, lock contention, and the 100-bind limit stop breaking your queries.
 
 ## Installation
 
@@ -67,8 +65,8 @@ Every default below yields to a value you wrote. The root `wrangler.jsonc`, `wra
 - Cloudflare module preset, generated Wrangler config, and Node compatibility
 - Static assets remain asset first by default. Blanket `assets.run_worker_first: true` warns because valid authentication and transform use cases exist
 - Workers Logs sampled at 1%, traces at 1%, both overridable
-- Preview URLs disabled unless explicitly enabled
-- `workers_dev` disabled when a route proves the Worker remains reachable; workers without routes must choose explicitly
+- Preview URLs disabled unless you enable them
+- `workers_dev` disabled when a route keeps the Worker reachable; a Worker without routes must set it
 - Version metadata binding at `CF_VERSION_METADATA`
 - Smart Placement enabled unless the project chooses a placement
 - Partial bundling: `find_additional_modules` plus a fallthrough `ESModule` rule for `**/*.mjs`, unless a rule already covers mjs or `no_bundle` is set
@@ -88,9 +86,9 @@ Persistent KV mounts are never wrapped. The expiry policy applies only to cache 
 
 ## Configuration
 
-Everything below is optional. The defaults above already cover a plain deploy.
+Everything below is optional. The defaults cover a plain deploy.
 
-To configure a cache mount when one does not already exist:
+If you have no cache mount, configure one:
 
 ```ts
 export default defineNuxtConfig({
@@ -105,11 +103,13 @@ export default defineNuxtConfig({
 
 Cloudflare KV requires TTLs of at least 60 seconds. The cache wrapper raises shorter positive TTLs to 60 seconds.
 
-Keep server runtime secret defaults empty. Nuxt reads matching `NUXT_*` values from Worker secret bindings at runtime. The production build guard rejects secret build environment values before Nitro can include them in the bundle. Nuxt Scripts proxy signing remains allowed because that module registers its security plugin during the build.
+Keep server runtime secret defaults empty. At runtime, Nuxt reads matching `NUXT_*` values from Worker secret bindings. The production build guard rejects a secret build environment value before Nitro can put it in the bundle. Nuxt Scripts proxy signing still works, because that module registers its security plugin during the build.
 
-Workers Caching is separate from Nitro's KV-backed cache. The module enables version-isolated caching by default. Set `workersCache: { _tag: 'disabled' }` to opt out. Choose cross-version caching only with an explicit purge path.
+Workers Caching is separate from Nitro's KV-backed cache. The module turns on version-isolated caching by default. To opt out, set `workersCache: { _tag: 'disabled' }`. Choose cross-version caching only if you have a purge path.
 
-Partial bundling is on by default. Wrangler's default bundling inlines every lazy chunk into one module the isolate parses at startup; on the Nuxt SEO Pro Worker that was a 26.3MB bundle, and partial bundling cut `wrangler check startup` active CPU from 118ms to 81ms by deploying chunks as separate modules. The generated config gains `find_additional_modules: true` and a fallthrough `ESModule` rule for `**/*.mjs`; rules you wrote are kept, and one that already covers mjs wins. Configs with `no_bundle` inject neither key, because Wrangler already defaults `find_additional_modules` to true there and applies your rules as written. Set `partialBundles: false` to keep single-bundle deploys.
+Partial bundling is on by default. Wrangler's default bundling inlines every lazy chunk into one module, and the isolate parses all of it at startup. On the Nuxt SEO Pro Worker that module was 26.3MB. Deploying chunks as separate modules cut `wrangler check startup` active CPU from 118ms to 81ms.
+
+The generated config gains `find_additional_modules: true` and a fallthrough `ESModule` rule for `**/*.mjs`. The module keeps rules you wrote, and a rule of yours that covers mjs wins. With `no_bundle`, the module adds neither key: Wrangler already defaults `find_additional_modules` to true there and applies your rules as written. To keep single-bundle deploys, set `partialBundles: false`.
 
 The module writes a fail-closed `private, no-store` before routing, so a response nobody described is never cached. It never rewrites a policy you set on a response that is not a rendered document, so asset and API route rules are yours.
 
@@ -141,28 +141,28 @@ export default defineNuxtConfig({
 })
 ```
 
-It emits `max-age`, never `s-maxage`. Cloudflare reads `s-maxage` as implying `proxy-revalidate`, which disables `stale-while-revalidate` and `stale-if-error`, so a policy that looks like it serves stale blocks on revalidation instead. The module warns at build if a route rule you wrote by hand hits that.
+It emits `max-age`, never `s-maxage`. Cloudflare reads `s-maxage` as `proxy-revalidate`, which turns off `stale-while-revalidate` and `stale-if-error`. A policy that looks like it serves stale then blocks on revalidation. If a route rule you wrote by hand hits this, the module warns at build.
 
 ## Cost controls
 
-Cloudflare pricing changes. Check the linked pricing pages before making a budget.
+Cloudflare pricing changes. Before you set a budget, check the linked pricing pages.
 
 - Workers Logs use a 1% routine sample. Paid plans include 20 million monthly events. Extra events cost $0.60 per million. See [Workers Logs pricing](https://developers.cloudflare.com/workers/observability/logs/workers-logs/#pricing).
-- Invocation logs remain enabled. High-volume Workers with complete error telemetry can set `observability.logs.invocation_logs: false`. This removes one event per sampled invocation.
+- Invocation logs stay on. If a high-volume Worker already has full error telemetry, set `observability.logs.invocation_logs: false`. This removes one event per sampled invocation.
 - Traces use a separate 1% sample. Each span is metered. [Trace pricing](https://developers.cloudflare.com/workers/observability/traces/#limits--pricing) lists 10 million included monthly events. It also says the quota is shared with logs. The Workers Logs page lists 20 million. Budget against 10 million until the pages agree.
 - Workers Caching uses version isolation by default. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/#workers) bills cache hits as Worker requests. This includes static assets and Worker-to-Worker requests. Disable caching when CPU savings do not exceed the added request cost.
 - Static assets stay asset first. Their requests are free and unlimited. The module warns when blanket Worker-first routing makes assets billable.
 - Cloudflare's 30-second CPU limit remains unchanged. The doctor warns when `limits.cpu_ms` exceeds 30,000. A higher ceiling increases runaway-cost exposure.
-- Queue retries add billed read operations. Each 64 KB message chunk incurs write, read, and delete operations. Keep payloads small and retries deliberate.
+- Queue retries add billed read operations. Each 64 KB message chunk costs a write, a read, and a delete. Keep payloads small and retries few.
 - The KV-backed Nitro cache expires entries after 30 days. This bounds stored cache data. It does not reduce billed operations.
 
-[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas add no separate charge. The module preserves D1 routing and session behavior.
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) charges for rows read, rows written, and stored data. Indexes reduce billed scans but add writes and storage. Read replicas cost nothing extra. The module does not change D1 routing or session behavior.
 
-Doctor warnings surface log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
+The doctor warns on log or trace sampling above 1%, Workers Caching with static assets, CPU limits above 30 seconds, and queue retries above three.
 
 ## Doctor
 
-Audit Wrangler's effective configuration, including generated config redirects and named environments:
+Audit the config Wrangler will actually deploy, including generated config redirects and named environments:
 
 ```sh
 pnpm nuxt-cloudflare doctor
@@ -170,13 +170,15 @@ pnpm nuxt-cloudflare doctor --env production --json
 pnpm nuxt-cloudflare doctor --strict --allow-warning source-maps-disabled
 ```
 
-The CLI reads Wrangler config through Wrangler itself, so JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects follow deployment semantics. It separately inspects root authoring format. Existing TOML remains supported and receives non-blocking guidance because Cloudflare recommends JSONC for new projects. Shadowed root configs warn because they can silently drift.
+The CLI reads Wrangler config through Wrangler itself. JSON, JSONC, TOML, environments, upward lookup, and Nitro generated-config redirects resolve the same way a deploy resolves them. The CLI also checks the format of the root config. TOML still works; the doctor suggests JSONC without failing, because Cloudflare recommends JSONC for new projects. A shadowed root config warns, because it can drift without anyone noticing.
 
-Errors cover `_headers` and `_redirects` files past Cloudflare's rule limits, malformed asset patterns, invalid Durable Object lifecycles, invalid Container storage, queue limits, unsafe example bindings, and unflattened generated environments. Warnings cover blanket Worker-first assets, missing environment bindings, unrestricted email, local service fidelity, deprecated fields, telemetry gaps, and public endpoints. Secret values are never included.
+Errors cover `_headers` and `_redirects` files past Cloudflare's rule limits, malformed asset patterns, invalid Durable Object lifecycles, invalid Container storage, queue limits, unsafe example bindings, and unflattened generated environments.
 
-Normal mode fails errors. `--strict` also fails warnings. Intentional exceptions remain visible and may be listed with `--allow-warning`. Module builds use the equivalent policy:
+Warnings cover blanket Worker-first assets, missing environment bindings, unrestricted email, local service fidelity, deprecated fields, telemetry gaps, and public endpoints. The output never includes secret values.
 
-`nodejs_compat` is required by default because this is a Nuxt module. Use `--node-compat ignore` only when auditing a non-Nuxt companion Worker, such as a redirect-only Worker.
+`nodejs_compat` is required by default because this is a Nuxt module. Use `--node-compat ignore` only to audit a non-Nuxt companion Worker, such as a redirect-only Worker.
+
+Normal mode fails on errors. `--strict` also fails on warnings. An intentional exception stays visible; list it with `--allow-warning`. Module builds use the same policy:
 
 ```ts
 export default defineNuxtConfig({
@@ -199,14 +201,14 @@ pnpm wrangler deploy --strict --dry-run --config .output/server/wrangler.json --
 pnpm wrangler check startup --config .output/server/wrangler.json
 ```
 
-Pass the final generated config explicitly to `types` and `check startup`; Nitro's `.wrangler/deploy/config.json` redirect does not apply to those commands.
+Pass the final generated config to `types` and `check startup` yourself. Nitro's `.wrangler/deploy/config.json` redirect does not apply to those commands.
 
 ### Product guidance
 
 - Named environments do not inherit bindings. The doctor reports each omitted root binding.
 - AI, Browser, Images, mTLS, Vectorize, and Flagship warn when local development omits `remote: true`.
 - Every Container must match a local SQLite Durable Object. Legacy `dev` and `standard` instance types warn.
-- Email bindings should restrict senders or destinations.
+- An email binding without a sender or destination restriction warns.
 - Legacy module bindings and the old Pipeline `pipeline` field warn with their current replacements.
 
 ## Runtime primitives
@@ -231,11 +233,11 @@ await retryIdempotentD1Write({
 })
 ```
 
-`getRecoveringRequestD1Session` caches one `first-primary` session per request and binding. Use `withD1ResetRecovery` when no request context exists. D1 already retries read-only queries. Recovery handles failures that outlive those retries. It opens a replacement session after `D1_RESET_DO`, carries the last bookmark, and rebuilds the prepared statement with its bound values. Replica disconnects and connection loss retry on the current session.
+`getRecoveringRequestD1Session` caches one `first-primary` session per request and binding. If no request context exists, use `withD1ResetRecovery`. D1 already retries read-only queries. Recovery handles the failures that outlast those retries. It opens a replacement session after `D1_RESET_DO`, carries the last bookmark, and rebuilds the prepared statement with its bound values. Replica disconnects and connection loss retry on the current session.
 
-Recovery replays only `SELECT`, read-only CTE, and `EXPLAIN` statements. It never replays writes, PRAGMA statements, mixed batches, or unknown statements. A session reset still opens a healthy session for the next statement. `onRecovery` receives tagged `retrying` or `stopped` events for request telemetry.
+Recovery replays only `SELECT`, read-only CTE, and `EXPLAIN` statements. It never replays writes, PRAGMA statements, mixed batches, or unknown statements. After a reset, the next statement still gets a healthy session. `onRecovery` receives tagged `retrying` or `stopped` events for request telemetry.
 
-Write retries require an explicit safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
+Every write retry needs a safety tag. `lock-only` retries SQLite lock contention; `replay-safe` also permits classified network and storage reset failures. Resource pressure, queue delay, CPU, and memory errors are never retried.
 
 ### D1 parameter plans
 
@@ -258,7 +260,7 @@ for (const ids of chunkD1Items(siteIds, siteIdPlan)) {
 }
 ```
 
-D1 allows 100 bound parameters per statement, including each statement inside `db.batch()`. The parsed opaque plan rejects fractions, non-finite values, negative reservations, forged runtime plans, and budgets that cannot fit one item. `parametersPerItem` supports multi-row inserts; `reservedParameters` accounts for fixed binds and deliberate headroom. `assertD1BoundParameters` verifies the final ORM output in regression tests. Chunk execution, ordering, transaction boundaries, and result merging remain explicit at the call site.
+D1 allows 100 bound parameters per statement, including each statement inside `db.batch()`. `defineD1ParameterPlan` rejects fractions, non-finite values, negative reservations, forged runtime plans, and budgets that cannot fit one item. `parametersPerItem` supports multi-row inserts; `reservedParameters` accounts for fixed binds and deliberate headroom. `assertD1BoundParameters` checks the final ORM output in regression tests. You still write chunk execution, ordering, transaction boundaries, and result merging at the call site.
 
 ### Bindings
 
@@ -278,9 +280,9 @@ function apiToken(event?: H3Event) {
 }
 ```
 
-`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both reference the declaration, while bindings remain server runtime values. Production builds compare it with the final generated Wrangler config and fail on drift. Set `bindingTypes: false` only when another tool owns the declaration.
+`nuxt prepare` runs Wrangler and writes exact, compatibility-aware types to `.nuxt/types/cloudflare-bindings.d.ts`. It merges root JSON, JSONC, or TOML bindings with `nitro.cloudflare.wrangler`. Nuxt and Nitro typechecks both use the declaration. Bindings are still server runtime values only. Production builds compare it with the final generated Wrangler config and fail on drift. If another tool owns the declaration, set `bindingTypes: false`.
 
-Binding types use a shared cache under `$XDG_CACHE_HOME/nuxt-cloudflare` or `~/.cache/nuxt-cloudflare`. The cache key includes the Wrangler config and version. Each worktree still receives private `.nuxt` files. Set `cacheDir` to a shared absolute path. Set it to `false` to bypass the cache.
+Binding types use a shared cache under `$XDG_CACHE_HOME/nuxt-cloudflare` or `~/.cache/nuxt-cloudflare`. The cache key includes the Wrangler config and version. Each worktree still gets its own `.nuxt` files. To move the cache, set `cacheDir` to a shared absolute path. To skip the cache, set it to `false`.
 
 ```ts
 export default defineNuxtConfig({
@@ -292,9 +294,9 @@ export default defineNuxtConfig({
 })
 ```
 
-The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. Missing required bindings throw. Pass a generic only to override generated types in a focused test.
+The source may be an H3 event, Nitro task input, or task context. Eventless access uses Nitro's `globalThis.__env__` Cloudflare entry shim. An explicit environment always wins and never mixes with the global environment. Binding names come from the generated `CloudflareBindings` interface. A missing required binding throws. Pass a generic only to override generated types in a focused test.
 
-`useCloudflareRuntimeConfig` reads runtime config from both contexts. On Cloudflare, `NUXT_*` Worker vars and secrets bind onto runtime config only through an event, so a bare `useRuntimeConfig()` off the request path returns build-time defaults. Without an event this reads the Cloudflare entry environment and wraps it as the source Nitro requires. The module's Nitro plugin supplies the reader; use `runtimeConfigSource` directly only when you own the `useRuntimeConfig` call.
+`useCloudflareRuntimeConfig` reads runtime config from both contexts. On Cloudflare, `NUXT_*` Worker vars and secrets bind onto runtime config only through an event, so a bare `useRuntimeConfig()` off the request path returns build-time defaults. Without an event, it reads the Cloudflare entry environment and wraps it as the source Nitro needs. The module's Nitro plugin supplies the reader; use `runtimeConfigSource` directly only when you own the `useRuntimeConfig` call.
 
 ### Scoped secrets file
 
@@ -315,22 +317,11 @@ await withWorkerSecretsFile({
 })
 ```
 
-The helper owns a private temporary directory and creates the JSON file with mode 0600. It removes the directory after deployment succeeds or fails. Secret values may be strings or `null`; Wrangler treats `null` as a deletion marker.
+The helper creates a private temporary directory and writes the JSON file with mode 0600. It removes the directory whether the deploy succeeds or fails. Secret values may be strings or `null`; Wrangler treats `null` as a deletion marker.
 
 ## Deliberate boundaries
 
-The module does not choose Worker names, routes, domains, resource IDs, placement, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` continues to own queues, job durability, recovery, and outbox behavior.
-
-Next extractions from Nuxt SEO and gscdump:
-
-1. Nuxt Content D1 sync plus readiness verification
-2. Expand-only D1 migration audit with protected-table rebuild detection
-3. Lease/CAS API idempotency with canonical request fingerprints
-4. D1 request telemetry for serial waves, rows, regions, and primary versus replica reads
-5. Atomic D1 fixed-window rate limiting
-6. R2 lifecycle declaration and read-only storage stocktake
-
-These remain separate adapters because their schemas, retention, and deployment ordering require explicit application policy.
+The module does not choose Worker names, routes, domains, resource IDs, placement, CPU limits, queue jobs, R2 deletion policy, or deployment promotion. `@harlan-zw/nuxt-cf-jobs` owns queues, job durability, recovery, and outbox behavior.
 
 ## Sponsors
 

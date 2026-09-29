@@ -1,8 +1,8 @@
 # @harlan-zw/jev
 
-Nuxt-free Jev judgements: one client, the `ask` tag API, digest helpers, and eval replay math. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
+Nuxt-free Jev judgements: one client, the `ask` tag API, digest helpers, and eval replay math. Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text.
 
-Pure TypeScript with one dependency, ohash, for sync digests: no Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. Use `@harlan-zw/nuxt-jev` for the Nuxt module, the decision runner, and the drizzle schema.
+Pure TypeScript with one dependency: ohash, for sync digests. No Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. For the Nuxt module, the decision runner, and the drizzle schema, use `@harlan-zw/nuxt-jev`.
 
 ## What you get
 
@@ -16,7 +16,11 @@ Pure TypeScript with one dependency, ohash, for sync digests: no Nuxt, no Nitro,
 
 ## Failure style
 
-Failures are values, never throws. The client resolves `{ _tag: 'Ok', result }` or `{ _tag: 'Err', failure }`, and every failure is one tagged `JevFailure`: `Http`, `Invalid`, `Network`, or `Timeout`. The `ask` API keeps the same contract: batches resolve to `{ _tag: 'Ok', answers }` or `{ _tag: 'Err', failure }`, and awaiting a tag on its own resolves to its answer or the same tagged failure. Nothing rejects.
+Failures are values. Nothing throws and nothing rejects.
+
+The client resolves `{ _tag: 'Ok', result }` or `{ _tag: 'Err', failure }`. Every failure is one tagged `JevFailure`: `Http`, `Invalid`, `Network`, or `Timeout`.
+
+The `ask` API keeps the same contract. A batch resolves to `{ _tag: 'Ok', answers }` or `{ _tag: 'Err', failure }`. An awaited tag on its own resolves to its answer or the same tagged failure.
 
 ## ask
 
@@ -39,7 +43,7 @@ if (result._tag === 'Ok') {
 }
 ```
 
-Interpolated objects go once each into `input` and their slots become paths, so the state travels with the question. Tags also send on their own when awaited. `askIf` resolves to a boolean above a threshold. Credentials come from options or `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
+Each interpolated object goes once into `input`, and its slot becomes a path. The state travels with the question. If you await a tag on its own, it sends on its own. `askIf` resolves to a boolean above a threshold. Credentials come from options, or from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
 
 ## Client
 
@@ -57,16 +61,16 @@ if (call._tag === 'Ok')
 
 ## Jev 1.13 jagged edges
 
-The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). The rules this package and its consumers follow:
+The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). This package and its consumers follow these rules:
 
-- **Math, counting, dates stay in code.** Never ask the model to tally, compare numbers, or order dates. Compute counts and buckets in code; pass the computed value or a named bucket in state. Score answers rank and threshold; never interpolate a magnitude between two rubric levels.
-- **Literal reading.** Write the exact condition in `instructions`; put boundary cases in `criteria`. Where interpretation is unavoidable, split into two literal questions and combine in code.
-- **Criteria extend the instruction.** A `true` that means "no" performs worse. Align them.
-- **Thresholds do not carry across question types.** A Noul band and a Choice confidence answer different questions (`noul` compares with `probabilities['yes']`, not with `confidence`); the same question and its negation do not sum to 1. Tune each threshold on its own question; never enforce arithmetic identities between separate answers.
-- **Choice settles "which"; Noul settles "whether".** A Choice is relative (picks one option); each Noul is absolute (can be low for all). Use both on the same shortlist when you need both answers.
-- **Filter state before sending.** Unrelated detail costs accuracy (context rot) and the context window is bounded. Send only the fields the question names.
-- **Adversarial content is data the model does not treat as hostile.** Frame untrusted text explicitly as measurements to judge, never as instructions, and test those edges before acting on answers in production.
-- **No generation.** When the answer space is bounded, extract options in code or with a generative model and let Jev pick. It writes no text.
+- **Math, counting, dates stay in code.** Never ask the model to tally, compare numbers, or order dates. Compute counts and buckets in code, then pass the value or a named bucket in state. Use Score answers to rank and threshold. Never infer a magnitude between two rubric levels.
+- **Literal reading.** Write the exact condition in `instructions`. Put boundary cases in `criteria`. If a question needs interpretation, split it into two literal questions and combine them in code.
+- **Criteria extend the instruction.** A `true` that means "no" gives worse answers. Keep the two aligned.
+- **Thresholds do not carry across question types.** A Noul band and a Choice confidence answer different questions. `noul` compares with `probabilities['yes']`, not with `confidence`. A question and its negation do not sum to 1. Tune each threshold on its own question. Never expect arithmetic identities between separate answers.
+- **Choice settles "which"; Noul settles "whether".** A Choice is relative: it picks one option. Each Noul is absolute: all of them can be low. If you need both answers, ask both on the same shortlist.
+- **Filter state before sending.** Unrelated detail costs accuracy (context rot), and the context window has a limit. Send only the fields the question names.
+- **Adversarial content is data the model does not treat as hostile.** Frame untrusted text as measurements to judge, never as instructions. Test those edges before you act on answers in production.
+- **No generation.** If the answer space is bounded, extract the options in code or with a generative model. Then let Jev pick one.
 
 ## License
 

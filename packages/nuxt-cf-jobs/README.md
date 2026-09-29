@@ -5,9 +5,7 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Typed Cloudflare Queue jobs for Nuxt, with Laravel-style ergonomics.
-
-Status: experimental. APIs may change before the first scoped release.
+Typed Cloudflare Queue jobs for Nuxt, with a Laravel-style API.
 
 <p align="center">
 <table>
@@ -21,11 +19,11 @@ Status: experimental. APIs may change before the first scoped release.
 
 ## Features
 
-- 📁 **File-based typed jobs:** drop a `defineJob` file in `server/jobs` and the module builds the registry, inferring names, payloads, queues, and broadcast messages.
-- ☁️ **Cloudflare Queues:** route jobs across multiple producer bindings and consume them through Nitro's `cloudflare:queue` hook.
-- 🗄️ **Optional D1 durability:** persist jobs before dispatch, recover missed sends, track attempts, and keep failed jobs.
-- ⏰ **Scheduled tasks:** declare the cron beside the task and generate Nitro and Cloudflare scheduling config from it.
-- 📡 **Realtime progress:** publish job and batch events over Nitro WebSockets and a Durable Object.
+- 📁 **File-based typed jobs:** you never hand-write a job registry or retype a payload at each dispatch site.
+- ☁️ **Cloudflare Queues:** each job reaches the right producer binding without routing glue code per queue.
+- 🗄️ **Optional D1 durability:** a lost send or a crashed run no longer loses the job or its failure history.
+- ⏰ **Scheduled tasks:** you write each cron once, beside its task, instead of copying it into Nitro and Wrangler config.
+- 📡 **Realtime progress:** your UI shows live job and batch progress without a polling endpoint you build yourself.
 
 ## Installation
 
@@ -41,7 +39,7 @@ npx nuxi@latest module add @harlan-zw/nuxt-cf-jobs
 
 ## Quick start
 
-The basic path sends a typed message directly to Cloudflare Queues. D1 is optional and covered under [Durable jobs](#durable-jobs).
+The basic path sends a typed message straight to Cloudflare Queues. D1 is optional; see [Durable jobs](#durable-jobs).
 
 ### 1. Map your queues
 
@@ -66,11 +64,11 @@ export default defineNuxtConfig({
 
 `default` and `analytics` are logical names used by your jobs. `QUEUE_DEFAULT` and `QUEUE_ANALYTICS` are Worker binding names. The object form lets the Cloudflare queue name differ from the logical name.
 
-Jobs are scanned from `server/jobs` by default. Private files, declarations, and test files are ignored.
+By default, the module scans `server/jobs` for jobs. It skips private, declaration, test, and spec files.
 
 ### 2. Configure Cloudflare
 
-Merge matching producers, consumers, and observability settings into the `wrangler.jsonc` used by your Nuxt deployment. See Cloudflare's [Queues configuration](https://developers.cloudflare.com/queues/configuration/configure-queues/) and [Workers observability](https://developers.cloudflare.com/workers/observability/) docs for the full set of options.
+Merge matching producers, consumers, and observability settings into the `wrangler.jsonc` used by your Nuxt deployment. See Cloudflare's [Queues configuration](https://developers.cloudflare.com/queues/configuration/configure-queues/) and [Workers observability](https://developers.cloudflare.com/workers/observability/) docs for all options.
 
 ```jsonc
 {
@@ -95,7 +93,7 @@ Merge matching producers, consumers, and observability settings into the `wrangl
 }
 ```
 
-Choose and test a real `compatibility_date` before deploying. After changing bindings, regenerate Worker types:
+Before you deploy, pick a real `compatibility_date` and test it. If you change bindings, regenerate Worker types:
 
 ```bash
 pnpm exec wrangler types
@@ -126,9 +124,9 @@ export default defineJob({
 })
 ```
 
-Use string literals for `name` and `queue`. The module extracts routing metadata without executing the job file. An explicit `name` wins; the path relative to `jobsDir` is the generation fallback. Duplicate names stop the build.
+Use string literals for `name` and `queue`. The module reads routing metadata without running the job file. If you omit `name`, the module uses the path relative to `jobsDir`. Duplicate names stop the build.
 
-Useful job options include:
+Common job options:
 
 | Option | Purpose |
 | --- | --- |
@@ -176,13 +174,13 @@ export default defineNitroPlugin((nitroApp) => {
 })
 ```
 
-The consumer owns `ack()` and `retry()`. Your `ctx.release()` and `ctx.fail()` implementations only record the requested action on `control`.
+The consumer calls `ack()` and `retry()`. Your `ctx.release()` and `ctx.fail()` only record the requested action on `control`.
 
-By default, the consumer uses `payload.jobId` as the runtime job ID. When it is absent, it derives a stable ID from the payload. Override this with `getJobId` when your payload has another identifier.
+By default, the consumer uses `payload.jobId` as the runtime job ID. If `payload.jobId` is absent, the consumer derives a stable ID from the payload. If your payload uses another identifier, pass `getJobId`.
 
 ### 5. Dispatch a job
 
-The generated `#cf-jobs/app` registry keeps the name and payload connected:
+The generated `#cf-jobs/app` registry types the payload from the job name:
 
 ```ts
 // server/api/sync.post.ts
@@ -228,9 +226,9 @@ const route = getJobDefinition(name)
 const fullDefinition = await loadJobDefinition(name)
 ```
 
-`getJobDefinition()` returns static routing and literal policy metadata without loading the job module. It does not include executable fields such as `handle`, `input`, or `uniqueId`. Use `loadJobDefinition()` when you need the full definition. The durable `prepareJob()` helper does this automatically. Jobs with `broadcast` also generate `JobBroadcastMessage<Name>` and `JobBroadcastEnvelope<Name>` types.
+`getJobDefinition()` returns static routing and literal policy metadata without loading the job module. It leaves out executable fields such as `handle`, `input`, and `uniqueId`. If you need the full definition, use `loadJobDefinition()`. The durable `prepareJob()` helper calls it for you. For each job with `broadcast`, the registry also generates `JobBroadcastMessage<Name>` and `JobBroadcastEnvelope<Name>` types.
 
-Runtime validation is available when you want to fail a custom startup check:
+To fail a custom startup check on bad queue bindings, use the runtime validators:
 
 ```ts
 import { assertQueueBindings, validateQueueBindings } from '#cf-jobs/app'
@@ -249,13 +247,13 @@ assertQueueBindings()
 | Best for | Short, idempotent work | Work that needs recovery, history, batches, or live progress |
 | CLI state | No | Yes |
 
-Both modes use the same `defineJob` files and generated types. Cloudflare Queues provide at-least-once delivery, so handlers should be safe to run again. The durable path adds a D1 claim before each run and keeps the lifecycle visible to the CLI.
+Both modes use the same `defineJob` files and generated types. Cloudflare Queues deliver at least once, so make each handler safe to run twice. The durable path claims the D1 row before each run, and the CLI can show every step of the lifecycle.
 
 ## Durable jobs
 
 ### Add D1
 
-Add a D1 binding to Wrangler alongside the queues:
+Add a D1 binding next to the queues in your Wrangler config:
 
 ```jsonc
 {
@@ -269,7 +267,7 @@ Add a D1 binding to Wrangler alongside the queues:
 }
 ```
 
-Create the local tables, then apply the same migration remotely when you are ready:
+Create the local tables. When you are ready, apply the same migration remotely:
 
 ```bash
 pnpm cf-jobs migrate
@@ -278,7 +276,7 @@ pnpm cf-jobs migrate --remote
 
 ### Create the runtime
 
-Keep runtime construction in one server utility so the queue consumer and producers share the same bindings and context:
+Build the runtime in one server utility. Then the queue consumer and the producers share bindings and context:
 
 ```ts
 // server/utils/cf-jobs-runtime.ts
@@ -332,7 +330,7 @@ export default defineNitroPlugin((nitroApp) => {
 })
 ```
 
-Use this plugin instead of the lightweight `registerQueueConsumer()` plugin from the quick start. Registering both would process the same hook twice.
+Use this plugin instead of the lightweight `registerQueueConsumer()` plugin from the quick start. If you register both, two consumers handle every batch.
 
 ### Enqueue a durable job
 
@@ -364,13 +362,13 @@ export default defineEventHandler(async (event) => {
 - `not-dispatched`: the row is safe in D1, but the queue binding was unavailable.
 - `dispatch-failed`: the row is safe in D1, and `cause` contains the send error.
 
-The generated `prepareJob()` loads the full job definition, validates the payload, resolves the queue, applies attempts and uniqueness, and checks the serialized payload against the durable D1 storage limit before inserting anything.
+The generated `prepareJob()` loads the full job definition and validates the payload. It also resolves the queue, applies attempts and uniqueness, and checks the serialized payload against the D1 storage limit. All of this happens before any row is written.
 
 ### Recovery
 
-The module registers `cf-jobs:reconcile` by default. Every two minutes it reclaims stale reservations, re-dispatches older due rows that have no queue message, and closes orphaned batches when it has enough terminal evidence.
+The module registers the `cf-jobs:reconcile` task by default. It runs every two minutes. It reclaims stale reservations and re-dispatches older due rows that have no queue message. It also closes orphaned batches when it has enough terminal evidence.
 
-If a transport message reaches its DLQ during a live reservation, the row becomes unpublished when durable attempts remain. Reconcile sends a replacement as soon as it releases the stale reservation. Rows with exhausted durable attempts become terminal failures instead.
+A queue message can reach its DLQ while a run still holds the row. If durable attempts remain, the row becomes unpublished, and the sweep sends a replacement once it releases the stale reservation. If no durable attempts remain, the row becomes a terminal failure.
 
 ```ts
 export default defineNuxtConfig({
@@ -391,35 +389,36 @@ export default defineNuxtConfig({
 })
 ```
 
-Pin `d1Binding` when the Worker exposes more than one D1-like binding.
+If the Worker exposes more than one D1-like binding, set `d1Binding`.
 
 The sweep is a producer, so two windows bound its write rate.
 
-- `orphanedSeconds` decides which rows qualify. The orphan test cannot tell "the
-  dispatch was lost" from "dispatched fine, still queued", so keep it above the
-  worst queue wait. On a `max_concurrency: 1` consumer that wait is hours.
-- `redispatchGraceSeconds` decides how often one row may be re-sent. The sweep
-  measures it from the row's last successful dispatch (`last_dispatched_at`),
-  which the producer stamps, so a row waiting its turn is never re-sent inside
-  the window.
+- `orphanedSeconds` decides which rows qualify. The orphan test cannot tell a
+  lost dispatch from a row that is still queued. Keep it above the worst queue
+  wait. On a `max_concurrency: 1` consumer, that wait is hours.
+- `redispatchGraceSeconds` decides how often the sweep may re-send one row. It
+  counts from the row's last successful dispatch (`last_dispatched_at`), which
+  the producer stamps. A row that waits its turn is never re-sent inside the
+  window.
 
 `staleSeconds` is the row's ownership window. The durable consumer's
 `reclaimAfterSeconds` defaults to the same value, so the reaper and a redelivery
-agree on when a reservation is abandoned. Set it above your longest handler
-runtime. If the reaper's window is shorter, it releases and re-dispatches a job
-that is still running, and the losing copy is terminalized without settling its
-batch. Pass `reclaimAfterSeconds` to `createDurableRuntime()` only to override
-that on purpose.
+agree on when a reservation is abandoned. Set `staleSeconds` above your longest
+handler runtime. If it is shorter, the reaper releases and re-dispatches a job
+that is still running. The losing copy then becomes terminal without settling
+its batch. Pass `reclaimAfterSeconds` to `createDurableRuntime()` only when you
+want a different value on purpose.
 
 ### Held rows
 
 A redelivery cannot claim a row that another run holds. The consumer retries
 that message with backoff: 60s on the first delivery, doubled on each later one,
-clamped to Cloudflare's 43200s ceiling. After two retries the message is acked.
+clamped to Cloudflare's 43200s ceiling. After two retries, the consumer acks
+the message.
 
 Cloudflare counts deliveries, not elapsed time. A message that keeps retrying
 spends the queue's `max_retries` and dead-letters with `attempts = 0`. The
-handler never runs. The ack stops that burn. The row keeps its reservation, so
+handler never runs. The ack prevents this. The row keeps its reservation, so
 the reconcile sweep still owns it: the sweep releases the reservation after
 `staleSeconds`, then re-dispatches the row.
 
@@ -433,18 +432,19 @@ createDurableRuntime({
 })
 ```
 
-Set `maxInFlightRetries: 0` to ack the first time a row is held. That spends no
-delivery at all, so a held row can never reach the dead-letter queue.
+To ack the first time a row is held, set `maxInFlightRetries: 0`. This spends
+no extra delivery, so a held row never reaches the dead-letter queue.
 
-If you set `reconcile: false`, no sweep runs. Then raise `maxInFlightRetries`,
-or run recovery from the app.
+If you set `reconcile: false`, no sweep runs. In that case, raise
+`maxInFlightRetries` or run recovery from the app.
 
-`terminalFailureContext` points to an application module exporting
-`createReconcileJobContext`. Configure it when job definitions have `failed`
-callbacks: an isolate may terminate on its final claim, so the stale reaper must
-be able to reconstruct application services after it commits the `failed_jobs`
-row. Without the adapter, durable evidence and an explicit error log remain, but
-the package cannot safely invent the application's database and logger context.
+`terminalFailureContext` points to an app module that exports
+`createReconcileJobContext`. If your jobs have `failed` callbacks, set it. An
+isolate can die during its final claim. The stale reaper then commits the
+`failed_jobs` row and must rebuild your app services to run `failed`. Without
+this module, the reaper keeps the `failed_jobs` row and logs an error, but it
+skips `failed`. The package cannot build your database and logger context for
+you.
 
 ## Broadcasting
 
@@ -498,7 +498,7 @@ useCfJobsChannel(cfJobsChannel('site', 'site_1'), (event) => {
 </script>
 ```
 
-Add a job-specific event when its lifecycle changes:
+To send an app event instead of the default lifecycle events, add `broadcast` to the job:
 
 ```ts
 // server/jobs/sync/table.ts
@@ -520,7 +520,7 @@ export default defineJob({
 })
 ```
 
-You can also publish from arbitrary server code with `publishCfJobsBroadcast()`. Protect private channels with the authorization hook:
+To publish from any server code, call `publishCfJobsBroadcast()`. To protect private channels, use the authorization hook:
 
 ```ts
 export default defineNitroPlugin((nitroApp) => {
@@ -558,19 +558,19 @@ export default defineNuxtConfig({
 })
 ```
 
-`tasksDir: true` scans `server/tasks` in the app and every extended Nuxt layer. Pass a path or path array when you want explicit directories.
+`tasksDir: true` scans `server/tasks` in the app and every extended Nuxt layer. To set the directories yourself, pass a path or an array of paths.
 
 - `name` and `cron` must be string literals because they are read at build time.
 - `cron` accepts one expression or an array. Cloudflare Cron Triggers run in UTC.
-- Plain Nitro `defineTask` files in the same directories are registered for manual use.
-- App task discovery is opt-in. The built-in recovery task is separate and remains enabled unless `reconcile: false`.
-- Scheduled execution is disabled during development by default. Set `scheduledTasks: true` to exercise crons locally.
+- The module registers plain Nitro `defineTask` files in the same directories for manual runs.
+- App task discovery is opt-in. The built-in recovery task is separate. It stays on unless you set `reconcile: false`.
+- Scheduled runs are off in development by default. To run crons locally, set `scheduledTasks: true`.
 
 If your Wrangler file already contains `triggers.crons`, the module checks it for drift and writes `.nuxt/cf-jobs/crons.suggested.toml`.
 
 ## CLI
 
-The `cf-jobs` binary reads the durable D1 tables through Wrangler. Local D1 is the default; add `--remote` for the deployed database.
+The `cf-jobs` binary reads the durable D1 tables through Wrangler. It uses local D1 by default. For the deployed database, add `--remote`.
 
 | Command | Use |
 | --- | --- |
@@ -597,11 +597,11 @@ pnpm cf-jobs clear --state reserved
 pnpm cf-jobs prune --completed-hours 24 --failed-hours 168
 ```
 
-Mutating commands ask for confirmation. Pass `--yes` for scripts and other non-interactive runs. Shared options include `--config`, `--db`, `--remote`, `--json`, `--jobs-table`, and `--failed-table`. Run `pnpm cf-jobs <command> --help` for command-specific flags.
+Commands that change data ask for confirmation. In scripts and other non-interactive runs, pass `--yes`. Shared options include `--config`, `--db`, `--remote`, `--json`, `--jobs-table`, and `--failed-table`. To see the flags for one command, run `pnpm cf-jobs <command> --help`.
 
 ### Out-of-band development worker
 
-The in-memory dev queue normally runs a job immediately in the Nuxt process. Start `cf-jobs work` when you need the request to return before durable work begins, especially when testing WebSocket progress:
+The in-memory dev queue runs a job at once, inside the Nuxt process. If the request must return before durable work starts, run `cf-jobs work`. This matters most when you test WebSocket progress:
 
 ```bash
 # terminal 1
@@ -614,11 +614,11 @@ pnpm cf-jobs work --once
 pnpm cf-jobs work --interval 1000
 ```
 
-The command polls `POST /__cf-jobs/work`, a development-only route, then runs the app's real queue consumer in the dev process. While the poller holds its short lease, durable rows wait for it. Stop the command and the normal in-memory queue resumes after roughly 15 seconds.
+The command polls `POST /__cf-jobs/work`, a development-only route, then runs the app's real queue consumer in the dev process. While the poller holds its short lease, durable rows wait for it. If you stop the command, the normal in-memory queue resumes after about 15 seconds.
 
 Concurrency and batch size come from the Wrangler consumer config. Values on `cfJobs.queues` override them in development. When neither source sets a value, the dev worker uses one lane and batches of 10.
 
-`work` only defers durable jobs because lightweight messages have no D1 row to drain. It is a `nuxt dev` companion, not a production Worker.
+`work` defers only durable jobs, because lightweight messages have no D1 row to drain. The route exists only in development, so use `work` beside `nuxt dev`.
 
 ### Read-only monitoring
 
@@ -642,7 +642,7 @@ import {
   createFakeQueue,
   createJobTestHarness,
   createQueueTestHarness,
-} from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/testing'
+} from '@harlan-zw/nuxt-cf-jobs/testing'
 ```
 
 ### Run handlers inline
@@ -650,8 +650,8 @@ import {
 Use an inline registry for a small unit test, or pass `jobRegistry` from `#cf-jobs/app` inside a prepared Nuxt test:
 
 ```ts
-import { defineJob, defineJobRegistry } from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/server'
-import { createJobTestHarness } from '@harlan-zw/@harlan-zw/nuxt-cf-jobs/testing'
+import { defineJob, defineJobRegistry } from '@harlan-zw/nuxt-cf-jobs/server'
+import { createJobTestHarness } from '@harlan-zw/nuxt-cf-jobs/testing'
 
 const registry = defineJobRegistry([
   defineJob({
@@ -716,9 +716,9 @@ await q.runUntilEmpty()
 q.assertNothingPending()
 ```
 
-Raw queue messages need `_task: <job-name>`. Bindings such as `QUEUE_STANDARD` are used to send; assertions use job names such as `order/ship`.
+Raw queue messages need `_task: <job-name>`. You send through bindings such as `QUEUE_STANDARD`. Assertions use job names such as `order/ship`.
 
-Pass a `consumer` callback to exercise your own queue processor. In that mode, assert against your store plus queue mechanics such as `assertRetried()`, `assertDispatched()`, and `pending()`.
+To test your own queue processor, pass a `consumer` callback. In that mode, assert against your own store and against queue mechanics such as `assertRetried()`, `assertDispatched()`, and `pending()`.
 
 ### Test setup
 
@@ -749,7 +749,7 @@ For plain Vitest, run `nuxt prepare`, alias `#cf-jobs/app` to `.nuxt/cf-jobs/reg
 
 Queue option objects accept `binding`, `queueName`, `jobType`, `maxBatchSize`, `maxBatchTimeout`, `maxConcurrency`, `maxRetries`, `retryDelay`, `deadLetterQueue`, and `deadLetterQueueBinding`.
 
-Wrangler remains the production source for consumer batching, concurrency, retries, and dead-letter routing. Matching values in `cfJobs.queues` help validation and configure the out-of-band dev worker.
+In production, the Wrangler config sets consumer batching, concurrency, retries, and dead-letter routing. Matching values in `cfJobs.queues` help validation and configure the out-of-band dev worker.
 
 ## Imports
 

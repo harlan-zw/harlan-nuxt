@@ -3,9 +3,9 @@
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Experimental Nuxt modules developed in one repo, so they share tooling and a single verification pipeline.
+Experimental Nuxt modules in one repo. They share tooling and one verification pipeline.
 
-Every package here publishes to npm with provenance. Versions and release notes are per package, so one module moving fast never forces a version bump on the others.
+Each package publishes to npm with provenance. Each package has its own version and release notes, so a fast-moving module never forces a version bump on the others.
 
 <p align="center">
 <table>
@@ -44,7 +44,7 @@ pnpm install
 pnpm dev:prepare
 ```
 
-Run these from the repo root to cover every package, or from a package directory for just that one:
+Run these from the repo root for every package. Run them from a package directory for that package only:
 
 ```bash
 pnpm lint       # eslint, includes markdown and code blocks
@@ -53,11 +53,11 @@ pnpm test       # vitest
 pnpm build      # nuxt-module-builder / obuild
 ```
 
-Packages are pnpm workspace members under `packages/*`. Shared dependency versions live in the `catalog:` block of `pnpm-workspace.yaml`, so bump a version there rather than in each package.
+Packages are pnpm workspace members under `packages/*`. Shared dependency versions live in the `catalog:` block of `pnpm-workspace.yaml`. Bump a shared version there, not in each package.
 
 ## Releases
 
-Merge the package version bump through a pull request first. Then run from the repo root:
+First, merge the package version bump through a pull request. Then run from the repo root:
 
 ```bash
 pnpm release                         # choose a package and confirm publishing
@@ -67,7 +67,7 @@ pnpm release nuxt-dx --yes            # publish without a prompt
 
 The command reads the version from `origin/main` and pushes its `<package>-v<version>` tag.
 It rejects existing tags and prerelease versions.
-The trusted GitHub Actions publisher releases that package under the `latest` npm tag with provenance.
+The trusted GitHub Actions publisher then publishes that package to npm under the `latest` tag, with provenance.
 
 ## Sponsors
 

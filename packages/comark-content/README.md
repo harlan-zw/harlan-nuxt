@@ -7,9 +7,7 @@
 
 Comark Content is a Markdown-only content module for Nuxt, powered by [Comark](https://github.com/harlan-zw/comark).
 
-Markdown is parsed at build time and written as compressed server assets. No database runs, and no Markdown is parsed while a request is in flight.
-
-Status: experimental. APIs may change before the first release.
+The build parses Markdown and writes it as compressed server assets. No database runs, and no request parses Markdown.
 
 <p align="center">
 <table>
@@ -23,12 +21,12 @@ Status: experimental. APIs may change before the first release.
 
 ## Features
 
-- 📄 **Build-time Markdown:** page Collections are parsed once and shipped as gzip server assets.
-- 🌍 **Local and remote sources:** globs from your `content` directory, or a Git repository pinned to a branch or tag.
-- 🔎 **One query API:** `queryCollection` and friends run the same way in the browser and inside Nitro.
-- 🗜️ **Lazy decompression:** a filtered query reads the metadata index only, then loads bodies for matched documents.
-- 🎨 **Rangi highlighting:** GitHub Light and Dark by default, with extra grammars bundled and your own themes accepted.
-- 🗺️ **Sitemap aware:** `@nuxtjs/sitemap` reads Collections through the manifest and lists them as its own data source.
+- 📄 **Build-time Markdown:** requests never wait on a Markdown parse, because the build parses each page collection once.
+- 🌍 **Local and remote sources:** you publish docs from another Git repository, pinned to a branch or tag, without copying files in.
+- 🔎 **One query API:** you write a query once and run it in the browser or inside Nitro.
+- 🗜️ **Lazy decompression:** a filtered query stays cheap, because it decompresses only the metadata index and the matched bodies.
+- 🎨 **Rangi highlighting:** code blocks get GitHub Light and Dark themes with no setup, and you can add your own grammars and themes.
+- 🗺️ **Sitemap aware:** your pages reach `@nuxtjs/sitemap` with no hand-written URL source.
 
 ## Installation
 
@@ -87,9 +85,9 @@ export default defineContentConfig({
 })
 ```
 
-Every layer may declare collections. Each name must be unique across all layers. If two files declare one name, the build fails and names both files.
+Any layer can declare collections. Each name must be unique across all layers. If two files declare one name, the build fails and names both files.
 
-Local sources resolve against the `content` directory of the layer that declares them. Set `cwd` to read from another directory.
+Local sources resolve against the `content` directory of the layer that declares them. To read from another directory, set `cwd`.
 
 ### Remote sources
 
@@ -108,9 +106,9 @@ defineCollection({
 })
 ```
 
-The checkout directory is keyed by repository URL and reference. A `tag` never moves, so its checkout is cloned once and then reused. A `branch`, or no reference, is cloned again on every full build. Local Markdown edits during development never trigger a clone.
+The module keys each checkout by repository URL and reference. A `tag` never moves, so the module clones it once and reuses it. A `branch`, or no reference, clones again on every full build. Local Markdown edits during development never trigger a clone.
 
-If a clone with a token fails, the module retries once without the token. If the retry fails, the build fails. Stale content is never served after a failed refresh.
+If a clone with a token fails, the module retries once without the token. If the retry fails, the build fails. The module never serves stale content after a failed refresh.
 
 ## Querying
 
@@ -137,7 +135,7 @@ Available functions:
 
 `where` supports the `=`, `LIKE`, `<>`, and `IS NULL` operators.
 
-Import the same functions from `@harlan-zw/comark-content/server` inside Nitro handlers. The server versions take the request event as their first argument.
+Inside Nitro handlers, import the same functions from `@harlan-zw/comark-content/server`. The server versions take the request event as their first argument.
 
 ```ts
 // server/api/page.get.ts
@@ -148,7 +146,7 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-Only the metadata index is decompressed for a filtered query. Document bodies load one at a time, and only for matched documents.
+A filtered query decompresses only the metadata index. It then loads document bodies one at a time, and only for matched documents.
 
 ## Rendering
 
@@ -158,7 +156,7 @@ Only the metadata index is decompressed for a filtered query. Document bodies lo
 </template>
 ```
 
-`ContentRenderer` renders Comark nodes as semantic HTML. It resolves an HTML tag to `ContentProseX`, then `ProseX`. It resolves a custom tag to `ContentX`, `ProseX`, then `X`. Components in `app/components/content` are also available under their unprefixed name. Only tags present in the parsed content are imported.
+`ContentRenderer` renders Comark nodes as semantic HTML. It resolves an HTML tag to `ContentProseX`, then `ProseX`. It resolves a custom tag to `ContentX`, `ProseX`, then `X`. Components in `app/components/content` are also available under their unprefixed name. It imports only the tags present in the parsed content.
 
 Set `unwrap="p"` to render slot content without its paragraph wrapper.
 
@@ -179,9 +177,9 @@ export default defineNuxtConfig({
 })
 ```
 
-To turn highlighting off, set `highlight: false`. The Rangi stylesheet is then not added to your application.
+To turn highlighting off, set `highlight: false`. The module then leaves the Rangi stylesheet out of your application.
 
-Import the bundled theme and languages to extend them:
+To extend the bundled theme and languages, import them:
 
 ```ts
 import { contentRangiLanguages, contentRangiTheme } from '@harlan-zw/comark-content'
@@ -204,9 +202,9 @@ walkNodes(page.body.nodes, (node) => {
 
 ## Sitemap
 
-`@nuxtjs/sitemap` 8.4.0 or later owns this integration. It reads collections through `queryCollectionManifest()` and lists them under its own data source, `@harlan-zw/comark-content:urls`. An older `@nuxtjs/sitemap` is rejected at build time, because this module used to add the URLs itself and the pair would list every page twice.
+`@nuxtjs/sitemap` 8.4.0 or later owns this integration. It reads collections through `queryCollectionManifest()` and lists them under its own data source, `@harlan-zw/comark-content:urls`. The build rejects an older `@nuxtjs/sitemap`. This module used to add the URLs itself, so the pair would list every page twice.
 
-A page is skipped when its frontmatter sets `sitemap: false` or `robots: false`. Frontmatter `sitemap` object fields are merged into the entry. The entry `lastmod` comes from `seo.articleModifiedTime`, or from `updatedAt`.
+Frontmatter `sitemap: false` or `robots: false` keeps a page out of the sitemap. Fields in a frontmatter `sitemap` object merge into the entry. The entry `lastmod` comes from `seo.articleModifiedTime`, or from `updatedAt`.
 
 To keep a whole collection out of the sitemap, set `sitemap: false` on the collection:
 
@@ -220,9 +218,10 @@ snippets: defineCollection({
 
 ## Deployment
 
-Parsed collections are written as gzip server assets. Navigation, surroundings, and search use content-addressed GET routes. The route key hashes the parsed content only. A redeploy that changes no content keeps the same routes, so clients running the previous build keep working.
+The build writes parsed collections as gzip server assets. Navigation, surroundings, and search use content-addressed GET routes. The route key hashes only the parsed content. So a redeploy with no content change keeps the same routes, and clients on the previous build keep working.
 
-Cloudflare presets require `@harlan-zw/nuxt-cloudflare` with Workers Caching enabled. The build fails otherwise.
+If you build with a Cloudflare preset, add `@harlan-zw/nuxt-cloudflare` with Workers Caching enabled. Without it, the build fails.
+
 ## Sponsors
 
 <p align="center">

@@ -2,20 +2,20 @@
 
 Framework-free policy rules for an MCP OAuth 2.1 authorization server: mandatory PKCE, consent identity, CSRF, bearer challenges.
 
-Pure TypeScript with no dependencies: no Nuxt, no Nitro, no h3, no `@cloudflare/workers-types`. Runs on Node 20+ and workers. It pairs with a provider such as [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider); it does not replace one.
+Pure TypeScript with no dependencies: no Nuxt, no Nitro, no h3, no `@cloudflare/workers-types`. Runs on Node 20+ and workers. Use it beside a provider such as [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). It does not replace one.
 
 ## Why this exists
 
-An MCP server that wants to be reachable from ChatGPT or Claude.ai has to offer RFC 7591 dynamic client registration, because neither connector UI accepts a pre-issued client id. So anyone can mint a client id on your server. That is the protocol working as designed, and it moves the whole defence onto two things: what the authorization endpoint insists on, and what the consent page tells the user.
+If you want ChatGPT or Claude.ai to reach your MCP server, you must offer RFC 7591 dynamic client registration. Neither connector UI accepts a pre-issued client id. So anyone can mint a client id on your server. The protocol works this way on purpose. Your whole defence then rests on two things: what the authorization endpoint demands, and what the consent page tells the user.
 
 Both are easy to get wrong, and a provider library will not get them right for you:
 
-- `@cloudflare/workers-oauth-provider` mandates PKCE only for public clients (`validateAuthorizationPkce` throws only when `token_endpoint_auth_method` is `none`). A client that self-declares `client_secret_basic` completes the authorization-code flow with no `code_challenge`. What that costs is authorization-code **injection** (RFC 9700 §2.1): the attacker cannot redeem a stolen code directly, because the token endpoint does verify the registered secret, but they can inject it into their own session with the legitimate client, whose client authentication then succeeds on their behalf. And `createClient` defaults an omitted auth method to `client_secret_basic`, so the unprotected path is the *default* one.
-- `client_name` is self-declared, and it is the headline of your consent page. Nothing stops a client registering as your own product and rendering as first-party over an attacker's callback. Neither does guarding the name alone: a custom-scheme callback is rendered as its scheme, so `yourbrand://anything` puts the reserved word in the destination slot instead.
-- A consent page that does not show the callback destination gives the user no way to tell a real connector from a look-alike.
-- The provider accepts `http://attacker.example/cb` as a registered callback. It blocks only the actively dangerous schemes, not plaintext transport to a remote host.
+- `@cloudflare/workers-oauth-provider` mandates PKCE only for public clients (`validateAuthorizationPkce` throws only when `token_endpoint_auth_method` is `none`). A client that self-declares `client_secret_basic` completes the authorization-code flow with no `code_challenge`. That opens authorization-code **injection** (RFC 9700 §2.1). The attacker cannot redeem a stolen code directly, because the token endpoint verifies the registered secret. But the attacker can inject the code into their own session with the legitimate client. That client's authentication then succeeds on the attacker's behalf. And `createClient` defaults an omitted auth method to `client_secret_basic`, so the unprotected path is the *default* one.
+- `client_name` is self-declared, and it is the headline of your consent page. Nothing stops a client that registers as your own product. It renders as first-party over an attacker's callback. A rule on the name alone does not stop it either. The consent page renders a custom-scheme callback as its scheme, so `yourbrand://anything` puts the reserved word in the destination slot.
+- If the consent page hides the callback destination, the user cannot tell a real connector from a look-alike.
+- The provider accepts `http://attacker.example/cb` as a registered callback. It blocks only the actively dangerous schemes. Plaintext transport to a remote host gets through.
 
-These rules are the answers, extracted from two production servers so they exist in one place rather than two.
+The rules in this package answer each of these. They come from two production servers, and now live in one place.
 
 ## What you get
 
@@ -42,7 +42,12 @@ These rules are the answers, extracted from two production servers so they exist
 
 ## Decision style
 
-The rules that can refuse something return a tagged decision, and none of them throws. The remaining exports are derivations and predicates returning a plain string, number or boolean. Two caveats: `createMcpRandomToken` reads `crypto` and `btoa` unless you inject its randomness, and `resolveMcpOAuthIdentity` throws on an unparseable `requestUrl`, because there is no honest fallback identity to return. Pass it `request.url`, which is always a valid URL.
+Each rule that can refuse something returns a tagged decision. None of them throws. The other exports are derivations and predicates that return a plain string, number, or boolean.
+
+Two exceptions:
+
+- `createMcpRandomToken` reads `crypto` and `btoa`, unless you inject its randomness.
+- `resolveMcpOAuthIdentity` throws on an unparseable `requestUrl`, because no honest fallback identity exists. Pass it `request.url`, which is always a valid URL.
 
 ```ts
 import { requireMcpPkce } from '@harlan-zw/mcp-oauth'
@@ -54,7 +59,7 @@ if (pkce._tag === 'Err') {
 }
 ```
 
-Put the PKCE rule **before** your login redirect. A flow that cannot complete should not first cost the user a round trip through their identity provider. And redirect an error only to a `redirect_uri` your provider has already matched against the client's registered set, or you have built an open redirect.
+Put the PKCE rule **before** your login redirect. Then a flow that cannot complete does not first send the user through their identity provider. Redirect an error only to a `redirect_uri` that your provider already matched against the client's registered set. Any other target is an open redirect.
 
 ## Consent identity
 
@@ -76,13 +81,13 @@ if (decision._tag === 'Err')
 renderConsent({ unverified: decision.verification === 'unverified' })
 ```
 
-**Call this at consent time, not only at registration.** A provider's registration callback covers RFC 7591 clients only. A Client-ID Metadata Document client — an https client id whose own host serves its metadata — never passes through registration, so a registration-only check is bypassed by choosing a client id instead of POSTing to `/register`. Nothing in the CIMD rules constrains that document's `redirect_uris` to the client-id host either. If you enable CIMD, run this rule on the resolved client before you render anything.
+**Call this at consent time, and not only at registration.** A provider's registration callback covers RFC 7591 clients only. A Client-ID Metadata Document (CIMD) client uses an https client id, and that id's own host serves its metadata. This client never passes through registration. So an attacker skips a registration-only rule by choosing a client id instead of POSTing to `/register`. The CIMD rules also do not limit that document's `redirect_uris` to the client-id host. If you enable CIMD, run this rule on the resolved client before you render anything.
 
-CIMD does give you the one signal worth trusting: the client id is an https URL whose host actually served the document. That is what `ownedHosts` checks, and why a verified first-party client is allowed to use your reserved name.
+CIMD does give you one signal worth trusting: the client id is an https URL whose host actually served the document. `ownedHosts` matches that host. This is why a verified first-party client may use your reserved name.
 
-`verified` requires BOTH the client id host and the callback host to be yours, because the id proves who published the metadata and says nothing about where the code goes. For a first-party client registered through DCR, whose id is opaque, set `trusted: true` on the claim instead.
+`verified` requires **both** the client id host and the callback host to be yours. The id proves who published the metadata. It says nothing about where the code goes. For a first-party client registered through DCR, the id is opaque, so set `trusted: true` on the claim instead.
 
-Show the destination on the page unconditionally, escaped, and mark the client unverified whenever `verification` says so.
+Always show the escaped destination on the page. If `verification` says unverified, mark the client unverified.
 
 ## Endpoints are configuration
 
@@ -97,11 +102,11 @@ const endpoints: McpOAuthEndpoints = {
 }
 ```
 
-Nothing here hardcodes a path or an origin. A deployment split across Workers by an edge route table has to nest its endpoints under a prefix that table already binds. Set `register: null` if you do not offer dynamic registration — note that this only affects routing; whether DCR is *advertised* is your provider's setting.
+Nothing here hardcodes a path or an origin. If an edge route table splits your deployment across Workers, nest the endpoints under a prefix that table already binds. If you do not offer dynamic registration, set `register: null`. This changes routing only. Your provider's setting decides whether DCR is *advertised*.
 
-`matchMcpOAuthRoute` normalises the path before comparing, and that is load-bearing rather than tidy. Comparing a raw path with `===` was an authentication bypass in one of the servers this came from: `POST /mcp/` classified as "not the protected resource", the caller skipped the bearer check, and the router folded the trailing slash and served the request off the MCP handler anyway.
+`matchMcpOAuthRoute` normalises the path before it compares. Security depends on this. In one of the source servers, a raw `===` path compare was an authentication bypass. `POST /mcp/` classified as "not the protected resource", so the caller skipped bearer authentication. The router then folded the trailing slash and served the request from the MCP handler anyway.
 
-Treat `Ignore` as "this is not mine" and `WellKnownNotFound` as "answer a JSON 404" — a client probing discovery parses the body as JSON, so an HTML error page surfaces as an invalid OAuth response rather than "no OIDC here".
+Treat `Ignore` as "this is not mine". Treat `WellKnownNotFound` as "answer a JSON 404". A client that probes discovery parses the body as JSON. It reads an HTML error page as an invalid OAuth response, and not as "no OIDC here".
 
 ## Identity and audience
 
@@ -109,9 +114,9 @@ Treat `Ignore` as "this is not mine" and `WellKnownNotFound` as "answer a JSON 4
 const identity = resolveMcpOAuthIdentity(request.url, endpoints, configuredOrigin)
 ```
 
-With `configuredOrigin` unset this derives from the request URL, which is built from the `Host` header. **That header is attacker-controlled.** A poisoned `Host` steers the advertised issuer, the RFC 8707 resource and the `resource_metadata` pointer in your 401 at a server of the attacker's choosing, and any cache in front of those responses passes it on. Validate `url.host` against a known set, or set `configuredOrigin`. Deriving is the right default because hardcoding makes every preview deploy unfinishable; it is not a substitute for a host check.
+If `configuredOrigin` is unset, the identity comes from the request URL. The runtime builds that URL from the `Host` header. **The attacker controls that header.** A poisoned `Host` points the advertised issuer, the RFC 8707 resource, and the `resource_metadata` pointer in your 401 at the attacker's server. Any cache in front of those responses passes that on. Compare `url.host` with a known set, or set `configuredOrigin`. Deriving is the right default, because a hardcoded origin breaks every preview deploy. You still need the host allowlist.
 
-Feed `identity.resource` into your provider's resource metadata. A provider that is not told its canonical resource accepts whatever `resource` a client sends and mints tokens with that audience, so RFC 8707 validation and audience binding are both silently lost.
+Feed `identity.resource` into your provider's resource metadata. If the provider does not know its canonical resource, it accepts any `resource` a client sends. It then mints tokens with that audience. You silently lose RFC 8707 validation and audience binding.
 
 ## Scopes
 
@@ -122,11 +127,11 @@ const granted = grantedMcpScopes(authRequest.scope, {
 })
 ```
 
-The granted list comes back in policy order and deduplicated, so it is stable across clients and comparable once stored on a grant.
+The granted list comes back deduplicated and in policy order. So it is stable across clients, and you can compare it once it is stored on a grant.
 
-Intersecting `offline_access` is not enough on its own: a provider mints a refresh token whenever its TTL is non-zero, without consulting scope, so a user who declined offline access still issues a 30-day credential and your consent page promised otherwise.
+Intersecting `offline_access` is not enough on its own. A provider mints a refresh token whenever its TTL is non-zero, and it ignores scope. So a user who declined offline access still gets a 30-day credential, which your consent page promised against.
 
-With `@cloudflare/workers-oauth-provider` the only hook that can set the lifetime per grant is `tokenExchangeCallback`, on the authorization-code exchange. `completeAuthorization` has no TTL field, so this is where the value goes:
+With `@cloudflare/workers-oauth-provider`, only `tokenExchangeCallback` can set the lifetime per grant, on the authorization-code exchange. `completeAuthorization` has no TTL field, so put the value here:
 
 ```ts
 const providerOptions = {
@@ -144,7 +149,7 @@ A TTL of `0` skips the mint entirely and omits `refresh_token` from the response
 
 ## What this package does not own
 
-The consent page's markup and copy, the grant payload shape, token storage, and the provider wiring. Those know what your product is, and they belong in your app.
+The consent page's markup and copy, the grant payload shape, token storage, and the provider wiring. These depend on your product, so they belong in your app.
 
 ## License
 

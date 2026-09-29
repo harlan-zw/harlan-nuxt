@@ -1,6 +1,8 @@
 # @harlan-zw/nuxt-jev
 
-The Nuxt layer for Jev typed judgements: module config, a decision runner with journal reuse, and the drizzle schema. The client, question builders, ask tags, and eval math live in [`@harlan-zw/jev`](../jev), a nuxt-free base package. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
+The Nuxt layer for Jev typed judgements: module config, a decision runner with journal reuse, and the drizzle schema. The client, question builders, ask tags, and eval math live in [`@harlan-zw/jev`](../jev), the Nuxt-free base package.
+
+Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text.
 
 ## Exports
 
@@ -9,26 +11,26 @@ The Nuxt layer for Jev typed judgements: module config, a decision runner with j
 | `@harlan-zw/nuxt-jev` | The Nuxt module. Registers `runtimeConfig.jev` defaults. |
 | `@harlan-zw/nuxt-jev/server` | Config and seat-mode resolution, plus the `decideJev` runner over an injected journal. |
 | `@harlan-zw/nuxt-jev/schema` | `createJevDecisionsTable(extraColumns?)`: the drizzle sqlite table factory. |
-| `@harlan-zw/jev` | The nuxt-free base: HTTP client, question builders, ask tags, digest helpers, eval math. |
+| `@harlan-zw/jev` | The Nuxt-free base: HTTP client, question builders, ask tags, digest helpers, eval math. |
 
 ## Safety rules
 
 | Situation | Behaviour |
 | --- | --- |
-| `state` null or undefined | `decideJev` throws a `TypeError` before any network call: a programming error, not a judgement. |
-| No `apiToken` and `accountId` | `Unconfigured`. No rows, no network, caller keeps today's behaviour. |
-| HTTP, network, timeout, or invalid answer | `Unavailable`. No row written, caller keeps its safe direction. |
-| Same seat, subject, state, and question version | `reuse`. The journaled row answers; no network call. |
-| Insert loses a unique race | The winner row is re-read and reused. |
-| Seat mode | `off`, `shadow`, or `live` per seat from `seatModes` pairs; default `shadow`. |
-| Eval suggestion | Evidence, never an action. Needs 30 answered samples, 10 in band, 95% agreement. Ten or more outcomes below 90% accuracy vetoes. |
+| `state` null or undefined | A programming error. `decideJev` throws a `TypeError` before any network call. |
+| No `apiToken` and `accountId` | `Unconfigured`. No rows and no network. The caller keeps its current behaviour. |
+| HTTP, network, timeout, or invalid answer | `Unavailable`. No row is written. The caller keeps its safe direction. |
+| Same seat, subject, state, and question version | `reuse`. The journaled row answers, with no network call. |
+| Insert loses a unique race | `decideJev` reads the winner row again and reuses it. |
+| Seat mode | `off`, `shadow`, or `live` per seat, from `seatModes` pairs. The default is `shadow`. |
+| Eval suggestion | Evidence, never an action. It needs 30 answered samples, 10 in the band, and 95% agreement in the band. Ten or more outcomes below 90% accuracy veto every suggestion. |
 
 ## Environment keys
 
 | Key | Purpose |
 | --- | --- |
-| `NUXT_JEV_API_TOKEN` | Cloudflare API token. Empty means unconfigured. |
-| `NUXT_JEV_ACCOUNT_ID` | Cloudflare account id. Empty means unconfigured. |
+| `NUXT_JEV_API_TOKEN` | Cloudflare API token. If empty, Jev is unconfigured. |
+| `NUXT_JEV_ACCOUNT_ID` | Cloudflare account id. If empty, Jev is unconfigured. |
 | `NUXT_JEV_GATEWAY_ID` | Optional AI Gateway id. |
 | `NUXT_JEV_MODEL` | Default `typesafe/jev`. |
 | `NUXT_JEV_CACHE_TTL` | Seconds for `cf-aig-cache-ttl`. Zero omits the header. |
@@ -77,7 +79,7 @@ if (decision._tag === 'Answer' && resolveJevSeatMode('brand-query', config) === 
 }
 ```
 
-`createInMemoryJevJournal()` ships for tests and for consumers without a database.
+For tests, or if you have no database, use `createInMemoryJevJournal()`.
 
 ## License
 
