@@ -1,47 +1,60 @@
 import type { CloudflareOptions } from '@sentry/cloudflare'
+import { createTransport, SDK_VERSION } from '@sentry/cloudflare'
 import { describe, expect, it, vi } from 'vitest'
 import { runWithQueueSentry } from '../src/runtime/server/sentry'
 
-const sentry = vi.hoisted(() => ({
-  responses: [] as Response[],
-  setAsyncContext: vi.fn(),
-  wrapRequestHandler: vi.fn(async (_options: unknown, handler: () => Promise<Response>) => {
-    const response = await handler()
-    sentry.responses.push(response)
-    return response
-  }),
-}))
+// No mock: this drives the installed `@sentry/cloudflare`, so it proves the
+// adapter against whichever Sentry major the lockfile resolves.
 
-vi.mock('@sentry/cloudflare', () => ({
-  setAsyncLocalStorageAsyncContextStrategy: sentry.setAsyncContext,
-  wrapRequestHandler: sentry.wrapRequestHandler,
-}))
+// Sentry 11 caches the first client per isolate, with its transport, so every
+// test reads one shared envelope list.
+const envelopes: string[] = []
 
-describe('runWithQueueSentry', () => {
-  it('returns the queue handler result through Sentry request instrumentation', async () => {
-    const context = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext
-    const options = { dsn: 'https://example.invalid/1' } satisfies CloudflareOptions
+function queueOptions() {
+  const options: CloudflareOptions = {
+    dsn: 'https://public@sentry.invalid/1',
+    transport: transportOptions => createTransport(transportOptions, async (request) => {
+      envelopes.push(typeof request.body === 'string' ? request.body : new TextDecoder().decode(request.body))
+      return {}
+    }),
+  }
+  return options
+}
 
-    await expect(runWithQueueSentry({ queue: 'events', context, options }, async () => 'processed')).resolves.toBe('processed')
-    expect(sentry.setAsyncContext).toHaveBeenCalledOnce()
-    expect(sentry.wrapRequestHandler).toHaveBeenCalledWith(
-      {
-        options,
-        request: expect.objectContaining({ url: 'https://queue.internal/events' }),
-        context,
-      },
-      expect.any(Function),
-    )
-    expect(sentry.responses[0]).toMatchObject({ status: 204 })
+function executionContext() {
+  const pending: Promise<unknown>[] = []
+  const context = {
+    waitUntil: vi.fn((promise: Promise<unknown>) => {
+      pending.push(promise)
+    }),
+    passThroughOnException: vi.fn(),
+    props: {},
+  } as unknown as ExecutionContext
+  return { context, settled: () => Promise.all(pending) }
+}
+
+describe(`runWithQueueSentry on @sentry/cloudflare ${SDK_VERSION}`, () => {
+  it('returns the queue handler result', async () => {
+    const options = queueOptions()
+    const { context } = executionContext()
+
+    await expect(runWithQueueSentry({ queue: 'events', context, options }, async () => 'processed'))
+      .resolves
+      .toBe('processed')
   })
 
-  it('propagates queue handler failures', async () => {
+  it('rethrows a queue handler failure and reports it to Sentry', async () => {
+    const options = queueOptions()
+    const { context, settled } = executionContext()
     const failure = new Error('queue failed')
-    const context = { waitUntil: vi.fn(), passThroughOnException: vi.fn() } as unknown as ExecutionContext
 
-    await expect(runWithQueueSentry(
-      { queue: 'events', context, options: {} },
-      async () => Promise.reject(failure),
-    )).rejects.toBe(failure)
+    await expect(runWithQueueSentry({ queue: 'events', context, options }, async () => Promise.reject(failure)))
+      .rejects
+      .toBe(failure)
+    await settled()
+
+    const sent = envelopes.join('\n')
+    expect(sent).toContain('queue failed')
+    expect(sent).toContain('https://queue.internal/events')
   })
 })

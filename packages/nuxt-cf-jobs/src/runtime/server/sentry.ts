@@ -1,5 +1,8 @@
 import type { CloudflareOptions } from '@sentry/cloudflare'
-import { setAsyncLocalStorageAsyncContextStrategy, wrapRequestHandler } from '@sentry/cloudflare'
+import { setAsyncLocalStorageAsyncContextStrategy } from '@sentry/cloudflare'
+// Sentry 11 removed `wrapRequestHandler` from the main entry. The `./request`
+// subpath carries it on Sentry 10.70 and later, so one import serves both.
+import { wrapRequestHandler } from '@sentry/cloudflare/request'
 
 export interface QueueSentryInput {
   queue: string

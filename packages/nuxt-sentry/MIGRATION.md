@@ -115,7 +115,7 @@ Edit `nuxt.config.ts`: remove lines 7, 14-15 and 407-429. Keep `autoInjectServer
 **Read the policy from `#nuxt-sentry/policy`, not from runtime config.** `useRuntimeConfig()` in this file makes the emitted `sentry.server.config.mjs` import the Nitro chunk, so the whole application and `node:http` evaluate before `Sentry.init` and `top-level-import` buys nothing. Measured on this site: 35 imports in the emitted file before, 3 after.
 
 ```ts
-import { createBeforeSend, createSentryDataCollection, resolveTracesSampleRate } from '@harlan-zw/nuxt-sentry/server'
+import { createBeforeSend, createSentryInitOptions, resolveTracesSampleRate } from '@harlan-zw/nuxt-sentry/server'
 import * as Sentry from '@sentry/nuxt'
 import { nuxtSentry } from '#nuxt-sentry/policy'
 
@@ -130,7 +130,7 @@ if (nuxtSentry.target._tag === 'enabled') {
     environment,
     ...target.release ? { release: target.release } : {},
     tracesSampleRate: resolveTracesSampleRate(target.tracesSampleRate, environment),
-    ...policy.dataCollection === 'none' ? { dataCollection: createSentryDataCollection() } : { sendDefaultPii: true },
+    ...createSentryInitOptions({ sdkVersion: Sentry.SDK_VERSION, dataCollection: policy.dataCollection, logs: false }),
     beforeSend: createBeforeSend(policy),
   })
 }

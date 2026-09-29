@@ -764,7 +764,7 @@ Published package subpaths:
 | `@harlan-zw/nuxt-cf-jobs/cloudflare` | Cloudflare-specific metrics helpers. |
 | `@harlan-zw/nuxt-cf-jobs/d1` | D1 repository adapter for non-Nuxt contexts. |
 | `@harlan-zw/nuxt-cf-jobs/schema` | Drizzle table definitions for non-Nuxt contexts. |
-| `@harlan-zw/nuxt-cf-jobs/sentry` | Sentry request scope adapter for queue handlers. |
+| `@harlan-zw/nuxt-cf-jobs/sentry` | Sentry request scope adapter for queue handlers. Needs `@sentry/cloudflare` 10.70 or later, or 11. |
 | `@harlan-zw/nuxt-cf-jobs/testing` | Nitro-free queue fakes and test harnesses. |
 
 ## Development

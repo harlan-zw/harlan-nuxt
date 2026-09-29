@@ -26,12 +26,14 @@ export {
   createBeforeSend,
   createClientNoiseOptions,
   createSentryDataCollection,
+  createSentryInitOptions,
   describeDisabledTarget,
   isLocalReportingHost,
   resolveClientTarget,
   resolveEnvironment,
   resolveTracesSampleRate,
 } from '../shared/policy'
+export type { SentryInitOptionsInput } from '../shared/policy'
 export {
   isSecretKey,
   REDACTED,
