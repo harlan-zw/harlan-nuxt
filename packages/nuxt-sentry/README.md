@@ -1,34 +1,31 @@
-<h1>@harlan-zw/nuxt-sentry</h1>
+# Nuxt Sentry
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Sentry owns one Report Policy for a whole estate of sites. It registers the client and server Sentry clients, decides who may report, and applies the same Drop Rules and Redaction Rules on both sides.
+> One Sentry Report Policy for every Nuxt site, on the client and the server.
 
-It does not wrap the Sentry SDK. Your code keeps importing `@sentry/nuxt` and `@sentry/cloudflare` directly.
+## Why Nuxt Sentry?
 
-Status: experimental. APIs may change before the first release.
+Every Nuxt site that reports to Sentry needs the same setup. Each copy drifts in its own way.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+- 💻 **Local builds report as production**: `nuxt preview` and `wrangler dev` run with `NODE_ENV=production`, so your laptop sends Error Reports to the live project.
+- 🔑 **Secrets leave in Error Reports**: Tokens, passwords, and query strings ride along in request data and error messages.
+- 🔇 **Noise buries real errors**: Browser extension errors, expected status codes, and aborted fetches crowd out the errors you need to fix.
+- 🔀 **Client and server disagree**: Each side gets its own drop logic and release name, so one deploy looks like two.
+
+Nuxt Sentry gives every site one Report Policy, with the same Drop Rules and Redaction Rules in the browser and on the server. It does not wrap the Sentry SDK; your code keeps importing `@sentry/nuxt` and `@sentry/cloudflare` directly.
 
 ## Features
 
-- 🚦 **One enable gate:** a release identity proves a deploy produced the build, so `wrangler dev` and `nuxt preview` cannot report as production.
-- 🧹 **Redaction Rules:** credentials are removed by key name and by value shape, on every report, on both sides.
-- 🎯 **Drop Rules:** status codes, transient upstream failures, browser noise, stackless failures, breadcrumb matches and extension frames, decided by one pure function.
-- 🏷️ **Release and environment naming:** resolved once at build time, then shared by the client and the server.
-- 📦 **Registered from the module:** `@harlan-zw/nuxt-dx` attributes the bundle entry to this package instead of to an anonymous site plugin.
-- ☁️ **Cloudflare Worker version tags:** read from the `CF_VERSION_METADATA` binding, so a report names the exact Worker version.
+- 🚦 **One enable gate**: `wrangler dev` and `nuxt preview` builds never report to Sentry as production.
+- 🧹 **Redaction Rules**: Tokens and passwords never leave in an Error Report, from the browser or the server.
+- 🎯 **Drop Rules**: Browser extension noise, expected status codes, and transient upstream failures stop burying the errors you need to fix.
+- 🏷️ **Release and environment naming**: Client and server Error Reports from one deploy always carry the same release and environment.
+- 📦 **Registered from the module**: `@harlan-zw/nuxt-dx` bundle reports name this package, so you can see what Sentry costs your bundle.
+- ☁️ **Cloudflare Worker version tags**: Each Error Report names the exact Worker version that failed.
 
 ## Installation
 
@@ -97,22 +94,22 @@ Set `SENTRY_AUTH_TOKEN` in CI to upload source maps. Set `SENTRY_RELEASE` in the
 | `'ci'` | A production build produced in CI. |
 | `'always'` | Any production build. |
 
-The default is `'release'`. A release identity is the proof that a deploy produced the build. `nuxt preview` and `wrangler dev` both run a production build with `NODE_ENV=production`, so `NODE_ENV` alone lets a laptop file issues against the live project. One site measured 232 events from a single local session against 223 real errors org wide in the same day.
+The default is `'release'`. A release identity proves that a deploy produced the build. `nuxt preview` and `wrangler dev` both run a production build with `NODE_ENV=production`. With `NODE_ENV` alone, your laptop sends Error Reports to the live project. On one site, a single local session sent 232 Error Reports. The whole org had 223 real errors that day.
 
-The release comes from `SENTRY_RELEASE`, then `GITHUB_SHA`. Set `SENTRY_RELEASE` explicitly in a deploy workflow. On a `workflow_run` event `GITHUB_SHA` is the default branch tip rather than the commit that was built, so the release names code that was never deployed.
+The release comes from `SENTRY_RELEASE`, then `GITHUB_SHA`. Set `SENTRY_RELEASE` in the deploy workflow. On a `workflow_run` event, `GITHUB_SHA` is the default branch tip. That may differ from the commit that was built, so the release can name code that never deployed.
 
 ```yaml
 env:
   SENTRY_RELEASE: ${{ github.event.workflow_run.head_sha || github.sha }}
 ```
 
-The browser applies one more gate that a build cannot see. A bundle served from a loopback or RFC1918 host is never a deployment, so it reports nothing.
+The browser adds one more gate that a build cannot see. A bundle served from a loopback or RFC1918 host reports nothing, because it is never a deployment.
 
 ### Data collection
 
 `dataCollection: 'scrubbed'` sends the request, then applies every Redaction Rule. `'none'` sends no personal data at all.
 
-Redaction runs on every report under both settings. `'none'` suppresses the request fields, but an ofetch error message still quotes the failing URL, query string and all, and no data collection setting stops that.
+Every Redaction Rule runs on every Error Report under both settings. `'none'` removes the request fields. An ofetch error message still quotes the failing URL, query string included, and no `dataCollection` value stops that.
 
 Each setting sends the same data on Sentry 10 and Sentry 11. Sentry 11 collects every category when its `dataCollection` option is unset, so the module always passes an explicit value:
 
@@ -149,15 +146,15 @@ export default defineNuxtConfig({
 })
 ```
 
-The server default is 404 only. 401, 403 and 429 keep reporting, because an auth regression or a rate limit spike must stay visible. The client default adds 401 and 403, where the same status is an expired session racing a redirect to the login page.
+The server default is 404 only. 401, 403 and 429 keep reporting, so you still see an auth regression or a rate limit spike. The client default adds 401 and 403. In the browser, those statuses usually mean an expired session racing a redirect to the login page.
 
-`dropStacklessErrors` and `dropBreadcrumbMessages` are both empty by default, so neither changes a site until it asks.
+`dropStacklessErrors` and `dropBreadcrumbMessages` are both empty by default. Neither drops anything until you configure it.
 
-Use `dropStacklessErrors` when the same message is a defect with a stack and noise without one. A browser that rejects a fetch on the global handler produces `TypeError: Failed to fetch` with an empty frame list, and no frame names site code. The same message with a stack still reports.
+Use `dropStacklessErrors` when the same message is a defect with a stack and noise without one. If a browser rejects a fetch on the global handler, you get `TypeError: Failed to fetch` with no frames. Nothing points at site code. The same message with a stack still reports.
 
 Use `dropBreadcrumbMessages` when the breadcrumb names the cause and the exception does not. A stale chunk load after a deploy often throws inside a component, so only the console breadcrumb says the chunk was gone.
 
-Every Drop Rule runs in a fixed order and the decision names the rule that fired: `status`, `transient`, `ignore-message`, `stackless-message`, `breadcrumb-message`, `deny-url`.
+The Drop Rules run in a fixed order, and the decision names the rule that fired: `status`, `transient`, `ignore-message`, `stackless-message`, `breadcrumb-message`, `deny-url`.
 
 ### Environment and sampling
 
@@ -178,13 +175,13 @@ The browser resolves the environment from its hostname. The server has no hostna
 - **It does not replace `@sentry/nuxt/module`.** That module still owns the build plugin, the source map upload and the client entry injection. This module configures it.
 - **It does not own the queue Sentry client.** `runWithQueueSentry` lives in `@harlan-zw/nuxt-cf-jobs/sentry`. Build its `beforeSend` from `@harlan-zw/nuxt-sentry/server`.
 - **It does not write a Wrangler file.** `@harlan-zw/nuxt-cloudflare` owns that, and `upload_source_maps` with it.
-- **It does not capture per request errors twice.** It never hooks the Nitro `error` event itself.
-- **It does not add Sentry Cron monitors or RPC capture.** Those cost a billed monitor seat and one site each uses them.
-- **It does not redact application log payloads.** Only the Sentry road is covered.
+- **It does not report a request error twice.** It never listens on the Nitro `error` hook.
+- **It does not add Sentry Cron monitors or RPC capture.** Cron monitors cost a billed seat each, and only one site uses each feature.
+- **It does not redact application log payloads.** Redaction Rules cover only what goes to Sentry.
 
 ## Non Cloudflare presets
 
-The server plugin is registered only on a Cloudflare Nitro preset, because `@sentry/cloudflare` is the only SDK that runs on Workers and it cannot be bundled into a Node build. On any other preset the module logs a warning and registers no server plugin. Keep the site's own `sentry.server.config.ts` and build its `beforeSend` from the shared policy.
+The module registers the server plugin only on a Cloudflare Nitro preset. `@sentry/cloudflare` is the only SDK that runs on Workers, and a Node build cannot bundle it. On any other preset, the module logs a warning and registers no server plugin. Keep the site's own `sentry.server.config.ts` and build its `beforeSend` from the shared policy.
 
 Import the policy from `#nuxt-sentry/policy`, never from runtime config:
 
@@ -208,19 +205,19 @@ if (nuxtSentry.target._tag === 'enabled') {
 
 `#nuxt-sentry/policy` is the resolved Report Policy written as a build time constant. It holds one object literal and imports nothing.
 
-`useRuntimeConfig()` in the same file makes the emitted `sentry.server.config.mjs` import the Nitro chunk. The whole application and `node:http` then evaluate before `Sentry.init` runs, which defeats `autoInjectServerSentry: 'top-level-import'` and loses the instrumentation that setting exists to install. On one Vercel site the emitted file carried 35 imports; reading the constant instead brings it to 3.
+If the same file calls `useRuntimeConfig()`, the emitted `sentry.server.config.mjs` imports the Nitro chunk. The whole application and `node:http` then load before `Sentry.init` runs. That breaks `autoInjectServerSentry: 'top-level-import'`, and you lose the instrumentation it installs. On one Vercel site the emitted file had 35 imports; the constant brought it to 3.
 
 Sentry 11 bundles the server config into the Nitro build and deprecates `autoInjectServerSentry`. Remove that option on Sentry 11.
 
-The same constant is still written to `runtimeConfig.public.nuxtSentry`, so code that already reads it keeps working.
+The module also writes the constant to `runtimeConfig.public.nuxtSentry`, so code that reads it there keeps working.
 
 ## Scheduled tasks
 
-Nitro's `runTask` calls no hook, so no plugin can see a scheduled task run. A throwing task reaches Sentry, if at all, as an unattributed `scriptThrewException`.
+Nitro's `runTask` calls no hook, so no plugin can see a scheduled task run. A task that throws reaches Sentry, if at all, as a bare `scriptThrewException` with no task name.
 
-On a Cloudflare preset the module wraps every registered task at build time, including one another module registers from inside its own package. A failure is reported with a `task` tag naming the task, then rethrown, so the scheduler still sees the task fail. Set `tasks: false` to leave tasks alone.
+On a Cloudflare preset, the module wraps every registered task at build time. That includes tasks another module registers from inside its own package. The wrapper reports a failure with a `task` tag, then rethrows it, so the scheduler still sees the task fail. To leave tasks alone, set `tasks: false`.
 
-`withSentryTask` wraps one task by hand. Use it when `tasks` is off, or in a task file shared with a build the module does not cover. Wrapping a task the build already wrapped changes nothing, so one failure reports once.
+`withSentryTask` wraps one task by hand. Use it when `tasks` is off, or in a task file shared with a build the module does not cover. A second wrap has no effect, so one failure reports once.
 
 ```ts
 import { withSentryTask } from '@harlan-zw/nuxt-sentry/server/task'
@@ -233,17 +230,17 @@ export default withSentryTask(defineTask({
 }))
 ```
 
-`withSentryTask` reports through `@sentry/cloudflare`, so it runs on a Cloudflare Workers preset only. It lives in its own subpath export, because the SDK-free `@harlan-zw/nuxt-sentry/server` barrel must keep resolving on Node, where that peer is not installed.
+`withSentryTask` reports through `@sentry/cloudflare`, so it runs on a Cloudflare Workers preset only. It has its own subpath export. That keeps the SDK-free `@harlan-zw/nuxt-sentry/server` barrel working on Node, where the peer is not installed.
 
 ## Wide Events
 
-With `@harlan-zw/nuxt-wide-events` installed, two bridges are wired and neither package imports the other.
+If `@harlan-zw/nuxt-wide-events` is installed, the module connects the two packages in two ways. Neither package imports the other.
 
-The Sentry trace identity is written into every request's Wide Event as `sentry.traceId` and `sentry.spanId`, so the two sinks can be joined. The fields are declared through the `wide-events:fields` build hook, so the allowlist stays exhaustive.
+The module writes the Sentry trace identity into every request's Wide Event as `sentry.traceId` and `sentry.spanId`. You can then join a Wide Event to its Sentry trace. The module declares these fields through the `wide-events:fields` build hook, so the allowlist stays complete.
 
-With `wideEvents: true` and the Wide Events `drain` option on, a failing Wide Event is forwarded to Sentry Logs. A log, never an error: a Wide Event carries no stack in production, and Sentry already captured the same failure from the same request.
+With `wideEvents: true` and the Wide Events `drain` option on, the module forwards a failing Wide Event to Sentry Logs. It sends a log, never an Error Report. A Wide Event carries no stack in production, and Sentry already captured the same failure from that request.
 
-`true` forwards a Wide Event whose level is `error`. Nothing else. Widen it only when the extra records are worth their bytes:
+`true` forwards only a Wide Event whose level is `error`. Widen it only when the extra records are worth their bytes:
 
 ```ts
 export default defineNuxtConfig({
@@ -254,7 +251,7 @@ export default defineNuxtConfig({
 })
 ```
 
-Sentry meters Logs as their own byte quota, separate from the error quota. Every level added here spends that quota on every matching request, so the default stays at `error`. A level outside `warn` and `error` throws at build time.
+Sentry bills Logs against their own byte quota, separate from the error quota. Each level you add spends that quota on every matching request, so the default is `error` only. A level outside `warn` and `error` throws at build time.
 
 ## Development
 

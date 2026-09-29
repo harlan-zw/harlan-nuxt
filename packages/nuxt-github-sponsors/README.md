@@ -1,37 +1,35 @@
-<h1>@harlan-zw/nuxt-github-sponsors</h1>
+# Nuxt GitHub Sponsors
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt GitHub Sponsors fetches your GitHub sponsors and hands them to your app as typed data. It ships no UI, so your sponsor page stays yours to design.
+> Show your GitHub sponsors on your Nuxt site from typed data.
 
-Status: experimental. APIs may change before the first release.
+## Why Nuxt GitHub Sponsors?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+A sponsor page looks simple until you call the GitHub API. You may see:
+
+- 📄 **Pagination by hand**: GitHub GraphQL returns sponsorships in pages, so you write the loop yourself.
+- 🔒 **Private sponsors in the response**: Raw GitHub data includes sponsors who asked to stay private.
+- 🕳️ **Empty sponsor lists in production**: A missing token or a failed fetch bakes an empty list into the deploy.
+
+Nuxt GitHub Sponsors fetches your GitHub sponsors and gives them to your app as typed data. It ships no UI, so you design your own sponsor page.
 
 ## Features
 
-- 🔌 **Route and composable:** a public route plus `useGitHubSponsors()` for a typed response, paginated across every active sponsorship.
-- 🔒 **Private sponsors filtered:** only a minimal public DTO leaves the server.
-- 🏅 **Tiers and overrides:** assign tier keys by minimum monthly amount, and correct names, avatars, and links without patching GitHub.
-- 🔤 **Tier keys typed from config:** a page that reads a renamed tier fails to compile.
-- ⚡ **One-day SWR cache:** only successful upstream results are cached.
-- 🎨 **Headless by design:** no sponsor UI, so your visual identity stays yours.
+- 🔌 **Route and composable**: You list every active sponsor without writing GitHub GraphQL pagination yourself.
+- 🔒 **Private sponsors filtered**: Private sponsors and raw GitHub data never leave your server.
+- 🏅 **Tiers and overrides**: You group sponsors by monthly amount and fix a wrong name, avatar, or link without touching GitHub.
+- 🔤 **Tier keys typed from config**: A renamed tier fails to compile, so no page shows an empty tier by mistake.
+- ⚡ **One-day SWR cache**: Page views stop calling the GitHub API on each visit, and a failed fetch never sticks in the cache.
+- 🎨 **Headless by design**: You build the sponsor page in your own design, with no bundled component to fight.
 
 ## Installation
 
 ```bash
-pnpm add @harlan-zw/nuxt-github-sponsors
+npx nuxi@latest module add @harlan-zw/nuxt-github-sponsors
 ```
 
 > [!TIP]
@@ -87,15 +85,15 @@ out of the rendered HTML and need no `onMounted` gate of your own.
 
 ## Tier keys
 
-The module types the tier keys from your configured tiers, so `tiers.top` is
-checked against your config. Renaming a tier turns a silently empty page into a
-compile error.
+The module types the tier keys from your configured tiers. TypeScript checks
+`tiers.top` against your config. If you rename a tier, the page fails to compile
+and does not render an empty list.
 
 ## Usage
 
-The module registers a public route and `useGitHubSponsors`. The server core fetches all active sponsorship pages, parses GitHub responses, filters private sponsors, projects a minimal public DTO, applies explicit profile overrides, and assigns configurable tiers.
+The module registers a public route and `useGitHubSponsors()`. The server fetches every page of active sponsorships and drops private sponsors. It sends a minimal public DTO, then applies your overrides and tiers.
 
-There is no sponsor UI in this package. Each site keeps its own visual identity and calls `useGitHubSponsors()` for a typed response.
+This package has no sponsor UI. Call `useGitHubSponsors()` for a typed response, and build the page yourself.
 
 ## Failure states
 
@@ -103,10 +101,10 @@ The route always answers `200` with a tagged state. `unavailable` with reason
 `not-configured` means no token. `unavailable` with reason `upstream-error`
 carries an `errorTag` naming the upstream fault. Both states carry an empty
 collection, so a page renders and a prerender with `failOnError` still builds.
-Only a successful upstream result is cached. No secret is logged.
+The cache stores only successful upstream results. The module logs no secret.
 
-Override keys that match no sponsor are reported in a server warning, because a
-key with a typo would otherwise do nothing at all.
+If an override key matches no sponsor, the server logs a warning. Without it, a
+key with a typo would do nothing.
 
 ## Sponsors
 

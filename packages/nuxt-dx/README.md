@@ -1,33 +1,31 @@
-<h1>@harlan-zw/nuxt-dx</h1>
+# Nuxt DX
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt DX is a diagnostics module that surfaces problems you would otherwise have to find yourself: client errors during development, and runtime entries that quietly bloat your JavaScript bundles.
+> Find client errors and oversized runtime entries in your Nuxt app during development and CI.
 
-Status: experimental. APIs may change before the first release.
+## Why Nuxt DX?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+Some Nuxt problems stay quiet until you go and hunt for them. You may see:
+
+- 🙈 **Errors lost in the console**: Vue warnings and unhandled rejections scroll past in the browser console, and nobody reads them.
+- 💧 **Opaque hydration mismatches**: Vue reports each mismatch as one flat message, so you guess which component and which value broke.
+- 📦 **Silent bundle growth**: A plugin or middleware pulls in a heavy dependency, and nothing tells you.
+
+Nuxt DX shows client errors during development and in your terminal. It warns when a runtime entry makes your JavaScript bundles too big.
 
 ## Features
 
-- 🚨 **Client error overlay:** Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections in one badge, and a strict production no-op.
-- 💧 **Hydration mismatches, decoded:** counted separately and read back as component, source file, and the two values that disagreed.
-- 🤖 **Agent handoff:** copy a route-scoped report with source files attached, ready to paste at a coding agent.
-- **[Inspect a route](#inspect-a-route):** collect client diagnostics with `nuxt-dx inspect`, using the running dev server.
-- **[Payload Diagnostics](#payload-diagnostics):** find fields the client did not read during hydration, in dev or prerendered pages.
-- 📦 **Runtime size budgets:** warn when a Nuxt plugin, route middleware, Nitro plugin, or Nitro middleware pulls too much JavaScript into its bundle.
-- 📈 **Regression diffs:** write a machine-readable report, then compare builds with the CLI or GitHub action before added JavaScript lands.
+- 🚨 **Client error overlay**: Vue warnings, console errors, and unhandled rejections no longer scroll past unseen in the browser console.
+- 💧 **Hydration mismatches, decoded**: You stop guessing which component and which value broke hydration.
+- 🤖 **Agent handoff**: You stop copying errors, routes, and file paths into a coding agent by hand.
+- 🔍 **[Inspect a route](#inspect-a-route)**: You get a route's client errors in your terminal or CI without opening a browser yourself.
+- 🧺 **[Payload Diagnostics](#payload-diagnostics)**: You find payload fields that ship to the client but never get read.
+- 📦 **Runtime size budgets**: A plugin or middleware that pulls in a heavy dependency no longer grows your bundle unnoticed.
+- 📈 **Regression diffs**: A pull request that takes a plugin from 12 kB to 48 kB gets flagged before it merges.
 
 ## Installation
 
@@ -49,7 +47,7 @@ export default defineNuxtConfig({
 
 ## Inspect a route
 
-Run this from your app directory while Nuxt dev is running:
+While Nuxt dev runs, run this from your app directory:
 
 ```sh
 pnpm exec nuxt-dx install-browser # once, to install Chromium
@@ -65,14 +63,14 @@ pnpm exec nuxt-dx inspect /about
 
 The report combines client errors, console warnings, hydration mismatches, and payload diagnostics from the initial page load.
 It also includes diagnostics that modules send to the dev overlay.
-It does not click through interactions or include server logs and build size budgets.
+It does not click through interactions. It does not include server logs or size budgets.
 
 The inspection browser disables Nuxt DevTools because its payload reads can hide unread fields.
 Normal browser sessions keep DevTools enabled.
 
-The terminal shows a readable report. Use `--json` for scripts or `--output report.json` to save JSON.
+The terminal shows a readable report. For scripts, use `--json`. To save the JSON to a file, use `--output report.json`.
 Exit code `1` means the page reported errors or the command could not run.
-Exit code `2` means observation was incomplete without recorded errors.
+Exit code `2` means the observation was incomplete and recorded no errors.
 Warnings alone leave the exit code at `0`.
 
 If your app lives in another directory, pass `--cwd apps/web`.
@@ -83,13 +81,13 @@ pnpm exec nuxt-dx inspect http://localhost:3000/about
 ```
 
 Prerendered pages need the [payload option below](#prerendered-pages) to report hydration completion and unread fields.
-Vue source context comes from the dev overlay and is unavailable in production builds.
+Vue source context comes from the dev overlay. Production builds do not have it.
 
 ## Error overlay
 
-A client error overlay that collects Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections. It can copy a concise report with route and source-file context for an agent handoff.
+The overlay collects Vue warnings, Vue errors, console errors, uncaught errors, and unhandled rejections. It can copy a short report with the route and source files, ready for a coding agent.
 
-The overlay is a strict production no-op; its client plugin is only registered when Nuxt runs in development mode.
+The overlay does nothing in production. Nuxt DX registers its client plugin only in development mode.
 
 ```ts
 export default defineNuxtConfig({
@@ -99,7 +97,7 @@ export default defineNuxtConfig({
 })
 ```
 
-Other modules can send errors and warnings to the same overlay through the typed `nuxt-dx:issue` runtime hook. The DX plugin runs first, so module plugins can report during setup without losing the issue.
+Other modules can send errors and warnings to the same overlay through the typed `nuxt-dx:issue` runtime hook. The DX plugin runs first, so a module plugin can report a diagnostic during setup and not lose it.
 
 ```ts
 export default defineNuxtPlugin((nuxtApp) => {
@@ -116,7 +114,7 @@ export default defineNuxtPlugin((nuxtApp) => {
 
 ## Hydration mismatches
 
-Hydration mismatches get their own count on the badge and their own section in the report. Vue hands them to `warnHandler` with the DOM nodes already flattened into the message, so the overlay parses that string back apart and pairs it with the component that was hydrating and its source file.
+Hydration mismatches get their own count on the badge and their own section in the report. Vue passes each mismatch to `warnHandler` as one flat message. The overlay parses that message, then adds the component that was hydrating and its source file.
 
 The badge reads `1 err | 1 warn | 5 hydration`, and the panel lists each mismatch as:
 
@@ -128,7 +126,7 @@ HYDRATION Class mismatch in <RandomBadge>
   client: class="cool"
 ```
 
-The copied report gets the same treatment, one heading per mismatch:
+The copied report has one heading per mismatch:
 
 ```md
 ### 2. Class mismatch in <RandomBadge>
@@ -139,7 +137,7 @@ The copied report gets the same treatment, one heading per mismatch:
 - Client rendered: `class="cool"`
 ```
 
-Node, text, children, class, style, and attribute mismatches are all recognised. Vue's follow-up `Hydration completed but contains mismatches.` console error is dropped, since every mismatch behind it is already listed. Two reports of the same mismatch collapse into one entry: a mismatch is identified by where it happened rather than by the values it printed, so a clock rendering `Date.now()` does not stack up a new entry every time it drifts.
+The overlay recognises node, text, children, class, style, and attribute mismatches. It drops Vue's follow-up `Hydration completed but contains mismatches.` console error, because the list already shows each mismatch. Two reports of the same mismatch become one entry. The overlay keys a mismatch by its location and ignores the printed values. So a clock that renders `Date.now()` does not add an entry each time it drifts.
 
 ## Payload Diagnostics
 
@@ -156,14 +154,14 @@ export default defineNuxtConfig({
 })
 ```
 
-With tracking enabled, reload the page. The overlay lists unread fields from plain `payload.data[key]` objects, with estimated JSON sizes.
+If tracking is on, reload the page. The overlay lists unread fields from plain `payload.data[key]` objects, with estimated JSON sizes.
 Tracking starts after Nuxt restores the payload, before ordinary app plugins run.
 It stops when initial hydration finishes.
 
 If the page reads `product.title`, the report can flag `product.details`.
 If nothing needs `details`, omit it from the fetch result.
 If a later interaction needs it, consider fetching it when that interaction happens.
-Nuxt DX keeps the data intact.
+Nuxt DX does not change the data.
 
 ### Reading the results
 
@@ -217,7 +215,7 @@ Remove the `prerender` option before your deployment build to leave out the trac
 <summary>Skipped data and scan limits</summary>
 
 Tracking wraps payload objects in proxies. If earlier code holds references outside `payload.data`, set `payloadUsage: false`.
-Those earlier references cannot be tracked, and their identity will differ from the proxy.
+Tracking cannot see those earlier references. Their identity also differs from the proxy.
 
 - Tracking skips arrays, primitives, reactive objects, refs, frozen objects, getters, and readonly or nonconfigurable properties.
 - Payload cache entries must be writable. Nested references, including Map and Set entries, can cause an object to be skipped.
@@ -225,7 +223,7 @@ Those earlier references cannot be tracked, and their identity will differ from 
   Custom objects, functions, accessors, and hidden Vue proxy references can stop the scan.
   The scan also stops after 10,000 objects, properties, or collection entries.
 - Enumeration, membership checks, writes, and framework reads count as use. They can hide unread fields.
-- Nested fields and custom root payload entries are not tracked.
+- Tracking ignores nested fields and custom root payload entries.
 - Cyclic, shared, or non-JSON field values have no size estimate.
   Estimates stop at 64 levels, 10,000 traversal steps, or a conservative 1 MiB JSON output bound.
 
@@ -252,9 +250,9 @@ Each entry is charged its post-tree-shaking size plus every JavaScript module re
     nuxtDx.sizeBudget.overridesKb = { 'analytics': 32 }
 ```
 
-The three heaviest modules are listed and the remainder is folded into one line, so the breakdown always sums to the reported total. The suggested override is rounded up past the current size, and every offender lands in a single copy-pasteable snippet.
+The warning lists the three heaviest modules and folds the rest into one line. The breakdown always adds up to the reported total. The suggested override rounds up past the current size. Every entry over budget goes into one snippet you can copy.
 
-A plugin that declares a name gets reported by it, with the file kept alongside so the warning stays clickable:
+If a plugin declares a name, the warning uses that name. The file path stays beside it, so you can still click through:
 
 ```ts
 export default defineNuxtPlugin({
@@ -263,11 +261,11 @@ export default defineNuxtPlugin({
 })
 ```
 
-Both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })` are read. Other entries use their path. If a Nuxt module registered an entry, warnings and reports include that module as its owner. Ownership is metadata and never creates a second charge.
+Nuxt DX reads both `defineNuxtPlugin({ name })` and `defineNuxtPlugin(fn, { name })`. Other entries use their path. If a Nuxt module registered an entry, warnings and reports name that module as its owner. The owner is metadata only. It never charges the entry twice.
 
 ## The size budget report
 
-Reporting is off until you ask for it. With `report: true`, every build writes `.nuxt/dx/size-budget.json`. The report contains one entry per measured runtime entry.
+Reporting is off by default. If you set `report: true`, every build writes `.nuxt/dx/size-budget.json`. The report has one entry per measured runtime entry.
 
 ```ts
 export default defineNuxtConfig({
@@ -310,7 +308,7 @@ export default defineNuxtConfig({
 
 `scope` is `client`, `client-middleware`, `nitro`, or `nitro-middleware`. Paths are relative to the app root. `owner` names the Nuxt module that registered an entry when Nuxt exposes that relationship.
 
-Disabled entry kinds are omitted from reports. The client bundle requires `nuxi build`. Development runs only report Nitro entries.
+Reports leave out disabled entry kinds. The client bundle needs `nuxi build`. Development runs report only Nitro entries.
 
 ## Catching regressions
 
@@ -355,13 +353,13 @@ nuxt-dx compare base/.nuxt/dx/size-budget.json .nuxt/dx/size-budget.json
 
 Markdown goes to stdout for job summaries. The local verdict goes to stderr. Client and server totals combine their disjoint runtime entries.
 
-`--threshold-kb` sets how much one target may grow before failure. The default is 10 kB. The threshold is per target. Bundle totals expose cumulative drift.
+`--threshold-kb` sets how much one target may grow before the command fails. The default is 10 kB. The threshold applies to each target. The bundle totals show drift that adds up across targets.
 
-`--allow-missing-base` reports that there was no baseline and passes, rather than failing. Exit code 1 means something grew past the threshold, 2 means a report could not be read, and 0 means you are clear.
+If there is no baseline, `--allow-missing-base` says so and passes. Exit code `1` means a target grew past the threshold. Exit code `2` means a report could not be read. Exit code `0` means no target grew past the threshold.
 
 ## GitHub Actions
 
-The comparison runs after your existing build step, in the job you already have. Nothing is rebuilt for it, since your build already wrote the report.
+The comparison runs after your build step, in the job you already have. Your build already wrote the report, so nothing builds twice.
 
 First, turn the report on:
 
@@ -410,8 +408,6 @@ jobs:
           threshold-kb: 10
 ```
 
-The action reuses the report from an existing build. Avoid a separate build just to run it.
-
 Use a different `artifact-name` for each app and environment. The action appends the checked-out commit to this prefix.
 It searches retained artifacts on the base branch, including reports from other workflows.
 It selects an earlier run at the same source commit or an ancestor. Future runs cannot become its baseline.
@@ -421,14 +417,14 @@ A first run starts a new baseline and says so in the summary. Older artifacts wi
 API failures and failed downloads fail reporting. Only valid reports are uploaded, including reports that exceed the threshold.
 
 For advisory deploy reporting, run the action after deployment with `continue-on-error: true` and `comment: 'false'`.
-Surface a failed action using its step outcome. Set a step timeout to bound runner time.
-The action reads artifacts directly through GitHub's API. GitHub CLI is needed only when PR comments are enabled.
+To surface a failed action, read its step outcome. To limit runner time, set a step timeout.
+The action reads artifacts through GitHub's API. It needs GitHub CLI only when pull request comments are on.
 
-On a pull request the diff lands twice: in `$GITHUB_STEP_SUMMARY`, and as one comment on the pull request. The comment is keyed to the action, so every push edits the same comment rather than adding another. Turn it off with `comment: false`.
+On a pull request, the diff appears twice: in `$GITHUB_STEP_SUMMARY` and in one pull request comment. Each push edits that same comment and adds no new one. To turn the comment off, set `comment: false`.
 
-The comment needs `pull-requests: write`. Without it, and on pull requests from forks, the comment step logs a notice and the summary carries the diff on its own.
+The comment needs `pull-requests: write`. Without it, or on a pull request from a fork, the comment step logs a notice. The summary still shows the diff.
 
-The step reports growth, it does not block. Set `fail-on-breach: true` to fail the job when a target grows past the threshold. The step still fails when the two reports could not be compared at all, since that leaves nothing measured.
+By default, the step reports growth and lets the job pass. To fail the job when a target grows past the threshold, set `fail-on-breach: true`. The step always fails if it cannot compare the two reports, because then nothing was measured.
 
 | Input | Default | |
 | --- | --- | --- |
@@ -472,16 +468,16 @@ export default defineNuxtConfig({
 
 Set `sizeBudget: false` to turn the check off entirely.
 
-A key in `overridesKb` must match a plugin name, a Nuxt module name, or a fragment of an entry path. A key that matches nothing changes no budget, so the build lists every key that matched no runtime entry:
+A key in `overridesKb` must match a plugin name, a Nuxt module name, or a fragment of an entry path. A key that matches nothing changes no budget. So the build warns about each key that matched no runtime entry:
 
 ```
 [nuxt-dx]  WARN  1 `sizeBudget.overridesKb` key matched no runtime entry: `server/plugins/sentry.ts`.
                  Each key must be a plugin name, a Nuxt module name, or a fragment of an entry path.
 ```
 
-Some modules ship a runtime entry that no app can make smaller. Those carry their own budget, so you do not write the same override in every app that installs them. `@sentry/nuxt` gets 400 kB for its Nitro plugin. A known budget only raises the budget for the scope, so a lower `nitroPluginsKb`, or an override you write yourself, still wins.
+Some modules ship a runtime entry that no app can make smaller. Those entries carry their own budget, so you do not copy the same override into every app. `@sentry/nuxt` and `@harlan-zw/nuxt-sentry` get 400 kB for their Nitro plugin. A known budget only raises the scope budget. If you set a higher `nitroPluginsKb`, or write your own override, your value wins.
 
-Budgets are measured whenever a bundle is produced. Nitro entries report during development and builds. Client entries only report during builds.
+Nuxt DX checks budgets each time a bundle is built. Nitro entries report during development and builds. Client entries report only during builds.
 
 ## Sponsors
 

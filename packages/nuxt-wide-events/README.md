@@ -1,43 +1,31 @@
-<h1>@harlan-zw/nuxt-wide-events</h1>
+# Nuxt Wide Events
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Wide Events emits one structured record per request from your Nuxt server routes.
-
-Production writes one flat JSON line. Development prints a richer record with error details.
-
-Status: experimental. APIs may change before the first release.
-
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+> One structured record for each Nuxt server request, with every field checked at build time.
 
 ## Why Nuxt Wide Events?
 
-Traditional request logging scatters one request across many disconnected lines. A Wide Event collects that context into one record.
+Most request logging spreads one request across many lines. Any of those lines can carry data you never meant to log.
 
-This module drops runtime redaction entirely. You configure every application Field before any code can use it.
+- 🧩 **Scattered log lines**: You rebuild a request from a trail of lines before you can debug it.
+- 🔓 **Secrets reach logs**: A logger that accepts any object logs an email or a token as soon as someone passes one.
+- 🐢 **Runtime redaction on every request**: Deep redaction and regular expression matching run on each record in production.
 
-The build parses each server file. It rejects unknown Fields, object spreads, computed names, and dynamic objects. So the boundary stays visible to reviewers and to coding agents.
+Nuxt Wide Events writes one wide event per request, and you list every field in config before code can use it. The build parses each server file and rejects unknown fields, object spreads, computed names, and dynamic objects, so reviewers and coding agents can see every field a record can carry.
 
 ## Features
 
-- 📝 **One record per request:** method, path, status, duration, request ID, and your Fields on a single flat line.
-- 🚧 **Build-time Field enforcement:** an unapproved key stops the build, so no secret reaches a log by accident.
-- 🪶 **Small production runtime:** no stack formatting, deep redaction, regular expressions, or pretty printing.
-- 🎚️ **Levels that stick:** a record keeps the highest level it receives, even when the handler recovers.
-- ⚙️ **Background records:** `createWideEvent` covers Queue Jobs, scheduled work, and anything off the request path.
-- 🚰 **Drain hook:** send records to D1, Sentry, or your own adapter through one Nitro hook.
-- 📉 **Route exclusion and sampling:** the config shape matches evlog, so migration is a rename.
+- 📝 **One record per request**: You debug a request from one flat line, not a trail of scattered log lines.
+- 🚧 **Build-time field enforcement**: An unapproved key stops the build, so no secret reaches a log by accident.
+- 🪶 **Small production runtime**: Logging adds little cost per request, because production skips stack formatting and pretty printing.
+- 🎚️ **Levels that stick**: A handler that recovers from an error still logs an error, so sampling and drains see the real level.
+- ⚙️ **Background records**: Queue Jobs, scheduled work, and other background operations get the same single record as a request.
+- 🚰 **Drain hook**: You send records to D1, Sentry, or your own adapter from one Nitro hook, not from each route.
+- 📉 **Route exclusion and sampling**: Noisy routes stop flooding your logs, and your evlog filter config works unchanged.
 
 ## Installation
 
@@ -99,7 +87,7 @@ addWideEventFields(event, { ...fields })
 
 ## Set the level
 
-`setWideEventLevel` marks a request Wide Event as `debug`, `info`, `warn`, or `error`.
+`setWideEventLevel` marks a request wide event as `debug`, `info`, `warn`, or `error`.
 
 ```ts
 export default defineEventHandler(async (event) => {
@@ -113,30 +101,13 @@ export default defineEventHandler(async (event) => {
 })
 ```
 
-A record keeps the highest level it receives. If the request handler recovers from an error, the record stays an error. A drain and a sampling rate both see the real level.
+A record keeps the highest level it receives. If the request handler recovers from an error, the record stays an error. Drains and sampling both see the real level.
 
-`getActiveWideEventRequestId(event)` returns the request identity while the Wide Event is collecting. Use it to correlate an application logger, Sentry, or another request-scoped module. It returns `undefined` before collection starts and after emission.
-
-This code stops the build because `user.email` is not configured:
-
-```ts
-addWideEventFields(event, {
-  'user.email': user.email,
-})
-```
-
-Variables and spreads also stop the build:
-
-```ts
-addWideEventFields(event, fields)
-addWideEventFields(event, { ...fields })
-```
-
-This constraint keeps the Field boundary visible to reviewers and coding agents.
+`getActiveWideEventRequestId(event)` returns the request ID while the wide event collects data. Use it to tie an application logger, Sentry, or another request-scoped module to the same request. It returns `undefined` before collection starts and after emission.
 
 ## Production output
 
-Default production performs no stack formatting, deep redaction, regular expression matching, or pretty printing.
+Default production output skips stack formatting, deep redaction, regular expression matching, and pretty printing.
 
 ```json
 { "timestamp": "2026-08-13T04:12:00.000Z", "level": "info", "kind": "request", "service": "shop", "method": "GET", "path": "/api/cart", "status": 200, "durationMs": 1.4, "requestId": "req_123", "cart.itemCount": 2, "user.id": "user_123" }
@@ -144,9 +115,9 @@ Default production performs no stack formatting, deep redaction, regular express
 
 `kind` is `request` for a request record and `background` for a background record.
 
-Production errors include status only. All error strings remain absent because they can contain unapproved data.
+In production, an error record carries the status only. It drops every error string, because an error string can hold unapproved data.
 
-Development records include error messages and stacks. Development uses compact terminal blocks with request metadata in the header and configured Fields in a tree.
+In development, records include error messages and stacks. The terminal shows each record as a compact block, with request metadata in the header and configured fields in a tree.
 
 ## Background operations
 
@@ -164,19 +135,19 @@ export default defineTask({
 
 A background record carries `kind: "background"`. It has no `method`, `path`, or `status`, because a background operation has none.
 
-The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, `sampling`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` remains synchronous.
+The Nuxt auto-import selects JSON output in production and object output in development. It uses the configured `service`, `console`, `sampling`, and `drain` options. With `drain: true`, `emit()` returns a Promise and waits for background drain adapters. Without a drain, `emit()` stays synchronous.
 
-Use `@harlan-zw/nuxt-wide-events/standalone` when Nuxt auto-imports are unavailable. Inside Nitro this export resolves to the same configured variant as the auto-import, so a deep import never loses `service`, `console`, `sampling`, or `drain`. Outside Nitro it writes production JSON without module configuration.
+If Nuxt auto-imports are unavailable, import from `@harlan-zw/nuxt-wide-events/standalone`. Inside Nitro, this export resolves to the same configured variant as the auto-import. So a deep import never loses `service`, `console`, `sampling`, or `drain`. Outside Nitro, it writes production JSON with no module configuration.
 
-Set `request: false` to disable request collection. Field enforcement, `createWideEvent`, and `setWideEventLevel` remain available.
+To turn off request collection, set `request: false`. Field enforcement, `createWideEvent`, and `setWideEventLevel` still work.
 
-Set `enabled: false` to stop all output. Every server import still resolves, so application code needs no change.
+To stop all output, set `enabled: false`. Every server import still resolves, so your application code needs no change.
 
 ## Migrate from evlog
 
-Map `env.service` to `service`. Keep `exclude` and `sampling` unchanged. Do not copy `console: false`: evlog applies it to browser output, while this option controls server output.
+Map `env.service` to `service`. Keep `exclude` and `sampling` unchanged. Do not copy `console: false`. In evlog it controls browser output; here it controls server output.
 
-For requests, replace `log.set({ section: { value } })` with an approved flat Field:
+For requests, replace `log.set({ section: { value } })` with an approved flat field:
 
 ```ts
 addWideEventFields(event, { 'section.value': value })
@@ -186,11 +157,11 @@ For background operations, replace `createLogger(fields)` with `createWideEvent(
 
 For requests, replace `log.setLevel(level)` with `setWideEventLevel(event, level)`.
 
-Set `request: false` for background-only sites. Convert spreads, computed keys, arrays, and nested objects into configured primitive Fields. Keep browser logging and custom error transports in the application.
+If a site only logs background operations, set `request: false`. Convert spreads, computed keys, arrays, and nested objects into configured primitive fields. Keep browser logging and custom error transports in the application.
 
 ## Production filtering
 
-The configuration shape matches evlog for direct migration:
+The config shape matches evlog, so you can copy it across:
 
 ```ts
 export default defineNuxtConfig({
@@ -204,15 +175,15 @@ export default defineNuxtConfig({
 })
 ```
 
-Rates are percentages. A record is kept when it matches one whole keep condition. Every part of one condition must match, and the conditions are tried in order. So `{ duration: 1000, status: 500 }` keeps a slow server error, while `[{ duration: 1000 }, { status: 500 }]` keeps either one.
+Rates are percentages. The module keeps a record that matches one keep condition in full. Every part of a condition must match. The module tries the conditions in order. So `{ duration: 1000, status: 500 }` keeps a slow server error, and `[{ duration: 1000 }, { status: 500 }]` keeps either one.
 
-Every level rate applies to every Wide Event. A background record has no status, so a status condition never keeps one.
+Level rates apply to request and background records alike. A background record has no status, so a status condition never keeps one.
 
-The module compiles route patterns during the build. A pattern that ends with `/**` also matches the bare prefix, which is how Nitro matches routes. Default production uses a separate plugin without filtering code.
+The build compiles route patterns. A pattern that ends with `/**` also matches the bare prefix, the same as Nitro. If you set no `exclude` or `sampling`, production uses a separate plugin with no filtering code.
 
 ## Drain records
 
-Use the Nitro hook when D1, Sentry, or another adapter owns the record:
+If D1, Sentry, or another adapter owns the record, use the Nitro hook:
 
 ```ts
 export default defineNitroPlugin((nitroApp) => {
@@ -222,16 +193,16 @@ export default defineNitroPlugin((nitroApp) => {
 })
 ```
 
-Set `drain: true` to enable this hook. `console` then defaults to `false`, because the hook owns the record. Set `console: true` to keep stdout output as well.
-Request drains use `event.waitUntil()`. Background `emit()` waits for every hook adapter and surfaces adapter failures.
+To turn on this hook, set `drain: true`. `console` then defaults to `false`, because the hook owns the record. To keep stdout output too, set `console: true`.
+Request drains use `event.waitUntil()`. Background `emit()` waits for every hook adapter and rejects if an adapter fails.
 
 ## Options
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| `enabled` | `true` | Emit Wide Events. `false` keeps Field enforcement and server imports. |
-| `request` | `true` | Collect one Wide Event for each request. |
-| `fields` | `[]` | Allow application Fields. |
+| `enabled` | `true` | Emit wide events. `false` keeps field enforcement and server imports. |
+| `request` | `true` | Collect one wide event for each request. |
+| `fields` | `[]` | Allow application fields. |
 | `service` | none | Add a service name. |
 | `exclude` | `[]` | Exclude routes that match a glob pattern. |
 | `sampling` | none | Set rates and keep conditions for production. |
@@ -240,7 +211,7 @@ Request drains use `event.waitUntil()`. Background `emit()` waits for every hook
 
 ## Benchmarks
 
-Run the production benchmarks on the target deployment runtime:
+Run the production benchmarks on the runtime you deploy to:
 
 ```bash
 pnpm test:bench
@@ -260,9 +231,9 @@ The Cloudflare fixture builds with the Workers preset, passes a Wrangler deploy 
 
 ## Scope
 
-The first version supports Nuxt server requests, flat primitive Fields, route exclusion, sampling, stdout, and a Nitro hook.
+This module covers Nuxt server requests, background operations, flat primitive fields, route exclusion, sampling, stdout, and a Nitro hook.
 
-It excludes browser logging, transports, audit logs, and production error presentation.
+It does not cover browser logging, transports, audit logs, or production error presentation.
 
 ## Sponsors
 

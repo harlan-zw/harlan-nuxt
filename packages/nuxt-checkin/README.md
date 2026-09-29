@@ -1,13 +1,45 @@
 # Nuxt Check-in
 
-Run deterministic checks from your Nuxt app and its modules.
-Discover definitions at build time. Execute them through a route or an external runner.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-## Install
+> Run deterministic checks from your Nuxt app and its modules, through a route or a CLI.
 
-```sh
-pnpm add @harlan-zw/nuxt-checkin
+## Why Nuxt Check-in?
+
+A site can return 200 on every page while its catalog goes stale or a queue backs up. You find out when a user does.
+
+- 🕳️ **Missing evidence reads as healthy**: A check that never ran or could not read its data leaves no trace in a pass/fail route.
+- 🧵 **Scattered probes**: Each site and module writes its own health script, with its own auth and output shape.
+- ⏱️ **Silent runners**: A scheduled check-in stops, and the last green report keeps looking current.
+
+Nuxt Check-in finds checks at build time. You run them through a route you own or through its CLI. Every report carries `coverage`, so a missing result never reads as a pass.
+
+## Features
+
+- 🔍 **Build-time discovery**: Files in `server/checks` register from every layer, and a duplicate ID stops the build.
+- 📊 **Coverage-aware reports**: A required check that is missing or unavailable marks the report incomplete.
+- 🧩 **Module integrations**: D1, Queue Job backlog, and Sentry checks register from module options.
+- 🔗 **Shared collection**: Checks that read the same evidence share one load per run.
+- 🖥️ **Shared CLI**: External and build checks run with exit codes and optional archives.
+- ✅ **Report validation**: `checkReport` catches a stale, mismatched, or incomplete report from an external runner.
+- 🧠 **Prompt items**: Site-specific analysis instructions travel in the report for a check-in agent.
+
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/nuxt-checkin
 ```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-checkin
+> ```
+
+The command adds the module to your Nuxt config:
 
 ```ts
 export default defineNuxtConfig({
@@ -17,7 +49,7 @@ export default defineNuxtConfig({
 
 The module scans `server/checks` in the app and every Nuxt layer.
 Use `checkin.dirs` to supply explicit paths relative to the app root.
-Tests, declaration files, and files starting with `_` are excluded.
+The scan skips tests, declaration files, and files that start with `_`.
 Each file must default-export a factory call with a literal `id`.
 Duplicate IDs stop the build. Discovery never executes check files.
 
@@ -44,7 +76,7 @@ export default defineCheck({
 Checks receive `event`, `now`, `signal`, and named `credentials`.
 Use `defineCheck<Event>()` when a custom check needs a typed request event.
 The runner supplies one observation time to every check.
-Keep domain evaluation pure when several callers need the same decision.
+If several callers need the same decision, keep the domain logic pure.
 
 ## Route
 
@@ -68,7 +100,7 @@ export default defineEventHandler(async (event) => {
 
 No route is installed automatically. The consuming app owns authentication.
 The virtual module uses static imports and remains server-only.
-Importing it loads definitions. Only `runChecks` performs the reads.
+Importing it loads definitions. Only `runChecks` does the reads.
 The registry refreshes when watched check files change during development.
 
 ## Results
@@ -76,31 +108,31 @@ The registry refreshes when watched check files change during development.
 | Result | Meaning |
 | --- | --- |
 | `pass(evidence)` | The check established its expected condition. |
-| `warn(reason, evidence)` | The warning threshold was met. |
-| `fail(reason, evidence)` | The failure threshold was met. |
-| `unavailable(reason)` | Evidence could not establish health. |
-| `skipped(reason)` | An explicit applicability decision prevented execution. |
+| `warn(reason, evidence)` | The check met its warning threshold. |
+| `fail(reason, evidence)` | The check met its failure threshold. |
+| `unavailable(reason)` | The evidence cannot show whether the condition is healthy. |
+| `skipped(reason)` | The check decided it does not apply, so it did not run. |
 
 The versioned report contains `identity`, `observedAt`, `severity`, `coverage`, ordered `results`, and `collections`.
 Each result includes its ID and duration.
 A failure stays visible even when another check has unavailable evidence.
 Warn and Fail results can set `coverage: 'incomplete'` when their evidence is partial.
 An empty registry has incomplete coverage.
-Missing IDs from `required` produce explicit unavailable results. Maintain this list independently from discovery.
-Never interpret `severity: pass` without checking `coverage`.
+Each `required` ID that is missing gets an unavailable result. Keep this list separate from discovery.
+Always read `coverage` before you trust `severity: pass`.
 
 Thrown exceptions become `Unavailable`. Raw exceptions stay out of the returned report.
 Use `onError(error, id)` to record them privately. Exceptions in that callback propagate.
-Evidence must contain JSON values. Check authors own evidence redaction.
+Evidence must contain JSON values. The check author must remove secrets from evidence.
 The default total deadline is 30 seconds. Expiry stops queued checks and cancels shared collection.
 Independent checks have a separate ten-second default deadline.
-Pass an AbortSignal to cancel a run. Checks must cooperate with cancellation for underlying work to stop.
+To cancel a run, pass an AbortSignal. Underlying work stops only if the check honors that signal.
 Do not use checks to perform repairs, deploy, send messages, or change Sentry state.
 
 ## Existing modules
 
 Each integration registers the same public factory that a site can import.
-Registration is explicit. It does not add default production queries to existing installations.
+You register each integration yourself. Installing a module adds no production queries by default.
 
 ```ts
 export default defineNuxtConfig({
@@ -137,22 +169,22 @@ Supply the read token through `runChecks(checks, { credentials: { sentry: token 
 Never put tokens in Nuxt module options. Options enter the generated registry.
 
 The D1 factory proves a read through the request's binding.
-The queue factory uses existing Queue Job backpressure SQL and excludes future scheduled work.
+The queue factory reuses the Queue Job backpressure SQL and ignores work scheduled for the future.
 It collects every queue once per database per run, using the supplied observation clock.
 Set `failMinimumReady` when failure requires both age and volume. Reservation rules remain independent.
 It expects the module's standard D1 tables. Missing or incompatible tables produce unavailable evidence.
 The Sentry factory reads retained unresolved issues through the organization endpoint and follows pagination.
-It explicitly selects the project and queries from the Unix epoch by default.
+It sets the project slug on the query and, by default, queries from the Unix epoch.
 Use `environment` and `region` (`us` or `de`) to scope production collection.
-Use `lookbackDays` only when deliberately checking a narrower window.
+Use `lookbackDays` only when you want a narrower window.
 It warns on unresolved issues. It does not infer user impact or investigate stacks.
-The default hundred-page limit and total deadline bound collection. Truncation produces incomplete coverage.
+A default limit of 100 pages and the total deadline bound collection. A truncated collection gives incomplete coverage.
 Known issues remain warnings with incomplete coverage when a later page returns an HTTP error.
-A transient HTTP error receives at most one retry, respecting Retry-After waits up to five seconds.
-Longer waits return unavailable evidence. Authorization failures are not retried.
-Validate live project access and retained-issue coverage before retiring an existing Sentry routine.
+A transient HTTP error gets at most one retry. The retry honors a Retry-After wait of up to five seconds.
+A longer wait returns unavailable evidence. The factory never retries an authorization failure.
+Before you retire an existing Sentry routine, confirm live project access and retained-issue coverage.
 
-Direct usage has the same behavior:
+A site file behaves the same way:
 
 ```ts
 // server/checks/queue.ts
@@ -183,13 +215,13 @@ nuxt.hook('checkin:register', (registry) => {
 
 The handler default-exports a public factory accepting `{ id, ...options }` and returning a Check.
 Handlers use absolute paths. Options must be JSON values.
-Contributions are collected after module setup, so registration does not depend on module order.
-Installing a contributing module without Nuxt Check-in leaves this integration inactive.
+Nuxt Check-in collects contributions after module setup, so module order does not matter.
+If Nuxt Check-in is not installed, a contributing module registers nothing.
 
 ## Runtime limits
 
 Cloudflare request bindings belong in authenticated route checks.
-GitHub, provider administration, and broad Sentry credentials belong in an external runner where possible.
+Where possible, keep GitHub, provider admin, and broad Sentry credentials in an external runner.
 External callers import public factories and call `runChecks` directly; they do not need the virtual registry.
 The core runtime imports no Nuxt, Node, or provider SDK code.
 
@@ -207,22 +239,22 @@ const summary = await context.collect(db, 'catalog.summary', async signal => ({
 ```
 
 Repeated calls share the same promise, including failures. Different collections against one resource run sequentially.
-Collection receives the run's signal. One consumer timing out does not cancel evidence needed by another.
+Collection receives the run's signal. If one consumer times out, evidence that another consumer needs keeps loading.
 The run cancels outstanding collection when it finishes. Underlying operations must support cancellation to stop work.
 No collection cache survives between runs. Credentials are copied and frozen for each run.
 
 `collections` reports duration, completion, and available request, rows-read, and byte counts.
-Missing measurements are unknown. A completed collection can still return an unhealthy or unavailable Check Result.
+A missing measurement means unknown. A completed collection can still produce an unhealthy or unavailable result.
 Queue collections include D1 rows-read metadata when the binding returns it.
 
 Direct callers can import `collectQueueEvidence` and `evaluateQueueCheck` from `@harlan-zw/nuxt-cf-jobs/checks`.
 Sentry callers can import `collectSentryIssues` from `@harlan-zw/nuxt-sentry/checks`.
-These are the same collectors used by module registration.
+Module registration uses the same collectors.
 
 ## External report validation
 
-The external runner owns schedules, credentials, storage, and independently maintained required IDs.
-`checkReport` validates an untrusted report against those expectations without accessing the network or storage.
+The external runner owns schedules, credentials, storage, and its own list of required IDs.
+`checkReport` validates an untrusted report against those expectations. It does not touch the network or storage.
 
 ```ts
 import { checkReport } from '@harlan-zw/nuxt-checkin/server'
@@ -234,12 +266,12 @@ const result = checkReport(await loadLatestReport(), {
 })
 ```
 
-Missing and stale reports are unavailable. Wrong identity, unknown schema versions, and missing required results are unavailable.
+These reports are unavailable: missing, stale, wrong identity, unknown schema version, or missing a required result.
 The validator recomputes health from individual results. Known failures retain incomplete coverage when other evidence is missing.
 An identity is optional for local `runChecks` calls; external validation always requires a matching identity.
 
-Run this validation from an independent schedule to detect a site check-in that stopped running.
-Retain the previous complete report with its original timestamp when a new run fails.
+Run this validation on its own schedule. It then catches a site check-in that stopped running.
+If a new run fails, keep the previous complete report with its original timestamp.
 This package does not install a scheduler, persistence service, or public route.
 
 ## Shared CLI
@@ -247,9 +279,9 @@ This package does not install a scheduler, persistence service, or public route.
 The module also scans `checks/external` and `checks/build` in every layer.
 Each file exports one check with a literal ID.
 Use `execution: 'external'` or `execution: 'build'` for module registrations.
-Server registrations retain the default execution context.
+Server registrations keep the default execution context.
 Discovered `.ts` and `.mts` build and external checks join Nuxt’s Node type project.
-Legacy Nuxt type configuration includes them too. JavaScript checking follows the app’s existing policy.
+Legacy Nuxt type configuration includes them too. JavaScript files follow the app’s existing type-check policy.
 IDs must be unique within each execution context.
 
 ```ts
@@ -292,7 +324,7 @@ export default defineReportCheck({
 The report helper rejects redirects and bounds response bytes.
 It reads the validation clock after receiving the response body.
 Omit `tokenEnv` for public reports. Use `authHeader` for Cookie or x-api-key authentication.
-Expected deployment and required IDs remain independent of the received report.
+The expected deployment and required IDs never come from the received report.
 
 Use `defineHttpCheck` for a status and optional text check.
 Set `attempts: 2` for one retry. Recovered failures remain in result evidence.
@@ -309,11 +341,11 @@ pnpm exec nuxt-checkin --save
 pnpm exec nuxt-checkin --since 2026-09-15T00:00:00Z
 ```
 
-Prepare discovers checks without running build checks or requiring a production build.
+`prepare` finds checks. It does not run build checks or need a production build.
 It writes `.nuxt/checkin/external.mjs`, a Node artifact containing only external checks and public configuration.
-Nuxt aliases are rejected in Node checks. Server handlers remain in the server virtual module.
-Prepare records custom build directories for later CLI runs.
-Use `--artifact path` to select an artifact explicitly.
+Node checks cannot use Nuxt aliases. Server handlers stay in the server virtual module.
+`prepare` records custom build directories for later CLI runs.
+To pick an artifact yourself, use `--artifact path`.
 Build checks run during `build:before`. Warnings, failures, or incomplete coverage stop the build.
 
 The CLI prints the shared JSON report.
@@ -322,7 +354,7 @@ Archives require `--save`. Files use mode `0600`; new directories use mode `0700
 Every attempt receives a unique archive file.
 The latest policy advances state only after complete passing coverage.
 The daily policy preserves the first complete report for each UTC day, including warnings and failures.
-Incomplete coverage never advances either baseline. Health verdicts and exit codes remain unchanged.
+Incomplete coverage never advances either baseline. Saving does not change health verdicts or exit codes.
 Omit `stateFile` for archives without baseline state.
 `DAILY_CHECKIN_DIR` overrides `save.dir` at execution time by default.
 The controller supplies this directory outside disposable worktrees.
@@ -331,7 +363,7 @@ If the selected variable is empty or unset, the CLI uses `save.dir`.
 
 ### Prompt items
 
-Sites can configure analysis instructions alongside their external checks:
+A site can add analysis instructions next to its external checks:
 
 ```ts
 export default defineNuxtConfig({
@@ -348,7 +380,7 @@ export default defineNuxtConfig({
 ```
 
 The CLI copies these items into the top-level `prompts` array in its JSON report and archive.
-The check-in agent interprets them using collected evidence.
+The check-in agent reads them against the collected evidence.
 The module never executes prompt text or sends it to a model.
 Prompt items cannot change check severity, coverage, or exit codes.
 The central daily-checkin Skill owns collection, storage, report writing, and publication rules.
@@ -356,8 +388,8 @@ Sites keep their checks, thresholds, credentials, and prompt items in module con
 
 Credentials resolve at execution time. Configuration contains environment names, never credential values.
 For file fallback, use `{ env: 'SENTRY_AUTH_TOKEN', files: [{ path: '~/.sentryclirc', section: 'auth', key: 'token' }] }`.
-Files are read in order when the environment credential is absent.
-Missing files are ignored. Other read failures remain visible.
+If the environment variable is not set, the CLI reads the files in order.
+It ignores a missing file. Other read failures stay visible.
 
 ```mermaid
 flowchart LR
@@ -372,14 +404,27 @@ flowchart LR
   cli --> report[JSON report and optional archive]
 ```
 
+## Sponsors
 
-## Pending stable release
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
 
-This branch prepares Check-in 0.2.0 and compatible integration releases:
-Cloudflare 0.4.2, Sentry 0.1.6, and Queue Jobs 0.2.4.
-These integration versions accept both Check-in 0.1 and 0.2, including the current 0.2 prerelease.
+## License
 
-Draft consumers currently use Check-in 0.2.0-alpha.0 with the previously released integrations.
-Their exact dependency override prevents pnpm from installing another Check-in version for an integration peer.
-After upgrading the integrations you use, remove that temporary override and use Check-in 0.2.0.
-The published alpha archive remains unchanged.
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-checkin/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-checkin/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-checkin
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-checkin.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-checkin
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-checkin/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

@@ -1,8 +1,42 @@
-# @harlan-zw/jev
+# Jev
 
-Nuxt-free Jev judgements: one client, the `ask` tag API, digest helpers, and eval replay math. Jev is a System One judge: it answers typed questions about one state with probabilities. It never generates text.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
 
-Pure TypeScript with one dependency, ohash, for sync digests: no Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. Use `@harlan-zw/nuxt-jev` for the Nuxt module, the decision runner, and the drizzle schema.
+> Ask Jev typed questions about one state and get probabilities back, with no Nuxt required.
+
+## Why Jev?
+
+A generative model answers a yes or no question with a paragraph. Your code then parses prose and guesses what it meant.
+
+- 🧾 **Prose instead of answers**: You parse free text to get a boolean, a label, or a rank.
+- 💥 **Thrown failures**: An HTTP error, a timeout, or a malformed answer throws in the middle of your request.
+- 🔑 **Unstable journal keys**: The same state with keys in a different order hashes to a new digest, so a stored answer never gets reused.
+- 🎚️ **Thresholds picked by feel**: Nothing tells you whether a probability band agrees with the answers you already have.
+
+Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text. This package is the Nuxt-free client for it: pure TypeScript with one dependency, ohash, for sync digests. It has no Nuxt, Nitro, or h3 code, and runs on Node 20+ and workers. For the Nuxt module, the decision runner, and the drizzle schema, use [`@harlan-zw/nuxt-jev`](../nuxt-jev).
+
+## Features
+
+- ⚖️ **Typed questions**: `noul`, `choice`, and `score` return a probability, a picked option, or a rubric level, never prose.
+- 🏷️ **`ask` tags**: Put the state and the question in one tagged template, and send a batch in one call.
+- 🧯 **Failures as values**: Every call resolves `Ok` or a tagged `JevFailure`, so nothing throws and nothing rejects.
+- 🔁 **Retries in the client**: The HTTP client retries with backoff inside one timeout window and validates each answer.
+- 🔑 **Order-stable digests**: `digestKey` and `canonicalJson` give the same key for the same state, whatever the key order.
+- 📊 **Eval replay math**: `summarizeReplay` and `suggestBand` measure agreement before you move a threshold.
+
+## Installation
+
+```bash
+pnpm add @harlan-zw/jev
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/jev
+> ```
 
 ## What you get
 
@@ -16,7 +50,11 @@ Pure TypeScript with one dependency, ohash, for sync digests: no Nuxt, no Nitro,
 
 ## Failure style
 
-Failures are values, never throws. The client resolves `{ _tag: 'Ok', result }` or `{ _tag: 'Err', failure }`, and every failure is one tagged `JevFailure`: `Http`, `Invalid`, `Network`, or `Timeout`. The `ask` API keeps the same contract: batches resolve to `{ _tag: 'Ok', answers }` or `{ _tag: 'Err', failure }`, and awaiting a tag on its own resolves to its answer or the same tagged failure. Nothing rejects.
+Failures are values. Nothing throws and nothing rejects.
+
+The client resolves `{ _tag: 'Ok', result }` or `{ _tag: 'Err', failure }`. Every failure is one tagged `JevFailure`: `Http`, `Invalid`, `Network`, or `Timeout`.
+
+The `ask` API keeps the same contract. A batch resolves to `{ _tag: 'Ok', answers }` or `{ _tag: 'Err', failure }`. An awaited tag on its own resolves to its answer or the same tagged failure.
 
 ## ask
 
@@ -39,7 +77,7 @@ if (result._tag === 'Ok') {
 }
 ```
 
-Interpolated objects go once each into `input` and their slots become paths, so the state travels with the question. Tags also send on their own when awaited. `askIf` resolves to a boolean above a threshold. Credentials come from options or `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
+Each interpolated object goes once into `input`, and its slot becomes a path. The state travels with the question. If you await a tag on its own, it sends on its own. `askIf` resolves to a boolean above a threshold. Credentials come from options, or from `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`.
 
 ## Client
 
@@ -57,17 +95,35 @@ if (call._tag === 'Ok')
 
 ## Jev 1.13 jagged edges
 
-The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). The rules this package and its consumers follow:
+The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13)). This package and its consumers follow these rules:
 
-- **Math, counting, dates stay in code.** Never ask the model to tally, compare numbers, or order dates. Compute counts and buckets in code; pass the computed value or a named bucket in state. Score answers rank and threshold; never interpolate a magnitude between two rubric levels.
-- **Literal reading.** Write the exact condition in `instructions`; put boundary cases in `criteria`. Where interpretation is unavoidable, split into two literal questions and combine in code.
-- **Criteria extend the instruction.** A `true` that means "no" performs worse. Align them.
-- **Thresholds do not carry across question types.** A Noul band and a Choice confidence answer different questions (`noul` compares with `probabilities['yes']`, not with `confidence`); the same question and its negation do not sum to 1. Tune each threshold on its own question; never enforce arithmetic identities between separate answers.
-- **Choice settles "which"; Noul settles "whether".** A Choice is relative (picks one option); each Noul is absolute (can be low for all). Use both on the same shortlist when you need both answers.
-- **Filter state before sending.** Unrelated detail costs accuracy (context rot) and the context window is bounded. Send only the fields the question names.
-- **Adversarial content is data the model does not treat as hostile.** Frame untrusted text explicitly as measurements to judge, never as instructions, and test those edges before acting on answers in production.
-- **No generation.** When the answer space is bounded, extract options in code or with a generative model and let Jev pick. It writes no text.
+- **Math, counting, dates stay in code.** Never ask the model to tally, compare numbers, or order dates. Compute counts and buckets in code, then pass the value or a named bucket in state. Use Score answers to rank and threshold. Never infer a magnitude between two rubric levels.
+- **Literal reading.** Write the exact condition in `instructions`. Put boundary cases in `criteria`. If a question needs interpretation, split it into two literal questions and combine them in code.
+- **Criteria extend the instruction.** A `true` that means "no" gives worse answers. Keep the two aligned.
+- **Thresholds do not carry across question types.** A Noul band and a Choice confidence answer different questions. `noul` compares with `probabilities['yes']`, not with `confidence`. A question and its negation do not sum to 1. Tune each threshold on its own question. Never expect arithmetic identities between separate answers.
+- **Choice settles "which"; Noul settles "whether".** A Choice is relative: it picks one option. Each Noul is absolute: all of them can be low. If you need both answers, ask both on the same shortlist.
+- **Filter state before sending.** Unrelated detail costs accuracy (context rot), and the context window has a limit. Send only the fields the question names.
+- **Adversarial content is data the model does not treat as hostile.** Frame untrusted text as measurements to judge, never as instructions. Test those edges before you act on answers in production.
+- **No generation.** If the answer space is bounded, extract the options in code or with a generative model. Then let Jev pick one.
+
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
 
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md). Forked from pithings/advocaat (MIT); question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js.
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/jev/LICENSE.md). Forked from pithings/advocaat (MIT); question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js.
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fjev/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/jev
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fjev.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/jev
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/jev/LICENSE.md

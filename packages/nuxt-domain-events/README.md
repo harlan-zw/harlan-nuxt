@@ -1,37 +1,36 @@
-<h1>@harlan-zw/nuxt-domain-events</h1>
+# Nuxt Domain Events
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Domain Events lets a producer fire a server-side event without importing any of the listeners that handle it. Registries are generated per layer and imported lazily.
+> Lazy, layer-aware domain events for Nuxt server runtimes.
 
-Status: experimental. APIs may change before the first release.
+## Why Nuxt Domain Events?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+If a producer calls its listeners directly, it must import every one of them. That coupling grows with each listener you add:
+
+- 🧶 **Coupled producers**: A new listener in another layer forces an edit to the producer.
+- 🎲 **Surprise execution**: A listener moves to deferred or queued work, and the producer does not know.
+- 🧳 **Leaked request state**: Request-scoped or mutable state ends up in a queue message.
+- 👻 **Rolled-back events**: A listener acts on a write that the transaction never committed.
+
+Nuxt Domain Events lets a producer fire a server-side domain event without importing any listener that handles it. The module generates a registry for each layer and imports it lazily.
 
 ## Features
 
-- 🗂️ **Generated lazy registries:** layer-aware, so producers never import a queued listener implementation.
-- 🎚️ **Explicit execution modes:** serial synchronous by default, with `sync` isolation, `deferred`, and `queued` as opt-ins.
-- 📦 **Two contract kinds:** `local` for request-scoped state, `transfer` for versioned JSON with a byte limit.
-- 🏷️ **Errors as tagged values:** unknown event, payload mismatch, lazy import failure, registry drift, queue failure, and after-commit misuse.
-- 💾 **After-commit publication:** stage queue rows beside domain SQL so a rollback leaves zero queue evidence.
-- 🚰 **One-call deferred drain:** `dispatchEventAndDrain` hands deferred work to the host `waitUntil`, or awaits it.
+- 🗂️ **Generated lazy registries**: A producer never imports its listeners, so a new listener in any layer leaves the producer untouched.
+- 🎚️ **Explicit execution modes**: A listener never runs later or in a queue by surprise, because every mode except serial synchronous is an opt-in.
+- 📦 **Two contract kinds**: Request-scoped state never leaks into a queue, because only `transfer` contracts reach queued listeners.
+- 🏷️ **Errors as tagged values**: You branch on a known tag, such as payload mismatch or registry drift, instead of parsing error messages.
+- 💾 **After-commit publication**: A rolled-back transaction leaves no queue rows, so no listener acts on data that never committed.
+- 🚰 **One-call deferred drain**: Producers stop repeating the same collect-and-drain loop for deferred work.
 
 ## Installation
 
 ```bash
-pnpm add @harlan-zw/nuxt-domain-events
+npx nuxi@latest module add @harlan-zw/nuxt-domain-events
 ```
 
 > [!TIP]
@@ -39,6 +38,8 @@ pnpm add @harlan-zw/nuxt-domain-events
 > ```bash
 > npx skilld add @harlan-zw/nuxt-domain-events
 > ```
+
+The command adds the module to `nuxt.config.ts`:
 
 ```ts
 export default defineNuxtConfig({
@@ -48,13 +49,13 @@ export default defineNuxtConfig({
 
 ## Execution modes
 
-Listeners run like Laravel listeners. Omitting `execution` means serial synchronous execution with propagated failure. That failure aborts the producer and prevents deferred work or queue publication. `sync` isolation, `deferred`, and `queued` are explicit alternatives.
+Listeners work like Laravel listeners. If you omit `execution`, listeners run one at a time, synchronously, and a failure propagates. That failure aborts the producer. It also stops deferred work and queue publication. To change this, opt into `sync` isolation, `deferred`, or `queued`.
 
-Queued listeners cannot declare `shouldHandle`; synchronous and deferred listeners may use it as an in-process condition. Queued listeners may declare a functional `failed(payload, context, error)` callback, invoked after terminal settlement.
+A queued listener cannot declare `shouldHandle`. A synchronous or deferred listener can use it as an in-process condition. A queued listener can declare a `failed(payload, context, error)` callback. The module calls it after the delivery reaches its final outcome.
 
 ## Deferred dispatch
 
-`dispatchEvent` schedules deferred listeners through `context.waitUntil`. `dispatchEventAndDrain` removes the collect-and-drain loop from every producer:
+`dispatchEvent` schedules deferred listeners through `context.waitUntil`. `dispatchEventAndDrain` saves each producer from writing its own collect-and-drain loop:
 
 ```ts
 await dispatchEventAndDrain('user:registered', payload, {
@@ -62,43 +63,43 @@ await dispatchEventAndDrain('user:registered', payload, {
 })
 ```
 
-If the host supplies `waitUntil`, deferred work is handed to it. If the host has no `waitUntil`, the deferred work is awaited before the call resolves. Deferred failures stay isolated in both paths.
+If the host supplies `waitUntil`, the call hands deferred work to it. If not, the call awaits deferred work before it resolves. In both cases, a deferred failure stays isolated.
 
 ## Queues
 
-`domainEvents.queues` names the logical queues that queued listeners may use. Omit it, or set it to `[]`, to derive the list from `cfJobs.queues`.
+`domainEvents.queues` names the logical queues that queued listeners may use. To derive the list from `cfJobs.queues`, omit it or set it to `[]`.
 
 ## Observer
 
-`domainEvents.observer` names a server module that exports `observeEventListener`. A relative path resolves against the layer that declares it, so a layer can ship its own observer. If no observer is configured, the module warns at build, and listener and dispatch failures reach stderr only.
+`domainEvents.observer` names a server module that exports `observeEventListener`. A relative path resolves against the layer that declares it, so a layer can ship its own observer. If you configure no observer, the build warns. Listener and dispatch failures then reach stderr only.
 
 ## Event contracts
 
-`local` event contracts may carry request-scoped or mutable state. They support synchronous listeners and same-isolate deferred `waitUntil` listeners, but never queued delivery.
+A `local` contract can carry request-scoped or mutable state. It supports synchronous listeners and deferred `waitUntil` listeners in the same isolate. It never supports queued delivery.
 
-`transfer` contracts own a versioned JSON codec and byte limit. Queued delivery parses that contract before importing or invoking the selected listener.
+A `transfer` contract owns a versioned JSON codec and a byte limit. Queued delivery parses the payload with that contract before it imports or calls the listener.
 
 ## Errors
 
-Runtime errors are tagged `Error` values and reject dispatch. Expected tags include unknown event, payload mismatch, lazy import failure, registry drift, queue failure, and after-commit misuse. Observer defects run the configured fallback, or `console.error`, without changing or relabelling the business outcome.
+A runtime error is a tagged `Error` value, and it rejects dispatch. The expected tags are unknown event, payload mismatch, lazy import failure, registry drift, queue failure, and after-commit misuse. If the observer itself fails, the module calls the configured fallback, or `console.error`. The business outcome and its label stay the same.
 
 ## Queued listeners
 
-Queued listeners require explicit idempotency and a caller-provided stable `eventId`. The generated delivery ID is stable from `eventId + listenerName`. Producer dispatch never imports a queued listener implementation.
+A queued listener needs explicit idempotency, and the caller must pass a stable `eventId`. The module derives a stable delivery ID from `eventId + listenerName`. Producer dispatch never imports a queued listener implementation.
 
 ## After-commit events
 
-After-commit flow uses `planEvent`, then `commitEventPlan`. In v1, every listener for that event must be queued with `publication: 'after-commit'`. D1 batch is non-interactive, so it cannot run ordinary listeners after domain SQL while still allowing their failure to roll back that SQL. Split the event contract when one producer needs both ordinary and after-commit listeners.
+The after-commit flow calls `planEvent`, then `commitEventPlan`. Every listener for that event must be queued with `publication: 'after-commit'`. A D1 batch is non-interactive. So it cannot run ordinary listeners after domain SQL and still let their failure roll back that SQL. If one producer needs both ordinary and after-commit listeners, split the event contract.
 
-The caller-supplied unit of work stages the adapter's unpublished D1 statements beside domain writes. It returns `rolled-back` with zero queue evidence, or the adapter's exact staged-delivery receipt only after D1 resolves. A failed send remains an unpublished durable row for recovery.
+The caller supplies the unit of work. It stages the adapter's unpublished D1 statements beside the domain writes. On rollback, it returns `rolled-back` and leaves no publication rows. Otherwise, it returns the adapter's exact staged-delivery receipt, and only after D1 resolves. A failed send stays as an unpublished durable row, so you can recover it.
 
 ## Cloudflare Jobs adapter
 
-The `./cf-jobs` adapter accepts the public `@harlan-zw/nuxt-cf-jobs/outbox` functions structurally. This keeps the event core runtime-neutral and the dependency one-way. Its generic delivery definition declares the static `maintenance` queue for `@harlan-zw/nuxt-cf-jobs` registry locality; the public outbox route override stores each listener job on the queue declared by that listener.
+You pass the public `@harlan-zw/nuxt-cf-jobs/outbox` functions to the `./cf-jobs` adapter, which types them by shape. So the event core stays runtime-neutral, and the dependency runs one way. The adapter's generic delivery definition declares the static `maintenance` queue, for `@harlan-zw/nuxt-cf-jobs` registry locality. The public outbox route override then stores each listener job on the queue that listener declares.
 
-## Not in v1
+## Not supported
 
-Deferred for now: mixed ordinary and after-commit listeners on one transaction-bound event, producer-time Laravel `shouldQueue`, cooperative listener timeouts, listener ordering contracts, grouped subscriber modules, dashboards, CLI, and compatibility shims.
+The module does not support these: mixed ordinary and after-commit listeners on one transaction-bound event, producer-time Laravel `shouldQueue`, cooperative listener timeouts, listener ordering contracts, grouped subscriber modules, dashboards, CLI, and compatibility shims.
 
 ## Sponsors
 

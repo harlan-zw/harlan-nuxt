@@ -1,35 +1,34 @@
-<h1>@harlan-zw/nuxt-use-query</h1>
+# Nuxt Use Query
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Use Query brings TanStack-shaped composables to Nuxt's own data layer, so caching, SWR, and invalidation run through the payload rather than alongside it.
+> Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.
 
-Status: experimental. APIs may change before the first scoped release.
+## Why Nuxt Use Query?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+A client query library keeps its own cache beside `useFetch`. You then keep two caches in sync by hand:
+
+- 🔁 **Two caches**: The query library cache and the Nuxt payload hold separate copies of the same data.
+- 🔗 **Hardcoded URLs**: Components embed API paths, so renaming an endpoint touches every caller.
+- 🧪 **Contract drift**: A changed response shape spreads through the app as `unknown`.
+- 🧵 **Shared SSR state**: A module-level cache on the server can hand one user's data to another.
+
+Nuxt Use Query adds TanStack-shaped composables to Nuxt's own data layer. Caching, SWR, and invalidation run through the Nuxt payload, so you have no second cache to keep in sync.
 
 ## Features
 
-- 🔄 **Queries and mutations:** `useNuxtQuery` wraps Nuxt `useFetch` with stale-time revalidation, polling, and enabled gates; `useNuxtMutation` adds invalidation and optimistic rollback.
-- 📇 **Typed RPC contracts:** `defineNuxtRpcQuery`, `defineNuxtRpcMutation`, `useNuxtRpcQuery`, and `useNuxtRpc` centralize Client -> API contracts in query folders with [Zod](https://zod.dev) request/response schemas.
-- 🗝️ **Cache control:** `invalidateNuxtQueries`, `getQueryData`, and `setQueryData` work with Nuxt payload and live `_asyncData` state.
-- ⚡ **Realtime bridge:** `useNuxtSubscription` pipes a WebSocket, SSE, or vendor SDK stream into the cache, with an optional `nuxtWebSocketSource` adapter built on [VueUse](https://vueuse.org).
-- 🧵 **SSR-safe by construction:** cache bookkeeping lives on the Nuxt app instance for per-request isolation.
+- 🔄 **Queries and mutations**: Pages refetch stale data, poll, and roll back failed optimistic writes without a second cache beside `useFetch`.
+- 📇 **Typed RPC contracts**: Components stop hardcoding API URLs, and [Zod](https://zod.dev) catches contract drift at the boundary instead of deep in the app.
+- 🗝️ **Cache control**: One write can refresh or patch every query it affects, in the Nuxt payload and in live `_asyncData` state.
+- ⚡ **Realtime bridge**: WebSocket, SSE, or vendor SDK messages mark the right queries stale, and your connection code stays yours ([VueUse](https://vueuse.org) adapter included).
+- 🧵 **SSR-safe by construction**: Cache state never leaks between users, because it lives on each request's Nuxt app instance.
 
 ## Installation
 
-Install `@harlan-zw/nuxt-use-query` in the consuming Nuxt site:
+Install `@harlan-zw/nuxt-use-query` in your Nuxt site:
 
 ```bash
 npx nuxi@latest module add @harlan-zw/nuxt-use-query
@@ -41,7 +40,7 @@ npx nuxi@latest module add @harlan-zw/nuxt-use-query
 > npx skilld add @harlan-zw/nuxt-use-query
 > ```
 
-If the site will define RPC contracts, add Zod as a direct app dependency:
+If your site defines RPC contracts, add Zod as a direct dependency:
 
 ```bash
 pnpm add zod
@@ -82,7 +81,7 @@ The module auto-imports:
 - `getQueryData`
 - `setQueryData`
 
-You can also import from subpaths when using the helpers outside Nuxt's auto-import scan:
+If you use the helpers outside Nuxt's auto-import scan, import them from subpaths:
 
 ```ts
 import { useNuxtMutation } from '@harlan-zw/nuxt-use-query/mutation'
@@ -98,30 +97,30 @@ import {
 
 ## Choosing a layer
 
-This module ships two layers that share one cache. Pick by the contract you have:
+The module has two layers, and both share one cache. Pick by who owns the contract:
 
 | Use this                                       | When                                                                                                                                       |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **RPC layer** (`defineNuxtRpc*` + `useNuxtRpcQuery` / `useNuxtRpc().execute`) | You own both sides of the call. Default for anything user-facing or imported in more than one place.                                       |
-| **Query layer** (`useNuxtQuery` / `useNuxtMutation` directly) | Escape hatch: third-party APIs you don't own, one-off internal calls, prototypes, file downloads / blobs where a Zod schema would be theatre. |
+| **RPC layer** (`defineNuxtRpc*` + `useNuxtRpcQuery` / `useNuxtRpc().execute`) | You own both sides of the call. Use it by default for user-facing calls and for calls imported in more than one place.                     |
+| **Query layer** (`useNuxtQuery` / `useNuxtMutation` directly) | Escape hatch for third-party APIs, one-off internal calls, prototypes, and file downloads or blobs, where a Zod schema adds nothing.        |
 
 The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache and respond to the same `invalidateNuxtQueries(prefix)` calls. You can mix them in one app.
 
-**Why the RPC default**: the operation object owns the API path, cache key, method, and Zod request/response schemas. Components import the operation, not the URL. Renaming an endpoint is a one-line change; the schema catches contract drift at the boundary instead of letting it propagate as `unknown` through the app.
+**Why RPC is the default:** the operation object owns the API path, cache key, method, and Zod request and response schemas. Components import the operation and never see the URL. If you rename an endpoint, you change one line. The schema catches contract drift at the boundary, before it spreads through the app as `unknown`.
 
-**Why the escape hatch exists**: writing a contract for a fetch you call once is overhead with no payoff. Reach for `useNuxtQuery` directly when there is no second caller to protect.
+**Why the escape hatch exists:** a contract for a fetch you call once costs time and protects nothing. If no second caller exists, call `useNuxtQuery` directly.
 
-**Mutations stay manual.** There is no `useNuxtRpcMutation` composable; `useNuxtMutation` plus `rpc.execute(operation, body)` is the recommended pattern (see [Execute Mutations](#4-execute-mutations) below). The thing worth writing by hand is the `invalidates` list, since a mutation operation does not know which read queries it should refresh; an auto-wrapper would hide exactly the decision you should make explicitly.
+**Mutations stay manual.** The package has no `useNuxtRpcMutation` composable. Use `useNuxtMutation` with `rpc.execute(operation, body)` (see [Execute Mutations](#4-execute-mutations)). You write the `invalidates` list by hand, because a mutation operation cannot know which queries to refresh. An auto-wrapper would hide that decision from you.
 
 ## Query defaults
 
-`useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow it:
+`useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow:
 
 - `staleTime` defaults to `0`, so cached data is stale immediately and can refetch on mount, focus, or reconnect.
-- `gcTime` defaults to 5 minutes for inactive payload eviction.
+- `gcTime` defaults to 5 minutes. After that, inactive payload data is evicted.
 - `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect` default to `true`; pass `'always'` to bypass the stale check.
-- `staleTime: Infinity` and `staleTime: 'static'` opt into immutable data until explicit invalidation.
-- `isPlaceholderData`, `isPending`, and `isFetching` are exposed alongside the Nuxt `status` ref.
+- `staleTime: Infinity` and `staleTime: 'static'` treat data as immutable until you invalidate it.
+- `isPlaceholderData`, `isPending`, and `isFetching` sit beside the Nuxt `status` ref.
 
 ## Recommended site pattern
 
@@ -164,11 +163,11 @@ export const sitePatchSchema = z.object({
 export type Site = z.output<typeof siteSchema>
 ```
 
-Use the same schemas in server routes and client query operations so request and response contracts stay aligned.
+Use the same schemas in server routes and in client query operations. Then both sides agree on the request and response shape.
 
 ### 2. Define Query Operations
 
-Define API operations beside the feature that owns them, and import shared Zod schemas from a contracts folder. Components should consume operations, not hardcoded URLs.
+Define each API operation beside the feature that owns it. Import the shared Zod schemas from the contracts folder. Components use operations and never hardcode URLs.
 
 ```ts
 // app/queries/sites.ts
@@ -192,11 +191,11 @@ export const siteQueries = defineNuxtQueryGroup('sites', {
 })
 ```
 
-Keep the operation object as the single owner of the API path, cache key, method, body schema, and response schema.
+The operation object is the one owner of the API path, cache key, method, body schema, and response schema.
 
 #### Defer Large Schema Groups
 
-Load a schema group when its Zod code adds too much to the first client chunk:
+If the Zod code makes the first client chunk too large, defer it with a schema group:
 
 ```ts
 const siteSchemas = defineNuxtRpcSchemaGroup(
@@ -218,11 +217,11 @@ export const siteQueries = defineNuxtQueryGroup('sites', {
 })
 ```
 
-The module loads once. Every selected schema keeps exact input and output types.
+The contracts module loads once. Every selected schema keeps its exact input and output types.
 
 Parsing always waits for the schema group. A load failure returns a retryable `schema-load` RPC error.
 
-Cached POST query bodies stay eager. Their parsed value forms the synchronous cache key.
+Cached POST query bodies still parse eagerly, because the parsed body forms the synchronous cache key.
 
 ### 3. Use Queries In Components
 
@@ -255,7 +254,7 @@ const siteQuery = useNuxtRpcQuery(
 </template>
 ```
 
-`useNuxtRpcQuery` wraps `useNuxtQuery`, so it accepts the same cache and refetch options while validating the response with the operation's Zod schema. Both layers share one cache: an `invalidateNuxtQueries(prefix)` triggered from an RPC mutation will refresh any plain `useNuxtQuery` reads under the same prefix and vice versa.
+`useNuxtRpcQuery` wraps `useNuxtQuery`. It takes the same cache and refetch options, and it validates the response with the operation's Zod schema.
 
 ### 4. Execute Mutations
 
@@ -270,7 +269,7 @@ async function saveSite(name: string | null) {
 }
 ```
 
-Use `useNuxtMutation` when the view needs pending/error state, lifecycle hooks, or optimistic cache writes:
+If the view needs pending or error state, lifecycle hooks, or optimistic cache writes, use `useNuxtMutation`:
 
 ```ts
 import type { Site } from '~~/shared/contracts/sites'
@@ -304,7 +303,7 @@ await updateSite.mutate({ name: 'Docs' })
 
 ## Escape hatch: `useNuxtQuery` directly
 
-Skip the RPC layer when the contract isn't yours to define: third-party APIs, one-off internal calls, prototypes, file downloads, or any request where a Zod schema would be ceremony with no payoff:
+Skip the RPC layer when the contract is not yours to define, or when a Zod schema adds nothing. Examples are third-party APIs, one-off internal calls, prototypes, and file downloads.
 
 ```ts
 const search = ref('')
@@ -318,21 +317,21 @@ const { displayData, error, isFetching, refresh } = useNuxtQuery('/api/sites', {
 })
 ```
 
-`useNuxtQuery` passes through Nuxt `useFetch` options, and adds:
+`useNuxtQuery` accepts every Nuxt `useFetch` option and adds these:
 
 - `key`: required stable cache key.
-- `enabled`: disables the initial request and later refreshes until true.
+- `enabled`: blocks the first request and later refreshes until it is true.
 - `staleTime`: time in milliseconds before cached data is stale. Use `Infinity` or `'static'` for immutable data.
 - `gcTime`: time before inactive payload data is evicted. Defaults to 5 minutes.
 - `keepPreviousData`: exposes previous data through `displayData` while a new key loads. Defaults to true.
 - `refetchInterval`: polling interval in milliseconds.
 - `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect`: pass `true`, `false`, or `'always'`.
 
-Reads from `useNuxtQuery` live in the same cache as RPC queries, so an `invalidateNuxtQueries('sites:')` call from either layer refreshes both.
+`useNuxtQuery` shares the cache with RPC queries, so `invalidateNuxtQueries('sites:')` from either layer refreshes both.
 
 ### Server Deadline
 
-Set a server deadline for data that should not delay the whole render:
+If some data should not hold up the whole render, set a server deadline:
 
 ```ts
 const siteQuery = useNuxtRpcQuery(siteQueries.detail(siteId), {
@@ -379,7 +378,7 @@ if (previous)
 
 ## Realtime: `useNuxtSubscription`
 
-`useNuxtSubscription` bridges a realtime message stream into the cache. It does **not** own a connection: you inject the transport through `source`, and each message turns into explicit cache operations. The connection (auth, channels, reconnect) stays in whatever already owns it: a [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) module, a vendor SDK, raw `useWebSocket`. This is the standard seam from "a message arrived" to "this read is now stale".
+`useNuxtSubscription` turns realtime messages into explicit cache operations. It does **not** own a connection. You pass the transport in through `source`. The connection, with its auth, channels, and reconnect logic, stays with whatever owns it now: a [WebSocket](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) module, a vendor SDK, or raw `useWebSocket`. The subscription is the one place where "a message arrived" becomes "this query is now stale".
 
 ```ts
 import { z } from 'zod'
@@ -398,11 +397,15 @@ useNuxtSubscription({
 })
 ```
 
-It mirrors the rest of the package: callbacks run inside the Nuxt context (so the global cache helpers and composables resolve), failures surface through `onError` and an `error` ref rather than being swallowed, and `status` reports bridge establishment (`idle` / `connecting` / `active` / `error`).
+It follows the same rules as the rest of the package:
 
-**`source` may call composables.** It runs in its own effect scope, so if your transport is itself a composable (`useWebSocket`, a channel composable), call it directly in `source`; its `onScopeDispose` and watchers are torn down with the subscription. Create them synchronously (before any `await`); only the synchronous portion of an async source is scoped.
+- Callbacks run inside the Nuxt context, so the global cache helpers and composables resolve.
+- Failures reach `onError` and an `error` ref. Nothing is swallowed.
+- `status` reports the connection state of the subscription: `idle`, `connecting`, `active`, or `error`.
 
-**Reconnect is a boundary you wire up yourself.** The bridge only sees messages that arrive; events missed while the socket was down are not its concern. Cold-start recovery stays with `useNuxtQuery`'s refetch-on-mount. For mid-session reconnects, run `onReconnect`, typically a wider invalidation that catches up everything that drifted while disconnected. If the transport exposes a connection-status ref, `ctx.resyncOn` wires it for you (it fires `onReconnect` on every reconnect, never the initial connect); otherwise call `ctx.resync()` yourself:
+**`source` may call composables.** `source` runs in its own effect scope. If your transport is a composable, such as `useWebSocket` or a channel composable, call it directly in `source`. Its `onScopeDispose` handlers and watchers stop when the subscription stops. Call composables before the first `await`, because only the synchronous part of an async `source` is scoped.
+
+**You wire up reconnect yourself.** The subscription only sees messages that arrive. It never sees messages sent while the socket was down. On a cold start, `useNuxtQuery` refetches on mount. For a reconnect mid-session, use `onReconnect`, usually with a wider invalidation that catches up on what changed. If the transport exposes a connection status ref, pass it to `ctx.resyncOn`. It fires `onReconnect` on every reconnect, never on the first connect. Otherwise, call `ctx.resync()` yourself:
 
 ```ts
 useNuxtSubscription({
@@ -415,7 +418,7 @@ useNuxtSubscription({
 })
 ```
 
-**Coalescing is yours.** Each `invalidateNuxtQueries` triggers a refresh, so a burst of progress events means a burst of refetches. For chatty channels, debounce inside `onMessage` (the package leaves this decision to you):
+**You own coalescing.** Each `invalidateNuxtQueries` call starts a refresh, so a burst of progress events causes a burst of refetches. If a channel is chatty, debounce inside `onMessage`:
 
 ```ts
 import { useDebounceFn } from '@vueuse/core'
@@ -426,7 +429,7 @@ useNuxtSubscription({ source: connectSocket, onMessage: () => sync() })
 
 ### WebSocket Source
 
-`nuxtWebSocketSource` is a ready-made `source` over VueUse's `useWebSocket` (already a dependency, so no extra weight). It maps frames to `ctx.push`, calls `ctx.resync()` on every reconnect, and closes the socket on teardown. Heartbeat and auto-reconnect are VueUse built-ins, passed straight through:
+`nuxtWebSocketSource` is a ready-made `source` built on VueUse's `useWebSocket`. VueUse is already a dependency, so it adds no weight. It sends each frame to `ctx.push`, calls `ctx.resync()` on every reconnect, and closes the socket on teardown. It passes the VueUse heartbeat and auto-reconnect options straight through:
 
 ```ts
 useNuxtSubscription({
@@ -440,11 +443,11 @@ useNuxtSubscription({
 })
 ```
 
-String frames are JSON-parsed by default (non-JSON frames pass through for `schema` to handle); pass `deserialize` to override. For other transports (SSE, a vendor SDK), write a `source` that calls `ctx.push` per message and returns a cleanup function.
+By default, it parses string frames as JSON. A frame that is not JSON passes through unchanged, for `schema` to handle. To change this, pass `deserialize`. For other transports, such as SSE or a vendor SDK, write a `source` that calls `ctx.push` for each message and returns a cleanup function.
 
 ## RPC error handling
 
-RPC clients can attach shared telemetry or toast handling. `$fetch` / HTTP failures and Zod request/response validation failures are normalized before they reach hooks or callers.
+An RPC client can attach shared telemetry or toast handling. The client normalizes each failure before it reaches a hook or caller. This covers `$fetch` and HTTP failures, and Zod request and response validation failures.
 
 ```ts
 import { toHumanNuxtRpcError } from '@harlan-zw/nuxt-use-query/rpc'
@@ -460,7 +463,7 @@ await rpc.execute(siteQueries.update(siteId.value), { name: 'Docs' }, {
 })
 ```
 
-`useNuxtRpcQuery` takes its own `onError`. The client hook above covers `rpc.query` / `rpc.execute` only, so a reactive query needs this one:
+The client hook above covers only `rpc.query` and `rpc.execute`. A reactive query needs its own `onError` on `useNuxtRpcQuery`:
 
 ```ts
 const sites = useNuxtRpcQuery(siteQueries.list(), {
@@ -470,7 +473,7 @@ const sites = useNuxtRpcQuery(siteQueries.list(), {
 })
 ```
 
-It fires once per failure, in the browser only. A failure raised during SSR is transferred in the payload and reported on hydration, so it is never reported twice.
+It fires once per failure, in the browser only. A failure during SSR travels in the payload and is reported on hydration, so it never reports twice.
 
 A `NuxtRpcError` is a real `Error` named `NuxtRpcError`. It carries the `type` discriminant and its variant payload, so `captureException` keeps the message and stack instead of stringifying a plain object.
 
@@ -478,13 +481,13 @@ The module registers a payload reducer and reviver for it, so a failure raised d
 
 ### Response Validation: `strict` / `lenient` / `auto`
 
-`responseValidation` controls what happens when a response payload doesn't match its Zod schema:
+`responseValidation` sets what happens when a response payload does not match its Zod schema:
 
 - **`strict`**: throws a `response-validation` `NuxtRpcError`.
-- **`lenient`**: recovers instead — the server's word wins over a stale or over-eager client contract. Returns the raw, unparsed payload, calls `onError` with `recovered: true` on the event (so telemetry can still see the mismatch), and logs the normalized error with `console.error` on the client.
-- **`auto`** (the default): resolves to `strict` in a dev build and `lenient` in production, using Nuxt's `import.meta.dev`. A mismatch is a bug you want to see immediately while developing; in production it shouldn't blank the page over one bad row.
+- **`lenient`**: recovers, because the server wins over a stale or over-eager client contract. It returns the raw payload unparsed and calls `onError` with `recovered: true`, so telemetry still sees the mismatch. On the client, it also logs the normalized error with `console.error`.
+- **`auto`** (the default): uses `strict` in a dev build and `lenient` in production, based on Nuxt's `import.meta.dev`. In development, you want to see a mismatch at once. In production, one bad row should not blank the page.
 
-Request bodies always validate strictly, regardless of this setting — only response payloads can be lenient.
+Request bodies always validate strictly. Only response payloads can be lenient.
 
 Override the default per operation:
 
@@ -501,23 +504,23 @@ export const siteQueries = defineNuxtQueryGroup('sites', {
 })
 ```
 
-Or set a default once, on `useNuxtRpc(...)`, `createNuxtRpcClient(...)`, or `useNuxtRpcQuery(operation, { responseValidation: 'auto' | 'strict' | 'lenient' })`. Resolution order: **the operation's own `responseValidation` wins, then the client/scope default, then `'auto'`.**
+You can also set a default once, on `useNuxtRpc(...)`, `createNuxtRpcClient(...)`, or `useNuxtRpcQuery(operation, { responseValidation: 'auto' | 'strict' | 'lenient' })`. Resolution order: **the operation's own `responseValidation` wins, then the client or scope default, then `'auto'`.**
 
-A schema slot that implements only `parse` (no `safeParse`), such as a deferred `defineNuxtRpcSchemaGroup` entry, still works under lenient validation: it falls back to a try/catch around `parse` instead of calling `safeParse` directly.
+Lenient validation also works for a schema slot with `parse` and no `safeParse`, such as a deferred `defineNuxtRpcSchemaGroup` entry. In that case it wraps `parse` in a try/catch.
 
-`isDev` (also settable on `useNuxtRpc`, `createNuxtRpcClient`, and `useNuxtRpcQuery`) overrides how `'auto'` picks dev vs. production — it defaults to reading `import.meta.dev` and only needs setting if that isn't the right dev/prod signal for a given client, or in a test that wants to force one branch of `'auto'`.
+`isDev` overrides how `'auto'` picks between dev and production. You can set it on `useNuxtRpc`, `createNuxtRpcClient`, and `useNuxtRpcQuery`. It defaults to `import.meta.dev`. Set it only if `import.meta.dev` is the wrong signal for a client, or if a test must force one branch of `'auto'`.
 
-`useNuxtRpcQuery`'s own `onError` (the one covering the reactive path — see [RPC error handling](#rpc-error-handling) above) also fires for a recovered mismatch, tagged `recovered: true`, on top of the genuine-failure case it already covers. This fires wherever the fetch actually ran — including during SSR — because a recovered mismatch never throws, so it never reaches the AsyncData error/payload machinery a real failure does, and there's no later hydration re-run of `transform` to catch it on the client.
+The `onError` on `useNuxtRpcQuery` (see [RPC error handling](#rpc-error-handling)) also fires for a recovered mismatch, with `recovered: true`. Unlike a real failure, a recovered mismatch fires where the fetch ran, SSR included. It never throws, so it never reaches the AsyncData error and payload path. Hydration does not run `transform` again, so the client would never see it.
 
 ## Server fetch telemetry
 
-Enable server-side fetch telemetry to wrap Nitro's global `$fetch` during SSR. It also applies a default server `$fetch` timeout unless a call or created fetcher already provides one. It logs:
+Server fetch telemetry wraps Nitro's global `$fetch` during SSR. It also sets a default server `$fetch` timeout, unless a call or a created fetcher sets its own. It logs these warnings:
 
 - `slow fetch` when a completed server fetch exceeds `slowFetchThreshold`.
 - `large HTTP payload` when a completed server fetch's response `Content-Length` exceeds `largePayloadThreshold` (default `300_000` bytes).
 - `fetch timeout` when a server fetch is aborted by the configured timeout.
-- `fetch waterfall` when one incoming request runs a chain of dependent fetches. The rule measures chain depth, not parallelism: a render can be six levels deep and seven fetches wide at each level, which is a waterfall even though it looks highly parallel. A chain is reported when the fetch span exceeds `waterfallThreshold`, the chain holds at least `waterfallMinChainDepth` serial levels, it explains at least `waterfallMinCriticalPathShare` of the wall time, and it costs at least `waterfallMinChainBeyondSlowestMs` more than its slowest single link. The warning lists the critical path plus an aligned timeline of tracked `$fetch` calls.
-- `duplicate fetch` when one incoming request repeats the same internal GET **path** at least `duplicateFetchThreshold` times. The query string is collected as a variant, not used as part of the key, because the query cache already coalesces identical urls. The repeat that costs real time is one handler entered once per filtered slice.
+- `fetch waterfall` when one incoming request runs a chain of dependent fetches. The rule measures chain depth. A render six levels deep with seven parallel fetches per level looks parallel, but it is still a waterfall. The module reports a chain when all of these hold: the fetch span exceeds `waterfallThreshold`, the chain has at least `waterfallMinChainDepth` serial levels, it covers at least `waterfallMinCriticalPathShare` of the wall time, and it takes at least `waterfallMinChainBeyondSlowestMs` longer than its slowest single link. The warning lists the critical path and an aligned timeline of tracked `$fetch` calls.
+- `duplicate fetch` when one incoming request repeats the same internal GET **path** at least `duplicateFetchThreshold` times. The key ignores the query string and records it as a variant, because the query cache already merges identical URLs. The costly repeat is one handler called once for each filtered slice.
 - `nested fetch` when internal Nitro fetches chain at least `nestedFetchDepthThreshold` levels deep.
 - `recursive fetch` when an internal Nitro fetch calls a route already in its request stack.
 
@@ -545,11 +548,15 @@ export default defineNuxtConfig({
 })
 ```
 
-Use `telemetry: true` for the defaults. Set `timeout: false` to disable the default timeout, or pass `timeout` per `$fetch` call to override it. Set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false` to disable those specific internal-fetch warnings. Set `debug: true` to also log per-fetch timing and per-request summaries, including the per-request timeline. Set `console: false` to keep hook events enabled while suppressing package console output, including slow fetch, large payload, timeout, waterfall, duplicate, nested, and recursive warnings.
+For the defaults, use `telemetry: true`. To disable the default timeout, set `timeout: false`. To override it for one call, pass `timeout` to that `$fetch` call. To disable an internal fetch warning, set `duplicateFetchThreshold: false`, `nestedFetchDepthThreshold: false`, or `recursiveFetchWarning: false`. To also log per-fetch timing and per-request summaries with their timelines, set `debug: true`. To keep hook events but silence every package console warning, set `console: false`.
 
-Keep every `slowFetchThreshold` below `timeout`. A fetch is aborted at the timeout, so a threshold at or above it can never be reached and the signal is dead. The module warns at build time when a default or per-host threshold breaks this rule. To turn slow detection off, set the threshold to `false`; do not raise it above the timeout.
+Keep every `slowFetchThreshold` below `timeout`. The timeout aborts the fetch, so a threshold at or above it never fires. The module warns at build time if a default or per-host threshold breaks this rule. To turn off slow detection, set the threshold to `false`. Do not raise it above the timeout.
 
-`largePayloadThreshold` defaults to `300_000` bytes (mirroring Sentry's Large HTTP Payload detector). Like `slowFetchThreshold`, it accepts a per-host map so you can mute an upstream whose big responses are expected while keeping detection everywhere else, a plain `false`/`0` to turn it off globally, or a per-`$fetch`-call override:
+`largePayloadThreshold` defaults to `300_000` bytes, the same as Sentry's Large HTTP Payload detector. Like `slowFetchThreshold`, it accepts these forms:
+
+- A per-host map, to mute one upstream whose large responses are expected.
+- `false` or `0`, to turn detection off everywhere.
+- An override on a single `$fetch` call.
 
 ```ts
 const largePayloadThreshold = {
@@ -563,11 +570,11 @@ const largePayloadThreshold = {
 // or per call:  $fetch('/api/export', { largePayloadThreshold: false })
 ```
 
-Detection is **header-only**: it reads the response `Content-Length` (wire bytes, so compressed when the response is encoded) and never sizes the parsed body, keeping it cheap on the hot path. Responses that omit `Content-Length` (streamed/chunked) are silently skipped, and the capture interceptor is skipped for muted hosts and per-call opt-outs.
+Detection reads **headers only**. It checks the response `Content-Length`, which counts wire bytes, so an encoded response counts at its compressed size. It never measures the parsed body, so it stays cheap on the hot path. It skips a response with no `Content-Length`, such as a chunked one, and logs nothing. It also skips the capture interceptor for muted hosts and per-call opt-outs.
 
-Telemetry also emits hook events so apps can send data to their own logger/APM without parsing console output.
+Telemetry also emits hook events. Your app can send them to its own logger or APM without parsing console output.
 
-During SSR, fetches made through `useFetch`, `useRequestFetch`, Nitro `event.$fetch`, and the default `useNuxtRpc()` client are attributed to the active request and included in the request summary. A raw app-side `$fetch('/api/...')` still emits the fetch hook, but Nuxt may not expose request context to that global call, so `event.request` and summary attribution can be absent. Use `useRequestFetch()` or the default `useNuxtRpc()` fetcher when request attribution matters.
+During SSR, the module ties each fetch to the active request and adds it to the request summary. This covers `useFetch`, `useRequestFetch`, Nitro `event.$fetch`, and the default `useNuxtRpc()` client. A raw app-side `$fetch('/api/...')` still emits the fetch hook. But Nuxt may not give that global call the request context, so `event.request` and summary attribution can be missing. If attribution matters, use `useRequestFetch()` or the default `useNuxtRpc()` fetcher.
 
 For server `$fetch` telemetry, attach Nitro hooks from a server plugin:
 
@@ -632,7 +639,7 @@ export default defineNuxtPlugin((nuxtApp) => {
 
 ## Contract enforcement
 
-Enable build-time enforcement when a project is ready to make the pattern mandatory:
+When a project is ready to make the pattern mandatory, enable build-time enforcement:
 
 ```ts
 export default defineNuxtConfig({
@@ -660,7 +667,7 @@ With enforcement enabled:
 
 - API path literals must live in configured query directories.
 - Query files must define Zod-backed RPC operations.
-- Server API routes can be required to import shared contracts.
+- You can require server API routes to import shared contracts.
 
 ### Path Patterns
 
@@ -671,11 +678,11 @@ With enforcement enabled:
 
 ### What The Scanner Accepts
 
-- Server code is exempt from `api-literal-outside-query`. A route, a middleware, and a server util all read or call internal API paths by design. `server-route-missing-contract` still polices the routes.
+- Server code is exempt from `api-literal-outside-query`, because routes, middleware, and server utils call internal API paths by design. `server-route-missing-contract` still checks the routes.
 - Operation factories resolve through aliases. `import { defineNuxtRpcQuery as defineProQuery }`, `export { defineNuxtRpcQuery as defineProQuery }`, and `const defineProQuery = defineNuxtRpcQuery` all count as operations.
 - Inside a query directory, any factory call whose first argument is an operation object counts as an operation. The object must name a `path` plus a `key` (query) or a `method` (mutation). This covers a layer's own scoped factory, whose name cannot be resolved across files.
 
-Start without enforcement while migrating an existing site, then enable it once queries and contracts have been moved into the recommended directories.
+If you are migrating an existing site, start without enforcement. Enable it after you move the queries and contracts into the recommended directories.
 
 ## Sponsors
 
