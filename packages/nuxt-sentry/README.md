@@ -1,32 +1,31 @@
-<h1>@harlan-zw/nuxt-sentry</h1>
+# Nuxt Sentry
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Sentry gives every site you run one Report Policy. It registers the client and server Sentry clients and decides who may report. The same Drop Rules and Redaction Rules run on both sides.
+> One Sentry Report Policy for every Nuxt site, on the client and the server.
 
-It does not wrap the Sentry SDK. Your code keeps importing `@sentry/nuxt` and `@sentry/cloudflare` directly.
+## Why Nuxt Sentry?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+Every Nuxt site that reports to Sentry needs the same setup. Each copy drifts in its own way.
+
+- 💻 **Local builds report as production**: `nuxt preview` and `wrangler dev` run with `NODE_ENV=production`, so your laptop sends Error Reports to the live project.
+- 🔑 **Secrets leave in Error Reports**: Tokens, passwords, and query strings ride along in request data and error messages.
+- 🔇 **Noise buries real errors**: Browser extension errors, expected status codes, and aborted fetches crowd out the errors you need to fix.
+- 🔀 **Client and server disagree**: Each side gets its own drop logic and release name, so one deploy looks like two.
+
+Nuxt Sentry gives every site one Report Policy, with the same Drop Rules and Redaction Rules in the browser and on the server. It does not wrap the Sentry SDK; your code keeps importing `@sentry/nuxt` and `@sentry/cloudflare` directly.
 
 ## Features
 
-- 🚦 **One enable gate:** `wrangler dev` and `nuxt preview` builds never report to Sentry as production.
-- 🧹 **Redaction Rules:** tokens and passwords never leave in an Error Report, from the browser or the server.
-- 🎯 **Drop Rules:** browser extension noise, expected status codes, and transient upstream failures stop burying the errors you need to fix.
-- 🏷️ **Release and environment naming:** client and server Error Reports from one deploy always carry the same release and environment.
-- 📦 **Registered from the module:** `@harlan-zw/nuxt-dx` bundle reports name this package, so you can see what Sentry costs your bundle.
-- ☁️ **Cloudflare Worker version tags:** each Error Report names the exact Worker version that failed.
+- 🚦 **One enable gate**: `wrangler dev` and `nuxt preview` builds never report to Sentry as production.
+- 🧹 **Redaction Rules**: Tokens and passwords never leave in an Error Report, from the browser or the server.
+- 🎯 **Drop Rules**: Browser extension noise, expected status codes, and transient upstream failures stop burying the errors you need to fix.
+- 🏷️ **Release and environment naming**: Client and server Error Reports from one deploy always carry the same release and environment.
+- 📦 **Registered from the module**: `@harlan-zw/nuxt-dx` bundle reports name this package, so you can see what Sentry costs your bundle.
+- ☁️ **Cloudflare Worker version tags**: Each Error Report names the exact Worker version that failed.
 
 ## Installation
 

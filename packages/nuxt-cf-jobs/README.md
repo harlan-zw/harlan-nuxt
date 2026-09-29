@@ -1,29 +1,30 @@
-<h1>@harlan-zw/nuxt-cf-jobs</h1>
+# Nuxt CF Jobs
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Typed Cloudflare Queue jobs for Nuxt, with a Laravel-style API.
+> Typed Cloudflare Queue jobs for Nuxt, with a Laravel-style API.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+## Why Nuxt CF Jobs?
+
+Cloudflare Queues give you a producer binding and a consumer hook. You write everything between them yourself:
+
+- 🧾 **Untyped payloads**: Each dispatch site retypes the payload, so a renamed field breaks in the consumer at runtime.
+- 🔀 **Routing glue**: You map each job to its producer binding by hand, and your Wrangler config drifts from that map.
+- 💥 **Lost jobs**: A failed send or a crashed run drops the job and its failure history.
+- ⏰ **Duplicated cron**: Each schedule lives twice, once in Nitro config and once in Wrangler config.
+
+Nuxt CF Jobs generates a typed job registry from `server/jobs` and routes each job to its queue binding. D1 durability, cron, and realtime progress are opt-in.
 
 ## Features
 
-- 📁 **File-based typed jobs:** you never hand-write a job registry or retype a payload at each dispatch site.
-- ☁️ **Cloudflare Queues:** each job reaches the right producer binding without routing glue code per queue.
-- 🗄️ **Optional D1 durability:** a lost send or a crashed run no longer loses the job or its failure history.
-- ⏰ **Scheduled tasks:** you write each cron once, beside its task, instead of copying it into Nitro and Wrangler config.
-- 📡 **Realtime progress:** your UI shows live job and batch progress without a polling endpoint you build yourself.
+- 📁 **File-based typed jobs**: You never hand-write a job registry or retype a payload at each dispatch site.
+- ☁️ **Cloudflare Queues**: Each job reaches the right producer binding without routing glue code per queue.
+- 🗄️ **Optional D1 durability**: A lost send or a crashed run no longer loses the job or its failure history.
+- ⏰ **Scheduled tasks**: You write each cron once, beside its task, instead of copying it into Nitro and Wrangler config.
+- 📡 **Realtime progress**: Your UI shows live job and batch progress without a polling endpoint you build yourself.
 
 ## Installation
 

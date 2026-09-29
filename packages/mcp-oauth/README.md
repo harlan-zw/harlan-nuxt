@@ -1,21 +1,47 @@
-# @harlan-zw/mcp-oauth
+# MCP OAuth
 
-Framework-free policy rules for an MCP OAuth 2.1 authorization server: mandatory PKCE, consent identity, CSRF, bearer challenges.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
 
-Pure TypeScript with no dependencies: no Nuxt, no Nitro, no h3, no `@cloudflare/workers-types`. Runs on Node 20+ and workers. Use it beside a provider such as [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). It does not replace one.
+> Framework-free policy rules for an MCP OAuth 2.1 authorization server.
 
-## Why this exists
+## Why MCP OAuth?
 
 If you want ChatGPT or Claude.ai to reach your MCP server, you must offer RFC 7591 dynamic client registration. Neither connector UI accepts a pre-issued client id. So anyone can mint a client id on your server. The protocol works this way on purpose. Your whole defence then rests on two things: what the authorization endpoint demands, and what the consent page tells the user.
 
 Both are easy to get wrong, and a provider library will not get them right for you:
 
-- `@cloudflare/workers-oauth-provider` mandates PKCE only for public clients (`validateAuthorizationPkce` throws only when `token_endpoint_auth_method` is `none`). A client that self-declares `client_secret_basic` completes the authorization-code flow with no `code_challenge`. That opens authorization-code **injection** (RFC 9700 §2.1). The attacker cannot redeem a stolen code directly, because the token endpoint verifies the registered secret. But the attacker can inject the code into their own session with the legitimate client. That client's authentication then succeeds on the attacker's behalf. And `createClient` defaults an omitted auth method to `client_secret_basic`, so the unprotected path is the *default* one.
-- `client_name` is self-declared, and it is the headline of your consent page. Nothing stops a client that registers as your own product. It renders as first-party over an attacker's callback. A rule on the name alone does not stop it either. The consent page renders a custom-scheme callback as its scheme, so `yourbrand://anything` puts the reserved word in the destination slot.
-- If the consent page hides the callback destination, the user cannot tell a real connector from a look-alike.
-- The provider accepts `http://attacker.example/cb` as a registered callback. It blocks only the actively dangerous schemes. Plaintext transport to a remote host gets through.
+- 💉 **PKCE only for public clients**: `@cloudflare/workers-oauth-provider` mandates PKCE only for public clients (`validateAuthorizationPkce` throws only when `token_endpoint_auth_method` is `none`). A client that self-declares `client_secret_basic` completes the authorization-code flow with no `code_challenge`. That opens authorization-code **injection** (RFC 9700 §2.1). The attacker cannot redeem a stolen code directly, because the token endpoint verifies the registered secret. But the attacker can inject the code into their own session with the legitimate client. That client's authentication then succeeds on the attacker's behalf. And `createClient` defaults an omitted auth method to `client_secret_basic`, so the unprotected path is the *default* one.
+- 🎭 **Self-declared client names**: `client_name` is self-declared, and it is the headline of your consent page. Nothing stops a client that registers as your own product. It renders as first-party over an attacker's callback. A rule on the name alone does not stop it either. The consent page renders a custom-scheme callback as its scheme, so `yourbrand://anything` puts the reserved word in the destination slot.
+- 🙈 **Hidden destinations**: If the consent page hides the callback destination, the user cannot tell a real connector from a look-alike.
+- 🔓 **Plaintext callbacks**: The provider accepts `http://attacker.example/cb` as a registered callback. It blocks only the actively dangerous schemes. Plaintext transport to a remote host gets through.
 
-The rules in this package answer each of these. They come from two production servers, and now live in one place.
+MCP OAuth answers each of these with a Policy Rule. The rules come from two production servers, and now live in one place.
+
+It is pure TypeScript with no dependencies: no Nuxt, no Nitro, no h3, no `@cloudflare/workers-types`. It runs on Node 20+ and workers. Use it beside a provider such as [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider). It does not replace one.
+
+## Features
+
+- 🔐 **Mandatory PKCE**: Every client must send an S256 challenge, confidential clients included, so an injected authorization code fails.
+- 🪪 **Consent identity**: A client cannot pose as your product through its name or a custom callback scheme.
+- 🧭 **Readable destinations**: The consent page shows where the code goes, and a loopback callback reads as "this computer".
+- 🛣️ **Path-normalising routes**: `POST /mcp/` cannot skip bearer authentication through a trailing slash.
+- 🎟️ **Scope-bound refresh tokens**: A user who declines `offline_access` gets no refresh token.
+- 🧱 **Consent-page secrets**: The CSRF token and the CSP nonce can never share a value.
+- 📦 **No dependencies**: The same rules run on Node 20+ and workers, beside any provider.
+
+## Installation
+
+```bash
+pnpm add @harlan-zw/mcp-oauth
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/mcp-oauth
+> ```
 
 ## What you get
 
@@ -151,6 +177,24 @@ A TTL of `0` skips the mint entirely and omits `refresh_token` from the response
 
 The consent page's markup and copy, the grant payload shape, token storage, and the provider wiring. These depend on your product, so they belong in your app.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-MIT
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/mcp-oauth/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fmcp-oauth/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/mcp-oauth
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fmcp-oauth.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/mcp-oauth
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/mcp-oauth/LICENSE.md

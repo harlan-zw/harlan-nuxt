@@ -1,8 +1,49 @@
-# @harlan-zw/nuxt-jev
+# Nuxt Jev
 
-The Nuxt layer for Jev typed judgements: module config, a decision runner with journal reuse, and the drizzle schema. The client, question builders, ask tags, and eval math live in [`@harlan-zw/jev`](../jev), the Nuxt-free base package.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text.
+> Run Jev judgements from Nuxt server code, with journal reuse and per-seat rollout.
+
+## Why Nuxt Jev?
+
+A model call inside a server route runs on every request. When it fails, the route still needs an answer.
+
+- 💸 **Repeat calls**: The same question about the same state goes to the network again on every request.
+- 🚧 **Failures break the route**: A timeout or a bad answer turns into an error for the user.
+- 🎛️ **All or nothing rollout**: A new judgement acts on production traffic before you know it agrees with reality.
+- 🔓 **Missing credentials**: A site with no Cloudflare token still tries the call and fails.
+
+Nuxt Jev is the Nuxt layer for Jev typed judgements. It adds module config, a decision runner with journal reuse, and the drizzle schema. Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text. The client, question builders, ask tags, and eval math live in [`@harlan-zw/jev`](../jev), the Nuxt-free base package.
+
+## Features
+
+- ♻️ **Journal reuse**: The same seat, subject, state, and question version reads the stored row, with no network call.
+- 🧯 **Tagged decisions**: `decideJev` resolves `Answer`, `Unavailable`, or `Unconfigured`, so the caller keeps its safe direction.
+- 🎛️ **Seat modes**: Set each seat to `off`, `shadow`, or `live`, and act only on live seats.
+- 🔓 **Unconfigured by default**: With no `apiToken` and `accountId`, no rows are written and no network call is made.
+- 🗄️ **Drizzle table factory**: `createJevDecisionsTable()` gives a sqlite table for D1 or better-sqlite, with room for extra columns.
+- 🧪 **In-memory journal**: `createInMemoryJevJournal()` runs the same runner in tests without a database.
+
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/nuxt-jev
+```
+
+If you import question builders such as `noul` in your own code, add `@harlan-zw/jev` too:
+
+```bash
+pnpm add @harlan-zw/jev
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-jev
+> ```
 
 ## Exports
 
@@ -81,6 +122,27 @@ if (decision._tag === 'Answer' && resolveJevSeatMode('brand-query', config) === 
 
 For tests, or if you have no database, use `createInMemoryJevJournal()`.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md).
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-jev/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-jev/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-jev
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-jev.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-jev
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-jev/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

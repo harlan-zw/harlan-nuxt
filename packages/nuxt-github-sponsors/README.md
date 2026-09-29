@@ -1,35 +1,35 @@
-<h1>@harlan-zw/nuxt-github-sponsors</h1>
+# Nuxt GitHub Sponsors
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt GitHub Sponsors fetches your GitHub sponsors and gives them to your app as typed data. It ships no UI, so you design your own sponsor page.
+> Show your GitHub sponsors on your Nuxt site from typed data.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+## Why Nuxt GitHub Sponsors?
+
+A sponsor page looks simple until you call the GitHub API. You may see:
+
+- 📄 **Pagination by hand**: GitHub GraphQL returns sponsorships in pages, so you write the loop yourself.
+- 🔒 **Private sponsors in the response**: Raw GitHub data includes sponsors who asked to stay private.
+- 🕳️ **Empty sponsor lists in production**: A missing token or a failed fetch bakes an empty list into the deploy.
+
+Nuxt GitHub Sponsors fetches your GitHub sponsors and gives them to your app as typed data. It ships no UI, so you design your own sponsor page.
 
 ## Features
 
-- 🔌 **Route and composable:** You list every active sponsor without writing GitHub GraphQL pagination yourself.
-- 🔒 **Private sponsors filtered:** Private sponsors and raw GitHub data never leave your server.
-- 🏅 **Tiers and overrides:** You group sponsors by monthly amount and fix a wrong name, avatar, or link without touching GitHub.
-- 🔤 **Tier keys typed from config:** A renamed tier fails to compile, so no page shows an empty tier by mistake.
-- ⚡ **One-day SWR cache:** Page views stop calling the GitHub API on each visit, and a failed fetch never sticks in the cache.
-- 🎨 **Headless by design:** You build the sponsor page in your own design, with no bundled component to fight.
+- 🔌 **Route and composable**: You list every active sponsor without writing GitHub GraphQL pagination yourself.
+- 🔒 **Private sponsors filtered**: Private sponsors and raw GitHub data never leave your server.
+- 🏅 **Tiers and overrides**: You group sponsors by monthly amount and fix a wrong name, avatar, or link without touching GitHub.
+- 🔤 **Tier keys typed from config**: A renamed tier fails to compile, so no page shows an empty tier by mistake.
+- ⚡ **One-day SWR cache**: Page views stop calling the GitHub API on each visit, and a failed fetch never sticks in the cache.
+- 🎨 **Headless by design**: You build the sponsor page in your own design, with no bundled component to fight.
 
 ## Installation
 
 ```bash
-pnpm add @harlan-zw/nuxt-github-sponsors
+npx nuxi@latest module add @harlan-zw/nuxt-github-sponsors
 ```
 
 > [!TIP]

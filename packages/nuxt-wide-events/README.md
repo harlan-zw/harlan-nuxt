@@ -1,41 +1,31 @@
-<h1>@harlan-zw/nuxt-wide-events</h1>
+# Nuxt Wide Events
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Wide Events writes one structured record for each request to your Nuxt server routes.
-
-Production writes one flat JSON line. Development prints a richer record with error details.
-
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+> One structured record for each Nuxt server request, with every field checked at build time.
 
 ## Why Nuxt Wide Events?
 
-Most request logging spreads one request across many lines. A wide event puts that request in one record.
+Most request logging spreads one request across many lines. Any of those lines can carry data you never meant to log.
 
-This module has no runtime redaction. You list every application field in config before code can use it.
+- 🧩 **Scattered log lines**: You rebuild a request from a trail of lines before you can debug it.
+- 🔓 **Secrets reach logs**: A logger that accepts any object logs an email or a token as soon as someone passes one.
+- 🐢 **Runtime redaction on every request**: Deep redaction and regular expression matching run on each record in production.
 
-The build parses each server file. It rejects unknown fields, object spreads, computed names, and dynamic objects. So reviewers and coding agents can see every field a record can carry.
+Nuxt Wide Events writes one wide event per request, and you list every field in config before code can use it. The build parses each server file and rejects unknown fields, object spreads, computed names, and dynamic objects, so reviewers and coding agents can see every field a record can carry.
 
 ## Features
 
-- 📝 **One record per request:** you debug a request from one flat line, not a trail of scattered log lines.
-- 🚧 **Build-time field enforcement:** an unapproved key stops the build, so no secret reaches a log by accident.
-- 🪶 **Small production runtime:** logging adds little cost per request, because production skips stack formatting and pretty printing.
-- 🎚️ **Levels that stick:** a handler that recovers from an error still logs an error, so sampling and drains see the real level.
-- ⚙️ **Background records:** Queue Jobs, scheduled work, and other background operations get the same single record as a request.
-- 🚰 **Drain hook:** you send records to D1, Sentry, or your own adapter from one Nitro hook, not from each route.
-- 📉 **Route exclusion and sampling:** noisy routes stop flooding your logs, and your evlog filter config works unchanged.
+- 📝 **One record per request**: You debug a request from one flat line, not a trail of scattered log lines.
+- 🚧 **Build-time field enforcement**: An unapproved key stops the build, so no secret reaches a log by accident.
+- 🪶 **Small production runtime**: Logging adds little cost per request, because production skips stack formatting and pretty printing.
+- 🎚️ **Levels that stick**: A handler that recovers from an error still logs an error, so sampling and drains see the real level.
+- ⚙️ **Background records**: Queue Jobs, scheduled work, and other background operations get the same single record as a request.
+- 🚰 **Drain hook**: You send records to D1, Sentry, or your own adapter from one Nitro hook, not from each route.
+- 📉 **Route exclusion and sampling**: Noisy routes stop flooding your logs, and your evlog filter config works unchanged.
 
 ## Installation
 

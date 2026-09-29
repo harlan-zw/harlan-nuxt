@@ -1,29 +1,30 @@
-<h1>@harlan-zw/nuxt-use-query</h1>
+# Nuxt Use Query
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Use Query adds TanStack-shaped composables to Nuxt's own data layer. Caching, SWR, and invalidation run through the Nuxt payload, so you have no second cache to keep in sync.
+> Nuxt-native query composables with SWR, invalidation, polling, and optimistic cache writes.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+## Why Nuxt Use Query?
+
+A client query library keeps its own cache beside `useFetch`. You then keep two caches in sync by hand:
+
+- 🔁 **Two caches**: The query library cache and the Nuxt payload hold separate copies of the same data.
+- 🔗 **Hardcoded URLs**: Components embed API paths, so renaming an endpoint touches every caller.
+- 🧪 **Contract drift**: A changed response shape spreads through the app as `unknown`.
+- 🧵 **Shared SSR state**: A module-level cache on the server can hand one user's data to another.
+
+Nuxt Use Query adds TanStack-shaped composables to Nuxt's own data layer. Caching, SWR, and invalidation run through the Nuxt payload, so you have no second cache to keep in sync.
 
 ## Features
 
-- 🔄 **Queries and mutations:** Pages refetch stale data, poll, and roll back failed optimistic writes without a second cache beside `useFetch`.
-- 📇 **Typed RPC contracts:** Components stop hardcoding API URLs, and [Zod](https://zod.dev) catches contract drift at the boundary instead of deep in the app.
-- 🗝️ **Cache control:** One write can refresh or patch every query it affects, in the Nuxt payload and in live `_asyncData` state.
-- ⚡ **Realtime bridge:** WebSocket, SSE, or vendor SDK messages mark the right queries stale, and your connection code stays yours ([VueUse](https://vueuse.org) adapter included).
-- 🧵 **SSR-safe by construction:** Cache state never leaks between users, because it lives on each request's Nuxt app instance.
+- 🔄 **Queries and mutations**: Pages refetch stale data, poll, and roll back failed optimistic writes without a second cache beside `useFetch`.
+- 📇 **Typed RPC contracts**: Components stop hardcoding API URLs, and [Zod](https://zod.dev) catches contract drift at the boundary instead of deep in the app.
+- 🗝️ **Cache control**: One write can refresh or patch every query it affects, in the Nuxt payload and in live `_asyncData` state.
+- ⚡ **Realtime bridge**: WebSocket, SSE, or vendor SDK messages mark the right queries stale, and your connection code stays yours ([VueUse](https://vueuse.org) adapter included).
+- 🧵 **SSR-safe by construction**: Cache state never leaks between users, because it lives on each request's Nuxt app instance.
 
 ## Installation
 

@@ -1,33 +1,32 @@
-<h1>@harlan-zw/nuxt-cloudflare</h1>
+# Nuxt Cloudflare
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Cloudflare gives a Nuxt 4 app Cloudflare defaults, a generated Wrangler config, and Wrangler diagnostics. A bad deploy fails in your build before Cloudflare rejects it.
+> Cloudflare defaults, a generated Wrangler config, and Wrangler diagnostics for Nuxt 4 apps.
 
-The defaults come from production patterns already running in Nuxt SEO and gscdump. The module owns platform policy. Your application topology stays yours.
+## Why Nuxt Cloudflare?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+Every Nuxt app on Cloudflare Workers needs the same Wrangler setup. Small mistakes in it surface only at deploy time or in production.
+
+- 💥 **Deploys fail late**: Cloudflare rejects a broken Wrangler config at deploy, after your build already passed.
+- 💰 **Surprise bills**: Unsampled Workers Logs and Worker-first asset routing turn free requests into billed ones.
+- 🗄️ **Stale cached pages**: A cached document can name build chunks that a later deploy deleted.
+- 🔑 **Binding drift**: A wrong binding name or a stale binding type fails only in production.
+
+Nuxt Cloudflare applies defaults from production patterns already running in Nuxt SEO and gscdump, and fails a bad deploy in your build. The module owns platform policy; your application topology stays yours.
 
 ## Features
 
-- ⚙️ **Generated Wrangler config:** you skip the Cloudflare boilerplate, and every key you wrote stays yours.
-- 🩺 **Deploy doctor:** a broken Wrangler config fails in CI, before a deploy reaches Cloudflare.
-- 💰 **Cost controls:** surprise bills from unsampled logs or newly billable asset requests get flagged before you deploy.
-- 🗄️ **Workers Caching:** one deploy never serves another deploy's cache, and rendered pages stay out of the shared cache by default.
-- 📦 **Partial bundling:** large Workers start faster; the Nuxt SEO Pro Worker dropped from 118ms to 81ms startup CPU.
-- 🔑 **Exact binding types:** a wrong binding name or stale binding type fails before it reaches production.
-- 🧰 **D1 primitives:** session resets, lock contention, and the 100-bind limit stop breaking your queries.
+- ⚙️ **Generated Wrangler config**: You skip the Cloudflare boilerplate, and every key you wrote stays yours.
+- 🩺 **Deploy doctor**: A broken Wrangler config fails in CI, before a deploy reaches Cloudflare.
+- 💰 **Cost controls**: Surprise bills from unsampled logs or newly billable asset requests get flagged before you deploy.
+- 🗄️ **Workers Caching**: One deploy never serves another deploy's cache, and rendered pages stay out of the shared cache by default.
+- 📦 **Partial bundling**: Large Workers start faster; the Nuxt SEO Pro Worker dropped from 118ms to 81ms startup CPU.
+- 🔑 **Exact binding types**: A wrong binding name or stale binding type fails before it reaches production.
+- 🧰 **D1 primitives**: Session resets, lock contention, and the 100-bind limit stop breaking your queries.
 
 ## Installation
 

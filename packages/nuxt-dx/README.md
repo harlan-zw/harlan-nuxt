@@ -1,31 +1,31 @@
-<h1>@harlan-zw/nuxt-dx</h1>
+# Nuxt DX
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt DX finds problems you would otherwise hunt for yourself. It shows client errors during development. It warns when a runtime entry makes your JavaScript bundles too big.
+> Find client errors and oversized runtime entries in your Nuxt app during development and CI.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+## Why Nuxt DX?
+
+Some Nuxt problems stay quiet until you go and hunt for them. You may see:
+
+- 🙈 **Errors lost in the console**: Vue warnings and unhandled rejections scroll past in the browser console, and nobody reads them.
+- 💧 **Opaque hydration mismatches**: Vue reports each mismatch as one flat message, so you guess which component and which value broke.
+- 📦 **Silent bundle growth**: A plugin or middleware pulls in a heavy dependency, and nothing tells you.
+
+Nuxt DX shows client errors during development and in your terminal. It warns when a runtime entry makes your JavaScript bundles too big.
 
 ## Features
 
-- 🚨 **Client error overlay:** Vue warnings, console errors, and unhandled rejections no longer scroll past unseen in the browser console.
-- 💧 **Hydration mismatches, decoded:** You stop guessing which component and which value broke hydration.
-- 🤖 **Agent handoff:** You stop copying errors, routes, and file paths into a coding agent by hand.
-- 🔍 **[Inspect a route](#inspect-a-route):** You get a route's client errors in your terminal or CI without opening a browser yourself.
-- 🧺 **[Payload Diagnostics](#payload-diagnostics):** You find payload fields that ship to the client but never get read.
-- 📦 **Runtime size budgets:** A plugin or middleware that pulls in a heavy dependency no longer grows your bundle unnoticed.
-- 📈 **Regression diffs:** A pull request that takes a plugin from 12 kB to 48 kB gets flagged before it merges.
+- 🚨 **Client error overlay**: Vue warnings, console errors, and unhandled rejections no longer scroll past unseen in the browser console.
+- 💧 **Hydration mismatches, decoded**: You stop guessing which component and which value broke hydration.
+- 🤖 **Agent handoff**: You stop copying errors, routes, and file paths into a coding agent by hand.
+- 🔍 **[Inspect a route](#inspect-a-route)**: You get a route's client errors in your terminal or CI without opening a browser yourself.
+- 🧺 **[Payload Diagnostics](#payload-diagnostics)**: You find payload fields that ship to the client but never get read.
+- 📦 **Runtime size budgets**: A plugin or middleware that pulls in a heavy dependency no longer grows your bundle unnoticed.
+- 📈 **Regression diffs**: A pull request that takes a plugin from 12 kB to 48 kB gets flagged before it merges.
 
 ## Installation
 

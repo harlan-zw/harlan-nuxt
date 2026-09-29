@@ -1,35 +1,36 @@
-<h1>@harlan-zw/nuxt-domain-events</h1>
+# Nuxt Domain Events
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Nuxt Domain Events lets a producer fire a server-side domain event without importing any listener that handles it. The module generates a registry for each layer and imports it lazily.
+> Lazy, layer-aware domain events for Nuxt server runtimes.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+## Why Nuxt Domain Events?
+
+If a producer calls its listeners directly, it must import every one of them. That coupling grows with each listener you add:
+
+- 🧶 **Coupled producers**: A new listener in another layer forces an edit to the producer.
+- 🎲 **Surprise execution**: A listener moves to deferred or queued work, and the producer does not know.
+- 🧳 **Leaked request state**: Request-scoped or mutable state ends up in a queue message.
+- 👻 **Rolled-back events**: A listener acts on a write that the transaction never committed.
+
+Nuxt Domain Events lets a producer fire a server-side domain event without importing any listener that handles it. The module generates a registry for each layer and imports it lazily.
 
 ## Features
 
-- 🗂️ **Generated lazy registries:** a producer never imports its listeners, so a new listener in any layer leaves the producer untouched.
-- 🎚️ **Explicit execution modes:** a listener never runs later or in a queue by surprise, because every mode except serial synchronous is an opt-in.
-- 📦 **Two contract kinds:** request-scoped state never leaks into a queue, because only `transfer` contracts reach queued listeners.
-- 🏷️ **Errors as tagged values:** you branch on a known tag, such as payload mismatch or registry drift, instead of parsing error messages.
-- 💾 **After-commit publication:** a rolled-back transaction leaves no queue rows, so no listener acts on data that never committed.
-- 🚰 **One-call deferred drain:** producers stop repeating the same collect-and-drain loop for deferred work.
+- 🗂️ **Generated lazy registries**: A producer never imports its listeners, so a new listener in any layer leaves the producer untouched.
+- 🎚️ **Explicit execution modes**: A listener never runs later or in a queue by surprise, because every mode except serial synchronous is an opt-in.
+- 📦 **Two contract kinds**: Request-scoped state never leaks into a queue, because only `transfer` contracts reach queued listeners.
+- 🏷️ **Errors as tagged values**: You branch on a known tag, such as payload mismatch or registry drift, instead of parsing error messages.
+- 💾 **After-commit publication**: A rolled-back transaction leaves no queue rows, so no listener acts on data that never committed.
+- 🚰 **One-call deferred drain**: Producers stop repeating the same collect-and-drain loop for deferred work.
 
 ## Installation
 
 ```bash
-pnpm add @harlan-zw/nuxt-domain-events
+npx nuxi@latest module add @harlan-zw/nuxt-domain-events
 ```
 
 > [!TIP]
@@ -37,6 +38,8 @@ pnpm add @harlan-zw/nuxt-domain-events
 > ```bash
 > npx skilld add @harlan-zw/nuxt-domain-events
 > ```
+
+The command adds the module to `nuxt.config.ts`:
 
 ```ts
 export default defineNuxtConfig({

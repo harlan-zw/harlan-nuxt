@@ -1,13 +1,45 @@
 # Nuxt Check-in
 
-Run deterministic checks from your Nuxt app and its modules.
-The module finds checks at build time. You run them through a route or an external runner.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
+[![Nuxt][nuxt-src]][nuxt-href]
 
-## Install
+> Run deterministic checks from your Nuxt app and its modules, through a route or a CLI.
 
-```sh
-pnpm add @harlan-zw/nuxt-checkin
+## Why Nuxt Check-in?
+
+A site can return 200 on every page while its catalog goes stale or a queue backs up. You find out when a user does.
+
+- 🕳️ **Missing evidence reads as healthy**: A check that never ran or could not read its data leaves no trace in a pass/fail route.
+- 🧵 **Scattered probes**: Each site and module writes its own health script, with its own auth and output shape.
+- ⏱️ **Silent runners**: A scheduled check-in stops, and the last green report keeps looking current.
+
+Nuxt Check-in finds checks at build time. You run them through a route you own or through its CLI. Every report carries `coverage`, so a missing result never reads as a pass.
+
+## Features
+
+- 🔍 **Build-time discovery**: Files in `server/checks` register from every layer, and a duplicate ID stops the build.
+- 📊 **Coverage-aware reports**: A required check that is missing or unavailable marks the report incomplete.
+- 🧩 **Module integrations**: D1, Queue Job backlog, and Sentry checks register from module options.
+- 🔗 **Shared collection**: Checks that read the same evidence share one load per run.
+- 🖥️ **Shared CLI**: External and build checks run with exit codes and optional archives.
+- ✅ **Report validation**: `checkReport` catches a stale, mismatched, or incomplete report from an external runner.
+- 🧠 **Prompt items**: Site-specific analysis instructions travel in the report for a check-in agent.
+
+## Installation
+
+```bash
+npx nuxi@latest module add @harlan-zw/nuxt-checkin
 ```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/nuxt-checkin
+> ```
+
+The command adds the module to your Nuxt config:
 
 ```ts
 export default defineNuxtConfig({
@@ -372,3 +404,27 @@ flowchart LR
   cli --> report[JSON report and optional archive]
 ```
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
+## License
+
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-checkin/LICENSE.md).
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fnuxt-checkin/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/nuxt-checkin
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fnuxt-checkin.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/nuxt-checkin
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/nuxt-checkin/LICENSE.md
+
+[nuxt-src]: https://img.shields.io/badge/Nuxt-18181B?logo=nuxt
+[nuxt-href]: https://nuxt.com

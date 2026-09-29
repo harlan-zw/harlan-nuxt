@@ -1,39 +1,29 @@
-<h1>Harlan Nuxt</h1>
+# Harlan Nuxt
 
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Experimental Nuxt modules in one repo. They share tooling and one verification pipeline.
+> Nuxt modules and companion packages that share tooling and one verification pipeline.
 
 Each package publishes to npm with provenance. Each package has its own version and release notes, so a fast-moving module never forces a version bump on the others.
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
-
 ## Packages
 
-| Package | What it does |
-| --- | --- |
-| [`@harlan-zw/nuxt-checkin`](./packages/nuxt-checkin) | Deterministic server checks from site files and existing modules. |
-| [`@harlan-zw/nuxt-cf-jobs`](./packages/nuxt-cf-jobs) | ☁️ Typed Cloudflare Queue jobs with file-based definitions, optional D1 durability, scheduled tasks, and an operations CLI. |
-| [`@harlan-zw/nuxt-use-query`](./packages/nuxt-use-query) | 🔄 Nuxt-native queries, mutations, and subscriptions with SWR, invalidation, polling, and typed RPC contracts. |
-| [`@harlan-zw/nuxt-domain-events`](./packages/nuxt-domain-events) | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
-| [`@harlan-zw/nuxt-dx`](./packages/nuxt-dx) | 🚨 Diagnostics: a client error overlay with agent handoff, and JavaScript budgets for Nuxt and Nitro runtime entries. |
-| [`@harlan-zw/nuxt-github-sponsors`](./packages/nuxt-github-sponsors) | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
-| [`@harlan-zw/nuxt-wide-events`](./packages/nuxt-wide-events) | 📝 Minimal Wide Events with build-time Field enforcement and a small production runtime. |
-| [`@harlan-zw/jev`](./packages/jev) | ⚖️ Nuxt-free Jev client, ask tags, digest helpers, and eval replay math. |
-| [`@harlan-zw/nuxt-jev`](./packages/nuxt-jev) | ⚖️ Jev decision runner with journal reuse and the drizzle decisions table, wired for Nuxt. |
-| [`@harlan-zw/nuxt-cloudflare`](./packages/nuxt-cloudflare) | 🌩️ Opinionated Cloudflare defaults, generated Wrangler config, and Wrangler diagnostics for Nuxt. |
-| [`@harlan-zw/nuxt-sentry`](./packages/nuxt-sentry) | 🛡️ One Sentry Report Policy: registration, enable gate, Drop Rules, and Redaction Rules for the client and the server. |
-| [`@harlan-zw/mcp-oauth`](./packages/mcp-oauth) | 🔐 Framework-free Policy Rules for an MCP OAuth 2.1 server: mandatory PKCE, consent identity, CSRF, bearer challenges. |
-| [`@harlan-zw/comark-content`](./packages/comark-content) | 📄 Markdown-only Nuxt content powered by Comark, with Collection queries, navigation, and search sections. |
+| Package | npm | What it does |
+| --- | --- | --- |
+| [Nuxt Check-in](./packages/nuxt-checkin) | `@harlan-zw/nuxt-checkin` | ✅ Deterministic server checks from site files and existing modules. |
+| [Nuxt CF Jobs](./packages/nuxt-cf-jobs) | `@harlan-zw/nuxt-cf-jobs` | ☁️ Typed Cloudflare Queue jobs with file-based definitions, optional D1 durability, scheduled tasks, and an operations CLI. |
+| [Nuxt Use Query](./packages/nuxt-use-query) | `@harlan-zw/nuxt-use-query` | 🔄 Nuxt-native queries, mutations, and subscriptions with SWR, invalidation, polling, and typed RPC contracts. |
+| [Nuxt Domain Events](./packages/nuxt-domain-events) | `@harlan-zw/nuxt-domain-events` | 📣 Layer-aware server domain events with generated lazy registries and after-commit queue publication. |
+| [Nuxt DX](./packages/nuxt-dx) | `@harlan-zw/nuxt-dx` | 🚨 Diagnostics: a client error overlay with agent handoff, and JavaScript budgets for Nuxt and Nitro runtime entries. |
+| [Nuxt GitHub Sponsors](./packages/nuxt-github-sponsors) | `@harlan-zw/nuxt-github-sponsors` | 💖 Typed GitHub Sponsors data with tiers, profile overrides, a public route, and a composable. |
+| [Nuxt Wide Events](./packages/nuxt-wide-events) | `@harlan-zw/nuxt-wide-events` | 📝 Minimal Wide Events with build-time Field enforcement and a small production runtime. |
+| [Jev](./packages/jev) | `@harlan-zw/jev` | ⚖️ Nuxt-free Jev client, ask tags, digest helpers, and eval replay math. |
+| [Nuxt Jev](./packages/nuxt-jev) | `@harlan-zw/nuxt-jev` | ⚖️ Jev decision runner with journal reuse and the drizzle decisions table, wired for Nuxt. |
+| [Nuxt Cloudflare](./packages/nuxt-cloudflare) | `@harlan-zw/nuxt-cloudflare` | 🌩️ Opinionated Cloudflare defaults, generated Wrangler config, and Wrangler diagnostics for Nuxt. |
+| [Nuxt Sentry](./packages/nuxt-sentry) | `@harlan-zw/nuxt-sentry` | 🛡️ One Sentry Report Policy: registration, enable gate, Drop Rules, and Redaction Rules for the client and the server. |
+| [MCP OAuth](./packages/mcp-oauth) | `@harlan-zw/mcp-oauth` | 🔐 Framework-free Policy Rules for an MCP OAuth 2.1 server: mandatory PKCE, consent identity, CSRF, bearer challenges. |
+| [Comark Content](./packages/comark-content) | `@harlan-zw/comark-content` | 📄 Markdown-only Nuxt content powered by Comark, with Collection queries, navigation, and search sections. |
 
 ## Development
 

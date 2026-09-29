@@ -1,32 +1,30 @@
-<h1>@harlan-zw/comark-content</h1>
+# Comark Content
 
 [![npm version][npm-version-src]][npm-version-href]
 [![npm downloads][npm-downloads-src]][npm-downloads-href]
 [![License][license-src]][license-href]
 [![Nuxt][nuxt-src]][nuxt-href]
 
-Comark Content is a Markdown-only content module for Nuxt, powered by [Comark](https://github.com/harlan-zw/comark).
+> Serve Markdown page collections in Nuxt with no database, parsed at build time by [Comark](https://github.com/harlan-zw/comark).
 
-The build parses Markdown and writes it as compressed server assets. No database runs, and no request parses Markdown.
+## Why Comark Content?
 
-<p align="center">
-<table>
-<tbody>
-<td align="center">
-<sub>Made possible by my <a href="https://github.com/sponsors/harlan-zw">Sponsor Program 💖</a><br> Follow me <a href="https://twitter.com/harlan_zw">@harlan_zw</a> 🐦 • Join <a href="https://discord.gg/275MBUBvgP">Discord</a> for help</sub><br>
-</td>
-</tbody>
-</table>
-</p>
+Markdown pages change only during builds. A content layer that stores them in a database still makes you deploy and query one. You may see:
+
+- 🗄️ **A database for read-only pages**: The content index lives in SQLite or D1, although nothing writes to it after the build.
+- 📥 **Docs copied between repositories**: Docs that live in another Git repository get copied in by hand before you can publish them.
+- 🧟 **Stale content after a failed refresh**: A remote fetch fails, and the site keeps serving the old pages without a word.
+
+Comark Content parses Markdown with Comark during the build and writes it as compressed server assets. No database runs, and no request parses Markdown.
 
 ## Features
 
-- 📄 **Build-time Markdown:** requests never wait on a Markdown parse, because the build parses each page collection once.
-- 🌍 **Local and remote sources:** you publish docs from another Git repository, pinned to a branch or tag, without copying files in.
-- 🔎 **One query API:** you write a query once and run it in the browser or inside Nitro.
-- 🗜️ **Lazy decompression:** a filtered query stays cheap, because it decompresses only the metadata index and the matched bodies.
-- 🎨 **Rangi highlighting:** code blocks get GitHub Light and Dark themes with no setup, and you can add your own grammars and themes.
-- 🗺️ **Sitemap aware:** your pages reach `@nuxtjs/sitemap` with no hand-written URL source.
+- 📄 **Build-time Markdown**: Requests never wait on a Markdown parse, because the build parses each page collection once.
+- 🌍 **Local and remote sources**: You publish docs from another Git repository, pinned to a branch or tag, without copying files in.
+- 🔎 **One query API**: You write a query once and run it in the browser or inside Nitro.
+- 🗜️ **Lazy decompression**: A filtered query stays cheap, because it decompresses only the metadata index and the matched bodies.
+- 🎨 **Rangi highlighting**: Code blocks get GitHub Light and Dark themes with no setup, and you can add your own grammars and themes.
+- 🗺️ **Sitemap aware**: Your pages reach `@nuxtjs/sitemap` with no hand-written URL source.
 
 ## Installation
 

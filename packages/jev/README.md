@@ -1,8 +1,42 @@
-# @harlan-zw/jev
+# Jev
 
-Nuxt-free Jev judgements: one client, the `ask` tag API, digest helpers, and eval replay math. Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text.
+[![npm version][npm-version-src]][npm-version-href]
+[![npm downloads][npm-downloads-src]][npm-downloads-href]
+[![License][license-src]][license-href]
 
-Pure TypeScript with one dependency: ohash, for sync digests. No Nuxt, no Nitro, no h3. Runs on Node 20+ and workers. For the Nuxt module, the decision runner, and the drizzle schema, use `@harlan-zw/nuxt-jev`.
+> Ask Jev typed questions about one state and get probabilities back, with no Nuxt required.
+
+## Why Jev?
+
+A generative model answers a yes or no question with a paragraph. Your code then parses prose and guesses what it meant.
+
+- 🧾 **Prose instead of answers**: You parse free text to get a boolean, a label, or a rank.
+- 💥 **Thrown failures**: An HTTP error, a timeout, or a malformed answer throws in the middle of your request.
+- 🔑 **Unstable journal keys**: The same state with keys in a different order hashes to a new digest, so a stored answer never gets reused.
+- 🎚️ **Thresholds picked by feel**: Nothing tells you whether a probability band agrees with the answers you already have.
+
+Jev is a System One judge. It answers typed questions about one state with probabilities. It never generates text. This package is the Nuxt-free client for it: pure TypeScript with one dependency, ohash, for sync digests. It has no Nuxt, Nitro, or h3 code, and runs on Node 20+ and workers. For the Nuxt module, the decision runner, and the drizzle schema, use [`@harlan-zw/nuxt-jev`](../nuxt-jev).
+
+## Features
+
+- ⚖️ **Typed questions**: `noul`, `choice`, and `score` return a probability, a picked option, or a rubric level, never prose.
+- 🏷️ **`ask` tags**: Put the state and the question in one tagged template, and send a batch in one call.
+- 🧯 **Failures as values**: Every call resolves `Ok` or a tagged `JevFailure`, so nothing throws and nothing rejects.
+- 🔁 **Retries in the client**: The HTTP client retries with backoff inside one timeout window and validates each answer.
+- 🔑 **Order-stable digests**: `digestKey` and `canonicalJson` give the same key for the same state, whatever the key order.
+- 📊 **Eval replay math**: `summarizeReplay` and `suggestBand` measure agreement before you move a threshold.
+
+## Installation
+
+```bash
+pnpm add @harlan-zw/jev
+```
+
+> [!TIP]
+> Generate an Agent Skill for this package using [skilld](https://github.com/harlan-zw/skilld):
+> ```bash
+> npx skilld add @harlan-zw/jev
+> ```
 
 ## What you get
 
@@ -72,6 +106,24 @@ The model's own docs list its failure modes ([jaggedness](https://docs.typesafe.
 - **Adversarial content is data the model does not treat as hostile.** Frame untrusted text as measurements to judge, never as instructions. Test those edges before you act on answers in production.
 - **No generation.** If the answer space is bounded, extract the options in code or with a generative model. Then let Jev pick one.
 
+## Sponsors
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg">
+    <img src='https://raw.githubusercontent.com/harlan-zw/static/main/sponsors.svg' alt='sponsors'/>
+  </a>
+</p>
+
 ## License
 
-MIT, see [LICENSE.md](./LICENSE.md). Forked from pithings/advocaat (MIT); question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js.
+Licensed under the [MIT license](https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/jev/LICENSE.md). Forked from pithings/advocaat (MIT); question and answer shapes mirror github.com/typesafe-ai/typesafe-sdk-js.
+
+<!-- Badges -->
+[npm-version-src]: https://img.shields.io/npm/v/%40harlan-zw%2Fjev/latest.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-version-href]: https://npmjs.com/package/@harlan-zw/jev
+
+[npm-downloads-src]: https://img.shields.io/npm/dm/%40harlan-zw%2Fjev.svg?style=flat&colorA=18181B&colorB=28CF8D
+[npm-downloads-href]: https://npmjs.com/package/@harlan-zw/jev
+
+[license-src]: https://img.shields.io/github/license/harlan-zw/harlan-nuxt.svg?style=flat&colorA=18181B&colorB=28CF8D
+[license-href]: https://github.com/harlan-zw/harlan-nuxt/blob/main/packages/jev/LICENSE.md
