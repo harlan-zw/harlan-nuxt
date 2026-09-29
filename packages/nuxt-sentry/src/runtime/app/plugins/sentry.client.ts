@@ -8,7 +8,7 @@ import { defineNuxtPlugin, useRuntimeConfig } from '#app'
 import {
   createBeforeSend,
   createClientNoiseOptions,
-  createSentryDataCollection,
+  createSentryInitOptions,
   resolveClientTarget,
   resolveEnvironment,
   resolveTracesSampleRate,
@@ -47,9 +47,7 @@ export default defineNuxtPlugin({
       environment,
       ...(target.release ? { release: target.release } : {}),
       tracesSampleRate: resolveTracesSampleRate(target.tracesSampleRate, environment),
-      ...(policy.dataCollection === 'none'
-        ? { dataCollection: createSentryDataCollection() }
-        : { sendDefaultPii: true }),
+      ...createSentryInitOptions({ sdkVersion: Sentry.SDK_VERSION, dataCollection: policy.dataCollection, logs: false }),
       ...(target.app ? { initialScope: { tags: { app: target.app } } } : {}),
       ignoreErrors: noise.ignoreErrors,
       denyUrls: noise.denyUrls,
