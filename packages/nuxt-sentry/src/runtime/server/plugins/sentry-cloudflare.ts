@@ -3,14 +3,14 @@ import type { SentryRuntimeConfig } from '../../shared/types'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. `@sentry/cloudflare` is only resolved on a
 // Cloudflare build, which is the only build that registers this plugin.
-import { consoleLoggingIntegration, setContext, setTags } from '@sentry/cloudflare'
+import { consoleLoggingIntegration, SDK_VERSION, setContext, setTags } from '@sentry/cloudflare'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer, resolved from the site's own `@sentry/nuxt`.
 import { sentryCloudflareNitroPlugin } from '@sentry/nuxt/module/plugins'
 import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
 import {
   createBeforeSend,
-  createSentryDataCollection,
+  createSentryInitOptions,
   resolveEnvironment,
   resolveTracesSampleRate,
 } from '../../shared/policy'
@@ -42,11 +42,9 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
     environment,
     ...(target.release ? { release: target.release } : {}),
     tracesSampleRate: resolveTracesSampleRate(target.tracesSampleRate, environment),
-    ...(policy.dataCollection === 'none'
-      ? { dataCollection: createSentryDataCollection() }
-      : { sendDefaultPii: true }),
+    ...createSentryInitOptions({ sdkVersion: SDK_VERSION, dataCollection: policy.dataCollection, logs: target.logs }),
     ...(target.logs
-      ? { enableLogs: true, integrations: [consoleLoggingIntegration({ levels: ['warn', 'error'] })] }
+      ? { integrations: [consoleLoggingIntegration({ levels: ['warn', 'error'] })] }
       : {}),
     ...(target.app ? { initialScope: { tags: { app: target.app } } } : {}),
     beforeSend: createBeforeSend(policy),

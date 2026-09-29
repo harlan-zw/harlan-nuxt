@@ -1,4 +1,5 @@
 import type {
+  DataCollection,
   EnvironmentPolicy,
   ErrorReport,
   ErrorReportHint,
@@ -58,23 +59,83 @@ export function createClientNoiseOptions(policy: ReportPolicy): {
 }
 
 /**
- * Turn off every personal field the Sentry SDK collects by default.
+ * The Sentry `dataCollection` option for a `DataCollection` setting.
  *
- * The exact shape the seven small sites already ship, kept byte for byte so
- * `dataCollection: 'none'` is a true no change migration for them.
+ * Both settings pass an explicit object, because the SDK default moved.
+ * Sentry 10 collected little when the option was unset. Sentry 11 collects
+ * every category when it is unset, and removed `sendDefaultPii`. An explicit
+ * object resolves the same on both majors.
+ *
+ * `scrubbed` names every category Sentry 10 enabled for `sendDefaultPii: true`.
+ * `none` turns every personal category off.
+ *
+ * Both settings turn off `queues`. Sentry 11 added that category and collects
+ * queue message payloads by default. Sentry 10 never sent them, and no
+ * Redaction Rule reads a span, so neither setting may start. Sentry 10 ignores
+ * the key.
  */
-export function createSentryDataCollection() {
+export function createSentryDataCollection(setting: DataCollection) {
+  if (setting === 'scrubbed') {
+    return {
+      userInfo: true,
+      cookies: true,
+      httpHeaders: { request: true, response: true },
+      httpBodies: ['incomingRequest', 'outgoingRequest', 'incomingResponse', 'outgoingResponse'] as HttpBodyCollectionTarget[],
+      urlQueryParams: true,
+      graphQL: { document: true, variables: true },
+      genAI: { inputs: true, outputs: true },
+      databaseQueryData: true,
+      queues: false,
+      stackFrameVariables: true,
+    }
+  }
   return {
     userInfo: false,
     cookies: false,
     httpHeaders: { request: false, response: false },
-    httpBodies: [],
+    httpBodies: [] as HttpBodyCollectionTarget[],
     urlQueryParams: false,
     graphQL: { document: false, variables: false },
     genAI: { inputs: false, outputs: false },
     databaseQueryData: false,
+    queues: false,
     stackFrameVariables: false,
   }
+}
+
+type HttpBodyCollectionTarget = 'incomingRequest' | 'outgoingRequest' | 'incomingResponse' | 'outgoingResponse'
+
+export interface SentryInitOptionsInput {
+  /** `SDK_VERSION` from the Sentry package that starts the client. */
+  sdkVersion: string
+  dataCollection: DataCollection
+  /** Whether a logging integration is installed. */
+  logs: boolean
+}
+
+/**
+ * The `Sentry.init` options that keep one meaning on Sentry 10 and Sentry 11.
+ *
+ * Sentry 10 drops every log unless `enableLogs` is set. Sentry 11 removed that
+ * option and sends logs whenever a logging integration is installed.
+ *
+ * Sentry 11 also attaches a synthetic stack to a message or a thrown non Error
+ * by default. That stack would stop `dropStacklessErrors` from matching, and
+ * split issue groups, so `attachStacktrace` stays at the Sentry 10 default.
+ */
+export function createSentryInitOptions(input: SentryInitOptionsInput) {
+  return {
+    dataCollection: createSentryDataCollection(input.dataCollection),
+    attachStacktrace: false,
+    ...(input.logs && sentryMajor(input.sdkVersion) < 11 ? { enableLogs: true } : {}),
+  }
+}
+
+function sentryMajor(sdkVersion: string): number {
+  const major = Number.parseInt(sdkVersion, 10)
+  if (Number.isNaN(major))
+    throw new TypeError(`Sentry SDK_VERSION "${sdkVersion}" does not start with a major version.`)
+  return major
 }
 
 /**

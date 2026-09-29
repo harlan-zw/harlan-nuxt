@@ -41,6 +41,8 @@ pnpm add @harlan-zw/nuxt-sentry @sentry/nuxt
 
 On Cloudflare Workers, also add `@sentry/cloudflare`.
 
+The module supports Sentry 10.70 or later and Sentry 11. Keep `@sentry/nuxt` and `@sentry/cloudflare` on the same version.
+
 ```ts
 export default defineNuxtConfig({
   modules: ['@sentry/nuxt/module', '@harlan-zw/nuxt-sentry'],
@@ -108,6 +110,12 @@ The browser adds one more gate that a build cannot see. A bundle served from a l
 `dataCollection: 'scrubbed'` sends the request, then applies every Redaction Rule. `'none'` sends no personal data at all.
 
 Every Redaction Rule runs on every Error Report under both settings. `'none'` removes the request fields. An ofetch error message still quotes the failing URL, query string included, and no `dataCollection` value stops that.
+
+Each setting sends the same data on Sentry 10 and Sentry 11. Sentry 11 collects every category when its `dataCollection` option is unset, so the module always passes an explicit value:
+
+- `'none'` turns off GenAI prompts and responses. This includes the AI SDK calls that Sentry 11 instruments at build time. A Vercel AI call that sets `experimental_telemetry.recordInputs` itself still records its inputs.
+- Both settings turn off queue message payloads. Sentry 10 never sent them, and no Redaction Rule reads a span.
+- `attachStacktrace` stays `false`. Sentry 11 attaches a synthetic stack to a message by default, and that stack stops `dropStacklessErrors` from matching.
 
 ### Report Policy
 
@@ -178,23 +186,28 @@ The module registers the server plugin only on a Cloudflare Nitro preset. `@sent
 Import the policy from `#nuxt-sentry/policy`, never from runtime config:
 
 ```ts
-import { createBeforeSend } from '@harlan-zw/nuxt-sentry/server'
+import { createBeforeSend, createSentryInitOptions } from '@harlan-zw/nuxt-sentry/server'
 import * as Sentry from '@sentry/nuxt'
 import { nuxtSentry } from '#nuxt-sentry/policy'
 
 if (nuxtSentry.target._tag === 'enabled') {
   Sentry.init({
     dsn: nuxtSentry.target.dsn,
+    ...createSentryInitOptions({ sdkVersion: Sentry.SDK_VERSION, dataCollection: nuxtSentry.server.dataCollection, logs: false }),
     beforeSend: createBeforeSend(nuxtSentry.server),
   })
 }
 ```
+
+`createSentryInitOptions` returns the `dataCollection`, `attachStacktrace`, and log options that give one result on Sentry 10 and Sentry 11. Use it wherever a site starts its own Sentry client, a queue client included. Never pass `sendDefaultPii`: Sentry 11 removed it.
 
 ### Why not runtime config
 
 `#nuxt-sentry/policy` is the resolved Report Policy written as a build time constant. It holds one object literal and imports nothing.
 
 If the same file calls `useRuntimeConfig()`, the emitted `sentry.server.config.mjs` imports the Nitro chunk. The whole application and `node:http` then load before `Sentry.init` runs. That breaks `autoInjectServerSentry: 'top-level-import'`, and you lose the instrumentation it installs. On one Vercel site the emitted file had 35 imports; the constant brought it to 3.
+
+Sentry 11 bundles the server config into the Nitro build and deprecates `autoInjectServerSentry`. Remove that option on Sentry 11.
 
 The module also writes the constant to `runtimeConfig.public.nuxtSentry`, so code that reads it there keeps working.
 

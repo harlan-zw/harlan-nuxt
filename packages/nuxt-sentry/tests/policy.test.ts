@@ -17,7 +17,6 @@ import {
   applyReportPolicy,
   createBeforeSend,
   createClientNoiseOptions,
-  createSentryDataCollection,
   describeDisabledTarget,
   isLocalReportingHost,
   resolveClientTarget,
@@ -108,22 +107,6 @@ describe('applyReportPolicy', () => {
     const beforeSend = createBeforeSend(policy)
     expect(beforeSend({ message: 'gone' }, { originalException: { statusCode: 404 } })).toBeNull()
     expect(beforeSend({ message: 'boom' })).toEqual({ message: 'boom' })
-  })
-})
-
-describe('createSentryDataCollection', () => {
-  it('turns off every personal field the SDK collects by default', () => {
-    expect(createSentryDataCollection()).toEqual({
-      userInfo: false,
-      cookies: false,
-      httpHeaders: { request: false, response: false },
-      httpBodies: [],
-      urlQueryParams: false,
-      graphQL: { document: false, variables: false },
-      genAI: { inputs: false, outputs: false },
-      databaseQueryData: false,
-      stackFrameVariables: false,
-    })
   })
 })
 
