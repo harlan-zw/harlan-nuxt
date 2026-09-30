@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "consola": "catalog:",
-    "yaml": "catalog:"
+    "yaml": "catalog:",
+    "pkg-pr-new": "catalog:"
   }
 }

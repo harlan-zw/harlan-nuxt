@@ -12,6 +12,7 @@ trustPolicy: no-downgrade
 trustPolicyIgnoreAfter: 262800
 
 catalog:
+  pkg-pr-new: 0.0.88
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
   '@cloudflare/workers-types': ^5.20260811.1
