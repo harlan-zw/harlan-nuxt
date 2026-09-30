@@ -1,0 +1,42 @@
+name: Cloudflare Preview
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packages/nuxt-cloudflare/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/cloudflare-preview.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-preview-${{ github.event.number }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @harlan-zw/nuxt-checkin --filter @harlan-zw/nuxt-wide-events run dev:prepare
+      - run: pnpm --filter @harlan-zw/nuxt-cloudflare run build
+      - run: pnpm --filter @harlan-zw/nuxt-cloudflare run lint
+      - run: pnpm --filter @harlan-zw/nuxt-cloudflare run typecheck
+      - run: pnpm --filter @harlan-zw/nuxt-cloudflare run test
+      - run: pnpm --filter @harlan-zw/nuxt-cloudflare run test:attw
+      - name: Publish immutable preview
+        run: pnpm exec pkg-pr-new publish --pnpm --comment=off --no-compact ./packages/nuxt-cloudflare

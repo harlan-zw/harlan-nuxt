@@ -26,35 +26,43 @@
   "exports": {
     ".": {
       "types": "./dist/module.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./d1": {
       "types": "./dist/d1.d.mts",
-      "import": "./dist/d1.mjs"
+      "import": "./dist/d1.mjs",
+      "default": "./dist/d1.mjs"
     },
     "./bindings": {
       "types": "./dist/bindings.d.mts",
-      "import": "./dist/bindings.mjs"
+      "import": "./dist/bindings.mjs",
+      "default": "./dist/bindings.mjs"
     },
     "./deploy": {
       "types": "./dist/deploy.d.mts",
-      "import": "./dist/deploy.mjs"
+      "import": "./dist/deploy.mjs",
+      "default": "./dist/deploy.mjs"
     },
     "./storage": {
       "types": "./dist/storage.d.mts",
-      "import": "./dist/storage.mjs"
+      "import": "./dist/storage.mjs",
+      "default": "./dist/storage.mjs"
     },
     "./wrangler": {
       "types": "./dist/wrangler.d.mts",
-      "import": "./dist/wrangler.mjs"
+      "import": "./dist/wrangler.mjs",
+      "default": "./dist/wrangler.mjs"
     },
     "./cache": {
       "types": "./dist/cache.d.mts",
-      "import": "./dist/cache.mjs"
+      "import": "./dist/cache.mjs",
+      "default": "./dist/cache.mjs"
     },
     "./checks": {
       "types": "./dist/checks.d.mts",
-      "import": "./dist/checks.mjs"
+      "import": "./dist/checks.mjs",
+      "default": "./dist/checks.mjs"
     }
   },
   "main": "./dist/module.mjs",

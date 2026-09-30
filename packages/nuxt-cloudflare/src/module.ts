@@ -278,8 +278,16 @@ async function auditGeneratedWranglerConfig(
   const policy = options.doctor ?? { _tag: 'advisory' }
   const outcome = evaluateWranglerDiagnostics(diagnostics, policy)
   const blocking = new Set(outcome.blockingDiagnostics)
-  const warnings = diagnostics.filter(diagnostic => diagnostic._tag === 'warning' && !blocking.has(diagnostic))
-  const information = diagnostics.filter(diagnostic => diagnostic._tag === 'info')
+  const accepted = new Set(policy._tag === 'strict' ? policy.allowedWarnings ?? [] : [])
+  const warnings = diagnostics.filter(diagnostic => diagnostic._tag === 'warning' && !blocking.has(diagnostic) && !accepted.has(diagnostic.code))
+  // Accepted warnings remain visible, with the severity chosen by the build policy.
+  const information = diagnostics.flatMap((diagnostic) => {
+    if (diagnostic._tag === 'info')
+      return [diagnostic]
+    if (diagnostic._tag === 'warning' && accepted.has(diagnostic.code))
+      return [{ ...diagnostic, _tag: 'info' as const }]
+    return []
+  })
   if (information.length > 0)
     logger.info(formatWranglerDiagnostics(information))
   if (warnings.length > 0)
