@@ -12,6 +12,7 @@
 //   3. `useNuxtQuery` fetches a `registerEndpoint`-mocked Nitro handler and
 //      stamps `lastFetched` after pending → success.
 
+import { useNuxtAsyncQuery } from '@harlan-zw/nuxt-use-query/async-query'
 import { retainQuery } from '@harlan-zw/nuxt-use-query/cache'
 import { useNuxtMutation } from '@harlan-zw/nuxt-use-query/mutation'
 import { useNuxtQuery } from '@harlan-zw/nuxt-use-query/query'
@@ -28,7 +29,7 @@ import { registerEndpoint } from '@nuxt/test-utils/runtime'
 import { describe, expect, it, vi } from 'vitest'
 import { effectScope } from 'vue'
 import { z } from 'zod'
-import { clearNuxtData, useNuxtApp } from '#app'
+import { clearNuxtData, refreshNuxtData, useNuxtApp } from '#app'
 import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
 
 // Counted handler so a refresh is observable by call count, not just shape.
@@ -512,6 +513,29 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     await useNuxtQuery<{ call: number }>('/api/echo-env', { key: 'dup-key-3' })
     await new Promise(r => setTimeout(r, 50))
     expect(echoCalls.mock.calls.length).toBeGreaterThan(callsAfterFirst)
+  })
+
+  describe.each(['fetch', 'async'] as const)('%s explicit refresh', (kind) => {
+    it.each(['refresh', 'execute', 'hook'] as const)('fetches fresh data through %s inside staleTime', async (action) => {
+      const key = `manual-${kind}-${action}`
+      let value = 1
+      const handler = vi.fn(async () => ({ value }))
+      const options = { key, staleTime: 60_000 }
+      const query = kind === 'fetch'
+        ? await useNuxtQuery<{ value: number }>('/api/manual-refresh', { ...options, $fetch: handler as any })
+        : await useNuxtAsyncQuery(handler, options)
+
+      expect(query.data.value).toEqual({ value: 1 })
+      value = 2
+      if (action === 'hook')
+        await refreshNuxtData(key)
+      else
+        await query[action]()
+
+      expect(query.data.value).toEqual({ value: 2 })
+      expect(handler).toHaveBeenCalledTimes(2)
+      clearNuxtData(key)
+    })
   })
 
   it('a hydration-seeded payload key is served by getCachedData (no refetch) with staleTime > 0', async () => {

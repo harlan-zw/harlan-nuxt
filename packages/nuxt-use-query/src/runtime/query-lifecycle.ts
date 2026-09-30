@@ -130,7 +130,7 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
   if (refetchInterval !== false && refetchInterval != null) {
     const intervalMs = computed(() => normalizeRefetchInterval(toValue(refetchInterval)))
     const interval = useIntervalFn(() => {
-      if (enabled.value && intervalMs.value > 0)
+      if (enabled.value && intervalMs.value > 0 && isQueryStale(cache, key.value, staleTime))
         void query.refresh()
     }, intervalMs, { immediate: false })
     watch(intervalMs, (ms) => {
