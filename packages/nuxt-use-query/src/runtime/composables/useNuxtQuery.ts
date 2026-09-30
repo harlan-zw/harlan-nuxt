@@ -241,6 +241,10 @@ export function useNuxtQuery(
     // await the first promise instead.
     dedupe: fetchOptions.dedupe ?? 'defer',
     getCachedData: (cacheKey: string, nuxtApp: any, context: any) => {
+      // Explicit refresh must read the source, even while cached data is fresh.
+      if (context.cause === 'refresh:manual' || context.cause === 'refresh:hook')
+        return undefined
+
       if (fetchOptions.getCachedData) {
         const cached = fetchOptions.getCachedData(cacheKey, nuxtApp, context)
         if (cached !== undefined && !isQuerySsrDeferredPayload(cached))

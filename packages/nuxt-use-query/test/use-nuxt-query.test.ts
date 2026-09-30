@@ -377,6 +377,17 @@ describe('useNuxtQuery refetchInterval', () => {
     expect(fetchState.refresh).toHaveBeenCalledOnce()
   })
 
+  it('polls only after cached data becomes stale', () => {
+    cache.lastFetched.set('q', Date.now())
+    useNuxtQuery('/api/x', { key: 'q', staleTime: 30_000, refetchInterval: 10_000 })
+    lastIntervalFn.fn()
+    expect(fetchState.refresh).not.toHaveBeenCalled()
+
+    cache.lastFetched.set('q', Date.now() - 30_001)
+    lastIntervalFn.fn()
+    expect(fetchState.refresh).toHaveBeenCalledOnce()
+  })
+
   it('does not fire the polled refresh when enabled is false', () => {
     useNuxtQuery('/api/x', { key: 'q', refetchInterval: 30_000, enabled: false })
     lastIntervalFn.fn()
