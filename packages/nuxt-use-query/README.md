@@ -117,6 +117,7 @@ The RPC composables wrap `useNuxtQuery`, so both layers live in the same cache a
 `useNuxtQuery` follows TanStack Query's important defaults where Nuxt primitives allow:
 
 - `staleTime` defaults to `0`, so cached data is stale immediately and can refetch on mount, focus, or reconnect.
+- During hydration, a query renders the server-rendered data whatever its `staleTime`, so the first render matches the server markup. If that data is stale, the query refetches after mount.
 - `gcTime` defaults to 5 minutes. After that, inactive payload data is evicted.
 - `refetchOnMount`, `refetchOnWindowFocus`, and `refetchOnReconnect` default to `true`; pass `'always'` to bypass the stale check.
 - `staleTime: Infinity` and `staleTime: 'static'` treat data as immutable until you invalidate it.

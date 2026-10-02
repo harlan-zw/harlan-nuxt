@@ -6,14 +6,14 @@ import type {
 } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
+import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, ref, toValue } from 'vue'
 import { useFetch, useRequestFetch } from '#app'
-import { isQueryStale } from '../cache'
-import { readNuxtData } from '../nuxt-data'
+import { createQueryGetCachedData } from '../query-cached-data'
 import { applyQueryLifecycle } from '../query-lifecycle'
-import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredPayload, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
+import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
@@ -240,21 +240,7 @@ export function useNuxtQuery(
     // query still produce two network hits. 'defer' makes the second mount
     // await the first promise instead.
     dedupe: fetchOptions.dedupe ?? 'defer',
-    getCachedData: (cacheKey: string, nuxtApp: any, context: any) => {
-      // Explicit refresh must read the source, even while cached data is fresh.
-      if (context.cause === 'refresh:manual' || context.cause === 'refresh:hook')
-        return undefined
-
-      if (fetchOptions.getCachedData) {
-        const cached = fetchOptions.getCachedData(cacheKey, nuxtApp, context)
-        if (cached !== undefined && !isQuerySsrDeferredPayload(cached))
-          return cached
-      }
-      if (isQueryStale(cache, cacheKey, staleTime))
-        return undefined
-      const cached = readNuxtData(nuxtApp, cacheKey)
-      return isQuerySsrDeferredPayload(cached) ? undefined : cached
-    },
+    getCachedData: createQueryGetCachedData(cache, staleTime, fetchOptions.getCachedData as QueryGetCachedData | undefined),
     ...telemetryFetchOptions,
   } as any) as NuxtQuery<any, any>
 

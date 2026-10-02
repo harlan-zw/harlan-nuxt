@@ -1,14 +1,14 @@
 import type { AsyncDataOptions, NuxtApp } from 'nuxt/app'
 import type { MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
+import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { NuxtQuery } from './useNuxtQuery'
 import { computed, ref, toValue } from 'vue'
 import { useAsyncData } from '#app'
-import { isQueryStale } from '../cache'
-import { readNuxtData } from '../nuxt-data'
+import { createQueryGetCachedData } from '../query-cached-data'
 import { applyQueryLifecycle } from '../query-lifecycle'
-import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredPayload, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
+import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
@@ -132,21 +132,7 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
         return asyncOptions.transform ? await asyncOptions.transform(input) : input as unknown as DataT
       },
       dedupe: asyncOptions.dedupe ?? 'defer',
-      getCachedData: (cacheKey: string, app: any, context: any) => {
-        // Explicit refresh must read the source, even while cached data is fresh.
-        if (context.cause === 'refresh:manual' || context.cause === 'refresh:hook')
-          return undefined
-
-        if (asyncOptions.getCachedData) {
-          const cached = asyncOptions.getCachedData(cacheKey, app, context)
-          if (cached !== undefined && !isQuerySsrDeferredPayload(cached))
-            return cached
-        }
-        if (isQueryStale(cache, cacheKey, staleTime))
-          return undefined
-        const cached = readNuxtData(app, cacheKey)
-        return (isQuerySsrDeferredPayload(cached) ? undefined : cached) as DataT | undefined
-      },
+      getCachedData: createQueryGetCachedData(cache, staleTime, asyncOptions.getCachedData as QueryGetCachedData | undefined) as AsyncDataOptions<ResT, DataT>['getCachedData'],
     },
   ) as unknown as NuxtQuery<DataT, ErrorT | undefined>
 
