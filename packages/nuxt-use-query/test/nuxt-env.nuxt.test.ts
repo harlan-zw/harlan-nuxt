@@ -31,6 +31,7 @@ import { effectScope } from 'vue'
 import { z } from 'zod'
 import { clearNuxtData, refreshNuxtData, useNuxtApp } from '#app'
 import { seedCacheFromPayload } from '../src/runtime/query-cache-hydration'
+import { createQuerySsrDeferredPayload } from '../src/runtime/query-server-option'
 
 // Counted handler so a refresh is observable by call count, not just shape.
 const echoCalls = vi.fn()
@@ -534,6 +535,79 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
 
       expect(query.data.value).toEqual({ value: 2 })
       expect(handler).toHaveBeenCalledTimes(2)
+      clearNuxtData(key)
+    })
+  })
+
+  describe.each(['fetch', 'async'] as const)('%s hydration with the default staleTime', (kind) => {
+    function mountQuery(key: string, handler: () => Promise<{ source: string }>) {
+      return kind === 'fetch'
+        ? useNuxtQuery<{ source: string }>('/api/hydration-payload', { key, $fetch: handler as any })
+        : useNuxtAsyncQuery(handler, { key })
+    }
+
+    function stageServerPayload(key: string) {
+      const nuxt = useNuxtApp() as unknown as { payload: { data: Record<string, unknown> } }
+      nuxt.payload.data[key] = { source: 'payload' }
+      // The server fetched this key, and staleTime 0 makes it stale on arrival.
+      useQueryCache().lastFetched.set(key, Date.now() - 1_000)
+    }
+
+    it('renders the SSR payload while hydrating, then revalidates', async () => {
+      const key = `hydrating-${kind}`
+      const handler = vi.fn(async () => ({ source: 'network' }))
+      stageServerPayload(key)
+      const nuxt = useNuxtApp()
+
+      nuxt.isHydrating = true
+      let query: ReturnType<typeof mountQuery>
+      try {
+        query = mountQuery(key, handler)
+        // The hydration render must match the server markup.
+        expect(query.data.value).toEqual({ source: 'payload' })
+      }
+      finally {
+        nuxt.isHydrating = false
+      }
+
+      await vi.waitFor(() => expect(query.data.value).toEqual({ source: 'network' }))
+      expect(handler).toHaveBeenCalledOnce()
+      clearNuxtData(key)
+    })
+
+    it('fetches while hydrating when the server deferred the query', async () => {
+      const key = `hydrating-deferred-${kind}`
+      const handler = vi.fn(async () => ({ source: 'network' }))
+      stageServerPayload(key)
+      const nuxt = useNuxtApp()
+      nuxt.payload.data[key] = createQuerySsrDeferredPayload()
+
+      nuxt.isHydrating = true
+      let query: ReturnType<typeof mountQuery>
+      try {
+        query = mountQuery(key, handler)
+        expect(query.data.value).toBeUndefined()
+      }
+      finally {
+        nuxt.isHydrating = false
+      }
+
+      await vi.waitFor(() => expect(query.data.value).toEqual({ source: 'network' }))
+      expect(handler).toHaveBeenCalledOnce()
+      clearNuxtData(key)
+    })
+
+    it('fetches instead of serving a stale payload after hydration', async () => {
+      const key = `hydrated-stale-${kind}`
+      const handler = vi.fn(async () => ({ source: 'network' }))
+      stageServerPayload(key)
+
+      const query = mountQuery(key, handler)
+      expect(query.data.value).toBeUndefined()
+
+      await query
+      expect(query.data.value).toEqual({ source: 'network' })
+      expect(handler).toHaveBeenCalledOnce()
       clearNuxtData(key)
     })
   })
