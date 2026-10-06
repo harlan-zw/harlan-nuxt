@@ -62,11 +62,6 @@
       "import": "./dist/runtime/rpc/index.js",
       "default": "./dist/runtime/rpc/index.js"
     },
-    "./rpc/core": {
-      "types": "./dist/runtime/rpc/core.d.ts",
-      "import": "./dist/runtime/rpc/core.js",
-      "default": "./dist/runtime/rpc/core.js"
-    },
     "./subscription": {
       "types": "./dist/runtime/composables/useNuxtSubscription.d.ts",
       "import": "./dist/runtime/composables/useNuxtSubscription.js",
@@ -104,9 +99,6 @@
       ],
       "rpc": [
         "./dist/runtime/rpc/index.d.ts"
-      ],
-      "rpc/core": [
-        "./dist/runtime/rpc/core.d.ts"
       ],
       "subscription": [
         "./dist/runtime/composables/useNuxtSubscription.d.ts"

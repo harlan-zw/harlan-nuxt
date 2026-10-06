@@ -1,23 +1,16 @@
-import type { AsyncDataAddonInstance } from 'nuxt/app'
-import type { QueryLifecycleOptions } from './query-lifecycle'
-import { defineUseAsyncDataAddon, defineUseFetchAddon } from '#imports'
+import type { LifecycleQuery, QueryLifecycleOptions } from './query-lifecycle'
 import { applyQueryLifecycle } from './query-lifecycle'
 
-export interface QueryAddonOptions {
-  _queryLifecycle: QueryLifecycleOptions
-}
-
-function setup(options: QueryAddonOptions) {
-  return (asyncData: AsyncDataAddonInstance) => {
-    const query = applyQueryLifecycle(asyncData, options._queryLifecycle)
-    return {
-      displayData: query.displayData,
-      isPlaceholderData: query.isPlaceholderData,
-      isPending: query.isPending,
-      isFetching: query.isFetching,
-    }
+export function applyQueryAddon<TQuery extends LifecycleQuery>(query: TQuery, options: QueryLifecycleOptions) {
+  const result = applyQueryLifecycle(query, options)
+  const extensions = {
+    displayData: result.displayData,
+    isPlaceholderData: result.isPlaceholderData,
+    isPending: result.isPending,
+    isFetching: result.isFetching,
   }
+  // Nuxt resolves its AsyncData promise to a separate instance.
+  // Extend both surfaces before callers await the query.
+  void Promise.resolve(query).then(instance => Object.assign(instance, extensions))
+  return result
 }
-
-export const queryFetchAddon = defineUseFetchAddon({ setup })
-export const queryAsyncDataAddon = defineUseAsyncDataAddon({ setup })
