@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { sentryCloudflareNitroPlugin } from '../src/runtime/server/cloudflare-sdk'
 
 const mocks = vi.hoisted(() => ({
+  scope: {},
   captureException: vi.fn(),
   wrapRequestHandler: vi.fn(async (_options: unknown, handler: () => Promise<Response>) => handler()),
   error: undefined as undefined | ((error: Error) => void),
 }))
-vi.mock('@sentry/cloudflare', () => ({ captureException: mocks.captureException, getDefaultIntegrations: () => [], setAsyncLocalStorageAsyncContextStrategy: vi.fn() }))
+vi.mock('@sentry/cloudflare', () => ({ captureException: mocks.captureException, getDefaultIntegrations: () => [], getIsolationScope: () => mocks.scope, setAsyncLocalStorageAsyncContextStrategy: vi.fn() }))
 vi.mock('@sentry/cloudflare/request', () => ({ wrapRequestHandler: mocks.wrapRequestHandler }))
 vi.mock('nitro/app', () => ({ useNitroHooks: () => ({ hook: (_name: string, handler: (error: Error) => void) => {
   mocks.error = handler

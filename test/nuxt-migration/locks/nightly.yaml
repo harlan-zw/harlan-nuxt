@@ -4901,7 +4901,6 @@ snapshots:
       '@nuxt/kit': 4.6.0(@nuxt/schema-nightly@5.0.0-2610052343-36eafab)(confbox@0.2.4)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(magic-string@1.4.3)(mlly@1.8.2)(oxc-parser@0.152.0)(rolldown@1.2.12)(unplugin@3.4.0(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.64.0)(vite@8.3.2))
       '@sentry/nuxt': 11.4.0(magic-string@1.4.3)(magicast@0.5.5)(nuxt-nightly@5.0.0-2610052343-36eafab)(oxc-parser@0.152.0)(rolldown@1.2.12)(rollup@4.64.0)(unplugin@3.4.0(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.64.0)(vite@8.3.2))(vue@3.5.43(typescript@5.9.3))(wrangler@4.147.0)
       nuxt: nuxt-nightly@5.0.0-2610052343-36eafab(e89131e9d49dfdf0f64d5d47d95a99d4)
-      pathe: 2.0.3
     optionalDependencies:
       '@harlan-zw/nuxt-checkin': file:tarballs/nuxt-checkin.tgz(@nuxt/schema-nightly@5.0.0-2610052343-36eafab)(confbox@0.2.4)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(magic-string@1.4.3)(mlly@1.8.2)(nuxt-nightly@5.0.0-2610052343-36eafab)(oxc-parser@0.152.0)(rolldown@1.2.12)(unplugin@3.4.0(esbuild@0.28.2)(rolldown@1.2.12)(rollup@4.64.0)(vite@8.3.2))
       '@sentry/cloudflare': 11.4.0(wrangler@4.147.0)

@@ -45,6 +45,17 @@ export default defineNuxtModule<ModuleOptions>({
     const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
     nuxt.options.alias['#nuxt-use-query/nitro'] = serverRuntime
     ;(nuxt.options.nitro.alias ??= {})['#nuxt-use-query/nitro'] = serverRuntime
+    const hooksModule = resolveServerVariant({ nitro2: 'nitropack/types', nitro3: 'nitro/types' })!
+    addTypeTemplate({
+      filename: 'types/nuxt-use-query-server-hooks.d.ts',
+      getContents: () => `
+import type { NuxtUseQueryNitroRuntimeHooks } from '@harlan-zw/nuxt-use-query/telemetry'
+declare module '${hooksModule}' {
+  interface NitroRuntimeHooks extends NuxtUseQueryNitroRuntimeHooks {}
+}
+export {}
+`,
+    }, { nuxt: true, nitro: true })
     if (resolveServerVariant({ nitro2: true, nitro3: false })) {
       const externals = nuxt.options.nitro.externals ??= {}
       ;(externals.inline ??= []).push(resolver.resolve('./runtime'))

@@ -1,7 +1,7 @@
 import type { NitroApp } from 'nitro/types'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. This adapter runs only on Cloudflare with Sentry enabled.
-import { captureException, getDefaultIntegrations, setAsyncLocalStorageAsyncContextStrategy } from '@sentry/cloudflare'
+import { captureException, getDefaultIntegrations, getIsolationScope, setAsyncLocalStorageAsyncContextStrategy } from '@sentry/cloudflare'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. This adapter runs only on Cloudflare with Sentry enabled.
 import { wrapRequestHandler } from '@sentry/cloudflare/request'
@@ -12,15 +12,21 @@ type PlatformRequest = Request & { runtime?: { cloudflare?: { context?: Paramete
 export function sentryCloudflareNitroPlugin(options: Parameters<typeof wrapRequestHandler>[0]['options']) {
   return (app: NitroApp) => {
     setAsyncLocalStorageAsyncContextStrategy()
+    const requests = new WeakSet<ReturnType<typeof getIsolationScope>>()
     const fetch = app.fetch.bind(app)
     app.fetch = (request) => {
       const req = request as PlatformRequest
+      if (requests.has(getIsolationScope()))
+        return fetch(req)
       return wrapRequestHandler({
         options: { defaultIntegrations: getDefaultIntegrations(options), ...options },
         request: req,
         context: req.runtime?.cloudflare?.context,
         captureErrors: false,
-      }, () => fetch(req))
+      }, () => {
+        requests.add(getIsolationScope())
+        return fetch(req)
+      })
     }
     useNitroHooks().hook('error', (error) => {
       const status = (error as { status?: number, statusCode?: number }).status

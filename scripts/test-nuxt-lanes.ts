@@ -78,7 +78,7 @@ import type { FetchSummaryTelemetryEvent } from '@harlan-zw/nuxt-use-query/telem
 import { NUXT_USE_QUERY_TELEMETRY_HOOKS } from '@harlan-zw/nuxt-use-query/telemetry'
 export default defineNitroPlugin(() => {
   const hooks = ${lane === 'nightly' ? 'useNitroHooks()' : 'useNitroApp().hooks'}
-  hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSummary as never, ((record: FetchSummaryTelemetryEvent) => { telemetryEvidence.push(record) }) as never)
+  hooks.hook(NUXT_USE_QUERY_TELEMETRY_HOOKS.fetchSummary, (record: FetchSummaryTelemetryEvent) => { telemetryEvidence.push(record) })
   hooks.hook('wide-events:emit', (record) => {
     if (record.kind !== 'background') return
     drainEvidence.push('failed')

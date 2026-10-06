@@ -96,8 +96,7 @@
     }
   },
   "dependencies": {
-    "@nuxt/kit": "catalog:",
-    "pathe": "catalog:"
+    "@nuxt/kit": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

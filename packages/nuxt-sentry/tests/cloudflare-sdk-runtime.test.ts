@@ -13,6 +13,16 @@ function deferred() {
 }
 
 describe('cloudflare SDK request boundary', () => {
+  it('keeps the incoming request metadata after a local subrequest', async () => {
+    const app = { fetch: async (request: Request): Promise<Response> => {
+      if (new URL(request.url).pathname === '/outer')
+        await app.fetch(new Request('https://example.test/inner'))
+      return Response.json(getIsolationScope().getScopeData().sdkProcessingMetadata.normalizedRequest)
+    } }
+    sentryCloudflareNitroPlugin({ enabled: false, tracesSampleRate: 0 })(app as never)
+    const response = await app.fetch(new Request('https://example.test/outer'))
+    expect(await response.json()).toEqual(expect.objectContaining({ url: 'https://example.test/outer' }))
+  })
   it('keeps concurrent request tags isolated after an await', async () => {
     const first = deferred()
     const second = deferred()
