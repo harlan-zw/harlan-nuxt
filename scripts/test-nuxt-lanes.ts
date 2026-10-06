@@ -68,6 +68,8 @@ delete policy.catalog
 policy.overrides = { ...dependencies, nuxt }
 // These archives come from this checkout. Their versions can precede npm publication.
 policy.trustPolicyExclude = [...(policy.trustPolicyExclude ?? []), ...localArchives]
+// Published versions still use local archives, so exempt their exact versions from age checks too.
+policy.minimumReleaseAgeExclude = [...(policy.minimumReleaseAgeExclude ?? []), ...localArchives]
 if (lane === 'nightly') {
   // This pinned Kit requires ^1.9.0. Nuxt's matching workspace approves that exact release too.
   policy.minimumReleaseAgeExclude = [...(policy.minimumReleaseAgeExclude ?? []), 'package-manager-detector@1.9.0', ...['nuxt', '@nuxt/kit', '@nuxt/schema', '@nuxt/vite-builder', '@nuxt/nitro-server', '@nuxt/vite-server'].map(name => `${name}-nightly@${NIGHTLY}`)]

@@ -372,8 +372,10 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
         return artifact.content
       },
     }, { nitro: true })
-    nuxt.hook('prepare:types', ({ references }) => {
+    // Shared route schemas need binding types without adding Worker globals to Vue's type parser.
+    nuxt.hook('prepare:types', ({ references, sharedReferences }) => {
       references.push({ path: bindingTypesTemplate.dst })
+      sharedReferences.push({ path: bindingTypesTemplate.dst })
     })
   }
 
