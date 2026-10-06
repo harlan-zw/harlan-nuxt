@@ -5,7 +5,7 @@ import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, createResolver, defineNuxtModule, hasNuxtModule, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, createResolver, defineNuxtModule, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -485,7 +485,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-cloudflare',
     configKey: 'nuxtCloudflare',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   defaults: {
     bindingTypes: true,
@@ -498,5 +498,11 @@ export default defineNuxtModule<ModuleOptions>({
     versionMetadataBinding: 'CF_VERSION_METADATA',
     workersCache: { _tag: 'enabled', crossVersion: false },
   },
-  setup: setupCloudflareModule,
+  setup(options, nuxt) {
+    const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    nuxt.options.alias['#nuxt-cloudflare/nitro'] = serverRuntime
+    ;(nuxt.options.nitro.alias ??= {})['#nuxt-cloudflare/nitro'] = serverRuntime
+    setupCloudflareModule(options, nuxt)
+  },
 })

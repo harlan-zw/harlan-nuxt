@@ -26,19 +26,23 @@
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     },
     "./cf-jobs": {
       "types": "./dist/runtime/server/adapters/cf-jobs.d.ts",
-      "import": "./dist/runtime/server/adapters/cf-jobs.js"
+      "import": "./dist/runtime/server/adapters/cf-jobs.js",
+      "default": "./dist/runtime/server/adapters/cf-jobs.js"
     },
     "./build": {
       "types": "./dist/build/index.d.mts",
-      "import": "./dist/build/index.mjs"
+      "import": "./dist/build/index.mjs",
+      "default": "./dist/build/index.mjs"
     }
   },
   "main": "./dist/module.mjs",
@@ -60,7 +64,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
@@ -75,7 +79,7 @@
   },
   "peerDependencies": {
     "@harlan-zw/nuxt-cf-jobs": "workspace:^",
-    "nuxt": ">=4.5.0 <6.0.0",
+    "nuxt": "^4.6.0 || ^5.0.0",
     "vite": "^8.0.0"
   },
   "peerDependenciesMeta": {

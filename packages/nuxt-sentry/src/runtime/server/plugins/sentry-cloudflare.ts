@@ -6,8 +6,8 @@ import type { SentryRuntimeConfig } from '../../shared/types'
 import { consoleLoggingIntegration, SDK_VERSION, setContext, setTags } from '@sentry/cloudflare'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer, resolved from the site's own `@sentry/nuxt`.
-import { sentryCloudflareNitroPlugin } from '@sentry/nuxt/module/plugins'
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import { sentryCloudflareNitroPlugin } from '#nuxt-sentry/cloudflare-sdk'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-sentry/nitro'
 import {
   createBeforeSend,
   createSentryInitOptions,
@@ -21,7 +21,7 @@ import { resolveWorkerAttribution } from '../attribution'
  *
  * The default `sentry.server.config.ts` is Node based and cannot run on
  * Workers, so this Nitro plugin, backed by `@sentry/cloudflare`, is the
- * supported replacement. It wraps `nitroApp.localFetch` for per request
+ * supported replacement. Its builder adapter wraps the request fetch for
  * isolation and hooks Nitro's `error` event to capture unhandled errors.
  *
  * Registered by the module from inside this package, which is what lets
@@ -59,7 +59,8 @@ export default defineNitroPlugin((nitroApp: NitroApp) => {
   const binding = target.workerVersionBinding
   nitroApp.hooks.hook('request', (event) => {
     const env = (event.context as { cloudflare?: { env?: Record<string, unknown> } }).cloudflare?.env
-    const attribution = resolveWorkerAttribution(env?.[binding])
+    const requestEnv = (event.req as unknown as { runtime?: { cloudflare?: { env?: Record<string, unknown> } } }).runtime?.cloudflare?.env
+    const attribution = resolveWorkerAttribution((env ?? requestEnv)?.[binding])
     if (!attribution)
       return
     setTags(attribution.tags)

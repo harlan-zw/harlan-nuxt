@@ -1,5 +1,5 @@
-import type { NitroApp } from 'nitropack/types'
 import type { WideEventRecord } from '../src/runtime/server/index'
+import type { RuntimeApp } from '../src/runtime/server/nitro-types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { scheduleWideEventDrain } from '../src/runtime/server/drain'
 
@@ -17,12 +17,12 @@ const record: WideEventRecord = {
   timestamp: '2026-08-13T00:00:00.000Z',
 }
 
-function nitroApp(hook: () => Promise<void>): NitroApp {
+function nitroApp(hook: () => Promise<void>): RuntimeApp {
   return {
     hooks: {
       callHookParallel: () => hook(),
     },
-  } as unknown as NitroApp
+  } as unknown as RuntimeApp
 }
 
 describe('scheduleWideEventDrain', () => {

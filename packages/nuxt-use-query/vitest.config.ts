@@ -7,6 +7,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url))
 const r = (path: string) => resolve(rootDir, path)
 
 const packageAliases = {
+  '#nuxt-use-query/nitro': r('src/runtime/server/nitro2.ts'),
   '@harlan-zw/nuxt-use-query/async-query': r('src/runtime/composables/useNuxtAsyncQuery.ts'),
   '@harlan-zw/nuxt-use-query/cache': r('src/runtime/cache.ts'),
   '@harlan-zw/nuxt-use-query/mutation': r('src/runtime/composables/useNuxtMutation.ts'),
@@ -42,6 +43,7 @@ export default defineConfig({
       defineProject({
         resolve: {
           alias: {
+            '#imports': r('test/stubs/factories.ts'),
             '#app': r('test/stubs/app.ts'),
             ...packageAliases,
           },

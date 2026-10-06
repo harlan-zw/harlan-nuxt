@@ -26,19 +26,23 @@
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     },
     "./server/task": {
       "types": "./dist/runtime/server/task.d.ts",
-      "import": "./dist/runtime/server/task.js"
+      "import": "./dist/runtime/server/task.js",
+      "default": "./dist/runtime/server/task.js"
     },
     "./checks": {
       "types": "./dist/checks.d.mts",
-      "import": "./dist/checks.mjs"
+      "import": "./dist/checks.mjs",
+      "default": "./dist/checks.mjs"
     }
   },
   "main": "./dist/module.mjs",
@@ -60,7 +64,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
@@ -77,7 +81,8 @@
     "@harlan-zw/nuxt-checkin": "^0.1.0 || ^0.2.0-0 || ^0.3.0",
     "@sentry/cloudflare": "catalog:",
     "@sentry/nuxt": "catalog:",
-    "nuxt": ">=4.5.0 <6.0.0"
+    "nitro": "^3.0.0-0",
+    "nuxt": "^4.6.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {
     "@harlan-zw/nuxt-checkin": {
@@ -85,11 +90,13 @@
     },
     "@sentry/cloudflare": {
       "optional": true
+    },
+    "nitro": {
+      "optional": true
     }
   },
   "dependencies": {
-    "@nuxt/kit": "catalog:",
-    "pathe": "catalog:"
+    "@nuxt/kit": "catalog:"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
@@ -102,6 +109,7 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "h3": "catalog:",
+    "nitro": "catalog:",
     "nitropack": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",

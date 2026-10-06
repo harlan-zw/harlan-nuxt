@@ -1,5 +1,4 @@
-// @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
-import { useNitroApp } from 'nitropack/runtime'
+import { useNitroApp } from '#nuxt-cf-jobs/nitro'
 import {
   CF_JOBS_BROADCAST_SYSTEM_CHANNEL,
   cfJobsBroadcastTopic,

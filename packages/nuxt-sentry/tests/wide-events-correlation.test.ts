@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 const addWideEventFields = vi.fn()
 const hooks: Record<string, (event: unknown) => void> = {}
 
-vi.mock('#imports', () => ({ addWideEventFields }))
+vi.mock('@harlan-zw/nuxt-wide-events/server', () => ({ addWideEventFields }))
 vi.mock('@sentry/cloudflare', () => ({ getTraceData: () => ({ 'sentry-trace': 'abc-def-1' }) }))
 vi.mock('nitropack/runtime', () => ({
   defineNitroPlugin: (plugin: (app: unknown) => void) => plugin,

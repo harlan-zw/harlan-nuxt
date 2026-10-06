@@ -19,5 +19,6 @@ export default defineNuxtConfig({
       waterfallThreshold: 60_000,
     },
   },
+  experimental: { routeTypedFetch: true },
   compatibilityDate: '2025-01-01',
 })

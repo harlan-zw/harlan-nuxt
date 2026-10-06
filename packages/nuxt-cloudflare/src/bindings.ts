@@ -44,8 +44,11 @@ function envFromContext(value: unknown): Record<string, unknown> | undefined {
 export function resolveCloudflareBindings<Environment extends object = CloudflareBindings>(source?: unknown): Environment | undefined {
   const sourceRecord = asRecord(source)
   const sourceEnv = envFromContext(sourceRecord?.context) ?? envFromContext(sourceRecord)
+  const requestRuntime = asRecord(asRecord(sourceRecord?.req)?.runtime)
+  const runtimeEnv = asRecord(asRecord(requestRuntime?.cloudflare)?.env)
+    ?? asRecord(asRecord(asRecord(sourceRecord?.runtime)?.cloudflare)?.env)
   const globalEnv = asRecord((globalThis as CloudflareEntryHost).__env__)
-  return (sourceEnv ?? globalEnv) as Environment | undefined
+  return (sourceEnv ?? runtimeEnv ?? globalEnv) as Environment | undefined
 }
 
 /** Sets the environment used by eventless Cloudflare binding resolution. */

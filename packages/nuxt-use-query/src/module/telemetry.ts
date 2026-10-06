@@ -1,5 +1,5 @@
 import type { FetchTelemetryRuntimeOptions } from '../runtime/telemetry'
-import { addServerPlugin } from '@nuxt/kit'
+import { addNitroPlugin } from '@nuxt/kit'
 import { consola } from 'consola'
 import {
   collectFetchTelemetryOptionWarnings,
@@ -32,7 +32,7 @@ export function setupFetchTelemetryModule(
 
   reportTelemetryOptionWarnings(telemetry)
   setRuntimeTelemetryConfig(runtimeConfig, telemetry)
-  addServerPlugin(serverPlugin)
+  addNitroPlugin(serverPlugin)
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { $Fetch } from 'nitropack'
+import type { $Fetch } from 'nuxt/app'
 import type { z, ZodError, ZodIssue } from 'zod'
 import type { Outcome } from '../lifecycle'
 import { runIsolatedHooks, toOutcome } from '../lifecycle'

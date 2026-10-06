@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
 
 const alias = {
+  '#nuxt-cf-jobs/nitro': new URL('./src/runtime/server/nitro2.ts', import.meta.url).pathname,
   '#cf-jobs/server': fileURLToPath(new URL('./src/runtime/server/index.ts', import.meta.url)),
   '#cf-jobs/cloudflare': fileURLToPath(new URL('./src/runtime/server/cloudflare.ts', import.meta.url)),
   '#cf-jobs/testing': fileURLToPath(new URL('./src/runtime/server/testing.ts', import.meta.url)),
@@ -17,14 +18,14 @@ const alias = {
 export default defineConfig({
   test: {
     projects: [
-      // Pure unit tests: happy-dom, runtime modules resolved from source via the
+      // Server unit tests: Node, runtime modules resolved from source via the
       // aliases above (with the nitropack stub).
       {
         resolve: { alias },
         test: {
           name: 'unit',
           globals: true,
-          environment: 'happy-dom',
+          environment: 'node',
           include: ['tests/**/*.test.ts'],
           exclude: [
             ...configDefaults.exclude,

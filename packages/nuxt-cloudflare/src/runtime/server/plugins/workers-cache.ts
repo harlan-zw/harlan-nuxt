@@ -1,7 +1,6 @@
-import type { H3Event } from 'h3'
 import type { CacheDecision, HtmlCacheMode } from '../utils/workers-cache'
-import { getHeader, getResponseHeader, getResponseStatus, setResponseHeader } from 'h3'
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import type { HeaderEvent } from './headers'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-cloudflare/nitro'
 import {
   clampSharedCacheSeconds,
   NO_STORE_BROWSER,
@@ -11,6 +10,7 @@ import {
   sharedCacheSeconds,
   statedPolicy,
 } from '../utils/workers-cache'
+import { getHeader, getResponseHeader, getResponseStatus, setResponseHeader } from './headers'
 
 /**
  * One warning per route per isolate, bounded.
@@ -49,13 +49,13 @@ const CREDENTIAL_HEADERS = [
   'x-api-key',
 ] as const
 
-function isAuthenticated(event: H3Event): boolean {
+function isAuthenticated(event: HeaderEvent): boolean {
   return CREDENTIAL_HEADERS.some(name => Boolean(getHeader(event, name)))
 }
 
 const DOCUMENT_TYPE_RE = /^(?:text\/html|application\/xhtml\+xml)\s*(?:;|$)/i
 
-function isDocumentResponse(event: H3Event): boolean {
+function isDocumentResponse(event: HeaderEvent): boolean {
   const type = getResponseHeader(event, 'content-type')
   return typeof type === 'string' && DOCUMENT_TYPE_RE.test(type)
 }
@@ -73,7 +73,7 @@ export default defineNitroPlugin((nitroApp) => {
   // a route rule setting only `cache-control` would be honoured and then
   // overruled by our own value in the higher-precedence header. Leaving it
   // untouched also means its presence later can only mean the app set it.
-  nitroApp.hooks.hook('request', (event: H3Event) => {
+  nitroApp.hooks.hook('request', (event: HeaderEvent) => {
     setResponseHeader(event, 'cache-control', NO_STORE_BROWSER)
   })
 
@@ -81,8 +81,8 @@ export default defineNitroPlugin((nitroApp) => {
   // object with no event, so it cannot see what a route rule set, and the
   // previous version overwrote unconditionally for exactly that reason.
 
-  nitroApp.hooks.hook('beforeResponse', (event: H3Event) => {
-    const config = useRuntimeConfig(event)
+  nitroApp.hooks.hook('beforeResponse', (event: HeaderEvent) => {
+    const config = useRuntimeConfig()
     const mode = (config.nuxtCloudflare?.htmlCacheMode ?? 'auto') as HtmlCacheMode
 
     const edge = getResponseHeader(event, 'cloudflare-cdn-cache-control')

@@ -1,7 +1,11 @@
-import { H3Event } from 'h3'
+import type { HeaderEvent } from '../src/runtime/server/plugins/headers'
 import { describe, expect, it, vi } from 'vitest'
 
-type Hook = (event: H3Event) => void
+function createEvent(req: Request) {
+  return { req, res: { headers: new Headers(), status: 200 }, path: new URL(req.url).pathname }
+}
+
+type Hook = (event: HeaderEvent, response?: { body: unknown }) => void | Promise<void>
 
 async function runPlugin(options: {
   routeRuleHeaders?: Record<string, string>
@@ -32,7 +36,7 @@ async function runPlugin(options: {
     },
   })
 
-  const event = new H3Event(new Request('https://x.test/gh/a/b', {
+  const event = createEvent(new Request('https://x.test/gh/a/b', {
     headers: { 'sec-fetch-dest': 'document', ...options.requestHeaders },
   }))
 
@@ -45,7 +49,7 @@ async function runPlugin(options: {
     event.res.headers.set(name, value)
   if (options.status)
     event.res.status = options.status
-  hooks.beforeResponse?.(event)
+  await hooks.beforeResponse?.(event, { body: undefined })
 
   return {
     browser: event.res.headers.get('cache-control'),
@@ -146,11 +150,11 @@ describe('responses that are not documents', () => {
       },
     })
 
-    const event = new H3Event(new Request('https://x.test/_nuxt/entry.abc.js'))
+    const event = createEvent(new Request('https://x.test/_nuxt/entry.abc.js'))
     hooks.request?.(event)
     event.res.headers.set('content-type', 'text/javascript')
     event.res.headers.set('cache-control', 'public, max-age=31536000, immutable')
-    hooks.beforeResponse?.(event)
+    await hooks.beforeResponse?.(event, { body: undefined })
 
     expect(event.res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
   })

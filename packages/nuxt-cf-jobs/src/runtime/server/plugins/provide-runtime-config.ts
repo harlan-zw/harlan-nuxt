@@ -1,5 +1,4 @@
-// @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-cf-jobs/nitro'
 import { provideJobRuntimeConfig } from '../runtime-config'
 
 // Optional host adapter for direct `useJobRuntimeConfig` consumers. The Nuxt

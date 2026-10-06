@@ -26,7 +26,8 @@ describe('nuxt module integration', () => {
 
     expect(plugins).toHaveLength(1)
     expect(plugins[0]!.totalBytes).toBeGreaterThan(0)
-    expect(plugins[0]!.totalBytes).toBeLessThanOrEqual(2 * 1024)
+    // The complete runtime now includes the builder's hook and drain adapter.
+    expect(plugins[0]!.totalBytes).toBeLessThanOrEqual(2.5 * 1024)
     expect(record.response).toEqual({ recorded: true })
     expect(record.logs).toEqual([
       expect.objectContaining({

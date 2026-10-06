@@ -26,15 +26,18 @@
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     },
     "./external": {
       "types": "./dist/runtime/external/index.d.ts",
-      "import": "./dist/runtime/external/index.js"
+      "import": "./dist/runtime/external/index.js",
+      "default": "./dist/runtime/external/index.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -56,7 +59,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
@@ -70,7 +73,7 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=4.5.0 <6.0.0"
+    "nuxt": "^4.6.0 || ^5.0.0"
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",

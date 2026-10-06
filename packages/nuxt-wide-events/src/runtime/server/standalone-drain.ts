@@ -1,7 +1,7 @@
 import type { WideEventsRuntimeConfig } from '../../types'
 import type { WideEventFields } from './index'
 import type { DrainedBackgroundWideEvent } from './standalone-core'
-import { useNitroApp } from 'nitropack/runtime'
+import { useNitroApp } from '#nuxt-wide-events/nitro'
 import config from '#wide-events/config'
 import { writeDevelopmentWideEvent } from './development'
 import { drainWideEvent } from './drain'

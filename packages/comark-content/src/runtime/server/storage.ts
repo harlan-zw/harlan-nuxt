@@ -1,4 +1,4 @@
-import { useStorage } from '#imports'
+import { useStorage } from '#comark-content/storage'
 import { createContentStorage } from './storage-core'
 
 const storage = createContentStorage(path => useStorage('assets:comark-content').getItemRaw(path))

@@ -1,6 +1,6 @@
 import type { GitHubSponsorsResponse, SponsorOverride, SponsorTier } from '../../shared/types'
-import { defineEventHandler } from 'h3'
-import { defineCachedFunction, useRuntimeConfig } from 'nitropack/runtime'
+import { defineEventHandler, useRuntimeConfig } from 'nuxt/server'
+import { defineCachedFunction } from '#nuxt-github-sponsors/nitro'
 import { fetchGitHubSponsorships, preparePublicSponsors, toGitHubSponsorsResponse } from '../github'
 
 interface SponsorsRuntimeConfig {
@@ -12,11 +12,8 @@ interface SponsorsRuntimeConfig {
   }
 }
 
-// nitropack ships h3 v1 types while the app runs h3 v2. One event object, two
-// type packages, so the event crosses the boundary as an opaque value.
-function readSponsorsConfig(event: unknown): SponsorsRuntimeConfig['githubSponsors'] {
-  const config = useRuntimeConfig(event as Parameters<typeof useRuntimeConfig>[0]) as unknown as SponsorsRuntimeConfig
-  return config.githubSponsors
+function readSponsorsConfig(): SponsorsRuntimeConfig['githubSponsors'] {
+  return (useRuntimeConfig() as unknown as SponsorsRuntimeConfig).githubSponsors
 }
 
 const cachedSponsorships = defineCachedFunction(async (input: { login: string, token: string }) => ({
@@ -32,8 +29,8 @@ const cachedSponsorships = defineCachedFunction(async (input: { login: string, t
   validate: entry => entry.value?.result._tag === 'ok',
 })
 
-export default defineEventHandler(async (event): Promise<GitHubSponsorsResponse> => {
-  const config = readSponsorsConfig(event)
+export default defineEventHandler(async (): Promise<GitHubSponsorsResponse> => {
+  const config = readSponsorsConfig()
   const fallback = preparePublicSponsors([], config.tiers, config.overrides).collection
   const token = config.token?.trim()
   if (!token)

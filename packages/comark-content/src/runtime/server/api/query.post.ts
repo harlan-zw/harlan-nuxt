@@ -1,4 +1,4 @@
-import { defineEventHandler, readBody } from '#imports'
+import { defineEventHandler, readBody } from 'nuxt/server'
 import { executeIndexedQueryPlan } from '../../core/query'
 import { parseQueryRequest } from '../../shared/protocol'
 import { loadCollectionIndex, loadDocumentBody } from '../storage'

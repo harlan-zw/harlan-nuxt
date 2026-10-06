@@ -1,6 +1,6 @@
 import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchTimeoutTelemetryEvent, FetchWaterfallTelemetryEvent, LargePayloadTelemetryEvent, NestedFetchTelemetryEvent, RecursiveFetchTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
 import { consola } from 'consola'
-import { defineNitroPlugin, useEvent, useRuntimeConfig } from 'nitropack/runtime'
+import { defineNitroPlugin, useEvent, useRuntimeConfig } from '#nuxt-use-query/nitro'
 import {
   analyseFetchChain,
   callTelemetryHook,
@@ -81,7 +81,32 @@ export default defineNitroPlugin((nitroApp) => {
   // while keeping the random call in request scope.
   let internalStackToken: string | undefined
   const getInternalStackToken = () => (internalStackToken ??= createInternalStackToken())
-  const original = globalThis.$fetch as FetchLike | undefined
+  if (nitroApp._tag === 'Nitro3') {
+    const instrument = (fetch: (request: Request) => Promise<Response>) => (request: Request, init?: Record<string, unknown>) => {
+      const event = safeEvent()
+      // Incoming HTTP calls have no parent request. Only nested fetches are upstream work.
+      if (!event)
+        return fetch(request)
+      return trackFetch(request, { ...init, headers: request.headers, signal: request.signal }, () => getEventState(event, getInternalStackToken()), async (opts) => {
+        const response = await fetch(nativeRequest(request, opts))
+        if (typeof opts?.onResponse === 'function')
+          await opts.onResponse({ response })
+        return response
+      }, true)
+    }
+    nitroApp.setFetch(instrument(nitroApp.fetch))
+    const current = globalThis.fetch as typeof globalThis.fetch & { [ORIGINAL_KEY]?: typeof globalThis.fetch }
+    const original = current[ORIGINAL_KEY] ?? current
+    const wrapped: typeof current = (input, init) => instrument(request => original(request, {
+      ...init,
+      body: undefined,
+      headers: request.headers,
+      signal: request.signal,
+    }))(new Request(input, init), init as Record<string, unknown> | undefined)
+    wrapped[ORIGINAL_KEY] = original
+    globalThis.fetch = wrapped
+  }
+  const original = nitroApp._tag === 'Nitro3' ? undefined : globalThis.$fetch as FetchLike | undefined
   const originalGlobalFetch = original?.[ORIGINAL_KEY] ?? original
   if (originalGlobalFetch) {
     globalThis.$fetch = wrapFetch(originalGlobalFetch, () => {
@@ -91,6 +116,8 @@ export default defineNitroPlugin((nitroApp) => {
   }
 
   nitroApp.hooks.hook('request', (event: any) => {
+    if (nitroApp._tag === 'Nitro3')
+      return
     const fetchEvent = event as { $fetch?: FetchLike }
     const fetcher = fetchEvent.$fetch
     if (!fetcher) {
@@ -99,7 +126,7 @@ export default defineNitroPlugin((nitroApp) => {
     fetchEvent.$fetch = wrapFetch(fetcher[ORIGINAL_KEY] ?? fetcher, () => getEventState(event, getInternalStackToken()), true)
   })
 
-  nitroApp.hooks.hook('afterResponse', async (event: any) => {
+  nitroApp.hooks.hook('response', async (_response: Response, event: any) => {
     const state = (event?.context as Record<string, unknown> | undefined)?.[STATE_KEY]
     if (state == null)
       return
@@ -390,6 +417,16 @@ export default defineNitroPlugin((nitroApp) => {
   }
 })
 
+function nativeRequest(request: Request, opts: Record<string, unknown> | undefined): Request {
+  const timeout = readFetchTimeout(opts?.timeout)
+  const signal = typeof timeout === 'number' && timeout > 0
+    ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)])
+    : request.signal
+  const next = new Request(request, { headers: opts?.headers as HeadersInit | undefined, signal })
+  const platform = request as Request & { context?: unknown, runtime?: unknown }
+  return Object.assign(next, { context: platform.context, runtime: platform.runtime })
+}
+
 function readOptions() {
   try {
     const config = useRuntimeConfig() as unknown as FetchTelemetryRuntimeConfig
@@ -405,6 +442,7 @@ function safeEvent(): any {
     return useEvent()
   }
   catch {
+    // Nitro has no active request during plugin startup or background work.
     return undefined
   }
 }
@@ -434,7 +472,7 @@ function describeEventFetchKey(event: any): string {
 }
 
 function describeEventOrigin(event: any): string | undefined {
-  const headers = event?.node?.req?.headers as Record<string, string | string[] | undefined> | undefined
+  const headers = (event?.req?.headers ?? event?.node?.req?.headers) as Record<string, string | string[] | undefined> | undefined
   const host = headerValue(headers, 'x-forwarded-host') ?? headerValue(headers, 'host')
   if (!host)
     return undefined
@@ -645,9 +683,9 @@ function withHeaders(headers: unknown, values: Record<string, string>): unknown 
 }
 
 function readIncomingFetchStack(event: any, token: string): string[] | undefined {
-  if (headerValue(event?.node?.req?.headers, INTERNAL_FETCH_STACK_TOKEN_HEADER) !== token)
+  if (headerValue((event?.req?.headers ?? event?.node?.req?.headers), INTERNAL_FETCH_STACK_TOKEN_HEADER) !== token)
     return undefined
-  const value = headerValue(event?.node?.req?.headers, INTERNAL_FETCH_STACK_HEADER)
+  const value = headerValue((event?.req?.headers ?? event?.node?.req?.headers), INTERNAL_FETCH_STACK_HEADER)
   if (!value)
     return undefined
   const stack = value
@@ -676,6 +714,8 @@ function createInternalStackToken(): string {
 }
 
 function headerValue(headers: unknown, name: string): string | undefined {
+  if (headers instanceof Headers)
+    return headers.get(name) ?? undefined
   if (!headers || typeof headers !== 'object')
     return undefined
   const value = (headers as Record<string, string | string[] | undefined>)[name]

@@ -212,18 +212,20 @@ declare module 'nuxt/app' {
   interface RuntimeNuxtHooks extends NuxtUseQueryRuntimeNuxtHooks {}
 }
 
+export interface NuxtUseQueryNitroRuntimeHooks {
+  'nuxt-use-query:telemetry:fetch': (event: FetchTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:duplicate': (event: DuplicateFetchTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:large-payload': (event: LargePayloadTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:nested': (event: NestedFetchTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:recursive': (event: RecursiveFetchTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:slow': (event: SlowFetchTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:summary': (event: FetchSummaryTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:timeout': (event: FetchTimeoutTelemetryEvent) => TelemetryHookResult
+  'nuxt-use-query:telemetry:fetch:waterfall': (event: FetchWaterfallTelemetryEvent) => TelemetryHookResult
+}
+
 declare module 'nitropack/types' {
-  interface NitroRuntimeHooks {
-    'nuxt-use-query:telemetry:fetch': (event: FetchTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:duplicate': (event: DuplicateFetchTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:large-payload': (event: LargePayloadTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:nested': (event: NestedFetchTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:recursive': (event: RecursiveFetchTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:slow': (event: SlowFetchTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:summary': (event: FetchSummaryTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:timeout': (event: FetchTimeoutTelemetryEvent) => TelemetryHookResult
-    'nuxt-use-query:telemetry:fetch:waterfall': (event: FetchWaterfallTelemetryEvent) => TelemetryHookResult
-  }
+  interface NitroRuntimeHooks extends NuxtUseQueryNitroRuntimeHooks {}
 }
 
 export const DEFAULT_FETCH_TELEMETRY_OPTIONS: FetchTelemetryRuntimeOptions = {

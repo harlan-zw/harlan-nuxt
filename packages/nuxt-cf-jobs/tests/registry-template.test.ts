@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { runWithNuxtContext } from '@nuxt/kit'
 import { describe, expect, it, vi } from 'vitest'
 import { inlineTemplateInNitroDev } from '../src/build/nitro-dev'
 import { buildRegistryPlan, collectRegistrySources, createRegistrySourceTracker, generateRegistryTemplate, generateRegistryTypesTemplate, resolveJobDirs } from '../src/build/registry'
@@ -247,6 +248,7 @@ describe('inlineRegistryTemplateInNitroDev', () => {
     const nuxt = {
       options: {
         dev: true,
+        _nitroMajor: 2,
         nitro: {
           externals: {
             inline: [existingInline],
@@ -255,7 +257,7 @@ describe('inlineRegistryTemplateInNitroDev', () => {
       },
     }
 
-    inlineTemplateInNitroDev(nuxt as never, registryPath)
+    runWithNuxtContext(nuxt as never, () => inlineTemplateInNitroDev(nuxt as never, registryPath))
 
     const inline = nuxt.options.nitro.externals.inline
     expect(inline[0]).toBe(existingInline)

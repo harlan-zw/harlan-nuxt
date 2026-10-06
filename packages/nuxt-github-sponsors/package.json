@@ -23,15 +23,18 @@
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     },
     "./types": {
       "types": "./dist/runtime/shared/types.d.ts",
-      "import": "./dist/runtime/shared/types.js"
+      "import": "./dist/runtime/shared/types.js",
+      "default": "./dist/runtime/shared/types.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -50,7 +53,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "publishConfig": {
     "access": "public"
@@ -67,7 +70,13 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=4.5.0 <6.0.0"
+    "nitro": "^3.0.0-0",
+    "nuxt": "^4.6.0 || ^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "nitro": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@nuxt/kit": "catalog:",
@@ -82,6 +91,7 @@
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "h3": "catalog:",
+    "nitro": "catalog:",
     "nuxt": "catalog:",
     "typescript": "catalog:",
     "unbuild": "catalog:",

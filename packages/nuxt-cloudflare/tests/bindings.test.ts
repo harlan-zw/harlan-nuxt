@@ -27,6 +27,7 @@ function runtimeConfig(apiToken: string): NitroRuntimeConfig {
   return {
     app: { baseURL: '/', buildAssetsDir: '_nuxt', buildId: 'test', cdnURL: '' },
     nitro: {},
+    appSecret: 'test',
     public: {},
     apiToken,
   }
@@ -191,4 +192,11 @@ describe('cloudflare bindings', () => {
       bindings.require('TYPO')
     }
   })
+})
+
+it('resolves Nitro 3 request bindings before the eventless environment', () => {
+  const requestEnv = { DB: { marker: 'request' } }
+  setCloudflareBindings({ DB: { marker: 'global' } })
+  const event = { req: Object.assign(new Request('https://example.test'), { runtime: { cloudflare: { env: requestEnv } } }), context: {} }
+  expect(resolveCloudflareBindings(event)).toBe(requestEnv)
 })

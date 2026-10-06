@@ -63,7 +63,11 @@ async function generatedSite() {
 async function queryOverTheWire(collection: string, path: string) {
   const handler = queryRoute as unknown as (event: unknown) => Promise<PageCollectionItemBase[]>
   const rows = await handler({
-    _body: { _tag: 'Query', collection, plan: { operations: [{ _tag: 'Path', value: path }, { _tag: 'Limit', value: 1 }] } },
+    req: new Request('http://localhost/__comark_content/query', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ _tag: 'Query', collection, plan: { operations: [{ _tag: 'Path', value: path }, { _tag: 'Limit', value: 1 }] } }),
+    }),
   })
   return JSON.parse(JSON.stringify(rows))[0] as PageCollectionItemBase | undefined
 }

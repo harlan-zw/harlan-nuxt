@@ -1,21 +1,19 @@
-import type { $Fetch } from 'nitropack'
-import type { InternalApi, NitroFetchRequest } from 'nitropack/types'
-import type {
-  AsyncData,
-  UseFetchOptions,
-} from 'nuxt/app'
+import type { $Fetch, AsyncData, TypedFetchRequest, TypedServerResponse, useFetch, UseFetchOptions } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
 import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, ref, toValue } from 'vue'
-import { useFetch, useRequestFetch } from '#app'
+import { useRequestFetch } from '#app'
+import { createUseFetch } from '#imports'
+import { queryFetchAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
-import { applyQueryLifecycle } from '../query-lifecycle'
 import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
+
+export const _useFetch: typeof useFetch = createUseFetch({ addons: [queryFetchAddon] }) as unknown as typeof useFetch
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
@@ -32,13 +30,7 @@ type PickFrom<T, K extends Array<string>> = T extends Array<any>
 
 type LooseFetchRequest = string & {}
 
-type InternalRouteResponse<ReqT extends NitroFetchRequest> = ReqT extends keyof InternalApi
-  ? 'get' extends keyof InternalApi[ReqT]
-    ? InternalApi[ReqT]['get']
-    : 'default' extends keyof InternalApi[ReqT]
-      ? InternalApi[ReqT]['default']
-      : unknown
-  : unknown
+type InternalRouteResponse<ReqT extends TypedFetchRequest> = TypedServerResponse<ReqT>
 
 export interface UseNuxtQueryOptions<
   ResT,
@@ -59,19 +51,21 @@ export interface UseNuxtQueryOptions<
   server?: QueryServerOption
 }
 
-export type NuxtQuery<DataT, ErrorT> = AsyncData<DataT, ErrorT> & {
+type QueryState<DataT, ErrorT> = Omit<AsyncData<DataT, ErrorT>, keyof Promise<unknown>> & {
   displayData: ComputedRef<DataT>
   isPlaceholderData: ComputedRef<boolean>
   isPending: ComputedRef<boolean>
   isFetching: ComputedRef<boolean>
 }
 
+export type NuxtQuery<DataT, ErrorT> = QueryState<DataT, ErrorT> & Promise<QueryState<DataT, ErrorT>>
+
 const QUERY_TELEMETRY_STATE = Symbol('nuxt-use-query-state')
 
 export function useNuxtQuery<
   ResT = void,
   ErrorT = unknown,
-  ReqT extends NitroFetchRequest = string & {},
+  ReqT extends TypedFetchRequest = string & {},
   _ResT = [ResT] extends [void] ? InternalRouteResponse<ReqT> : ResT,
   DataT = _ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
@@ -83,7 +77,7 @@ export function useNuxtQuery<
 export function useNuxtQuery<
   ResT = void,
   ErrorT = unknown,
-  ReqT extends NitroFetchRequest = string & {},
+  ReqT extends TypedFetchRequest = string & {},
   _ResT = [ResT] extends [void] ? InternalRouteResponse<ReqT> : ResT,
   DataT = _ResT,
   PickKeys extends KeysOf<DataT> = KeysOf<DataT>,
@@ -93,7 +87,7 @@ export function useNuxtQuery<
   opts: UseNuxtQueryOptions<_ResT, DataT, PickKeys, DefaultT>,
 ): NuxtQuery<DefaultT | PickFrom<DataT, PickKeys>, ErrorT | undefined>
 export function useNuxtQuery(
-  request: NitroFetchRequest | MaybeRefOrGetter<NitroFetchRequest>,
+  request: TypedFetchRequest | MaybeRefOrGetter<TypedFetchRequest>,
   opts: UseNuxtQueryOptions<any, any, any, any>,
 ): NuxtQuery<any, any> {
   const {
@@ -224,8 +218,22 @@ export function useNuxtQuery(
       )
     : fetchOptions.$fetch
 
-  const query = useFetch(request as any, {
+  const query = _useFetch(request as any, {
     ...fetchOptions,
+    _queryLifecycle: {
+      cache,
+      enabled,
+      gcTime,
+      key,
+      keepPreviousData,
+      refetchInterval,
+      refetchOnMount,
+      refetchOnReconnect,
+      refetchOnWindowFocus,
+      staleTime,
+      ssrDeferred,
+
+    },
     ...(deadlineFetch == null ? {} : { $fetch: deadlineFetch }),
     enabled,
     key,
@@ -244,19 +252,7 @@ export function useNuxtQuery(
     ...telemetryFetchOptions,
   } as any) as NuxtQuery<any, any>
 
-  return applyQueryLifecycle(query as any, {
-    cache,
-    enabled,
-    gcTime,
-    key,
-    keepPreviousData,
-    refetchInterval,
-    refetchOnMount,
-    refetchOnReconnect,
-    refetchOnWindowFocus,
-    staleTime,
-    ssrDeferred,
-  }) as NuxtQuery<any, any>
+  return query
 }
 
 type QueryFetch = (request: unknown, options?: Record<string, any>) => Promise<unknown>
@@ -330,7 +326,7 @@ function isPendingResponseError(context: unknown, ignoreResponseError: unknown):
   return response.ok === false || (Number.isFinite(status) && status >= 400)
 }
 
-function describeQueryRequest(request: NitroFetchRequest | MaybeRefOrGetter<NitroFetchRequest>): string {
+function describeQueryRequest(request: TypedFetchRequest | MaybeRefOrGetter<TypedFetchRequest>): string {
   const value = toValue(request)
   if (typeof value === 'string')
     return value

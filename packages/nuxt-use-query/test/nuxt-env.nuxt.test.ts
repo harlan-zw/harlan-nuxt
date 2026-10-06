@@ -674,3 +674,24 @@ describe('nuxt-use-query · nuxt-env (in-process Nuxt)', () => {
     expect(q.data.value?.call).toBeGreaterThan(0)
   })
 })
+
+describe('nuxt 4.6 query extensions', () => {
+  it('keeps Query state after awaiting a URL Query', async () => {
+    const query = await useNuxtQuery<{ call: number }>('/api/echo-env', {
+      key: 'awaited-query-state',
+    })
+    expect(query.displayData.value).toEqual(query.data.value)
+    expect(query.isFetching.value).toBe(false)
+    expect(query.isPending.value).toBe(false)
+  })
+
+  it('keeps Query state after awaiting a handler Query', async () => {
+    const query = await useNuxtAsyncQuery(async () => ({ value: 1 }), {
+      key: 'awaited-handler-state',
+      middleware: [async next => ({ value: (await next()).value + 1 })],
+    })
+    expect(query.data.value).toEqual({ value: 2 })
+    expect(query.displayData.value).toEqual({ value: 2 })
+    expect(query.isFetching.value).toBe(false)
+  })
+})

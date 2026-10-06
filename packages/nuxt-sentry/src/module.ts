@@ -4,18 +4,9 @@ import type { TaskRegistration } from './build/tasks'
 import type { SentryRuntimeConfig } from './runtime/shared/types'
 import type { ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import process from 'node:process'
-import {
-  addPlugin,
-  addServerPlugin,
-  addTemplate,
-  addTypeTemplate,
-  createResolver,
-  defineNuxtModule,
-  hasNuxtModule,
-  useLogger,
-} from '@nuxt/kit'
-import { resolve } from 'pathe'
+import { addNitroPlugin, addPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolveReportPolicy } from './build/policy'
 import { checkSentryBuild, hasSentryAuthToken, resolveSentryBuildOptions, uploadsSourceMaps } from './build/sentry-build'
 import { resolveRelease, resolveReportTarget } from './build/target'
@@ -63,7 +54,7 @@ export default defineNuxtModule<ModuleOptions>({
     // size budget override has to be copied into each app.
     name: MODULE_NAME,
     configKey: 'nuxtSentry',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   defaults: {
     enabled: true,
@@ -93,6 +84,9 @@ export default defineNuxtModule<ModuleOptions>({
       return
 
     const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    nuxt.options.alias['#nuxt-sentry/nitro'] = serverRuntime
+    nuxt.options.alias['#nuxt-sentry/cloudflare-sdk'] = resolveServerVariant({ nitro2: '@sentry/nuxt/module/plugins', nitro3: resolver.resolve('./runtime/server/cloudflare-sdk') })!
     nuxt.hook('checkin:register', (registry) => {
       for (const check of options.checks ?? [])
         registry.add({ id: check.id, handler: resolver.resolve('./checks'), options: { ...check } })
@@ -195,7 +189,7 @@ export default defineNuxtModule<ModuleOptions>({
     const nitro = ((nuxt.options as unknown as { nitro?: NitroConfigLike }).nitro ??= {})
     const cloudflare = isCloudflarePreset(nitro.preset)
     if (cloudflare) {
-      addServerPlugin(resolver.resolve('./runtime/server/plugins/sentry-cloudflare'))
+      addNitroPlugin(resolver.resolve('./runtime/server/plugins/sentry-cloudflare'))
       if (options.tasks !== false)
         reportTasks(nuxt, resolver.resolve('./runtime/server/task'))
     }
@@ -284,9 +278,9 @@ function registerWideEvents(
   if (!Array.isArray(nuxt.options.modules) || !hasNuxtModule('@harlan-zw/nuxt-wide-events', nuxt))
     return
 
-  addServerPlugin(resolver.resolve('./runtime/server/plugins/wide-events-correlation'))
+  addNitroPlugin(resolver.resolve('./runtime/server/plugins/wide-events-correlation'))
   if (resolveWideEventDrain(options.wideEvents))
-    addServerPlugin(resolver.resolve('./runtime/server/plugins/wide-events-drain'))
+    addNitroPlugin(resolver.resolve('./runtime/server/plugins/wide-events-drain'))
 }
 
 /**

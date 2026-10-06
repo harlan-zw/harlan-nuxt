@@ -1,5 +1,5 @@
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
-import { provideCloudflareRuntimeConfig } from '../../../bindings'
+import { provideCloudflareRuntimeConfig } from '@harlan-zw/nuxt-cloudflare/bindings'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-cloudflare/nitro'
 
 /**
  * Hands Nitro's runtime config reader to `useCloudflareRuntimeConfig`.

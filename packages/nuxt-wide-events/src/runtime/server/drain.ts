@@ -1,5 +1,5 @@
-import type { NitroApp } from 'nitropack/types'
 import type { BackgroundWideEventRecord, WideEventRecord } from './index'
+import type { RuntimeApp } from './nitro-types'
 
 type DrainedWideEventRecord = BackgroundWideEventRecord | WideEventRecord
 
@@ -13,12 +13,12 @@ interface WideEventDrainContext {
   waitUntil: (promise: Promise<unknown>) => void
 }
 
-export async function drainWideEvent(app: NitroApp, record: DrainedWideEventRecord): Promise<void> {
+export async function drainWideEvent(app: Pick<RuntimeApp, 'hooks'>, record: DrainedWideEventRecord): Promise<void> {
   await app.hooks.callHookParallel('wide-events:emit', record)
 }
 
 export function scheduleWideEventDrain(
-  app: NitroApp,
+  app: RuntimeApp,
   context: WideEventDrainContext,
   record: WideEventRecord,
 ): void {
