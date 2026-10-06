@@ -621,7 +621,7 @@ packages:
 
   '@harlan-zw/comark-content@file:tarballs/comark-content.tgz':
     resolution: {integrity: sha512-kqqe6QHLQwYN4SNOQ7FVm4i+5trxJKZz4pdtvOXVLnjjM/BL0spIvvi+EZUFSNBWAvilrQQCk8Bu9V/Ge3hnFA==, tarball: file:tarballs/comark-content.tgz}
-    version: 0.2.0
+    version: 0.2.1
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nuxt: ^4.6.0 || ^5.0.0
@@ -639,7 +639,7 @@ packages:
 
   '@harlan-zw/nuxt-cf-jobs@file:tarballs/nuxt-cf-jobs.tgz':
     resolution: {integrity: sha512-jOnLo8EaYlAdO+EzGTja0xEBfjIUr7rxW9TzkGDEgkuMecDqclqPsJ/JuaS5Uf7oc1vDyaTiN+ZBmZ6urdz3Cg==, tarball: file:tarballs/nuxt-cf-jobs.tgz}
-    version: 0.3.0
+    version: 0.3.1
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
@@ -739,7 +739,7 @@ packages:
 
   '@harlan-zw/nuxt-use-query@file:tarballs/nuxt-use-query.tgz':
     resolution: {integrity: sha512-WMvAs5oT9w3ASs+XSucS5uh0v7LovCrPzJfd/BShJoV80IRxH/gCnA3dPxjY8VFyv8XFWuzxwIxzjwIsQCwX8w==, tarball: file:tarballs/nuxt-use-query.tgz}
-    version: 0.3.0
+    version: 0.3.1
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nitro: ^3.0.0-0
