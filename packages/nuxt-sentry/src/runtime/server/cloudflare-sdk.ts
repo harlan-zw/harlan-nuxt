@@ -1,7 +1,7 @@
 import type { NitroApp } from 'nitro/types'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. This adapter runs only on Cloudflare with Sentry enabled.
-import { captureException, getDefaultIntegrations } from '@sentry/cloudflare'
+import { captureException, getDefaultIntegrations, setAsyncLocalStorageAsyncContextStrategy } from '@sentry/cloudflare'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. This adapter runs only on Cloudflare with Sentry enabled.
 import { wrapRequestHandler } from '@sentry/cloudflare/request'
@@ -11,6 +11,7 @@ type PlatformRequest = Request & { runtime?: { cloudflare?: { context?: Paramete
 
 export function sentryCloudflareNitroPlugin(options: Parameters<typeof wrapRequestHandler>[0]['options']) {
   return (app: NitroApp) => {
+    setAsyncLocalStorageAsyncContextStrategy()
     const fetch = app.fetch.bind(app)
     app.fetch = (request) => {
       const req = request as PlatformRequest
