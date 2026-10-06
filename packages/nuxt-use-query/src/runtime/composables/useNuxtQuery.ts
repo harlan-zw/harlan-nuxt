@@ -7,16 +7,13 @@ import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, ref, toValue } from 'vue'
 import { useRequestFetch } from '#app'
 import { createUseFetch } from '#imports'
-import { createQueryFetchAddon } from '../query-addon'
+import { queryFetchAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
 import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
-export const _useFetch: typeof useFetch = ((...args: Parameters<typeof useFetch>) => {
-  const fetch = createUseFetch({ addons: [createQueryFetchAddon()] }) as unknown as typeof useFetch
-  return fetch(...args)
-}) as typeof useFetch
+export const _useFetch: typeof useFetch = createUseFetch({ addons: [queryFetchAddon] }) as unknown as typeof useFetch
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 

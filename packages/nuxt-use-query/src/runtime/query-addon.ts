@@ -19,5 +19,5 @@ function setup(options: QueryAddonOptions) {
   }
 }
 
-export const createQueryFetchAddon = () => defineUseFetchAddon({ setup })
-export const createQueryAsyncDataAddon = () => defineUseAsyncDataAddon({ setup })
+export const queryFetchAddon = defineUseFetchAddon({ setup })
+export const queryAsyncDataAddon = defineUseAsyncDataAddon({ setup })

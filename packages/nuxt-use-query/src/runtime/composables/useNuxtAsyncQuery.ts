@@ -7,16 +7,13 @@ import type { QueryServerOption } from '../query-server-option'
 import type { NuxtQuery } from './useNuxtQuery'
 import { computed, ref, toValue } from 'vue'
 import { createUseAsyncData } from '#imports'
-import { createQueryAsyncDataAddon } from '../query-addon'
+import { queryAsyncDataAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
 import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
-export const _useAsyncData: typeof useAsyncData = ((...args: Parameters<typeof useAsyncData>) => {
-  const asyncData = createUseAsyncData({ addons: [createQueryAsyncDataAddon()] }) as unknown as typeof useAsyncData
-  return asyncData(...args)
-}) as typeof useAsyncData
+export const _useAsyncData: typeof useAsyncData = createUseAsyncData({ addons: [queryAsyncDataAddon] }) as unknown as typeof useAsyncData
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
