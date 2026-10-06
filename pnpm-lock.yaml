@@ -317,9 +317,6 @@ importers:
       h3:
         specifier: 'catalog:'
         version: 2.0.1-rc.25(crossws@0.4.12(srvx@1.0.5))
-      happy-dom:
-        specifier: 'catalog:'
-        version: 20.11.2
       nitro:
         specifier: 'catalog:'
         version: 3.0.260903-beta

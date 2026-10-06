@@ -18,14 +18,14 @@ const alias = {
 export default defineConfig({
   test: {
     projects: [
-      // Pure unit tests: happy-dom, runtime modules resolved from source via the
+      // Server unit tests: Node, runtime modules resolved from source via the
       // aliases above (with the nitropack stub).
       {
         resolve: { alias },
         test: {
           name: 'unit',
           globals: true,
-          environment: 'happy-dom',
+          environment: 'node',
           include: ['tests/**/*.test.ts'],
           exclude: [
             ...configDefaults.exclude,
