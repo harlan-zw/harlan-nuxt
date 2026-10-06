@@ -5,7 +5,7 @@ import type { DrainedWideEvent } from '../wide-events'
 // @ts-ignore optional peer. Registered only on a Cloudflare build with
 // `@harlan-zw/nuxt-wide-events` installed.
 import { logger } from '@sentry/cloudflare'
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-sentry/nitro'
 import { decideWideEventLog } from '../wide-events'
 
 /**

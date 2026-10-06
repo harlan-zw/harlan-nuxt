@@ -16,6 +16,7 @@ import {
   defineNuxtModule,
   hasNuxtModule,
   importModule,
+  resolveServerVariant,
   updateTemplates,
   useLogger,
 } from '@nuxt/kit'
@@ -78,7 +79,7 @@ export default defineNuxtModule<ModuleOptions>({
     // calling hasNuxtModuleCompatibility() sees no version and fails closed.
     version,
     configKey: 'content',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   moduleDependencies: {
     '@nuxt/ui': {
@@ -141,6 +142,7 @@ export default defineNuxtModule<ModuleOptions>({
       { name: 'queryCollectionItemSurroundings', from: resolver.resolve('./runtime/client') },
       { name: 'queryCollectionSearchSections', from: resolver.resolve('./runtime/client') },
     ])
+    nuxt.options.alias['#comark-content/storage'] = resolveServerVariant({ nitro2: 'nitropack/runtime', nitro3: 'nitro/storage' })!
     addServerHandler({ route: '/__comark_content/query', method: 'post', handler: resolver.resolve('./runtime/server/api/query.post') })
 
     nuxt.hook('nitro:config', (config: NitroConfig) => {

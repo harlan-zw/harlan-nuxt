@@ -1,4 +1,4 @@
-import { defineEventHandler } from '#imports'
+import { defineEventHandler } from 'nuxt/server'
 import { parseSearchRequest } from '../../shared/protocol'
 import { sendCacheableContent } from '../cache'
 import { loadSearchSections } from '../storage'

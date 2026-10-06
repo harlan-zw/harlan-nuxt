@@ -1,5 +1,5 @@
 import type { WideEventLike } from './index'
-import { defineNitroPlugin } from 'nitropack/runtime'
+import { defineNitroPlugin } from '#nuxt-wide-events/nitro'
 import config from '#wide-events/config'
 import { enrichDevelopmentWideEvent, writeDevelopmentWideEvent } from './development'
 import { scheduleWideEventDrain } from './drain'
@@ -58,7 +58,7 @@ export default defineNitroPlugin((nitroApp) => {
       scheduleWideEventDrain(nitroApp, context.event, record)
   })
 
-  nitroApp.hooks.hook('afterResponse', (event, response) => {
+  nitroApp.hooks.hook('response', (response, event) => {
     const request = event as unknown as ServerEvent
     if (isExcluded(request))
       return

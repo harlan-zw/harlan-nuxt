@@ -1,7 +1,7 @@
 import type { SponsorsMode } from './options'
 import type { SponsorOverride, SponsorTier } from './runtime/shared/types'
 import process from 'node:process'
-import { addImports, addServerHandler, addTypeTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { addImports, addServerHandler, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import {
   DEFAULT_TOKEN_ENV,
   normalizeRoute,
@@ -29,7 +29,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-github-sponsors',
     configKey: 'githubSponsors',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   /**
    * `tiers` is absent on purpose. Nuxt merges these defaults with `defu`, which
@@ -53,6 +53,9 @@ export default defineNuxtModule<ModuleOptions>({
     const tokenEnv = options.tokenEnv?.trim() || DEFAULT_TOKEN_ENV
     const mode = options.mode ?? 'prerender'
     const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    nuxt.options.alias['#nuxt-github-sponsors/nitro'] = serverRuntime
+    ;(nuxt.options.nitro.alias ??= {})['#nuxt-github-sponsors/nitro'] = serverRuntime
 
     const token = resolveSponsorToken(process.env, tokenEnv)
     const privateConfig = nuxt.options.runtimeConfig as Record<string, unknown>

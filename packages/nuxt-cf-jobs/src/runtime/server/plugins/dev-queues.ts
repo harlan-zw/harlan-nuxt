@@ -1,6 +1,5 @@
 import { mergeCloudflareBindings, resolveCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
-// @ts-expect-error - nitropack/runtime is resolved at build time inside Nuxt
-import { defineNitroPlugin, useRuntimeConfig } from 'nitropack/runtime'
+import { defineNitroPlugin, useRuntimeConfig } from '#nuxt-cf-jobs/nitro'
 import { createDevQueueRuntime } from '../dev'
 import { isWorkerActive } from '../dev-worker'
 

@@ -1,6 +1,6 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
 import type { ModuleRuntimeConfig, ModuleTelemetryOptions } from './module/telemetry'
-import { addImports, addPlugin, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addImports, addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant } from '@nuxt/kit'
 import { setupFetchTelemetryModule } from './module/telemetry'
 
 // `nuxt-use-query` — TanStack-Query-shaped wrapper over Nuxt's `useFetch` /
@@ -32,7 +32,7 @@ export default defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-use-query',
     configKey: 'nuxtUseQuery',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   defaults: {
     contracts: {
@@ -42,6 +42,13 @@ export default defineNuxtModule<ModuleOptions>({
   },
   setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    nuxt.options.alias['#nuxt-use-query/nitro'] = serverRuntime
+    ;(nuxt.options.nitro.alias ??= {})['#nuxt-use-query/nitro'] = serverRuntime
+    if (resolveServerVariant({ nitro2: true, nitro3: false })) {
+      const externals = nuxt.options.nitro.externals ??= {}
+      ;(externals.inline ??= []).push(resolver.resolve('./runtime'))
+    }
 
     const composables = resolver.resolve('./runtime/composables')
     const rpcCore = resolver.resolve('./runtime/rpc/core')
@@ -101,6 +108,10 @@ export {}
       nuxt.options.runtimeConfig as ModuleRuntimeConfig,
       resolver.resolve('./runtime/server/plugins/fetch-telemetry'),
     )
+    if ((nuxt.options.runtimeConfig as ModuleRuntimeConfig).nuxtUseQuery?.telemetry?.enabled) {
+      // Native fetch instrumentation needs the parent request across awaits.
+      ;(nuxt.options.nitro.experimental ??= {}).asyncContext = true
+    }
 
     if (options.contracts?.enabled) {
       nuxt.hook('build:before', async () => {

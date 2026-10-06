@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { addTemplate, addTypeTemplate, resolveFiles } from '@nuxt/kit'
+import { addTemplate, addTypeTemplate, resolveFiles, resolveServerVariant } from '@nuxt/kit'
 import { extractEventMeta } from './extract-event-meta'
 import { extractListenerMeta } from './extract-listener-meta'
 
@@ -77,10 +77,16 @@ export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt
   nitro.alias['#domain-events/server'] = serverTemplate.dst
 
   if (nuxt.options.dev) {
-    nitro.externals ||= {}
-    const inline = nitro.externals.inline
-    const entries = Array.isArray(inline) ? inline : inline ? [inline] : []
-    nitro.externals.inline = [...entries, resolve(templateDir)]
+    if (resolveServerVariant({ nitro2: false, nitro3: true })) {
+      if (nitro.noExternals !== true)
+        nitro.noExternals = [...(nitro.noExternals || []), resolve(templateDir)]
+    }
+    else {
+      nitro.externals ||= {}
+      const inline = nitro.externals.inline
+      const entries = Array.isArray(inline) ? inline : inline ? [inline] : []
+      nitro.externals.inline = [...entries, resolve(templateDir)]
+    }
   }
 
   nuxt.hooks.hook('builder:watch' as never, (async (_event: string, path: string) => {

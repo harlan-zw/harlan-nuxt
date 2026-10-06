@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   resolve: {
     alias: {
+      '#comark-content/storage': fileURLToPath(new URL('./test/nuxt-imports.ts', import.meta.url)),
       '#imports': fileURLToPath(new URL('./test/nuxt-imports.ts', import.meta.url)),
     },
   },

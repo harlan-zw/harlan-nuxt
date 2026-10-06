@@ -9,7 +9,7 @@ export default defineNuxtModule<ModuleOptions>({
     name: '@harlan-zw/nuxt-jev',
     configKey: 'jev',
     compatibility: {
-      nuxt: '>=4.5.0 <6.0.0',
+      nuxt: '^4.6.0 || ^5.0.0',
     },
   },
   defaults: {},

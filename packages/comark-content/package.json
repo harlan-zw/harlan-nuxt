@@ -27,15 +27,18 @@
   "exports": {
     ".": {
       "types": "./dist/module.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./runtime": {
       "types": "./dist/runtime/shared/exports.d.ts",
-      "import": "./dist/runtime/shared/exports.js"
+      "import": "./dist/runtime/shared/exports.js",
+      "default": "./dist/runtime/shared/exports.js"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     }
   },
   "main": "./dist/module.mjs",
@@ -54,7 +57,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "bench": "node ./bench/run.mjs",
@@ -71,7 +74,7 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "nuxt": ">=4.5.0 <6.0.0",
+    "nuxt": "^4.6.0 || ^5.0.0",
     "vue": ">=3.5.0 <4.0.0"
   },
   "dependencies": {

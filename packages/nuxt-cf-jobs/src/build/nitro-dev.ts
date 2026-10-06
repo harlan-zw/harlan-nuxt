@@ -1,5 +1,6 @@
 import type { Nuxt } from '@nuxt/schema'
 import { fileURLToPath } from 'node:url'
+import { resolveServerVariant } from '@nuxt/kit'
 
 const WINDOWS_SLASH_RE = /\\/g
 const FILE_URL_PREFIX_RE = /^file:\/*/
@@ -18,6 +19,13 @@ type NitroExternalInlineEntry = string | RegExp | ((id: string, importer?: strin
 export function inlineTemplateInNitroDev(nuxt: Nuxt, templatePath: string): void {
   if (!nuxt.options.dev)
     return
+
+  if (resolveServerVariant({ nitro2: false, nitro3: true })) {
+    const nitro = nuxt.options.nitro as unknown as { noExternals?: boolean | (string | RegExp)[] }
+    if (nitro.noExternals !== true)
+      nitro.noExternals = [...(nitro.noExternals || []), templatePath]
+    return
+  }
 
   const nitro = ((nuxt.options as { nitro?: { externals?: { inline?: NitroExternalInlineEntry | NitroExternalInlineEntry[] } } }).nitro ??= {})
   nitro.externals ??= {}

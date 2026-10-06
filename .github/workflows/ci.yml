@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
@@ -18,12 +22,16 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.22.3', '24']
     steps:
       - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm dev:prepare
@@ -33,3 +41,25 @@ jobs:
       - run: pnpm build
       - run: pnpm test:attw
       - run: pnpm test:pack
+
+  nuxt-lanes:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { lane: minimum, node: '22.22.3' }
+          - { lane: minimum, node: '24' }
+          - { lane: future, node: '22.22.3' }
+          - { lane: future, node: '24' }
+          - { lane: nightly, node: '24' }
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:nuxt-lanes ${{ matrix.lane }}

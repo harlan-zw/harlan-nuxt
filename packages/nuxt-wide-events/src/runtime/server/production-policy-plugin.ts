@@ -1,5 +1,6 @@
-import type { NitroApp } from 'nitropack/types'
 import type { WideEventLike } from './index'
+import type { RuntimeApp } from './nitro-types'
+import { defineNitroPlugin } from '#nuxt-wide-events/nitro'
 import config from '#wide-events/config'
 import { scheduleWideEventDrain } from './drain'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
@@ -18,7 +19,7 @@ interface RequestEvent extends WideEventLike {
 
 const EXCLUDED_KEY = Symbol('excluded')
 
-export default function wideEventPolicyPlugin(nitroApp: NitroApp): void {
+export default defineNitroPlugin((nitroApp: RuntimeApp) => {
   function output(event: RequestEvent, status: number, path?: string): void {
     if (isExcluded(event))
       return
@@ -47,7 +48,7 @@ export default function wideEventPolicyPlugin(nitroApp: NitroApp): void {
     output(context.event, errorStatus(error), path)
   })
 
-  nitroApp.hooks.hook('afterResponse', (event, response) => {
+  nitroApp.hooks.hook('response', (response, event) => {
     const request = event as unknown as RequestEvent
     output(
       request,
@@ -55,7 +56,7 @@ export default function wideEventPolicyPlugin(nitroApp: NitroApp): void {
       routeTemplate(request),
     )
   })
-}
+})
 
 function isExcluded(event: WideEventLike): boolean {
   const context = event.context as Record<PropertyKey, unknown>

@@ -5,7 +5,7 @@ import type { DiscoveredTask } from './tasks'
 import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
 import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
-import { addImportsDir, addServerHandler, addServerImports, addServerPlugin, addTemplate, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
+import { addImportsDir, addNitroPlugin, addServerHandler, addServerImports, addTemplate, createResolver, defineNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolveLayeredDirs } from './build/layers'
 import { inlineTemplateInNitroDev } from './build/nitro-dev'
 import { installRegistryTemplates } from './build/registry'
@@ -78,7 +78,7 @@ export default defineNuxtModule<ModuleOptions>().with({
   meta: {
     name: '@harlan-zw/nuxt-cf-jobs',
     configKey: 'cfJobs',
-    compatibility: { nuxt: '>=4.5.0 <6.0.0' },
+    compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },
   defaults: {
     queues: {},
@@ -93,6 +93,9 @@ export default defineNuxtModule<ModuleOptions>().with({
   },
   setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    nuxt.options.alias['#nuxt-cf-jobs/nitro'] = serverRuntime
+    ;(nuxt.options.nitro.alias ??= {})['#nuxt-cf-jobs/nitro'] = serverRuntime
     const queues = options.queues as ModuleOptions['queues']
     const hasQueues = Object.keys(queues).length > 0
     nuxt.hook('checkin:register', (registry) => {
@@ -161,7 +164,7 @@ export default defineNuxtModule<ModuleOptions>().with({
     }
 
     if (nuxt.options.dev && hasQueues) {
-      addServerPlugin(resolver.resolve('./runtime/server/plugins/dev-queues'))
+      addNitroPlugin(resolver.resolve('./runtime/server/plugins/dev-queues'))
       // Dev-only worker endpoint driven by `cf-jobs work`: drains durable jobs
       // out-of-band through the app's consumer so WebSockets see live progress.
       // Never registered outside dev — it's an unauthenticated job executor.

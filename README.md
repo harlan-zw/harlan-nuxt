@@ -27,7 +27,7 @@ Each package publishes to npm with provenance. Each package has its own version 
 
 ## Development
 
-Requires Node 22.12+ and pnpm.
+Requires Nuxt 4.6 or Nuxt 5 and pnpm. Supported Node versions: `^22.22.3 || ^24.15.0 || >=26.0.0`.
 
 ```bash
 pnpm install

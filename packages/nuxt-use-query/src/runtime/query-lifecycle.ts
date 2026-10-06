@@ -41,7 +41,7 @@ export interface QueryLifecycleOptions {
 export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
   query: TQuery,
   opts: QueryLifecycleOptions,
-): TQuery {
+) {
   const {
     cache,
     enabled,
@@ -68,8 +68,6 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
     return isPlaceholderData.value ? previousData.value : query.data.value
   })
 
-  query.displayData = displayData
-  query.isPlaceholderData = isPlaceholderData
   watch([ssrDeferred, query.status], ([deferred, status]) => {
     if (deferred && status === 'success') {
       query.data.value = undefined
@@ -77,8 +75,8 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
     }
   }, { flush: 'sync' })
 
-  query.isPending = computed(() => ssrDeferred.value || (enabled.value && query.data.value === undefined && query.status.value !== 'error' && query.status.value !== 'success'))
-  query.isFetching = computed(() => query.status.value === 'pending')
+  const isPending = computed(() => ssrDeferred.value || (enabled.value && query.data.value === undefined && query.status.value !== 'error' && query.status.value !== 'success'))
+  const isFetching = computed(() => query.status.value === 'pending')
 
   let release: (() => void) | undefined
   watch(key, (next) => {
@@ -141,7 +139,7 @@ export function applyQueryLifecycle<TQuery extends LifecycleQuery>(
     }, { immediate: true })
   }
 
-  return query
+  return Object.assign(query, { displayData, isPlaceholderData, isPending, isFetching })
 }
 
 function normalizeRefetchInterval(value: number | false | null | undefined): number {

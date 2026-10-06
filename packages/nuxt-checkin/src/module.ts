@@ -2,7 +2,7 @@ import type { CheckRegistration, CheckRegistry, ModuleOptions } from './types'
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
-import { addServerTemplate, addTypeTemplate, createResolver, defineNuxtModule, getLayerDirectories, resolveFiles } from '@nuxt/kit'
+import { addServerTemplate, addTypeTemplate, createResolver, defineNuxtModule, getLayerDirectories, resolveFiles, resolveServerVariant } from '@nuxt/kit'
 import { isAbsolute, resolve } from 'pathe'
 import { bundleChecks } from './build/bundle'
 import { readCheckId } from './build/discovery'
@@ -17,9 +17,13 @@ declare module '@nuxt/schema' {
 }
 
 export default defineNuxtModule<ModuleOptions>({
-  meta: { name: '@harlan-zw/nuxt-checkin', configKey: 'checkin', compatibility: { nuxt: '>=4.5.0 <6.0.0' } },
+  meta: { name: '@harlan-zw/nuxt-checkin', configKey: 'checkin', compatibility: { nuxt: '^4.6.0 || ^5.0.0' } },
   setup(options, nuxt) {
     const resolver = createResolver(import.meta.url)
+    if (resolveServerVariant({ nitro2: true, nitro3: false })) {
+      const externals = (nuxt.options.nitro as { externals?: { inline?: unknown[] } }).externals ??= {}
+      ;(externals.inline ??= []).push(resolver.resolve('./runtime'))
+    }
     const server = resolver.resolve('./runtime/server/index')
     const directories = options.dirs
       ? options.dirs.map(dir => resolve(nuxt.options.rootDir, dir))

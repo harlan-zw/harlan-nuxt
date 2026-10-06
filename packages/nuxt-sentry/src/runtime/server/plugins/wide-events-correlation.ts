@@ -1,12 +1,12 @@
 import type { NitroApp } from 'nitropack/types'
 // eslint-disable-next-line ts/ban-ts-comment
+// @ts-ignore auto import contributed by `@harlan-zw/nuxt-wide-events`.
+import { addWideEventFields } from '@harlan-zw/nuxt-wide-events/server'
+// eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer. Registered only on a Cloudflare build with
 // `@harlan-zw/nuxt-wide-events` installed.
 import { getTraceData } from '@sentry/cloudflare'
-import { defineNitroPlugin } from 'nitropack/runtime'
-// eslint-disable-next-line ts/ban-ts-comment
-// @ts-ignore auto import contributed by `@harlan-zw/nuxt-wide-events`.
-import { addWideEventFields } from '#imports'
+import { defineNitroPlugin } from '#nuxt-sentry/nitro'
 import { parseSentryCorrelation } from '../wide-events'
 
 /**

@@ -26,28 +26,37 @@
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
-      "import": "./dist/module.mjs"
+      "import": "./dist/module.mjs",
+      "default": "./dist/module.mjs"
     },
     "./server": {
       "types": "./dist/runtime/server/index.d.ts",
-      "import": "./dist/runtime/server/index.js"
+      "import": "./dist/runtime/server/index.js",
+      "default": "./dist/runtime/server/index.js"
     },
     "./schema": {
       "types": "./dist/schema.d.mts",
-      "import": "./dist/schema.mjs"
+      "import": "./dist/schema.mjs",
+      "default": "./dist/schema.mjs"
     }
   },
   "main": "./dist/module.mjs",
   "types": "./dist/types.d.mts",
   "typesVersions": {
     "*": {
-      "server": ["dist/runtime/server/index.d.ts"],
-      "schema": ["dist/schema.d.mts"]
+      "server": [
+        "dist/runtime/server/index.d.ts"
+      ],
+      "schema": [
+        "dist/schema.d.mts"
+      ]
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
@@ -61,7 +70,7 @@
     "test:pack": "rm -rf .pack && pnpm pack --pack-destination .pack && tar -tf .pack/*.tgz"
   },
   "peerDependencies": {
-    "nuxt": ">=4.5.0 <6.0.0"
+    "nuxt": "^4.6.0 || ^5.0.0"
   },
   "dependencies": {
     "@harlan-zw/jev": "catalog:",

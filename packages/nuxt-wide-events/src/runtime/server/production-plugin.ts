@@ -1,5 +1,6 @@
-import type { NitroApp } from 'nitropack/types'
 import type { WideEventLike } from './index'
+import type { RuntimeApp } from './nitro-types'
+import { defineNitroPlugin } from '#nuxt-wide-events/nitro'
 import config from '#wide-events/config'
 import { scheduleWideEventDrain } from './drain'
 import { captureWideEventError, emitWideEvent, startWideEvent } from './index'
@@ -15,7 +16,7 @@ interface RequestEvent extends WideEventLike {
   waitUntil: (promise: Promise<unknown>) => void
 }
 
-export default function wideEventPlugin(nitroApp: NitroApp): void {
+export default defineNitroPlugin((nitroApp: RuntimeApp) => {
   function output(event: RequestEvent, status: number, path?: string): void {
     const record = emitWideEvent(event, status, config.service, path)
     if (!record)
@@ -41,7 +42,7 @@ export default function wideEventPlugin(nitroApp: NitroApp): void {
     output(context.event, errorStatus(error), path)
   })
 
-  nitroApp.hooks.hook('afterResponse', (event, response) => {
+  nitroApp.hooks.hook('response', (response, event) => {
     const request = event as unknown as RequestEvent
     output(
       request,
@@ -49,7 +50,7 @@ export default function wideEventPlugin(nitroApp: NitroApp): void {
       routeTemplate(request),
     )
   })
-}
+})
 
 function routeTemplate(event: WideEventLike): string | undefined {
   return (event.context.matchedRoute as { path?: string } | undefined)?.path

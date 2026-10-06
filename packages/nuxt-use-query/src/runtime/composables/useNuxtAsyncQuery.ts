@@ -1,16 +1,19 @@
-import type { AsyncDataOptions, NuxtApp } from 'nuxt/app'
+import type { AsyncDataOptions, NuxtApp, useAsyncData } from 'nuxt/app'
 import type { MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
+import type { QueryAddonOptions } from '../query-addon'
 import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { NuxtQuery } from './useNuxtQuery'
 import { computed, ref, toValue } from 'vue'
-import { useAsyncData } from '#app'
+import { createUseAsyncData } from '#imports'
+import { queryAsyncDataAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
-import { applyQueryLifecycle } from '../query-lifecycle'
 import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
+
+export const _useAsyncData: typeof useAsyncData = createUseAsyncData({ addons: [queryAsyncDataAddon] }) as unknown as typeof useAsyncData
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
@@ -118,11 +121,25 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
     }
     : deadlineHandler
 
-  const query = useAsyncData<ResT, ErrorT, DataT>(
+  const query = _useAsyncData<ResT, ErrorT, DataT>(
     () => key.value,
     wrappedHandler as NuxtAsyncQueryHandler<ResT>,
     {
       ...asyncOptions,
+      _queryLifecycle: {
+        cache,
+        enabled,
+        gcTime,
+        key,
+        keepPreviousData,
+        refetchInterval,
+        refetchOnMount,
+        refetchOnReconnect,
+        refetchOnWindowFocus,
+        staleTime,
+        ssrDeferred,
+
+      },
       enabled,
       immediate: asyncOptions.immediate ?? enabled.value,
       server: resolvedServerOption.server,
@@ -133,20 +150,8 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
       },
       dedupe: asyncOptions.dedupe ?? 'defer',
       getCachedData: createQueryGetCachedData(cache, staleTime, asyncOptions.getCachedData as QueryGetCachedData | undefined) as AsyncDataOptions<ResT, DataT>['getCachedData'],
-    },
+    } as AsyncDataOptions<ResT, DataT> & QueryAddonOptions,
   ) as unknown as NuxtQuery<DataT, ErrorT | undefined>
 
-  return applyQueryLifecycle(query as any, {
-    cache,
-    enabled,
-    gcTime,
-    key,
-    keepPreviousData,
-    refetchInterval,
-    refetchOnMount,
-    refetchOnReconnect,
-    refetchOnWindowFocus,
-    staleTime,
-    ssrDeferred,
-  }) as unknown as NuxtQuery<DataT, ErrorT | undefined>
+  return query
 }

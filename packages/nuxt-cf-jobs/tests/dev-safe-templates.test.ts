@@ -12,6 +12,7 @@ function createNuxtStub(dev: boolean) {
   return {
     options: {
       dev,
+      _nitroMajor: 2,
       rootDir,
       buildDir: join(rootDir, '.nuxt'),
       alias: {} as Record<string, string>,

@@ -1,6 +1,6 @@
 import type { WideEventFieldRegistry } from './build/contributed-fields'
 import type { ModuleOptions } from './types'
-import { addServerImports, addServerPlugin, addTemplate, addTypeTemplate, createResolver, defineNuxtModule } from '@nuxt/kit'
+import { addNitroPlugin, addServerImports, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant } from '@nuxt/kit'
 import { createWideEventFieldRegistry } from './build/contributed-fields'
 import { formatWideEventFieldIssues, resolveWideEventFields } from './build/fields'
 import { resolveWideEventsRuntimeConfig, serializeWideEventsRuntimeConfig } from './build/runtime-config'
@@ -25,6 +25,7 @@ declare module '@nuxt/schema' {
 const STANDALONE_EXPORT = '@harlan-zw/nuxt-wide-events/standalone'
 
 interface NitroConfigLike {
+  plugins?: string[]
   alias?: Record<string, string>
   rollupConfig?: {
     plugins?: ReturnType<typeof createWideEventValidationPlugin>[]
@@ -43,7 +44,7 @@ export default defineNuxtModule<ModuleOptions>({
     name: '@harlan-zw/nuxt-wide-events',
     configKey: 'wideEvents',
     compatibility: {
-      nuxt: '>=4.5.0 <6.0.0',
+      nuxt: '^4.6.0 || ^5.0.0',
     },
   },
   defaults: {
@@ -64,6 +65,9 @@ export default defineNuxtModule<ModuleOptions>({
     // this hook fires, so deferring costs nothing.
     const fields = new Set<string>()
     const resolver = createResolver(import.meta.url)
+    const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
+    const hooksModule = resolveServerVariant({ nitro2: 'nitropack/types', nitro3: 'nitro/types' })!
+    nuxt.options.alias['#nuxt-wide-events/nitro'] = serverRuntime
     nuxt.hook('modules:done', async () => {
       const collected = createWideEventFieldRegistry()
       await nuxt.callHook('wide-events:fields', collected.registry)
@@ -75,7 +79,7 @@ export default defineNuxtModule<ModuleOptions>({
         throw new Error(`[nuxt-wide-events]\n${formatWideEventFieldIssues(resolvedFields.issues)}`)
       for (const field of resolvedFields.fields)
         fields.add(field)
-      addWideEventTypes(resolvedFields.fields)
+      addWideEventTypes(resolvedFields.fields, hooksModule)
     })
     const runtimeConfig = resolveWideEventsRuntimeConfig(enabled
       ? options
@@ -87,14 +91,22 @@ export default defineNuxtModule<ModuleOptions>({
     })
     nuxt.options.alias['#wide-events/config'] = configTemplate.dst
     const nitro = ((nuxt.options as unknown as { nitro?: NitroConfigLike }).nitro ??= {})
+    if (resolveServerVariant({ nitro2: true, nitro3: false })) {
+      const externals = (nitro as { externals?: { inline?: string[] } }).externals ??= {}
+      ;(externals.inline ??= []).push(resolver.resolve('./runtime'))
+    }
+    const initializer = resolveServerVariant<string | false>({ nitro2: false, nitro3: resolver.resolve('./runtime/server/nitro3-init') })
+    if (initializer)
+      (nitro.plugins ??= []).unshift(initializer)
     nitro.alias ||= {}
+    nitro.alias['#nuxt-wide-events/nitro'] = serverRuntime
     nitro.alias['#wide-events/config'] = configTemplate.dst
     nitro.rollupConfig ||= {}
     nitro.rollupConfig.plugins ||= []
     nitro.rollupConfig.plugins.push(createWideEventValidationPlugin(nuxt.options.rootDir, fields))
 
     if (enabled && (options.request ?? true)) {
-      addServerPlugin(resolver.resolve(nuxt.options.dev
+      addNitroPlugin(resolver.resolve(nuxt.options.dev
         ? './runtime/server/development-plugin'
         : runtimeConfig.exclude || runtimeConfig.sampling
           ? './runtime/server/production-policy-plugin'
@@ -121,7 +133,7 @@ export default defineNuxtModule<ModuleOptions>({
   },
 })
 
-function addWideEventTypes(fields: readonly string[]): void {
+function addWideEventTypes(fields: readonly string[], hooksModule: string): void {
   const properties = fields.map(field => `    '${field}': true`).join('\n')
   addTypeTemplate({
     filename: 'wide-events/fields.d.ts',
@@ -141,7 +153,7 @@ export {}
     getContents: () => `
 import type { BackgroundWideEventRecord, WideEventRecord } from '@harlan-zw/nuxt-wide-events/server'
 
-declare module 'nitropack/types' {
+declare module '${hooksModule}' {
   interface NitroRuntimeHooks {
     'wide-events:emit': (record: BackgroundWideEventRecord | WideEventRecord) => void | Promise<void>
   }

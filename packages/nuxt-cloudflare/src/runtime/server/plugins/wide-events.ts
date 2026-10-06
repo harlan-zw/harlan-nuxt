@@ -1,9 +1,10 @@
-import type { H3Event } from 'h3'
 import type { NitroApp } from 'nitropack/types'
+import type { RequestEvent } from 'nuxt/server'
 // eslint-disable-next-line ts/ban-ts-comment
 // @ts-ignore optional peer — the module only registers this plugin when
 // `@harlan-zw/nuxt-wide-events` is installed, so the specifier resolves then.
-import { addWideEventFields } from '#imports'
+import { addWideEventFields } from '@harlan-zw/nuxt-wide-events/server'
+import { defineNitroPlugin } from '#nuxt-cloudflare/nitro'
 import { readD1Stats } from '../../../d1-stats'
 
 /**
@@ -34,11 +35,11 @@ import { readD1Stats } from '../../../d1-stats'
  * runtime. An earlier version assembled a `Record` and passed the variable; it
  * failed the consuming application's build.
  */
-export default (nitroApp: NitroApp): void => {
-  nitroApp.hooks.hook('beforeResponse', (event: H3Event) => {
+export default defineNitroPlugin((nitroApp: NitroApp) => {
+  nitroApp.hooks.hook('beforeResponse', (event: Pick<RequestEvent, 'context'>) => {
     recordCloudflareWideEventFields(event)
   })
-}
+})
 
 interface RequestCfProperties {
   colo?: unknown
@@ -50,11 +51,12 @@ function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-export function recordCloudflareWideEventFields(event: H3Event): void {
+export function recordCloudflareWideEventFields(event: Pick<RequestEvent, 'context'> & { req?: unknown }): void {
   // Only ever these three from `request.cf`. It also carries city, region,
   // postal code and ASN — location data about a person, which has no place in a
   // record written for every request.
-  const cf = (event.context as { cloudflare?: { request?: { cf?: RequestCfProperties } } })
+  const requestCf = (event.req as { cf?: RequestCfProperties } | undefined)?.cf
+  const cf = requestCf ?? (event.context as { cloudflare?: { request?: { cf?: RequestCfProperties } } })
     .cloudflare
     ?.request
     ?.cf
@@ -73,5 +75,5 @@ export function recordCloudflareWideEventFields(event: H3Event): void {
     'd1.unrecovered': d1?.unrecovered,
     'd1.durationMs': d1 ? Math.round(d1.durationMs) : undefined,
     'd1.region': d1?.region ?? undefined,
-  })
+  } as unknown as Parameters<typeof addWideEventFields>[1])
 }
