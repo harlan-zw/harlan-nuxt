@@ -188,6 +188,8 @@ try {
   await setTimeout(50)
   assert(output.includes('"kind":"request"'), `Wide Events emitted no request: ${output}`)
   assert(output.includes('"path":"/cached"'), `Wide Events lost the native request path: ${output}`)
+  if (lane === 'nightly')
+    await testDevDiscovery(fixture)
   completed = true
   if (updateLock) {
     await mkdir(resolve(root, 'test/nuxt-migration/locks'), { recursive: true })
@@ -203,4 +205,65 @@ finally {
   server?.kill('SIGTERM')
   if (process.env.NUXT_KEEP_FIXTURE !== '1' && completed)
     await rm(fixture, { recursive: true, force: true })
+}
+
+async function testDevDiscovery(fixture: string) {
+  const socket = createServer()
+  await new Promise<void>(done => socket.listen(0, '127.0.0.1', done))
+  const address = socket.address()
+  assert(address && typeof address === 'object')
+  const port = address.port
+  await new Promise<void>((done, fail) => socket.close(error => error ? fail(error) : done()))
+  const dev = spawn('pnpm', ['exec', 'nuxt', 'dev', '--port', String(port), '--host', '127.0.0.1'], {
+    cwd: fixture,
+    env: { ...process.env, NUXT_TELEMETRY_DISABLED: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
+  })
+  let output = ''
+  dev.stdout.on('data', (chunk) => {
+    output += String(chunk)
+  })
+  dev.stderr.on('data', (chunk) => {
+    output += String(chunk)
+  })
+  const file = resolve(fixture, 'server/checks/watch.ts')
+  const ids = async (): Promise<string[]> => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/checks`)
+    if (!response.ok)
+      throw new Error(await response.text())
+    const report = await response.json()
+    return report.results.map((result: { id: string }) => result.id)
+  }
+  const until = async (accept: (value: string[]) => boolean) => {
+    let last: unknown
+    for (let attempt = 0; attempt < 240; attempt++) {
+      // Startup and rebuild responses can fail. Keep their cause for the failure report.
+      const value = await ids().catch((error) => {
+        last = error
+        return undefined
+      })
+      if (value) {
+        last = value
+        if (accept(value))
+          return
+      }
+      if (dev.exitCode !== null)
+        break
+      await setTimeout(250)
+    }
+    assert.fail(`Dev check discovery did not converge: ${String(last)}\n${output}`)
+  }
+  try {
+    await until(value => value.includes('migration.runtime'))
+    await writeFile(file, `import { defineCheck, pass } from '@harlan-zw/nuxt-checkin/server'\nexport default defineCheck({ id: 'watch.added', run: () => pass({}) })\n`)
+    await until(value => value.includes('watch.added'))
+    await rm(file)
+    await until(value => !value.includes('watch.added'))
+  }
+  finally {
+    if (dev.exitCode === null && dev.pid)
+      process.kill(-dev.pid, 'SIGTERM')
+    await rm(file, { force: true })
+  }
 }

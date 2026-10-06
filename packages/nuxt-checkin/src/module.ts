@@ -109,7 +109,7 @@ export default defineNuxtModule<ModuleOptions>({
       getContents: () => `declare module '#checkin/checks' { const checks: readonly import(${JSON.stringify(server)}).Check[]; export default checks }`,
     }, { nuxt: true, nitro: true })
     if (nuxt.options.dev) {
-      nuxt.options.watch.push(...directories.map(dir => `${dir}/**/*`))
+      nuxt.options.watch.push(...directories)
       const onNitroInit = nuxt.hook as unknown as (
         name: 'nitro:init',
         callback: (nitro: { hooks: { callHook: (name: 'rollup:reload') => Promise<void> } }) => void,
