@@ -137,6 +137,9 @@ export default defineScheduledTask({
           name: continuation.name,
           payload: continuation.payload,
           registry: jobRegistry,
+          route: continuation.queue
+            ? { queue: continuation.queue, jobType: jobRegistry.getJobRoute?.(continuation.name)?.jobType ?? continuation.name }
+            : undefined,
           delaySeconds: continuation.delaySeconds,
         })
         const result = await enqueueDurableJob(
