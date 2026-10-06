@@ -710,7 +710,15 @@ export function createDurableJobsRuntime<
   const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
-      const record = await prepareDurableJob({ name: c.name, payload: c.payload, registry: opts.registry as never, delaySeconds: c.delaySeconds })
+      const record = await prepareDurableJob({
+        name: c.name,
+        payload: c.payload,
+        registry: opts.registry as never,
+        route: c.queue
+          ? { queue: c.queue, jobType: opts.registry.getJobRoute?.(c.name)?.jobType ?? c.name }
+          : undefined,
+        delaySeconds: c.delaySeconds,
+      })
       const result = await enqueueDurableJob(
         repository,
         publisher,
