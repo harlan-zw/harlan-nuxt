@@ -12,7 +12,7 @@ import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredV
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
-export const _useFetch: typeof useFetch = useFetch
+const _useFetch: typeof useFetch = useFetch
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
