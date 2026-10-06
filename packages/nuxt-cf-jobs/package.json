@@ -26,9 +26,6 @@
     "access": "public"
   },
   "sideEffects": false,
-  "imports": {
-    "#nuxt-cf-jobs/nitro": "./dist/runtime/server/nitro2.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",
@@ -49,6 +46,11 @@
       "types": "./dist/runtime/server/runtime-config.d.ts",
       "import": "./dist/runtime/server/runtime-config.js",
       "default": "./dist/runtime/server/runtime-config.js"
+    },
+    "./nitro": {
+      "types": "./dist/runtime/server/nitro2.d.ts",
+      "import": "./dist/runtime/server/nitro2.js",
+      "default": "./dist/runtime/server/nitro2.js"
     },
     "./cloudflare": {
       "types": "./dist/runtime/server/cloudflare.d.ts",
@@ -98,6 +100,9 @@
       ],
       "runtime-config": [
         "dist/runtime/server/runtime-config.d.ts"
+      ],
+      "nitro": [
+        "dist/runtime/server/nitro2.d.ts"
       ],
       "cloudflare": [
         "dist/runtime/server/cloudflare.d.ts"
