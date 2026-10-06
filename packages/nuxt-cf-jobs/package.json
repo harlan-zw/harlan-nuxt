@@ -26,6 +26,9 @@
     "access": "public"
   },
   "sideEffects": false,
+  "imports": {
+    "#nuxt-cf-jobs/nitro": "./dist/runtime/server/nitro2.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/types.d.mts",

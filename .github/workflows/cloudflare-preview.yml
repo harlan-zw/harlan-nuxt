@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - 'packages/nuxt-cloudflare/**'
+      - 'packages/nuxt-cf-jobs/**'
+      - 'packages/comark-content/**'
+      - 'packages/nuxt-use-query/**'
       - 'package.json'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
@@ -34,9 +37,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @harlan-zw/nuxt-checkin --filter @harlan-zw/nuxt-wide-events run dev:prepare
       - run: pnpm --filter @harlan-zw/nuxt-cloudflare run build
+      - run: pnpm --filter @harlan-zw/nuxt-cf-jobs --filter @harlan-zw/comark-content --filter @harlan-zw/nuxt-use-query run build
       - run: pnpm --filter @harlan-zw/nuxt-cloudflare run lint
       - run: pnpm --filter @harlan-zw/nuxt-cloudflare run typecheck
       - run: pnpm --filter @harlan-zw/nuxt-cloudflare run test
       - run: pnpm --filter @harlan-zw/nuxt-cloudflare run test:attw
       - name: Publish immutable preview
-        run: pnpm exec pkg-pr-new publish --pnpm --comment=off --no-compact ./packages/nuxt-cloudflare
+        run: pnpm exec pkg-pr-new publish --pnpm --comment=off --no-compact ./packages/nuxt-cloudflare ./packages/nuxt-cf-jobs ./packages/comark-content ./packages/nuxt-use-query

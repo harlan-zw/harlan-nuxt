@@ -24,6 +24,9 @@
     "access": "public"
   },
   "sideEffects": false,
+  "imports": {
+    "#comark-content/storage": "./dist/runtime/server/nitro2.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/module.d.mts",
