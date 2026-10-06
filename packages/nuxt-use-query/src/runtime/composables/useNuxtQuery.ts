@@ -1,19 +1,18 @@
-import type { $Fetch, AsyncData, TypedFetchRequest, TypedServerResponse, useFetch, UseFetchOptions } from 'nuxt/app'
+import type { $Fetch, AsyncData, TypedFetchRequest, TypedServerResponse, UseFetchOptions } from 'nuxt/app'
 import type { ComputedRef, MaybeRefOrGetter } from 'vue'
 import type { QueryStaleTime } from '../cache'
 import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, ref, toValue } from 'vue'
-import { useRequestFetch } from '#app'
-import { createUseFetch } from '#imports'
-import { queryFetchAddon } from '../query-addon'
+import { useFetch, useRequestFetch } from '#app'
+import { applyQueryAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
 import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
-export const _useFetch: typeof useFetch = createUseFetch({ addons: [queryFetchAddon] }) as unknown as typeof useFetch
+const _useFetch: typeof useFetch = useFetch
 
 export type { QueryServerDeadline, QueryServerOption } from '../query-server-option'
 
@@ -220,20 +219,6 @@ export function useNuxtQuery(
 
   const query = _useFetch(request as any, {
     ...fetchOptions,
-    _queryLifecycle: {
-      cache,
-      enabled,
-      gcTime,
-      key,
-      keepPreviousData,
-      refetchInterval,
-      refetchOnMount,
-      refetchOnReconnect,
-      refetchOnWindowFocus,
-      staleTime,
-      ssrDeferred,
-
-    },
     ...(deadlineFetch == null ? {} : { $fetch: deadlineFetch }),
     enabled,
     key,
@@ -252,7 +237,19 @@ export function useNuxtQuery(
     ...telemetryFetchOptions,
   } as any) as NuxtQuery<any, any>
 
-  return query
+  return applyQueryAddon(query, {
+    cache,
+    enabled,
+    gcTime,
+    key,
+    keepPreviousData,
+    refetchInterval,
+    refetchOnMount,
+    refetchOnReconnect,
+    refetchOnWindowFocus,
+    staleTime,
+    ssrDeferred,
+  })
 }
 
 type QueryFetch = (request: unknown, options?: Record<string, any>) => Promise<unknown>

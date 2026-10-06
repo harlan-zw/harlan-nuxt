@@ -96,6 +96,8 @@ export default defineNuxtModule<ModuleOptions>().with({
     const serverRuntime = resolveServerVariant({ nitro2: resolver.resolve('./runtime/server/nitro2'), nitro3: resolver.resolve('./runtime/server/nitro3') })!
     nuxt.options.alias['#nuxt-cf-jobs/nitro'] = serverRuntime
     ;(nuxt.options.nitro.alias ??= {})['#nuxt-cf-jobs/nitro'] = serverRuntime
+    nuxt.options.alias['@harlan-zw/nuxt-cf-jobs/nitro'] = serverRuntime
+    nuxt.options.nitro.alias['@harlan-zw/nuxt-cf-jobs/nitro'] = serverRuntime
     const queues = options.queues as ModuleOptions['queues']
     const hasQueues = Object.keys(queues).length > 0
     nuxt.hook('checkin:register', (registry) => {

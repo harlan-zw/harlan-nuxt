@@ -1,7 +1,7 @@
 {
   "name": "@harlan-zw/nuxt-cf-jobs",
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Experimental Nuxt module for typed Cloudflare queue jobs.",
   "author": {
     "name": "Harlan Wilton",
@@ -46,6 +46,11 @@
       "types": "./dist/runtime/server/runtime-config.d.ts",
       "import": "./dist/runtime/server/runtime-config.js",
       "default": "./dist/runtime/server/runtime-config.js"
+    },
+    "./nitro": {
+      "types": "./dist/runtime/server/nitro2.d.ts",
+      "import": "./dist/runtime/server/nitro2.js",
+      "default": "./dist/runtime/server/nitro2.js"
     },
     "./cloudflare": {
       "types": "./dist/runtime/server/cloudflare.d.ts",
@@ -95,6 +100,9 @@
       ],
       "runtime-config": [
         "dist/runtime/server/runtime-config.d.ts"
+      ],
+      "nitro": [
+        "dist/runtime/server/nitro2.d.ts"
       ],
       "cloudflare": [
         "dist/runtime/server/cloudflare.d.ts"
