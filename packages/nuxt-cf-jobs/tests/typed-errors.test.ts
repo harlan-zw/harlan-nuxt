@@ -375,7 +375,9 @@ describe('describeCauseWithStack keeps the deepest cause under truncation', () =
 
   it('renders an under-budget chain byte-identically to the untruncated shape', () => {
     const cause = new Error('D1_ERROR: no such table: gsc_pages')
+    cause.stack = 'Error: D1_ERROR: no such table: gsc_pages\n    at query (/worker.js:2:1)'
     const top = new Error('Failed query: select 1', { cause })
+    top.stack = 'Error: Failed query: select 1\n    at handler (/worker.js:1:1)'
     expect(describeCauseWithStack(top)).toBe(`${top.stack}\nCaused by: ${cause.stack}`)
   })
 

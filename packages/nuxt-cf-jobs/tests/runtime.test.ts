@@ -115,6 +115,51 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
 const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), retry: vi.fn() })
 
 describe('createDurableJobsRuntime — batch happy path', () => {
+  it.each([
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: false },
+    { persisted: undefined, expected: 'q', definitionOnly: false },
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: true },
+    { persisted: undefined, expected: 'q', definitionOnly: true },
+  ])('sends a completed batch continuation to $expected, definitionOnly=$definitionOnly', async ({ persisted, expected, definitionOnly }) => {
+    const interactive = createQueueBinding()
+    const defaultQueue = createQueueBinding()
+    const handlers = { work: async () => {}, finish: async () => {} }
+    const registry = createRegistry(handlers)
+    const { d1, runtime } = await setup(handlers, {
+      env: { Q: defaultQueue.binding, INTERACTIVE: interactive.binding },
+      resolveQueueBinding: (queue: string) => queue === 'interactive' ? 'INTERACTIVE' : 'Q',
+      registry: {
+        ...registry,
+        getJobDefinition: (name: string) => {
+          const definition = registry.getJobDefinition(name)
+          return name === 'finish' && definition
+            ? { ...definition, jobType: 'finish-definition' }
+            : definition
+        },
+        getJobRoute: definitionOnly
+          ? undefined
+          : (name: string) => name === 'finish'
+              ? { queue: 'q', jobType: 'finish-handler' }
+              : registry.getJobRoute(name),
+      },
+    })
+    const { jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {})],
+      onFinish: { name: 'finish', payload: {}, queue: persisted },
+    })
+    defaultQueue.messages.length = 0
+
+    await runtime.consumeMessage(msg(jobIds[0]!))
+
+    const selected = expected === 'interactive' ? interactive : defaultQueue
+    const other = expected === 'interactive' ? defaultQueue : interactive
+    expect(selected.messages).toEqual([expect.objectContaining({ queue: expected })])
+    expect(other.messages).toEqual([])
+    expect(d1._db.prepare('SELECT queue, job_type FROM jobs WHERE id = ?').get(selected.messages[0]!.jobId))
+      .toEqual(expect.objectContaining({ queue: expected, job_type: definitionOnly ? 'finish-definition' : 'finish-handler' }))
+    d1._db.close()
+  })
+
   it('consumes members, settles the batch, fires onFinish once, emits progress + metrics', async () => {
     const events: JobMetricsEvent[] = []
     const progress: Array<{ completed: number, total: number }> = []
