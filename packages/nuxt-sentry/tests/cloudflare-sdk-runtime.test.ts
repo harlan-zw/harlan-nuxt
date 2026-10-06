@@ -4,10 +4,16 @@ import { sentryCloudflareNitroPlugin } from '../src/runtime/server/cloudflare-sd
 
 vi.mock('nitro/app', () => ({ useNitroHooks: () => ({ hook: vi.fn() }) }))
 
+function deferred() {
+  let release!: () => void
+  const promise = new Promise<void>((resolve) => { release = resolve })
+  return { promise, resolve: () => release() }
+}
+
 describe('cloudflare SDK request boundary', () => {
   it('keeps concurrent request tags isolated after an await', async () => {
-    const first = Promise.withResolvers<void>()
-    const second = Promise.withResolvers<void>()
+    const first = deferred()
+    const second = deferred()
     const app = { fetch: async (request: Request) => {
       const id = request.headers.get('x-request-id')!
       setTag('request-id', id)
