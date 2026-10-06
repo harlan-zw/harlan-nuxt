@@ -635,7 +635,7 @@ packages:
 
   '@harlan-zw/nuxt-cloudflare@file:tarballs/nuxt-cloudflare.tgz':
     resolution: {integrity: sha512-eBo+lClKJW8lMQOXBm3wEmsm1IFT1tIwqj1y7v1k/au+bZYiPV/k79xoAp1fkz4Ne2X3g7G2DhqNbSyrWTVbHQ==, tarball: file:tarballs/nuxt-cloudflare.tgz}
-    version: 0.5.0
+    version: 0.5.1
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
