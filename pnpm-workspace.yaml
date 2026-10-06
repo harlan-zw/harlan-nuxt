@@ -16,7 +16,7 @@ catalog:
   '@antfu/eslint-config': ^9.3.0
   '@arethetypeswrong/cli': ^0.18.5
   '@cloudflare/workers-types': ^5.20260811.1
-  '@harlan-zw/jev': ^0.2.4
+  '@harlan-zw/jev': ^0.3.0
   '@sentry/cloudflare': ^10.70.0 || ^11.0.0
   '@sentry/nuxt': ^10.70.0 || ^11.0.0
   '@nuxt/kit': ^4.6.0
