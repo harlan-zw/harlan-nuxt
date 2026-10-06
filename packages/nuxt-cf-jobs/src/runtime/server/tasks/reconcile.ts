@@ -138,7 +138,7 @@ export default defineScheduledTask({
           payload: continuation.payload,
           registry: jobRegistry,
           route: continuation.queue
-            ? { queue: continuation.queue, jobType: jobRegistry.getJobRoute?.(continuation.name)?.jobType ?? continuation.name }
+            ? { queue: continuation.queue, jobType: jobRegistry.getJobRoute?.(continuation.name)?.jobType ?? jobRegistry.getJobDefinition?.(continuation.name)?.jobType ?? continuation.name }
             : undefined,
           delaySeconds: continuation.delaySeconds,
         })

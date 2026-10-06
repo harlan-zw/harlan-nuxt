@@ -715,7 +715,7 @@ export function createDurableJobsRuntime<
         payload: c.payload,
         registry: opts.registry as never,
         route: c.queue
-          ? { queue: c.queue, jobType: opts.registry.getJobRoute?.(c.name)?.jobType ?? c.name }
+          ? { queue: c.queue, jobType: opts.registry.getJobRoute?.(c.name)?.jobType ?? opts.registry.getJobDefinition?.(c.name)?.jobType ?? c.name }
           : undefined,
         delaySeconds: c.delaySeconds,
       })

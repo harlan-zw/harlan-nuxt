@@ -116,9 +116,11 @@ const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), ret
 
 describe('createDurableJobsRuntime — batch happy path', () => {
   it.each([
-    { persisted: 'interactive', expected: 'interactive' },
-    { persisted: undefined, expected: 'q' },
-  ])('sends a completed batch continuation to $expected', async ({ persisted, expected }) => {
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: false },
+    { persisted: undefined, expected: 'q', definitionOnly: false },
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: true },
+    { persisted: undefined, expected: 'q', definitionOnly: true },
+  ])('sends a completed batch continuation to $expected, definitionOnly=$definitionOnly', async ({ persisted, expected, definitionOnly }) => {
     const interactive = createQueueBinding()
     const defaultQueue = createQueueBinding()
     const handlers = { work: async () => {}, finish: async () => {} }
@@ -128,9 +130,17 @@ describe('createDurableJobsRuntime — batch happy path', () => {
       resolveQueueBinding: (queue: string) => queue === 'interactive' ? 'INTERACTIVE' : 'Q',
       registry: {
         ...registry,
-        getJobRoute: (name: string) => name === 'finish'
-          ? { queue: 'q', jobType: 'finish-handler' }
-          : registry.getJobRoute(name),
+        getJobDefinition: (name: string) => {
+          const definition = registry.getJobDefinition(name)
+          return name === 'finish' && definition
+            ? { ...definition, jobType: 'finish-definition' }
+            : definition
+        },
+        getJobRoute: definitionOnly
+          ? undefined
+          : (name: string) => name === 'finish'
+              ? { queue: 'q', jobType: 'finish-handler' }
+              : registry.getJobRoute(name),
       },
     })
     const { jobIds } = await runtime.createBatch({
@@ -146,7 +156,7 @@ describe('createDurableJobsRuntime — batch happy path', () => {
     expect(selected.messages).toEqual([expect.objectContaining({ queue: expected })])
     expect(other.messages).toEqual([])
     expect(d1._db.prepare('SELECT queue, job_type FROM jobs WHERE id = ?').get(selected.messages[0]!.jobId))
-      .toEqual(expect.objectContaining({ queue: expected, job_type: 'finish-handler' }))
+      .toEqual(expect.objectContaining({ queue: expected, job_type: definitionOnly ? 'finish-definition' : 'finish-handler' }))
     d1._db.close()
   })
 

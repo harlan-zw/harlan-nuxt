@@ -4,6 +4,7 @@ import reconcile from '../src/runtime/server/tasks/reconcile'
 
 const state = vi.hoisted(() => ({
   queue: undefined as string | undefined,
+  definitionOnly: false,
   records: [] as DurableJobRecord[],
   sendInteractive: vi.fn(async () => {}),
   sendDefault: vi.fn(async () => {}),
@@ -17,7 +18,10 @@ vi.mock('@harlan-zw/nuxt-cloudflare/bindings', () => ({
   }),
 }))
 vi.mock('#cf-jobs/app', () => ({
-  jobRegistry: { getJobRoute: () => ({ queue: 'default', jobType: 'finish' }) },
+  jobRegistry: {
+    getJobRoute: () => state.definitionOnly ? undefined : ({ queue: 'default', jobType: 'finish' }),
+    getJobDefinition: () => ({ queue: 'default', jobType: 'finish-definition', handle: async () => {} }),
+  },
 }))
 vi.mock('#cf-jobs/reconcile-context', () => ({ createReconcileJobContext: undefined }))
 vi.mock('#nuxt-cf-jobs/nitro', () => ({
@@ -53,13 +57,16 @@ describe('scheduled batch recovery', () => {
   })
 
   it.each([
-    { persisted: 'interactive', expected: 'interactive' },
-    { persisted: undefined, expected: 'default' },
-  ])('dispatches a recovered continuation to $expected', async ({ persisted, expected }) => {
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: false },
+    { persisted: undefined, expected: 'default', definitionOnly: false },
+    { persisted: 'interactive', expected: 'interactive', definitionOnly: true },
+    { persisted: undefined, expected: 'default', definitionOnly: true },
+  ])('dispatches a recovered continuation to $expected, definitionOnly=$definitionOnly', async ({ persisted, expected, definitionOnly }) => {
     state.queue = persisted
+    state.definitionOnly = definitionOnly
     await reconcile.run({ payload: {}, context: {} })
 
-    expect(state.records).toEqual([expect.objectContaining({ queue: expected, jobType: 'finish' })])
+    expect(state.records).toEqual([expect.objectContaining({ queue: expected, jobType: definitionOnly ? 'finish-definition' : 'finish' })])
     const selected = expected === 'interactive' ? state.sendInteractive : state.sendDefault
     const other = expected === 'interactive' ? state.sendDefault : state.sendInteractive
     expect(selected).toHaveBeenCalledOnce()
