@@ -590,7 +590,7 @@ packages:
 
   '@harlan-zw/comark-content@file:tarballs/comark-content.tgz':
     resolution: {integrity: sha512-kqqe6QHLQwYN4SNOQ7FVm4i+5trxJKZz4pdtvOXVLnjjM/BL0spIvvi+EZUFSNBWAvilrQQCk8Bu9V/Ge3hnFA==, tarball: file:tarballs/comark-content.tgz}
-    version: 0.1.5
+    version: 0.2.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nuxt: 4.6.0
@@ -598,21 +598,21 @@ packages:
 
   '@harlan-zw/jev@file:tarballs/jev.tgz':
     resolution: {integrity: sha512-Tl9ZUpYKjR3YHr0gzDZ6RwUnAAfHfQT6wl4u1aYdwYnnm/BIvwcDewD/GBraJok5DHo9rTEQdA3/XJZzfWOJKg==, tarball: file:tarballs/jev.tgz}
-    version: 0.2.4
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
 
   '@harlan-zw/mcp-oauth@file:tarballs/mcp-oauth.tgz':
     resolution: {integrity: sha512-1B4/S/dSsUVCfqplSF9o54aH/PezNVIayAL2JPMY4vjgZbN3ycKdBSEpizZtCJsys/qlTP3wRlHy/FlxnNHH3Q==, tarball: file:tarballs/mcp-oauth.tgz}
-    version: 0.1.1
+    version: 0.2.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
 
   '@harlan-zw/nuxt-cf-jobs@file:tarballs/nuxt-cf-jobs.tgz':
     resolution: {integrity: sha512-jOnLo8EaYlAdO+EzGTja0xEBfjIUr7rxW9TzkGDEgkuMecDqclqPsJ/JuaS5Uf7oc1vDyaTiN+ZBmZ6urdz3Cg==, tarball: file:tarballs/nuxt-cf-jobs.tgz}
-    version: 0.2.6
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
-      '@harlan-zw/nuxt-checkin': ^0.1.0 || ^0.2.0-0 || ^0.3.0
+      '@harlan-zw/nuxt-checkin': ^0.4.0
       '@sentry/cloudflare': ^10.70.0 || ^11.0.0
       nitro: ^3.0.0-0
       nuxt: 4.6.0
@@ -627,7 +627,7 @@ packages:
 
   '@harlan-zw/nuxt-checkin@file:tarballs/nuxt-checkin.tgz':
     resolution: {integrity: sha512-DNDxlbuSKB7XTVKXjyKaCdEIuw+qDVgc6uXmNNWlA0GEX6xuhsEpZrpHwOsQxafcWoVKlO1KZ02XoskHUw0SaA==, tarball: file:tarballs/nuxt-checkin.tgz}
-    version: 0.3.0
+    version: 0.4.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
@@ -635,11 +635,11 @@ packages:
 
   '@harlan-zw/nuxt-cloudflare@file:tarballs/nuxt-cloudflare.tgz':
     resolution: {integrity: sha512-eBo+lClKJW8lMQOXBm3wEmsm1IFT1tIwqj1y7v1k/au+bZYiPV/k79xoAp1fkz4Ne2X3g7G2DhqNbSyrWTVbHQ==, tarball: file:tarballs/nuxt-cloudflare.tgz}
-    version: 0.4.4
+    version: 0.5.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
-      '@harlan-zw/nuxt-checkin': ^0.1.0 || ^0.2.0-0 || ^0.3.0
+      '@harlan-zw/nuxt-checkin': ^0.4.0
       nitro: ^3.0.0-0
       nuxt: 4.6.0
       wrangler: '>=4.120.0 <5.0.0'
@@ -651,10 +651,10 @@ packages:
 
   '@harlan-zw/nuxt-domain-events@file:tarballs/nuxt-domain-events.tgz':
     resolution: {integrity: sha512-fQCUepAbfxTb5V4wyq2ouH5XuNq5sUWWKLWu4QcNxkLXLwpp6d7dqS1M35n4jRtvXIU7oJNf8AlXwCy9O+Ld4Q==, tarball: file:tarballs/nuxt-domain-events.tgz}
-    version: 0.1.2
+    version: 0.2.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
-      '@harlan-zw/nuxt-cf-jobs': ^0.2.6
+      '@harlan-zw/nuxt-cf-jobs': ^0.3.0
       nuxt: 4.6.0
       vite: ^8.0.0
     peerDependenciesMeta:
@@ -663,7 +663,7 @@ packages:
 
   '@harlan-zw/nuxt-dx@file:tarballs/nuxt-dx.tgz':
     resolution: {integrity: sha512-Ib4x1qFKTx89Kn4W9HfjuXvu4t0eNOZqvp1Ruk88M3lmbEYm8mCinXliH6+8d7z+oA3+M9KgJcLMx+y93Botvg==, tarball: file:tarballs/nuxt-dx.tgz}
-    version: 0.2.1
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
@@ -672,7 +672,7 @@ packages:
 
   '@harlan-zw/nuxt-github-sponsors@file:tarballs/nuxt-github-sponsors.tgz':
     resolution: {integrity: sha512-pO8JIH3Y+1jJKOVVCHa6XRFE+ByJOITuW6p8MDjJ6oq4ToomoM6w9bokO/8swG+mTsDK1v9Xm8DdopeuP0lKKA==, tarball: file:tarballs/nuxt-github-sponsors.tgz}
-    version: 0.1.4
+    version: 0.2.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nitro: ^3.0.0-0
@@ -683,17 +683,17 @@ packages:
 
   '@harlan-zw/nuxt-jev@file:tarballs/nuxt-jev.tgz':
     resolution: {integrity: sha512-hPMcIIk2YwIkdui7tFnHwPjsT2TvtF0SMFgjcnAYkBhTe9CRnN04J1UzNcnYQkax0qyJjEhPDKBhVoScxI0Tjg==, tarball: file:tarballs/nuxt-jev.tgz}
-    version: 0.2.3
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nuxt: 4.6.0
 
   '@harlan-zw/nuxt-sentry@file:tarballs/nuxt-sentry.tgz':
     resolution: {integrity: sha512-cbg5NRqoClnhiXYSABT+XkyXZdYyyfeIehUQ6+zbj3+EA2g6c4Vci2ePnyxEwjVxA+uCfgcGz6nkvzWkfN3o1A==, tarball: file:tarballs/nuxt-sentry.tgz}
-    version: 0.2.0
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
-      '@harlan-zw/nuxt-checkin': ^0.1.0 || ^0.2.0-0 || ^0.3.0
+      '@harlan-zw/nuxt-checkin': ^0.4.0
       '@sentry/cloudflare': ^10.70.0 || ^11.0.0
       '@sentry/nuxt': ^10.70.0 || ^11.0.0
       nitro: ^3.0.0-0
@@ -708,7 +708,7 @@ packages:
 
   '@harlan-zw/nuxt-use-query@file:tarballs/nuxt-use-query.tgz':
     resolution: {integrity: sha512-AdzrSW9adR1hBy3xyavA5e7la/KZyMrKJ5rdy6Dtr3954eovfVM9wqLEFRilgCMHCM/U7Wq5B0PfOI28eBmosw==, tarball: file:tarballs/nuxt-use-query.tgz}
-    version: 0.2.4
+    version: 0.3.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nitro: ^3.0.0-0
@@ -721,7 +721,7 @@ packages:
 
   '@harlan-zw/nuxt-wide-events@file:tarballs/nuxt-wide-events.tgz':
     resolution: {integrity: sha512-bUOOD3GtoKfyx0LKfTlxywMlKWNUl5Ee9fXIsF5/1U2WwrEsEOZUNk1S+WfDkfqZBNRbFOmzvMVuwXCU1cVlZA==, tarball: file:tarballs/nuxt-wide-events.tgz}
-    version: 0.1.4
+    version: 0.2.0
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     peerDependencies:
       nitro: ^3.0.0-0
