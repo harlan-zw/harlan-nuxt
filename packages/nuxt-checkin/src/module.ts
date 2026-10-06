@@ -107,7 +107,7 @@ export default defineNuxtModule<ModuleOptions>({
     addTypeTemplate({
       filename: 'checkin/types.d.ts',
       getContents: () => `declare module '#checkin/checks' { const checks: readonly import(${JSON.stringify(server)}).Check[]; export default checks }`,
-    }, { nuxt: true, nitro: true })
+    }, { nuxt: true, nitro: true, shared: true })
     if (nuxt.options.dev) {
       nuxt.options.watch.push(...directories)
       const onNitroInit = nuxt.hook as unknown as (

@@ -658,7 +658,7 @@ packages:
 
   '@harlan-zw/nuxt-checkin@file:tarballs/nuxt-checkin.tgz':
     resolution: {integrity: sha512-DNDxlbuSKB7XTVKXjyKaCdEIuw+qDVgc6uXmNNWlA0GEX6xuhsEpZrpHwOsQxafcWoVKlO1KZ02XoskHUw0SaA==, tarball: file:tarballs/nuxt-checkin.tgz}
-    version: 0.4.0
+    version: 0.4.1
     engines: {node: ^22.22.3 || ^24.15.0 || >=26.0.0}
     hasBin: true
     peerDependencies:
