@@ -6,7 +6,9 @@ vi.mock('nitro/app', () => ({ useNitroHooks: () => ({ hook: vi.fn() }) }))
 
 function deferred() {
   let release!: () => void
-  const promise = new Promise<void>((resolve) => { release = resolve })
+  const promise = new Promise<void>((resolve) => {
+    release = resolve
+  })
   return { promise, resolve: () => release() }
 }
 
