@@ -45,5 +45,5 @@ jobs:
       - name: Publish immutable preview
         run: |
           mkdir -p "$RUNNER_TEMP/previews"
-          pnpm --filter @harlan-zw/nuxt-cloudflare --filter @harlan-zw/nuxt-cf-jobs --filter @harlan-zw/comark-content --filter @harlan-zw/nuxt-use-query --ignore-scripts pack --pack-destination "$RUNNER_TEMP/previews"
+          pnpm --config.ignore-scripts=true -r --filter @harlan-zw/nuxt-cloudflare --filter @harlan-zw/nuxt-cf-jobs --filter @harlan-zw/comark-content --filter @harlan-zw/nuxt-use-query pack --pack-destination "$RUNNER_TEMP/previews"
           pnpm exec pkg-pr-new publish --comment=off --no-compact "$RUNNER_TEMP/previews/*.tgz"
