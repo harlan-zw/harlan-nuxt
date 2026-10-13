@@ -14,6 +14,7 @@ import { contentHookCollection, contentHookFile, parserOptions } from '../hooks'
 import { collectComponentTags } from '../runtime/components/names'
 import { generatedTitle } from '../runtime/core/path'
 import { CACHE_VERSION, readCache, writeCache } from './cache'
+import { details } from './details'
 import { contentPath, sourceStem } from './path'
 import { contentRangiLanguages, contentRangiTheme, normalizeRangiThemeVariables } from './rangi'
 import { prepareRemoteSource } from './remote'
@@ -45,6 +46,7 @@ type IngestionOptions = ContentHook & {
 
 const plainParser = createMarkdownParser({
   plugins: [
+    details,
     headings(),
     toc({ depth: 3, searchDepth: 3 }),
   ],
@@ -56,6 +58,7 @@ export async function createContentParser(options: Pick<IngestionOptions, 'highl
   const highlight = typeof options.highlight === 'object' ? options.highlight : {}
   const parse = createMarkdownParser({
     plugins: [
+      details,
       headings(),
       toc({ depth: 3, searchDepth: 3 }),
       rangi({
