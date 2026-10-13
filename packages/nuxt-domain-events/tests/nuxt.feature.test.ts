@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { buildNuxt } from '@nuxt/kit'
+import { buildNuxt, writeTypes } from '@nuxt/kit'
 import { loadNuxt } from 'nuxt'
 import { describe, expect, it } from 'vitest'
 import { generateEventRegistryTemplate } from '../src/build/registry'
@@ -20,13 +20,15 @@ describe('nuxt module integration', () => {
     ])
     await Promise.all([
       writeFile(join(root, 'server/events/event.ts'), `export default defineEvent({ name: 'test:event', transport: { _tag: 'local' }, input: { parse: (input: unknown): { value: string } => input as { value: string } } })`),
-      writeFile(join(root, 'server/type-probe.ts'), `import { dispatchEvent } from '#domain-events/server'\n\nawait dispatchEvent('test:event', { value: 'valid' })\n// @ts-expect-error event payloads reject the wrong value type\nawait dispatchEvent('test:event', { value: 1 })\n`),
+      writeFile(join(root, 'server/type-probe.ts'), `import type { EventPayload } from '#domain-events/server'\nimport type { EventPayload as RuntimePayload } from '../.nuxt/domain-events/server.mjs'\nimport { dispatchEvent } from '#domain-events/server'\n\nconst payload: EventPayload<'test:event'> & RuntimePayload<'test:event'> = { value: 'valid' }\nawait dispatchEvent('test:event', payload)\n// @ts-expect-error event payloads reject the wrong value type\nawait dispatchEvent('test:event', { value: 1 })\n`),
     ])
 
     const nuxt = await loadNuxt({
       cwd: root,
       ready: true,
       overrides: {
+        _prepare: true,
+        future: { compatibilityVersion: 5 },
         alias: {
           '@harlan-zw/nuxt-domain-events/server': join(import.meta.dirname, '../src/runtime/server/index'),
         },
@@ -34,6 +36,7 @@ describe('nuxt module integration', () => {
         modules: [[domainEventsModule, { allowEmptyEvents: ['test:event'] }]],
       },
     })
+    await writeTypes(nuxt)
     await buildNuxt(nuxt)
     await execFileAsync('pnpm', ['exec', 'tsc', '--noEmit', '--pretty', 'false', '-p', join(nuxt.options.buildDir, 'tsconfig.server.json')])
     await nuxt.close()

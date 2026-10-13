@@ -50,10 +50,22 @@ export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt
     write: true,
     getContents: () => renderEventServerProxy(),
   })
-  const typesTemplate = addTypeTemplate({
-    filename: 'domain-events/server.d.ts',
+  const typesTemplate = addTemplate({
+    filename: 'domain-events/server.d.mts',
+    write: true,
     getContents: async () => generateEventRegistryTypes(options, sourceContext, templateDir),
+  })
+  addTypeTemplate({
+    filename: 'domain-events/server.d.ts',
+    getContents: () => 'export * from "./server.mjs"\n',
   }, { nuxt: true, nitro: true })
+  nuxt.hook('prepare:types', ({ tsConfig, serverTsConfig }) => {
+    for (const config of [tsConfig, serverTsConfig]) {
+      config.compilerOptions ||= {}
+      config.compilerOptions.paths ||= {}
+      config.compilerOptions.paths['#domain-events/server'] = [typesTemplate.dst]
+    }
+  })
   const contractsTemplate = addTemplate({
     filename: 'domain-events/contracts.ts',
     write: true,
@@ -75,6 +87,11 @@ export function installEventRegistryTemplates(options: ModuleOptions, nuxt: Nuxt
   const nitro = ((nuxt.options as unknown as { nitro?: Record<string, any> }).nitro ??= {})
   nitro.alias ||= {}
   nitro.alias['#domain-events/server'] = serverTemplate.dst
+  nitro.typescript ||= {}
+  nitro.typescript.tsConfig ||= {}
+  nitro.typescript.tsConfig.compilerOptions ||= {}
+  nitro.typescript.tsConfig.compilerOptions.paths ||= {}
+  nitro.typescript.tsConfig.compilerOptions.paths['#domain-events/server'] = [typesTemplate.dst]
 
   if (nuxt.options.dev) {
     if (resolveServerVariant({ nitro2: false, nitro3: true })) {
