@@ -57,6 +57,15 @@ name: Harlan Desktop site CI
 on:
   workflow_call:
     inputs:
+      skip:
+        description: >-
+          Skip every check. Each job then reports SKIPPED under its usual name,
+          which satisfies a required check. A caller sets this from a changes
+          job for a pull request that touches only docs, instead of filtering
+          paths at the event, where no check would report at all.
+        type: boolean
+        required: false
+        default: false
       runs-on:
         description: JSON array of runner labels. Self-hosted pools are private repositories only.
         type: string
@@ -129,7 +138,7 @@ permissions:
 
 jobs:
   lint:
-    if: inputs.task-cache || inputs.lint-command != ''
+    if: ${{ !inputs.skip && (inputs.task-cache || inputs.lint-command != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -158,7 +167,7 @@ jobs:
         run: ${{ inputs.lint-command }}
 
   typecheck:
-    if: inputs.task-cache || inputs.typecheck-command != ''
+    if: ${{ !inputs.skip && (inputs.task-cache || inputs.typecheck-command != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -186,7 +195,7 @@ jobs:
           NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
 
   test:
-    if: inputs.task-cache || inputs.test-command != ''
+    if: ${{ !inputs.skip && (inputs.task-cache || inputs.test-command != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
