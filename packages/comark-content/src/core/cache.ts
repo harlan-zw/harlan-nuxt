@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import process from 'node:process'
 
-export const CACHE_VERSION = 'comark-content:3:comark-0.6.2:rangi-2.2.0:github-aa-v1'
+export const CACHE_VERSION = 'comark-content:4:comark-0.6.2:rangi-2.2.0:github-aa-v1'
 
 export interface CacheEntry {
   digest: string
