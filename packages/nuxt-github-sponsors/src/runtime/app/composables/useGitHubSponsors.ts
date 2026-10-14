@@ -1,8 +1,8 @@
-import type { AsyncData } from '#app'
+import type { AsyncData, NuxtError } from '#app'
 import type { GitHubSponsorsResponse } from '../../shared/types'
 import { useFetch, useRuntimeConfig } from '#app'
 
-export function useGitHubSponsors(): AsyncData<GitHubSponsorsResponse | undefined, Error> {
+export function useGitHubSponsors(): AsyncData<GitHubSponsorsResponse | undefined, NuxtError<unknown> | undefined> {
   const config = useRuntimeConfig()
   const githubSponsors = (config.public as Record<string, unknown>).githubSponsors as { route: string, mode: 'runtime' | 'prerender' | 'client' }
   return useFetch<GitHubSponsorsResponse>(githubSponsors.route, {
