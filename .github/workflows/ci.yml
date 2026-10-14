@@ -28,7 +28,7 @@ jobs:
         node: ['22.22.3', '24']
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
@@ -55,7 +55,7 @@ jobs:
           - { lane: nightly, node: '24' }
     steps:
       - uses: actions/checkout@v6
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
