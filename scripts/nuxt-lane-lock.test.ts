@@ -33,7 +33,7 @@ test('a rebuilt local archive installs with a frozen lock after a version bump',
     for (const version of ['0.2.1', '0.2.2']) {
       await writeFile(resolve(producer, 'package.json'), JSON.stringify({ name: 'lane-fixture', version, main: 'index.cjs' }))
       await writeFile(resolve(producer, 'index.cjs'), `module.exports = '${version}'\n`)
-      run(['pack', '--ignore-scripts', '--out', resolve(consumer, 'fixture.tgz')], producer)
+      run(['pack', '--config.ignore-scripts=true', '--out', resolve(consumer, 'fixture.tgz')], producer)
       if (version === '0.2.1')
         run(['install', '--lockfile-only', '--ignore-scripts'])
     }
