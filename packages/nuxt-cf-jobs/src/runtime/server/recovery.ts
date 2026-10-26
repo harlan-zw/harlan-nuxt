@@ -112,21 +112,31 @@ export async function recoverDurableJobs<
     limit,
   })
   const remainingLimit = Math.max(0, limit - unpublished.length)
-  const orphaned = remainingLimit > 0
+  // Recover only while a stale release remains the latest lifecycle evidence.
+  // Give redelivery its grace, independently of the general orphan age.
+  const staleReleased = remainingLimit > 0
+    ? await repository.findStaleReleasedJobs?.({
+      now: nowSeconds,
+      staleReleasedBefore: nowSeconds - redeliveryGraceSeconds,
+      limit: remainingLimit,
+    }) ?? []
+    : []
+  const orphanLimit = Math.max(0, remainingLimit - staleReleased.length)
+  const orphaned = orphanLimit > 0
     ? await findDispatchableDurableJobs(repository, {
         now: nowSeconds,
         createdBefore: nowSeconds - orphanedSeconds,
         ...(redeliveryGraceSeconds > 0 ? { staleReleasedBefore: nowSeconds - redeliveryGraceSeconds } : {}),
         ...(redispatchGraceSeconds > 0 ? { redispatchedBefore: nowSeconds - redispatchGraceSeconds } : {}),
         publication: 'published',
-        limit: remainingLimit,
+        limit: orphanLimit,
       })
     : []
 
   const releasedIds = new Set(stale.slice(0, released).map(job => job.id))
   const dispatchable = uniqueJobs(redeliveryGraceSeconds > 0
-    ? [...unpublished, ...orphaned.filter(job => !releasedIds.has(job.id))]
-    : [...unpublished, ...stale.slice(0, released), ...orphaned])
+    ? [...unpublished, ...staleReleased, ...orphaned.filter(job => !releasedIds.has(job.id))]
+    : [...unpublished, ...stale.slice(0, released), ...staleReleased, ...orphaned]).slice(0, limit)
   const publicationRepository = repository as DurableJobRecoveryRepository<Queue, Record> & Partial<DurableJobPublicationRepository>
   const dispatchResults: Array<DispatchDurableJobBatchResult<Queue>> = publicationRepository.markJobsPublished && publicationRepository.noteJobsDispatchFailure
     ? (await publishDurableJobBatch(

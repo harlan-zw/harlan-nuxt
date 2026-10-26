@@ -20,14 +20,14 @@
     "lint:fix": "pnpm -r --if-present run lint:fix",
     "release": "node scripts/release.mjs",
     "typecheck": "pnpm -r --if-present run typecheck",
-    "test": "node --test scripts/*.test.mjs && pnpm -r --if-present run test",
+    "test": "node --test scripts/*.test.mjs scripts/*.test.ts && pnpm -r --if-present run test",
     "test:attw": "pnpm -r --if-present run test:attw",
     "test:pack": "pnpm -r --if-present run test:pack",
     "test:nuxt-lanes": "node scripts/test-nuxt-lanes.ts"
   },
   "devDependencies": {
     "consola": "catalog:",
-    "yaml": "catalog:",
-    "pkg-pr-new": "catalog:"
+    "pkg-pr-new": "catalog:",
+    "yaml": "catalog:"
   }
 }

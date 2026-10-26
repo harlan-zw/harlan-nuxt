@@ -250,6 +250,8 @@ export interface DurableJobRecoveryRepository<
   Record extends Pick<DurableJobRecord<Queue>, 'id' | 'queue'> = Pick<DurableJobRecord<Queue>, 'id' | 'queue'>,
 > {
   findDispatchableJobs?: (query?: DurableJobRecoveryQuery) => Promise<Record[]>
+  /** Recover published jobs whose latest evidence is an expired stale release without renewed transport. */
+  findStaleReleasedJobs?: (query: { now?: number, staleReleasedBefore: number, limit?: number }) => Promise<Record[]>
   /**
    * Record that the orphan sweep re-dispatched these rows, so a later sweep can
    * exclude them via {@link DurableJobRecoveryQuery.redispatchedBefore}. Optional:

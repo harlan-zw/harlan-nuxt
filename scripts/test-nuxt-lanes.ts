@@ -1,6 +1,5 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -8,6 +7,7 @@ import { resolve } from 'node:path'
 import process from 'node:process'
 import { setTimeout } from 'node:timers/promises'
 import { parse, stringify } from 'yaml'
+import { refreshLocalArchive } from './nuxt-lane-lock.ts'
 
 const NIGHTLY = '5.0.0-2610052343-36eafab'
 const lane = process.argv[2] ?? 'minimum'
@@ -19,6 +19,7 @@ const policy = parse(await readFile(resolve(root, 'pnpm-workspace.yaml'), 'utf8'
 const modules: string[] = []
 const dependencies: Record<string, string> = {}
 const localArchives: string[] = []
+const archiveVersions: Record<string, string> = {}
 await mkdir(resolve(fixture, 'tarballs'))
 
 function run(args: string[], cwd = fixture) {
@@ -33,6 +34,7 @@ for (const directory of await readdir(resolve(root, 'packages'))) {
   run(['pack', '--config.ignore-scripts=true', '--out', resolve(fixture, 'tarballs', archive)], cwd)
   dependencies[pkg.name] = `file:./tarballs/${archive}`
   localArchives.push(`${pkg.name}@${pkg.version}`)
+  archiveVersions[`file:tarballs/${archive}`] = pkg.version
   if (pkg.peerDependencies?.nuxt)
     modules.push(pkg.name)
 }
@@ -45,11 +47,13 @@ if (!updateLock) {
   const lock = await readFile(lockPath, 'utf8')
   lockedPackages = parse(lock).packages
   const seed = parse(lock)
-  // Rebuilt local archives get new integrity hashes. Keep their resolved dependency snapshots.
-  for (const entry of Object.values(seed.packages) as { resolution: { integrity: string, tarball?: string } }[]) {
+  // Refresh local archive identity after releases. Keep resolved dependency snapshots.
+  for (const [key, entry] of Object.entries(seed.packages) as [string, { resolution: { integrity: string, tarball?: string }, version: string }][]) {
     if (entry.resolution.tarball?.startsWith('file:')) {
       const archive = await readFile(resolve(fixture, entry.resolution.tarball.slice(5)))
-      entry.resolution.integrity = `sha512-${createHash('sha512').update(archive).digest('base64')}`
+      const version = archiveVersions[entry.resolution.tarball]
+      assert(version, `Missing local archive version: ${entry.resolution.tarball}`)
+      seed.packages[key] = refreshLocalArchive(entry, archive, version)
     }
   }
   await writeFile(resolve(fixture, 'pnpm-lock.yaml'), stringify(seed))

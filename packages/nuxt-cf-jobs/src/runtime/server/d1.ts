@@ -713,6 +713,24 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       ).run()
     },
 
+    async findStaleReleasedJobs(query) {
+      return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
+          SELECT *
+          FROM ${jobsTable}
+          WHERE reserved_at IS NULL
+            AND published_at IS NOT NULL
+            AND available_at <= ?
+            AND completed_at IS NULL
+            AND failed_at IS NULL
+            AND (max_attempts IS NULL OR attempts < max_attempts)
+            AND json_extract(${validEvidenceArraySql('retry_reasons')}, '$[#-1]._tag') = 'stale-release'
+            AND CAST(json_extract(${validEvidenceArraySql('retry_reasons')}, '$[#-1].at') AS INTEGER)
+              BETWEEN COALESCE(last_dispatched_at, 0) + 1 AND ?
+          ORDER BY created_at ASC
+          LIMIT ?
+        `).bind(query.now ?? currentUnixSeconds(), query.staleReleasedBefore, query.limit ?? 100))
+    },
+
     async findDispatchableJobs(query = {}) {
       const publicationPredicate = query.publication === 'all'
         ? '1 = 1'

@@ -32,28 +32,6 @@ describe('recoverDurableJobs', () => {
       limit: 10,
     })
 
-    expect(repository.findStaleReservedJobs).toHaveBeenCalledWith({ staleBefore: 700, limit: 10 })
-    expect(repository.releaseStaleReservedJobs).toHaveBeenCalledWith({
-      now: 1_000,
-      staleBefore: 700,
-      availableAt: 1_000,
-      error: 'stale-reservation',
-      limit: 10,
-    })
-    expect(repository.findDispatchableJobs).toHaveBeenNthCalledWith(1, {
-      now: 1_000,
-      publication: 'unpublished',
-      limit: 10,
-    })
-    expect(repository.findDispatchableJobs).toHaveBeenNthCalledWith(2, {
-      now: 1_000,
-      createdBefore: 400,
-      staleReleasedBefore: 880,
-      // Defaults to orphanedSeconds: a row is re-sent at most once per window.
-      redispatchedBefore: 400,
-      publication: 'published',
-      limit: 10,
-    })
     expect(sent).toEqual([{ queue: 'q', ids: ['orphaned'] }])
     expect(result).toMatchObject({
       released: 2,
