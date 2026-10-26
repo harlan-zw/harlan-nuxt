@@ -45,6 +45,11 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
           return api
         },
         async run() {
+          if (stmt.columns().length) {
+            const results = stmt.all(...(bound as never[])) as T[]
+            const changes = db.prepare('SELECT changes() AS count').get() as { count: number }
+            return { success: true, results, meta: { changes: changes.count } }
+          }
           const result = stmt.run(...(bound as never[]))
           return { success: true, meta: { changes: Number(result.changes) } }
         },
@@ -70,6 +75,173 @@ async function record(id: string): Promise<DurableJobRecord> {
     traceId: `event_${id}`,
   })
 }
+
+async function staleRecoveryFixture(maxAttempts = 3) {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(100_000_000)
+  const db = createSqliteD1()
+  const repository = createD1DurableJobRepository(db)
+  await repository.migrate()
+  const job = { ...await record('stale'), createdAt: 100_000, availableAt: 100_000, maxAttempts }
+  await stagePreparedDurableJobs(repository, [job])
+  await publishDurableJobBatch(repository, { sendBatch: async () => true }, [job], { now: 100_000 })
+  await repository.claimJob(job.id)
+  const sent: string[] = []
+  let accepted = true
+  const publisher = { sendBatch: async (_queue: string, messages: Array<{ jobId: string }>) => {
+    sent.push(...messages.map(message => message.jobId))
+    return accepted
+  } }
+  const tick = async (now: number, options: Parameters<typeof recoverDurableJobs>[2] = {}) => {
+    clock.mockReturnValue(now * 1_000)
+    return await recoverDurableJobs(repository, publisher, { ...options, now })
+  }
+  const released = await tick(101_000)
+  return {
+    db,
+    repository,
+    job,
+    publisher,
+    sent,
+    tick,
+    released,
+    at: (now: number) => clock.mockReturnValue(now * 1_000),
+    accept: (value: boolean) => { accepted = value },
+    close() {
+      clock.mockRestore()
+      db._db.close()
+    },
+  }
+}
+
+describe('stale reservation redelivery', () => {
+  it('waits through grace and sends once at its boundary', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      await fixture.tick(101_119)
+      expect(fixture.sent).toEqual([])
+      await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([fixture.job.id])
+      fixture.sent.length = 0
+      await fixture.tick(101_120)
+      await fixture.tick(101_121)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('leaves a live reservation with its current delivery', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      fixture.at(101_010)
+      expect(await fixture.repository.claimJob(fixture.job.id)).toMatchObject({ id: fixture.job.id })
+      await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it.each(['completed', 'failed'] as const)('does not recover a %s job', async (terminal) => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      fixture.at(101_010)
+      const claimed = await fixture.repository.claimJob(fixture.job.id)
+      if (!claimed)
+        throw new Error('Expected the original delivery to reclaim its job.')
+      if (terminal === 'completed')
+        await fixture.repository.completeJob(claimed, {})
+      else
+        await fixture.repository.failJob(claimed, 'fixture failure')
+      await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('terminalizes exhausted attempts instead of publishing another delivery', async () => {
+    const fixture = await staleRecoveryFixture(1)
+    try {
+      expect(fixture.released.terminalizedJobs).toMatchObject([{ id: fixture.job.id }])
+      await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('uses the latest stale release when a second reservation expires', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      fixture.at(101_010)
+      await fixture.repository.claimJob(fixture.job.id)
+      await fixture.tick(102_000)
+      await fixture.tick(102_119)
+      expect(fixture.sent).toEqual([])
+      await fixture.tick(102_120)
+      expect(fixture.sent).toEqual([fixture.job.id])
+    }
+    finally { fixture.close() }
+  })
+
+  it('ignores stale-release evidence older than a renewed transport publication', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      await publishDurableJobBatch(fixture.repository, fixture.publisher, [fixture.job], { now: 101_010 })
+      fixture.sent.length = 0
+      await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('retries a failed recovery send and damps the first successful publication', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      fixture.accept(false)
+      expect((await fixture.tick(101_120)).dispatched).toBe(0)
+      fixture.sent.length = 0
+      fixture.accept(true)
+      expect((await fixture.tick(101_121)).dispatched).toBe(1)
+      expect(fixture.sent).toEqual([fixture.job.id])
+      fixture.sent.length = 0
+      await fixture.tick(101_122)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('shares the sweep cap and preserves the general orphan age', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      const old = await record('old-published')
+      const recent = { ...await record('recent-published'), createdAt: 100_000, availableAt: 100_000 }
+      await stagePreparedDurableJobs(fixture.repository, [old, recent])
+      await publishDurableJobBatch(fixture.repository, { sendBatch: async () => true }, [old], { now: 100 })
+      await publishDurableJobBatch(fixture.repository, { sendBatch: async () => true }, [recent], { now: 100_000 })
+      await fixture.tick(101_120, { limit: 1 })
+      expect(fixture.sent).toEqual([fixture.job.id])
+      fixture.sent.length = 0
+      await fixture.tick(101_121, { limit: 1 })
+      expect(fixture.sent).toEqual([old.id])
+      fixture.sent.length = 0
+      await fixture.tick(101_122, { limit: 1 })
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('recovers unpublished work first within the same sweep cap', async () => {
+    const fixture = await staleRecoveryFixture()
+    try {
+      const unpublished = await record('unpublished')
+      await stagePreparedDurableJobs(fixture.repository, [unpublished])
+      await fixture.tick(101_120, { limit: 1 })
+      expect(fixture.sent).toEqual([unpublished.id])
+      fixture.sent.length = 0
+      await fixture.tick(101_121, { limit: 1 })
+      expect(fixture.sent).toEqual([fixture.job.id])
+    }
+    finally { fixture.close() }
+  })
+})
 
 describe('transactional durable staging', () => {
   it('keeps legacy inserts claimable while explicit stages wait for publication', async () => {
@@ -120,6 +292,37 @@ describe('transactional durable staging', () => {
 })
 
 describe('durable publication state', () => {
+  it('redelivers a stale-released published job after its grace without waiting for orphan age', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const db = createSqliteD1()
+    try {
+      const repository = createD1DurableJobRepository(db)
+      await repository.migrate()
+      const job = await record('recent-stale-release')
+      await stagePreparedDurableJobs(repository, [job])
+      await publishDurableJobBatch(repository, { sendBatch: async () => true }, [job], { now: 1_000 })
+      await repository.claimJob(job.id)
+      const sent: string[] = []
+      const publisher = { sendBatch: async (_queue: string, messages: Array<{ jobId: string }>) => {
+        sent.push(...messages.map(message => message.jobId))
+        return true
+      } }
+
+      clock.mockReturnValue(2_000_000)
+      await recoverDurableJobs(repository, publisher, { now: 2_000 })
+      expect(sent).toEqual([])
+      clock.mockReturnValue(2_120_000)
+      const recovered = await recoverDurableJobs(repository, publisher, { now: 2_120 })
+
+      expect(sent).toEqual([job.id])
+      expect(recovered.dispatched).toBe(1)
+    }
+    finally {
+      clock.mockRestore()
+      db._db.close()
+    }
+  })
+
   it('uses legacy insertion unless every publication primitive is present', async () => {
     const job = await record('partial-publication-repository')
     const repository = {

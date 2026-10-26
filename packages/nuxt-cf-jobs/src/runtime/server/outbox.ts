@@ -211,7 +211,7 @@ export interface QueuePublisher<
   sendBatch: (queue: Queue, messages: Message[], opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
 }
 
-export interface DurableJobRecoveryQuery {
+interface DurableJobRecoveryFilters {
   now?: number
   /** Only return jobs created at or before this unix-second timestamp. */
   createdBefore?: number
@@ -239,7 +239,19 @@ export interface DurableJobRecoveryQuery {
   publication?: 'unpublished' | 'published' | 'all'
 }
 
-export interface DurableJobStaleRecoveryQuery extends DurableJobRecoveryQuery {
+export type DurableJobRecoveryQuery = DurableJobRecoveryFilters & (
+  | {
+    /** Select released jobs whose transport was not renewed after their latest stale release. */
+    staleReleasedOnly: true
+    staleReleasedBefore: number
+    publication: 'published'
+    createdBefore?: never
+    redispatchedBefore?: never
+  }
+  | { staleReleasedOnly?: never }
+)
+
+export type DurableJobStaleRecoveryQuery = DurableJobRecoveryQuery & {
   staleBefore: number
   availableAt?: number
   error?: string

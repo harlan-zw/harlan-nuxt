@@ -392,7 +392,7 @@ export default defineNuxtConfig({
 
 If the Worker exposes more than one D1-like binding, set `d1Binding`.
 
-The sweep is a producer, so two windows bound its write rate.
+The sweep is a producer, so two windows bound ordinary orphan recovery.
 
 - `orphanedSeconds` decides which rows qualify. The orphan test cannot tell a
   lost dispatch from a row that is still queued. Keep it above the worst queue
@@ -401,6 +401,11 @@ The sweep is a producer, so two windows bound its write rate.
   counts from the row's last successful dispatch (`last_dispatched_at`), which
   the producer stamps. A row that waits its turn is never re-sent inside the
   window.
+
+Released stale reservations use `redeliveryGraceSeconds`, independently of these orphan windows.
+If the original message does not reclaim the job, the sweep sends one replacement after that grace.
+A successful dispatch prevents another replacement for the same stale release.
+All recovery paths share `limit` and preserve live reservations and attempt limits.
 
 `staleSeconds` is the row's ownership window. The durable consumer's
 `reclaimAfterSeconds` defaults to the same value, so the reaper and a redelivery

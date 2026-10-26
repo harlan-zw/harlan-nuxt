@@ -714,6 +714,25 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async findDispatchableJobs(query = {}) {
+      if (query.staleReleasedOnly) {
+        return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
+          SELECT *
+          FROM ${jobsTable}
+          WHERE reserved_at IS NULL
+            AND published_at IS NOT NULL
+            AND available_at <= ?
+            AND completed_at IS NULL
+            AND failed_at IS NULL
+            AND (max_attempts IS NULL OR attempts < max_attempts)
+            AND (
+              SELECT MAX(CAST(json_extract(value, '$.at') AS INTEGER))
+              FROM json_each(${validEvidenceArraySql('retry_reasons')})
+              WHERE json_extract(value, '$._tag') = 'stale-release'
+            ) BETWEEN COALESCE(last_dispatched_at, 0) + 1 AND ?
+          ORDER BY created_at ASC
+          LIMIT ?
+        `).bind(query.now ?? currentUnixSeconds(), query.staleReleasedBefore, query.limit ?? 100))
+      }
       const publicationPredicate = query.publication === 'all'
         ? '1 = 1'
         : query.publication === 'published'
