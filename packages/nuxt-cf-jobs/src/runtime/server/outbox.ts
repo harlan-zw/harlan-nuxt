@@ -211,7 +211,7 @@ export interface QueuePublisher<
   sendBatch: (queue: Queue, messages: Message[], opts?: QueueSendOptions & SendBackpressureOptions) => Promise<boolean>
 }
 
-interface DurableJobRecoveryFilters {
+export interface DurableJobRecoveryQuery {
   now?: number
   /** Only return jobs created at or before this unix-second timestamp. */
   createdBefore?: number
@@ -239,19 +239,7 @@ interface DurableJobRecoveryFilters {
   publication?: 'unpublished' | 'published' | 'all'
 }
 
-export type DurableJobRecoveryQuery = DurableJobRecoveryFilters & (
-  | {
-    /** Select released jobs whose transport was not renewed after their latest stale release. */
-    staleReleasedOnly: true
-    staleReleasedBefore: number
-    publication: 'published'
-    createdBefore?: never
-    redispatchedBefore?: never
-  }
-  | { staleReleasedOnly?: never }
-)
-
-export type DurableJobStaleRecoveryQuery = DurableJobRecoveryQuery & {
+export interface DurableJobStaleRecoveryQuery extends DurableJobRecoveryQuery {
   staleBefore: number
   availableAt?: number
   error?: string
@@ -262,6 +250,8 @@ export interface DurableJobRecoveryRepository<
   Record extends Pick<DurableJobRecord<Queue>, 'id' | 'queue'> = Pick<DurableJobRecord<Queue>, 'id' | 'queue'>,
 > {
   findDispatchableJobs?: (query?: DurableJobRecoveryQuery) => Promise<Record[]>
+  /** Recover published jobs whose latest evidence is an expired stale release without renewed transport. */
+  findStaleReleasedJobs?: (query: { now?: number, staleReleasedBefore: number, limit?: number }) => Promise<Record[]>
   /**
    * Record that the orphan sweep re-dispatched these rows, so a later sweep can
    * exclude them via {@link DurableJobRecoveryQuery.redispatchedBefore}. Optional:

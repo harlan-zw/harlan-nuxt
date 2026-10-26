@@ -112,16 +112,14 @@ export async function recoverDurableJobs<
     limit,
   })
   const remainingLimit = Math.max(0, limit - unpublished.length)
-  // A released reservation already proved its previous delivery stopped making progress.
-  // Give redelivery its grace, then recover independently of the general orphan age.
+  // Recover only while a stale release remains the latest lifecycle evidence.
+  // Give redelivery its grace, independently of the general orphan age.
   const staleReleased = remainingLimit > 0
-    ? await findDispatchableDurableJobs(repository, {
-        now: nowSeconds,
-        staleReleasedOnly: true,
-        staleReleasedBefore: nowSeconds - redeliveryGraceSeconds,
-        publication: 'published',
-        limit: remainingLimit,
-      })
+    ? await repository.findStaleReleasedJobs?.({
+      now: nowSeconds,
+      staleReleasedBefore: nowSeconds - redeliveryGraceSeconds,
+      limit: remainingLimit,
+    }) ?? []
     : []
   const orphanLimit = Math.max(0, remainingLimit - staleReleased.length)
   const orphaned = orphanLimit > 0

@@ -1,4 +1,4 @@
-import type { D1DatabaseLike, D1PreparedStatementLike, DurableJobRecord } from '#cf-jobs/server'
+import type { D1DatabaseLike, D1PreparedStatementLike, DurableJobRecord, DurableJobRecoveryQuery } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -114,6 +114,35 @@ async function staleRecoveryFixture(maxAttempts = 3) {
 }
 
 describe('stale reservation redelivery', () => {
+  it('preserves orphan age for a custom repository that supports only the original query contract', async () => {
+    const db = createSqliteD1()
+    try {
+      const repository = createD1DurableJobRepository(db)
+      await repository.migrate()
+      const job = { ...await record('healthy-published'), createdAt: 100_000, availableAt: 100_000 }
+      await stagePreparedDurableJobs(repository, [job])
+      await publishDurableJobBatch(repository, { sendBatch: async () => true }, [job], { now: 100_000 })
+      const custom = {
+        findDispatchableJobs: async (query?: DurableJobRecoveryQuery) => await repository.findDispatchableJobs({
+          now: query?.now,
+          createdBefore: query?.createdBefore,
+          staleReleasedBefore: query?.staleReleasedBefore,
+          redispatchedBefore: query?.redispatchedBefore,
+          publication: query?.publication,
+          limit: query?.limit,
+        }),
+      }
+      const sent: string[] = []
+      await recoverDurableJobs(custom, { sendBatch: async (_queue, messages) => {
+        sent.push(...messages.map(message => message.jobId))
+        return true
+      } }, { now: 101_120 })
+
+      expect(sent).toEqual([])
+    }
+    finally { db._db.close() }
+  })
+
   it('waits through grace and sends once at its boundary', async () => {
     const fixture = await staleRecoveryFixture()
     try {
@@ -187,6 +216,25 @@ describe('stale reservation redelivery', () => {
       await publishDurableJobBatch(fixture.repository, fixture.publisher, [fixture.job], { now: 101_010 })
       fixture.sent.length = 0
       await fixture.tick(101_120)
+      expect(fixture.sent).toEqual([])
+    }
+    finally { fixture.close() }
+  })
+
+  it('leaves controlled retry redelivery to an original message that reclaimed its job', async () => {
+    const fixture = await staleRecoveryFixture(4)
+    try {
+      fixture.at(101_010)
+      const reclaimed = await fixture.repository.claimJob(fixture.job.id)
+      if (!reclaimed)
+        throw new Error('Expected the original delivery to reclaim its job.')
+      await fixture.repository.releaseJob(reclaimed, { delaySeconds: 110 })
+      const due = await fixture.repository.findDispatchableJobs({ now: 101_120, publication: 'published' })
+      expect(due.map(job => job.id)).toEqual([fixture.job.id])
+
+      await fixture.tick(101_120)
+      await fixture.tick(101_121)
+
       expect(fixture.sent).toEqual([])
     }
     finally { fixture.close() }

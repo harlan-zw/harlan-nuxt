@@ -11,7 +11,7 @@ describe('recoverDurableJobs', () => {
         { id: 'dupe', queue: 'q' },
       ]),
       releaseStaleReservedJobs: vi.fn(async () => 2),
-      findDispatchableJobs: vi.fn(async (query?: DurableJobRecoveryQuery) => query?.publication === 'unpublished' || query?.staleReleasedOnly
+      findDispatchableJobs: vi.fn(async (query?: DurableJobRecoveryQuery) => query?.publication === 'unpublished'
         ? []
         : [
             { id: 'dupe', queue: 'q' },
