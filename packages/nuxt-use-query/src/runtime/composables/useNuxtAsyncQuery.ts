@@ -5,10 +5,10 @@ import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { NuxtQuery } from './useNuxtQuery'
 import { computed, ref, toValue } from 'vue'
-import { useAsyncData } from '#app'
+import { useAsyncData, useNuxtApp } from '#app'
 import { applyQueryAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
-import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
+import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, registerQueryServerDeadline, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
@@ -74,12 +74,18 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
   const key = computed(() => toValue(opts.key))
   const enabled = computed(() => toValue(enabledOption) !== false)
 
+  const serverDeadline = import.meta.server
+    ? registerQueryServerDeadline(useNuxtApp(), key.value, resolvedServerOption.deadline, () => {
+        ssrDeferred.value = true
+      })
+    : undefined
   const deadlineHandler = async (app: NuxtApp, context: NuxtAsyncQueryHandlerContext) => {
-    if (!import.meta.server || resolvedServerOption.deadline == null)
+    const deadline = serverDeadline?.deadline()
+    if (serverDeadline == null || deadline == null)
       return handler(app, context)
     return runWithQuerySsrDeadline({
-      deadline: resolvedServerOption.deadline,
-      onDeferred: () => void (ssrDeferred.value = true),
+      deadline,
+      onDeferred: () => serverDeadline.defer(),
       run: signal => handler(app, { signal }),
       signal: context.signal,
     })
@@ -97,7 +103,7 @@ export function useNuxtAsyncQuery<ResT, DataT = ResT, ErrorT = unknown>(
           if (isQuerySsrDeferredValue(result)) {
             telemetry.finish({
               _tag: 'started',
-              deadline: resolvedServerOption.deadline!,
+              deadline: getQuerySsrDeadline(result.error)!,
               error: result.error,
               reason: 'ssr-deadline',
               state,

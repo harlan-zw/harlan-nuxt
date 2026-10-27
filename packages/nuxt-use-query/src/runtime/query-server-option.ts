@@ -1,6 +1,17 @@
 export interface QueryServerDeadline {
-  /** Maximum time that server rendering waits for this query, in milliseconds. */
-  deadline: number
+  /**
+   * Maximum time that server rendering waits for this query, in milliseconds.
+   * A function is read each time the query runs. The strictest registration of
+   * a key wins, whichever registration Nuxt runs.
+   */
+  deadline: number | (() => number)
+}
+
+export interface QueryServerDeadlineRegistration {
+  /** The strictest finite deadline across every registration of the key, if any. */
+  deadline: () => number | undefined
+  /** Marks every registration of the key as deferred. */
+  defer: () => void
 }
 
 export type QueryServerOption = boolean | QueryServerDeadline
@@ -8,11 +19,11 @@ export type QueryServerOption = boolean | QueryServerDeadline
 const QUERY_SSR_DEADLINE = Symbol('nuxt-use-query-ssr-deadline')
 
 type QuerySsrDeadlineError = DOMException & {
-  [QUERY_SSR_DEADLINE]: QueryServerDeadline
+  [QUERY_SSR_DEADLINE]: { deadline: number }
 }
 
 interface QuerySsrDeferredValue {
-  readonly [QUERY_SSR_DEADLINE]: QueryServerDeadline
+  readonly [QUERY_SSR_DEADLINE]: { deadline: number }
   readonly error: QuerySsrDeadlineError
 }
 
@@ -23,16 +34,65 @@ interface QuerySsrDeferredPayload {
 }
 
 export function resolveQueryServerOption(option: QueryServerOption | undefined): {
-  deadline?: number
+  deadline?: QueryServerDeadline['deadline']
   server: boolean
 } {
   if (option === false)
     return { server: false }
   if (option == null || option === true)
     return { server: true }
+  if (typeof option.deadline === 'function')
+    return { deadline: option.deadline, server: true }
   if (!Number.isFinite(option.deadline) || option.deadline <= 0)
-    throw new TypeError('Query server deadline must be a positive number.')
+    throw new TypeError('Query server deadline must be a positive number or a function.')
   return { deadline: option.deadline, server: true }
+}
+
+interface QueryServerDeadlineEntry {
+  deadlines: Array<QueryServerDeadline['deadline']>
+  deferred: Array<() => void>
+}
+
+const queryServerDeadlines = new WeakMap<object, Map<string, QueryServerDeadlineEntry>>()
+
+/**
+ * Nuxt runs the handler of the first registration of a key. A deadline held by
+ * one registration would be lost behind an earlier `server: false` one, so the
+ * deadline belongs to the key: every registration adds to one entry per render.
+ */
+export function registerQueryServerDeadline(
+  nuxtApp: object,
+  key: string,
+  deadline: QueryServerDeadline['deadline'] | undefined,
+  onDeferred: () => void,
+): QueryServerDeadlineRegistration {
+  let keys = queryServerDeadlines.get(nuxtApp)
+  if (!keys)
+    queryServerDeadlines.set(nuxtApp, keys = new Map())
+  let entry = keys.get(key)
+  if (!entry)
+    keys.set(key, entry = { deadlines: [], deferred: [] })
+  if (deadline != null)
+    entry.deadlines.push(deadline)
+  entry.deferred.push(onDeferred)
+  const shared = entry
+  return {
+    deadline: () => resolveStrictestQueryServerDeadline(shared.deadlines),
+    defer: () => {
+      for (const notify of shared.deferred)
+        notify()
+    },
+  }
+}
+
+function resolveStrictestQueryServerDeadline(deadlines: Array<QueryServerDeadline['deadline']>): number | undefined {
+  let strictest: number | undefined
+  for (const deadline of deadlines) {
+    const ms = typeof deadline === 'function' ? deadline() : deadline
+    if (Number.isFinite(ms) && (strictest == null || ms < strictest))
+      strictest = Math.max(0, ms)
+  }
+  return strictest
 }
 
 export async function runWithQuerySsrDeadline<T>(options: {
@@ -41,6 +101,12 @@ export async function runWithQuerySsrDeadline<T>(options: {
   run: (signal: AbortSignal) => Promise<T>
   signal: AbortSignal
 }): Promise<QuerySsrDeferredValue | T> {
+  // An exhausted budget defers without starting the request.
+  if (options.deadline <= 0) {
+    const error = createQuerySsrDeadlineError(options.deadline)
+    options.onDeferred(error)
+    return { [QUERY_SSR_DEADLINE]: { deadline: options.deadline }, error }
+  }
   const controller = new AbortController()
   const abortFromOwner = () => controller.abort(options.signal.reason)
   if (options.signal.aborted)

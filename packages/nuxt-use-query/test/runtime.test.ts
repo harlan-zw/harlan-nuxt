@@ -47,6 +47,11 @@ interface Probe {
   }
   deadlineCachedData: unknown
   deferredQueries: Array<{ deadline: number, key: string, reason: string, status: string }>
+  sharedDeadlineQuery: {
+    data: unknown
+    isPending: boolean
+    status: string
+  }
   hasAutoImports: boolean
   mutationMethod: string
   rpcDefault: { value: string, call: number }
@@ -112,6 +117,18 @@ describe('nuxt-use-query · e2e', () => {
       { deadline: 20, key: 'async-deadline', reason: 'ssr-deadline', status: 'deferred' },
       { deadline: 20, key: 'deadline-delay', reason: 'ssr-deadline', status: 'deferred' },
     ]))
+  })
+
+  it('applies the deadline of a key behind an earlier server: false registration', async () => {
+    const probe = await readProbe()
+    expect(probe.sharedDeadlineQuery).toEqual({
+      data: null,
+      isPending: true,
+      status: 'idle',
+    })
+    expect(probe.deferredQueries).toContainEqual(
+      { deadline: 20, key: 'shared-deadline', reason: 'ssr-deadline', status: 'deferred' },
+    )
   })
 
   it('useQueryCache returns a single mutable instance per Nuxt app', async () => {
