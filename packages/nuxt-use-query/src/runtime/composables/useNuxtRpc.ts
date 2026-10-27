@@ -264,20 +264,27 @@ function normalizeNuxtRpcQueryError(
   if (direct === value)
     return direct
 
-  // Nuxt's `createError` keeps the original ZodError as `cause` when a plain
-  // response-validation object is thrown from `transform`, but drops that
-  // object's discriminant. Recover it before the H3Error's synthetic 500 can
-  // be mistaken for a fetch failure. The repaired plain object is written back
-  // into payload errors by the watcher above, so SSR hydration keeps the tag.
+  // Nuxt's error wrapper can replace validation and transport tags with a
+  // synthetic 500. Recover the cause only when no HTTP response or response
+  // body establishes a genuine server failure.
   const cause = value && typeof value === 'object' && 'cause' in value
     ? (value as { cause?: unknown }).cause
     : undefined
-  const canRecoverWrappedValidation = direct.type !== 'fetch'
+  const canRecoverWrappedCause = direct.type !== 'fetch'
     || (direct.response == null && direct.data === undefined)
-  if (cause != null && canRecoverWrappedValidation) {
+  if (cause != null && canRecoverWrappedCause) {
     const fromCause = normalizeNuxtRpcError(cause, 'response-validation')
     if (fromCause.type === 'response-validation')
       return fromCause
+    // An explicit HTTP status other than Nuxt's default 500 keeps its meaning.
+    if (direct.type !== 'fetch' || direct.status === 500) {
+      switch (fromCause.type) {
+        case 'connection':
+        case 'timeout':
+        case 'aborted':
+          return fromCause
+      }
+    }
   }
   return direct
 }
