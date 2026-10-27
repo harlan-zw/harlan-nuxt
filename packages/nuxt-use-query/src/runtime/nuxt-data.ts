@@ -1,8 +1,7 @@
 // Concentrates every reach into Nuxt's private data registries
 // (`_asyncData`, `payload.data`, `static.data`) so the unsafe-cast surface
 // lives in one file. `useNuxtData()` covers reads but writes only one store;
-// our optimistic writes need both `_asyncData[key].data.value` (live consumers)
-// and `payload.data[key]` (next mount's `getCachedData` fallback).
+// explicit writes keep live consumers and both hydration stores aligned.
 
 import { isQuerySsrDeferredPayload } from './query-server-option'
 
@@ -41,14 +40,21 @@ export function readNuxtData<T = unknown>(nuxt: unknown, key: string): T | undef
 }
 
 /**
- * Write `value` to BOTH stores Nuxt reads from. The dual-write is
- * deliberate: a `setQueryData` that lands before any consumer mounts must
- * still be visible to the next `getCachedData` fallback via `payload.data`.
+ * Write `value` to live consumers and hydration stores. Existing extracted
+ * data must agree before updating the live ref, including synchronous readers.
+ * Writes before a consumer mounts remain available through `payload.data`.
  */
 export function writeNuxtData<T>(nuxt: unknown, key: string, value: T): void {
   const n = internals(nuxt)
   n.payload.data ??= {}
   n.payload.data[key] = value
+  const extracted = n.static?.data
+  if (extracted && key in extracted) {
+    if (value === undefined)
+      delete extracted[key]
+    else
+      extracted[key] = value
+  }
   const live = n._asyncData?.[key]
   if (live)
     live.data.value = value
