@@ -5,10 +5,10 @@ import type { QueryGetCachedData } from '../query-cached-data'
 import type { QueryServerOption } from '../query-server-option'
 import type { QueryTelemetryState } from '../query-telemetry'
 import { computed, ref, toValue } from 'vue'
-import { useFetch, useRequestFetch } from '#app'
+import { useFetch, useNuxtApp, useRequestFetch } from '#app'
 import { applyQueryAddon } from '../query-addon'
 import { createQueryGetCachedData } from '../query-cached-data'
-import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
+import { createQuerySsrDeferredPayload, getQuerySsrDeadline, isQuerySsrDeferredValue, registerQueryServerDeadline, resolveQueryServerOption, runWithQuerySsrDeadline } from '../query-server-option'
 import { useQueryTelemetry } from '../query-telemetry'
 import { useQueryCache } from './useQueryCache'
 
@@ -206,13 +206,21 @@ export function useNuxtQuery(
       }
     : undefined
 
-  const deadlineFetch = import.meta.server && resolvedServerOption.deadline != null
+  // Every server registration installs the deadline fetch, so a later
+  // registration's deadline reaches the handler Nuxt kept from the first one.
+  const serverDeadline = import.meta.server
+    ? registerQueryServerDeadline(useNuxtApp(), key.value, resolvedServerOption.deadline, () => {
+        ssrDeferred.value = true
+      })
+    : undefined
+  const deadlineFetch = serverDeadline
     ? createQueryDeadlineFetch(
-        (fetchOptions.$fetch as unknown as QueryFetch | undefined) ?? (useRequestFetch() as unknown as QueryFetch),
-        resolvedServerOption.deadline,
-        (error) => {
-          ssrDeferred.value = true
-          emitQueryDeferred(resolvedServerOption.deadline!, error)
+        fetchOptions.$fetch as unknown as QueryFetch | undefined,
+        useRequestFetch() as unknown as QueryFetch,
+        serverDeadline.deadline,
+        (deadline, error) => {
+          serverDeadline.defer()
+          emitQueryDeferred(deadline, error)
         },
       )
     : fetchOptions.$fetch
@@ -254,16 +262,33 @@ export function useNuxtQuery(
 
 type QueryFetch = (request: unknown, options?: Record<string, any>) => Promise<unknown>
 
-function createQueryDeadlineFetch(fetch: QueryFetch, deadline: number, onDeferred: (error: unknown) => void): $Fetch {
+function createQueryDeadlineFetch(
+  fetch: QueryFetch | undefined,
+  requestFetch: QueryFetch,
+  resolveDeadline: () => number | undefined,
+  onDeferred: (deadline: number, error: unknown) => void,
+): $Fetch {
   return (async (request: unknown, options: Record<string, any> = {}) => {
     const { $fetch: _ignored, signal = new AbortController().signal, ...fetchOptions } = options
+    // Nuxt's own default: forward the request context to same-origin paths only.
+    const transport = fetch ?? (isServerRelativeRequest(request, fetchOptions.baseURL) ? requestFetch : globalThis.$fetch as unknown as QueryFetch)
+    const deadline = resolveDeadline()
+    if (deadline == null)
+      return transport(request, { ...fetchOptions, signal })
     return runWithQuerySsrDeadline({
       deadline,
-      onDeferred,
-      run: deadlineSignal => fetch(request as any, { ...fetchOptions, signal: deadlineSignal }),
+      onDeferred: error => onDeferred(deadline, error),
+      run: deadlineSignal => transport(request, { ...fetchOptions, signal: deadlineSignal }),
       signal,
     })
   }) as $Fetch
+}
+
+function isServerRelativeRequest(request: unknown, baseURL: unknown): boolean {
+  return typeof request === 'string'
+    && request[0] === '/'
+    && request[1] !== '/'
+    && (!baseURL || (typeof baseURL === 'string' && baseURL[0] === '/'))
 }
 
 async function callFetchHook(hook: unknown, context: unknown): Promise<void> {

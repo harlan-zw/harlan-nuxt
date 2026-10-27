@@ -132,7 +132,7 @@ describe('useNuxtQuery server deadline', () => {
 
   it('rejects an invalid server deadline', () => {
     expect(() => useNuxtQuery('/api/x', { key: 'q', server: { deadline: 0 } }))
-      .toThrow('Query server deadline must be a positive number.')
+      .toThrow('Query server deadline must be a positive number or a function.')
   })
 })
 

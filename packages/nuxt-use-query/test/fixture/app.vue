@@ -54,6 +54,18 @@ const asyncDeadlineQuery = useNuxtAsyncQuery(
 )
 await asyncDeadlineQuery
 
+// Nuxt keeps the handler of the first registration of a key. The deadline of a
+// later registration must still bound the server read.
+useNuxtQuery<{ ok: boolean }>('/api/deadline-delay', {
+  key: 'shared-deadline',
+  server: false,
+})
+const sharedDeadlineQuery = useNuxtQuery<{ ok: boolean }>('/api/deadline-delay', {
+  key: 'shared-deadline',
+  server: { deadline: 20 },
+})
+await sharedDeadlineQuery
+
 const echoQueries = defineNuxtQueryGroup('fixture', {
   detail: (value: string) => defineNuxtRpcQuery({
     key: ['fixture', value],
@@ -164,6 +176,11 @@ const probe = {
   },
   deadlineCachedData: getQueryData('deadline-delay') ?? null,
   deferredQueries,
+  sharedDeadlineQuery: {
+    data: sharedDeadlineQuery.data.value ?? null,
+    isPending: sharedDeadlineQuery.isPending.value,
+    status: sharedDeadlineQuery.status.value,
+  },
   mutationMethod: mutationOperation.method,
   rpcDirect,
   rpcPostDirect,
