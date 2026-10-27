@@ -124,8 +124,8 @@ export function getQueryData<T = unknown>(key: string): T | undefined {
  * value, or a `(previous) => next` function. Returns the previous value so
  * the caller can hand it back to `setQueryData(key, previous)` on rollback.
  *
- * Mirrors TanStack Query's `setQueryData`. Updates BOTH stores Nuxt reads —
- * see `nuxt-data.ts` for why the dual-write is load-bearing. The
+ * Mirrors TanStack Query's `setQueryData`. Updates live and hydration stores,
+ * including an existing extracted payload. The
  * `lastFetched` timestamp is bumped so SWR treats the write as a fresh fetch
  * and doesn't immediately overwrite it with a network refresh.
  */
