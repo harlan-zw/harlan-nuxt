@@ -1,4 +1,4 @@
-import type { CreateDurableJobsRuntimeOptions, D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
+import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
@@ -34,13 +34,7 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
           bound = values
           return api
         },
-        async run() {
-          if (stmt.columns().length > 0) {
-            const results = stmt.all(...(bound as never[])) as T[]
-            return { success: true, results, meta: { changes: results.length } }
-          }
-          return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } }
-        },
+        async run() { return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } } },
         async first<R = T>() { return (stmt.get(...(bound as never[])) ?? null) as R | null },
         async all<R = T>() { return { results: stmt.all(...(bound as never[])) as R[] } },
       }
@@ -61,7 +55,7 @@ function createQueueBinding() {
   }
 }
 
-interface Handlers { [name: string]: (payload: unknown, ctx: JobContext<unknown, unknown, unknown>) => Promise<void> }
+interface Handlers { [name: string]: (payload: Record<string, unknown>, ctx: JobContext<unknown, unknown, unknown>) => Promise<void> }
 
 function createRegistry(handlers: Handlers) {
   // Only known names are defined/handled — an unknown name fails to dispatch
@@ -99,7 +93,7 @@ function ctxFactory(control: JobControlResult): JobContext<unknown, unknown, unk
   }
 }
 
-async function setup(handlers: Handlers, extra: Partial<CreateDurableJobsRuntimeOptions> = {}) {
+async function setup(handlers: Handlers, extra: Record<string, unknown> = {}) {
   const d1 = createSqliteD1()
   const { messages, binding } = createQueueBinding()
   const runtime = createDurableJobsRuntime({
@@ -118,165 +112,7 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
   return Number((d1._db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n)
 }
 
-const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, attempts: 1, ack: vi.fn(), retry: vi.fn() })
-
-describe('settlement recovery boundaries', () => {
-  it.each(['rollback', 'lost-response'] as const)('keeps the member receipt and decrement atomic after $mode', async (mode) => {
-    const continuations = vi.fn()
-    const finish = vi.fn()
-    const { d1, runtime } = await setup({ work: async () => {} }, {
-      dispatchContinuations: continuations,
-      dispatchOnFinish: finish,
-    })
-    const { jobIds } = await runtime.createBatch({
-      jobs: [await prepare('work', {}), await prepare('work', {})],
-      onFinish: { name: 'finish', payload: {} },
-    })
-    let interrupt = true
-    if (mode === 'rollback') {
-      const prepareStatement = d1.prepare.bind(d1)
-      d1.prepare = (<T>(query: string) => {
-        const statement = prepareStatement<T>(query)
-        if (query.includes('SET payload = json_set(payload, \'$._cfJobsSettlement.batchAttempt\'')) {
-          const run = statement.run.bind(statement)
-          statement.run = async () => {
-            if (interrupt) {
-              interrupt = false
-              throw new Error('receipt interrupted')
-            }
-            return run()
-          }
-        }
-        return statement
-      }) as typeof d1.prepare
-    }
-    else {
-      const batch = d1.batch!.bind(d1)
-      d1.batch = async (statements) => {
-        const result = await batch(statements)
-        if (interrupt) {
-          interrupt = false
-          throw new Error('receipt response lost')
-        }
-        return result
-      }
-    }
-    await expect(runtime.consumeMessage(msg(jobIds[0]!))).rejects.toThrow('receipt')
-    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: mode === 'rollback' ? 2 : 1 })
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
-    try {
-      await runtime.consumeMessage(msg(jobIds[0]!))
-      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: 1 })
-      expect(continuations).toHaveBeenCalledTimes(2)
-      expect(finish).not.toHaveBeenCalled()
-      await runtime.consumeMessage(msg(jobIds[1]!))
-      expect(finish).toHaveBeenCalledOnce()
-    }
-    finally {
-      clock.mockRestore()
-    }
-  })
-
-  it.each(['completed', 'failed'] as const)('counts a $outcome member once after progress throws and its lease expires', async (outcome) => {
-    const continuations = vi.fn()
-    const finish = vi.fn()
-    const terminalFailure = vi.fn()
-    let interrupt = true
-    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
-      if (outcome === 'failed')
-        await ctx.fail('bad input')
-    } }, {
-      dispatchContinuations: continuations,
-      onTerminalFailure: terminalFailure,
-      dispatchOnFinish: finish,
-      onBatchProgress: () => {
-        if (interrupt) {
-          interrupt = false
-          throw new Error('progress interrupted')
-        }
-      },
-    })
-    const { jobIds } = await runtime.createBatch({
-      jobs: [await prepare('work', {}), await prepare('work', {})],
-      onFinish: { name: 'finish', payload: {} },
-    })
-    await expect(runtime.consumeMessage(msg(jobIds[0]!))).rejects.toThrow('progress interrupted')
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
-    try {
-      await runtime.consumeMessage(msg(jobIds[0]!))
-      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: 1 })
-      expect(finish).not.toHaveBeenCalled()
-      expect(continuations).toHaveBeenCalledTimes(2)
-      expect(terminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
-      await runtime.consumeMessage(msg(jobIds[1]!))
-      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: 0 })
-      expect(finish).toHaveBeenCalledOnce()
-    }
-    finally {
-      clock.mockRestore()
-    }
-  })
-
-  it.each([
-    { failures: 2, outcome: 'completed' },
-    { failures: 3, outcome: 'completed' },
-    { failures: 2, outcome: 'failed' },
-    { failures: 3, outcome: 'failed' },
-  ] as const)('isolates $failures overloaded $outcome settlement completion writes from sibling messages', async ({ failures, outcome }) => {
-    const handled = vi.fn(async () => {})
-    const continuations = vi.fn()
-    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
-      await handled()
-      if (outcome === 'failed')
-        await ctx.fail('bad input')
-    } }, {
-      lifecycleWriteRetry: { backoffMs: () => 0, redeliveryDelaySeconds: 900 },
-      dispatchContinuations: continuations,
-    })
-    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {}), await prepare('work', {})] })
-    const prepareStatement = d1.prepare.bind(d1)
-    let calls = 0
-    d1.prepare = (<T>(query: string) => {
-      const statement = prepareStatement<T>(query)
-      if (query.includes('\'$._cfJobsSettlement.done\'')) {
-        const run = statement.run.bind(statement)
-        statement.run = async () => {
-          calls++
-          if (calls <= failures)
-            throw new Error('D1_ERROR: D1 DB is overloaded')
-          return run()
-        }
-      }
-      return statement
-    }) as typeof d1.prepare
-    const first = { ...msg(jobIds[0]!), attempts: 1 }
-    const sibling = { ...msg(jobIds[1]!), attempts: 1 }
-    await runtime.consumeBatch({ queue: 'q', messages: [first, sibling] })
-    expect(handled).toHaveBeenCalledTimes(2)
-    expect(sibling.ack).toHaveBeenCalledOnce()
-    expect(sibling.retry).not.toHaveBeenCalled()
-    expect(calls).toBe(4)
-    if (failures === 2) {
-      expect(first.ack).toHaveBeenCalledOnce()
-      expect(first.retry).not.toHaveBeenCalled()
-    }
-    else {
-      expect(first.ack).not.toHaveBeenCalled()
-      expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 900 })
-      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
-      try {
-        const retry = msg(jobIds[0]!)
-        await runtime.consumeMessage(retry)
-        expect(retry.ack).toHaveBeenCalledOnce()
-        expect(handled).toHaveBeenCalledTimes(2)
-        expect(continuations).toHaveBeenCalledTimes(4)
-      }
-      finally {
-        clock.mockRestore()
-      }
-    }
-  })
-})
+const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), retry: vi.fn() })
 
 describe('createDurableJobsRuntime — batch happy path', () => {
   it.each([
@@ -595,7 +431,7 @@ describe('consumeBatch', () => {
     const runtime = createDurableJobsRuntime({
       db: d1,
       env: { Q: binding },
-      registry: createRegistry({ light: async p => void ran.push((p as { n: number }).n) }),
+      registry: createRegistry({ light: async p => void ran.push(p.n as number) }),
       resolveQueueBinding: () => 'Q',
       createJobContext: ({ control }) => ctxFactory(control),
       dedup,
@@ -849,7 +685,7 @@ describe('gscdump-parity hooks', () => {
       { work: async () => { order.push('run') }, finish: async () => {} },
       {
         createJobScope: () => ({
-          wrapDispatch: async (run) => {
+          wrapDispatch: async (run: () => Promise<unknown>) => {
             order.push('before')
             const r = await run()
             order.push('after')

@@ -21,7 +21,6 @@ import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastReposit
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
-import { runLifecycleWrite } from './lifecycle-write'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
@@ -79,16 +78,10 @@ export async function runDurableJobBatchMessage<
   // Keep the queue delivery and settlement lease until batch work also finishes.
   let ack = false
   let complete: (() => Promise<void>) | undefined
-  let attempts: number | undefined
   const claimSettlement = opts.lifecycle.claimPendingSettlement
   const completeSettlement = opts.lifecycle.completePendingSettlement
   const run = await runDurableJobMessage({
     ...opts,
-    toDispatchableJob: (stored) => {
-      const job = opts.toDispatchableJob(stored)
-      attempts = job.attempts
-      return job
-    },
     message: {
       body: opts.message.body,
       attempts: opts.message.attempts,
@@ -103,7 +96,6 @@ export async function runDurableJobBatchMessage<
               const claim = await claimSettlement(id, pending)
               if (!claim || 'retryAfterSeconds' in claim)
                 return claim
-              attempts = claim.settlement.attempts
               return {
                 ...claim,
                 complete: async () => { complete = claim.complete },
@@ -133,23 +125,13 @@ export async function runDurableJobBatchMessage<
   const settled = await settleBatchMember({
     store: opts.store,
     jobId,
-    attempts: run.status === 'dispatch-failed' && opts.failDispatchFailure === false ? undefined : attempts,
     failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
     dispatchOnFinish: opts.dispatchOnFinish,
   })
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
-  const completion = await runLifecycleWrite({
-    write: 'settlement',
-    run: async () => { await complete?.() },
-    isTransientError: opts.isTransientError,
-    retry: opts.lifecycleWriteRetry,
-  })
-  if (completion._tag === 'deferred' || completion._tag === 'unconfirmed') {
-    opts.message.retry({ delaySeconds: completion.deferral.delaySeconds })
-    return { run: { status: 'write-deferred', deferral: completion.deferral }, settled }
-  }
+  await complete?.()
   if (ack)
     opts.message.ack()
 

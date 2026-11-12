@@ -331,37 +331,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     `).bind(id, pending.attempts, token).run()
     assertOwnedMutation(result, id)
   }
-  const runSettlementStage = async <T>(
-    job: D1DurableJobRecord<Queue>,
-    token: string,
-    stage: 'observer' | 'terminal-failure' | 'then' | 'catch' | 'finally',
-    run: () => Promise<T>,
-  ): Promise<T | undefined> => {
-    const row = await db.prepare<{ state: string, failed: number }>(`
-        SELECT json_extract(payload, '$._cfJobsSettlement') AS state, 0 AS failed
-        FROM ${jobsTable} WHERE id = ? AND attempts = ? AND completed_at IS NOT NULL
-        UNION ALL
-        SELECT json_extract(payload, '$._cfJobsSettlement') AS state, 1 AS failed
-        FROM ${failedJobsTable} WHERE id = ? AND attempts = ?
-      `).bind(job.id, job.attempts, job.id, job.attempts).first<{ state: string, failed: number }>()
-    if (!row?.state)
-      return await run()
-    const state = JSON.parse(row.state) as { token: string, stages?: Record<string, boolean> }
-    if (state.token !== token)
-      throw new DurableJobOwnershipError(job.id)
-    if (state.stages?.[stage])
-      return undefined
-    const value = await run()
-    const table = row.failed ? failedJobsTable : jobsTable
-    const result = await db.prepare(`
-        UPDATE ${table}
-        SET payload = json_set(payload, ?, json('true'))
-        WHERE id = ? AND attempts = ?
-          AND json_extract(payload, '$._cfJobsSettlement.token') = ?
-      `).bind(`$._cfJobsSettlement.stages.${stage}`, job.id, job.attempts, token).run()
-    assertOwnedMutation(result, job.id)
-    return value
-  }
   const batchesTable = opts.batchesTable ?? 'job_batches'
 
   // The legacy immediate insert asserts publication (`published_at`), so it must
@@ -640,15 +609,12 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         settlement,
         ...('exception' in claimed ? { error: headlineOf(claimed.exception) } : {}),
         complete: () => finishSettlement(id, settlement, token),
-        runSettlementStage: (_job, stage, run) => runSettlementStage(job, token, stage, run),
       }
     },
 
     async completePendingSettlement(job, status) {
       await finishSettlement(job.id, { status, attempts: job.attempts }, `initial:${job.attempts}`)
     },
-
-    runSettlementStage: (job, stage, run) => runSettlementStage(job, `initial:${job.attempts}`, stage, run),
 
     async completeJob(job, result) {
       const stats = readResultStat(result)

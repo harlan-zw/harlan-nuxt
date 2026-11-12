@@ -71,7 +71,7 @@ export interface DurableBatchStore {
    * `finished_at` on the 1→0 transition, and return the resulting row. Returns
    * `null` when the batch does not exist or has already settled.
    */
-  decrementPending: (batchId: string, opts?: { failed?: boolean, member?: { jobId: string, attempts: number } }) => Promise<DurableBatchRecord | null>
+  decrementPending: (batchId: string, opts?: { failed?: boolean }) => Promise<DurableBatchRecord | null>
   /** Resolve the batch a job belongs to (checks active then failed jobs). */
   getJobBatchId: (jobId: string) => Promise<string | null>
   /** Grow a batch's counters (used for parent batches / dynamically-added members). */
@@ -269,36 +269,6 @@ export function createD1DurableBatchStore(
     },
 
     async decrementPending(batchId, decOpts) {
-      if (decOpts?.member) {
-        if (!db.batch)
-          throw new Error('Atomic member settlement requires D1Database.batch')
-        const { jobId, attempts } = decOpts.member
-        const table = decOpts.failed ? failedJobs : jobs
-        // The receipt and counter commit together. A lost response cannot count
-        // this attempt twice, even after a different settlement lease takes over.
-        const [result] = await db.batch([
-          db.prepare(`
-            UPDATE ${batches}
-            SET pending_jobs = pending_jobs - 1,
-                failed_jobs = failed_jobs + ?, updated_at = unixepoch(),
-                finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
-            WHERE id = ? AND pending_jobs > 0 AND EXISTS (
-              SELECT 1 FROM ${table}
-              WHERE id = ? AND batch_id = ? AND attempts = ?
-                AND COALESCE(json_extract(payload, '$._cfJobsSettlement.batchAttempt'), -1) != ?
-            )
-            RETURNING *
-          `).bind(decOpts.failed ? 1 : 0, batchId, jobId, batchId, attempts, attempts),
-          db.prepare(`
-            UPDATE ${table}
-            SET payload = json_set(payload, '$._cfJobsSettlement.batchAttempt', ?)
-            WHERE id = ? AND batch_id = ? AND attempts = ?
-              AND EXISTS (SELECT 1 FROM ${batches} WHERE id = ?)
-          `).bind(attempts, jobId, batchId, attempts, batchId),
-        ])
-        const row = result?.results?.[0] as Record<string, unknown> | undefined
-        return row ? mapBatchRow(row) : null
-      }
       const row = await db.prepare<Record<string, unknown>>(`
         UPDATE ${batches}
         SET pending_jobs = pending_jobs - 1,
@@ -508,8 +478,6 @@ export interface SettleBatchMemberOptions<
   store: DurableBatchStore
   /** Resolve the batch from a settled job id. Provide this OR `batchId`. */
   jobId?: string
-  /** Include the terminal claim to make recovery idempotent for this member. */
-  attempts?: number
   /** Settle directly against a known batch id (skips the job→batch lookup). */
   batchId?: string
   /** True when the member permanently failed (still counts toward terminal). */
@@ -668,10 +636,7 @@ export async function settleBatchMember<
   if (!batchId)
     return { batchComplete: false, onFinishDispatched: false }
 
-  const batch = await opts.store.decrementPending(batchId, {
-    failed: opts.failed,
-    member: opts.jobId && opts.attempts !== undefined ? { jobId: opts.jobId, attempts: opts.attempts } : undefined,
-  })
+  const batch = await opts.store.decrementPending(batchId, { failed: opts.failed })
   if (!batch)
     return { batchComplete: false, onFinishDispatched: false }
 
