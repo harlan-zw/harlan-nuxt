@@ -6,6 +6,7 @@ import type {
   DurableJobRecord,
   DurableJobRecoveryRepository,
   DurableJobRepository,
+  PendingDurableJobSettlement,
   ReleaseDurableJobOptions,
 } from './outbox'
 import type { Result } from './result'
@@ -169,6 +170,7 @@ export type StageD1DurableJobsResult<Queue extends string = string>
     | { status: 'failed', cause: unknown }
 
 export const d1DurableJobMigrationSql = [
+  'CREATE TABLE IF NOT EXISTS jobs_settlements (job_id text PRIMARY KEY, token text NOT NULL UNIQUE, attempts integer NOT NULL, reserved_until integer NOT NULL, job text NOT NULL, payload text NOT NULL, execution text NOT NULL, write_kind text NOT NULL)',
   'CREATE TABLE IF NOT EXISTS job_batches (id text PRIMARY KEY, name text, parent_batch_id text, total_jobs integer NOT NULL DEFAULT 0, pending_jobs integer NOT NULL DEFAULT 0, failed_jobs integer NOT NULL DEFAULT 0, on_finish text, handler text, allow_failures integer DEFAULT 0, site_id text, user_id integer, created_at integer NOT NULL DEFAULT (unixepoch()), updated_at integer NOT NULL DEFAULT (unixepoch()), finished_at integer)',
   'CREATE TABLE IF NOT EXISTS jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text REFERENCES job_batches(id), user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, attempts integer DEFAULT 0, max_attempts integer DEFAULT 3, backoff text, reserved_at integer, available_at integer NOT NULL, created_at integer NOT NULL DEFAULT (unixepoch()), published_at integer, last_dispatched_at integer, dispatch_attempts integer NOT NULL DEFAULT 0, last_dispatch_error text, completed_at integer, failed_at integer, last_error text, retry_reasons text, rows_fetched integer, rows_inserted integer, d1_rows_read integer, d1_rows_written integer, duration_ms integer)',
   'CREATE TABLE IF NOT EXISTS failed_jobs (id text PRIMARY KEY, queue text NOT NULL, job_type text NOT NULL, batch_id text, user_id integer, site_id text, partner_id text, trace_id text, unique_key text, payload text NOT NULL, exception text NOT NULL, attempts integer NOT NULL, max_attempts integer NOT NULL, failed_at integer NOT NULL)',
@@ -309,6 +311,24 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 ): D1DurableJobRepository<Queue> {
   const jobsTable = opts.jobsTable ?? 'jobs'
   const failedJobsTable = opts.failedJobsTable ?? 'failed_jobs'
+  const settlementsTable = `${jobsTable}_settlements`
+  const confirmWrite = async (job: D1DurableJobRecord<Queue>, write: 'complete' | 'fail' | 'release'): Promise<boolean> => {
+    if (write === 'fail') {
+      const failed = await db.prepare<{ attempts: number }>(`
+        SELECT attempts FROM ${failedJobsTable} WHERE id = ?
+      `).bind(job.id).first<{ attempts: number }>()
+      return failed?.attempts === job.attempts
+    }
+    const persisted = await db.prepare<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>(`
+      SELECT attempts, reserved_at, completed_at, failed_at FROM ${jobsTable} WHERE id = ?
+    `).bind(job.id).first<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>()
+    if (!persisted || persisted.attempts !== job.attempts || persisted.reserved_at !== null)
+      return false
+    return write === 'complete'
+      ? persisted.completed_at !== null
+      : persisted.completed_at === null && persisted.failed_at === null
+  }
+  const settlementLeaseSeconds = Math.max(60, opts.reclaimAfterSeconds ?? 60)
   const batchesTable = opts.batchesTable ?? 'job_batches'
 
   // The legacy immediate insert asserts publication (`published_at`), so it must
@@ -535,22 +555,75 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       return 'in-flight'
     },
 
-    async isLifecycleWriteCommitted(job, write) {
-      if (write === 'fail') {
-        const failed = await db.prepare<{ attempts: number }>(`
-          SELECT attempts FROM ${failedJobsTable} WHERE id = ?
-        `).bind(job.id).first<{ attempts: number }>()
-        return failed?.attempts === job.attempts
-      }
-      const persisted = await db.prepare<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>(`
-        SELECT attempts, reserved_at, completed_at, failed_at FROM ${jobsTable} WHERE id = ?
-      `).bind(job.id).first<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>()
-      // A later claim must never confirm this claim's write.
-      if (!persisted || persisted.attempts !== job.attempts || persisted.reserved_at !== null)
-        return false
-      return write === 'complete'
-        ? persisted.completed_at !== null
-        : persisted.completed_at === null && persisted.failed_at === null
+    isLifecycleWriteCommitted: confirmWrite,
+
+    pendingSettlements: {
+      async claim(id) {
+        const now = currentUnixSeconds()
+        const record = await db.prepare<{
+          token: string
+          job: string
+          payload: string
+          execution: string
+          write_kind: 'complete' | 'fail'
+        }>(`
+          UPDATE ${settlementsTable} SET token = ?, reserved_until = ?
+          WHERE job_id = ? AND reserved_until <= ?
+          RETURNING token, job, payload, execution, write_kind
+        `).bind(crypto.randomUUID(), now + settlementLeaseSeconds, id, now).first()
+        if (!record) {
+          const existing = await db.prepare(`SELECT job_id FROM ${settlementsTable} WHERE job_id = ?`).bind(id).first()
+          return existing ? { _tag: 'busy' } : { _tag: 'none' }
+        }
+        const settlement: PendingDurableJobSettlement<D1DurableJobRecord<Queue>> = {
+          token: record.token,
+          job: { ...JSON.parse(record.job), payload: record.payload },
+          execution: JSON.parse(record.execution),
+          write: record.write_kind,
+        }
+        const committed = await confirmWrite(settlement.job, settlement.write).catch(async (cause: unknown) => {
+          // A failed read must leave this settlement available to the next delivery.
+          await db.prepare(`UPDATE ${settlementsTable} SET reserved_until = 0 WHERE token = ?`).bind(settlement.token).run()
+          throw cause
+        })
+        return { _tag: 'ready', settlement, committed }
+      },
+      async save(settlement) {
+        const { payload, ...job } = settlement.job
+        const execution = settlement.execution._tag === 'dispatch'
+          ? {
+              ...settlement.execution,
+              dispatch: {
+                ...settlement.execution.dispatch,
+                error: settlement.execution.dispatch.error && {
+                  ...settlement.execution.dispatch.error,
+                  ...('cause' in settlement.execution.dispatch.error
+                    ? { cause: describeCause(settlement.execution.dispatch.error.cause) }
+                    : {}),
+                },
+              },
+              // D1 completion consumes numeric stats only. Do not serialize arbitrary results.
+              completeWith: Object.fromEntries((['durationMs', 'rowsFetched', 'rowsInserted', 'd1RowsRead', 'd1RowsWritten'] as const)
+                .map(key => [key, readResultStat(settlement.execution._tag === 'dispatch' ? settlement.execution.completeWith : undefined)(key)])),
+            }
+          : settlement.execution
+        const saved = await db.prepare(`
+          INSERT INTO ${settlementsTable} (job_id, token, attempts, reserved_until, job, payload, execution, write_kind)
+          SELECT id, ?, attempts, ?, ?, ?, ?, ? FROM ${jobsTable}
+          WHERE id = ? AND reserved_at = ? AND attempts = ? AND completed_at IS NULL AND failed_at IS NULL
+          ON CONFLICT(job_id) DO UPDATE SET token = excluded.token, attempts = excluded.attempts,
+            reserved_until = excluded.reserved_until, job = excluded.job, payload = excluded.payload,
+            execution = excluded.execution, write_kind = excluded.write_kind
+          WHERE ${settlementsTable}.attempts < excluded.attempts OR ${settlementsTable}.token = excluded.token
+        `).bind(settlement.token, currentUnixSeconds() + settlementLeaseSeconds, JSON.stringify(job), payload, JSON.stringify(execution), settlement.write, job.id, job.reserved_at, job.attempts).run()
+        return (saved.meta?.changes ?? 0) > 0
+      },
+      async release(token) {
+        await db.prepare(`UPDATE ${settlementsTable} SET reserved_until = 0 WHERE token = ?`).bind(token).run()
+      },
+      async finish(token) {
+        await db.prepare(`DELETE FROM ${settlementsTable} WHERE token = ?`).bind(token).run()
+      },
     },
 
     async completeJob(job, result) {

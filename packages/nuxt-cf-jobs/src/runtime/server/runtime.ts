@@ -75,15 +75,43 @@ export async function runDurableJobBatchMessage<
 >(
   opts: RunDurableJobBatchMessageOptions<StoredJob, Job, Message, Env, Db, Logger>,
 ): Promise<RunDurableJobBatchMessageResult> {
-  const run = await runDurableJobMessage(opts)
+  let finishToken: string | undefined
+  let acknowledged = false
+  const pendingSettlements = opts.lifecycle.pendingSettlements
+  const run = await runDurableJobMessage({
+    ...opts,
+    message: {
+      body: opts.message.body,
+      attempts: opts.message.attempts,
+      retry: retryOpts => opts.message.retry(retryOpts),
+      ack: () => { acknowledged = true },
+    },
+    lifecycle: {
+      ...opts.lifecycle,
+      pendingSettlements: pendingSettlements && {
+        ...pendingSettlements,
+        finish: async (token) => { finishToken = token },
+      },
+    },
+  })
+  const finish = async (): Promise<void> => {
+    if (finishToken)
+      await pendingSettlements!.finish(finishToken)
+    if (acknowledged)
+      opts.message.ack()
+  }
 
   const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted'
-  if (!terminal)
+  if (!terminal) {
+    await finish()
     return { run, settled: null }
+  }
 
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
-  if (!jobId)
+  if (!jobId) {
+    await finish()
     return { run, settled: null }
+  }
 
   const settled = await settleBatchMember({
     store: opts.store,
@@ -94,6 +122,7 @@ export async function runDurableJobBatchMessage<
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
+  await finish()
   return { run, settled }
 }
 
