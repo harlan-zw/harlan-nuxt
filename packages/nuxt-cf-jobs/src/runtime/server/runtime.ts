@@ -77,7 +77,7 @@ export async function runDurableJobBatchMessage<
 ): Promise<RunDurableJobBatchMessageResult> {
   const run = await runDurableJobMessage(opts)
 
-  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted'
+  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted' || run.status === 'settlement-recovered'
   if (!terminal)
     return { run, settled: null }
 
@@ -88,7 +88,7 @@ export async function runDurableJobBatchMessage<
   const settled = await settleBatchMember({
     store: opts.store,
     jobId,
-    failed: run.status !== 'completed',
+    failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
     dispatchOnFinish: opts.dispatchOnFinish,
   })
   if (settled.progress && opts.onBatchProgress)
@@ -267,6 +267,7 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
   isTransientError?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isTransientError']
   lifecycleWriteRetry?: RunDurableJobMessageOptions<unknown, DispatchableJob>['lifecycleWriteRetry']
+  requeueSettlement?: RunDurableJobMessageOptions<unknown, DispatchableJob>['requeueSettlement']
   completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
@@ -509,6 +510,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         maxInFlightRetries: opts.maxInFlightRetries,
         isTransientError: opts.isTransientError,
         lifecycleWriteRetry: opts.lifecycleWriteRetry,
+        requeueSettlement: opts.requeueSettlement,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
@@ -777,6 +779,8 @@ export function createDurableJobsRuntime<
     ...opts.lifecycleWriteRetry,
     redeliveryDelaySeconds: opts.lifecycleWriteRetry?.redeliveryDelaySeconds ?? opts.reclaimAfterSeconds,
   }
+  const requeueSettlement: RunDurableJobMessageOptions<unknown, DispatchableJob>['requeueSettlement'] = ({ message, delaySeconds }) =>
+    publisher.send(message.queue as Queue, { ...message, queue: message.queue as Queue }, { delaySeconds })
 
   return {
     repository,
@@ -802,6 +806,7 @@ export function createDurableJobsRuntime<
         maxInFlightRetries: opts.maxInFlightRetries,
         isTransientError: opts.isTransientError,
         lifecycleWriteRetry,
+        requeueSettlement,
         maxAttemptsOf: stored => stored.max_attempts,
         completeResult: opts.completeResult,
         createJobScope: opts.createJobScope,
@@ -833,6 +838,7 @@ export function createDurableJobsRuntime<
       maxInFlightRetries: opts.maxInFlightRetries,
       isTransientError: opts.isTransientError,
       lifecycleWriteRetry,
+      requeueSettlement,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate: dedup?.has,

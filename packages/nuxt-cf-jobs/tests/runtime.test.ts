@@ -848,3 +848,113 @@ describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
     }
   })
 })
+
+describe('createDurableJobsRuntime — lost response on the final lifecycle write', () => {
+  // Review finding on #201: the last write try commits, then D1 drops the
+  // response. Deferring then stranded the batch settlement and continuations,
+  // because the redelivery found the row already completed and only acked.
+  const overloaded = () => new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+  const lost = () => new Error('D1_ERROR: Network connection lost.')
+
+  function faultD1(d1: ReturnType<typeof createSqliteD1>, faults: { complete: Array<'overload' | 'commit-then-lose'>, confirm: number }) {
+    const prepare = d1.prepare.bind(d1)
+    const complete = [...faults.complete]
+    let confirm = faults.confirm
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('SET completed_at = unixepoch()')) {
+        const run = statement.run.bind(statement)
+        statement.run = async () => {
+          const fault = complete.shift()
+          if (fault === 'overload')
+            throw overloaded()
+          const result = await run()
+          if (fault === 'commit-then-lose')
+            throw lost()
+          return result
+        }
+      }
+      if (query.includes('-- confirm lifecycle write')) {
+        const first = statement.first.bind(statement)
+        statement.first = (async () => {
+          if (confirm > 0) {
+            confirm--
+            throw overloaded()
+          }
+          return await first()
+        }) as typeof statement.first
+      }
+      return statement
+    }) as typeof d1.prepare
+  }
+
+  async function setupBatch(confirmFailures: number) {
+    const sent: Array<{ message: Record<string, unknown>, delaySeconds?: number }> = []
+    const binding = {
+      send: (message: Record<string, unknown>, opts?: { delaySeconds?: number }) => { sent.push({ message, delaySeconds: opts?.delaySeconds }) },
+      sendBatch: (batch: Array<{ body: Record<string, unknown> } | Record<string, unknown>>) => {
+        for (const entry of batch)
+          sent.push({ message: ('body' in entry ? entry.body : entry) as Record<string, unknown> })
+      },
+    }
+    const continuations: string[] = []
+    const finished = vi.fn(async () => {})
+    const { d1, runtime } = await setup({ work: async () => {}, finish: finished }, {
+      env: { Q: binding },
+      reclaimAfterSeconds: 900,
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    sent.length = 0
+    faultD1(d1, { complete: ['overload', 'overload', 'commit-then-lose'], confirm: confirmFailures })
+    return { d1, runtime, jobId: jobIds[0]!, sent, continuations }
+  }
+
+  const pendingJobs = (d1: ReturnType<typeof createSqliteD1>) =>
+    (d1._db.prepare('SELECT pending_jobs FROM job_batches').get() as { pending_jobs: number }).pending_jobs
+
+  it('confirms the committed write and runs continuations and batch settlement once', async () => {
+    const { d1, runtime, jobId, continuations } = await setupBatch(0)
+
+    const first = msg(jobId)
+    const result = await runtime.consumeMessage(first)
+    // A duplicate delivery of the same message must not settle again.
+    await runtime.consumeMessage(msg(jobId))
+
+    expect(result.run.status).toBe('completed')
+    expect(first.ack).toHaveBeenCalled()
+    expect(continuations).toEqual(['then', 'finally'])
+    expect(pendingJobs(d1)).toBe(0)
+  })
+
+  it('requeues the settlement when the confirming read fails, then settles once on redelivery', async () => {
+    const { d1, runtime, jobId, sent, continuations } = await setupBatch(1)
+
+    const first = msg(jobId)
+    const result = await runtime.consumeMessage(first)
+
+    expect(result.run.status).toBe('write-deferred')
+    expect(first.ack).toHaveBeenCalled()
+    expect(first.retry).not.toHaveBeenCalled()
+    expect(continuations).toEqual([])
+    expect(pendingJobs(d1)).toBe(1)
+    expect(sent).toEqual([{
+      message: { jobId, queue: 'q', settlement: { status: 'completed', attempts: 1 } },
+      delaySeconds: 900,
+    }])
+
+    // Cloudflare may deliver the settlement message twice.
+    const settlement = () => ({ body: sent[0]!.message as { jobId: string, queue: string }, ack: vi.fn(), retry: vi.fn() })
+    const redelivered = settlement()
+    const recovered = await runtime.consumeMessage(redelivered)
+    const duplicate = settlement()
+    await runtime.consumeMessage(duplicate)
+
+    expect(recovered.run.status).toBe('settlement-recovered')
+    expect(redelivered.ack).toHaveBeenCalled()
+    expect(duplicate.ack).toHaveBeenCalled()
+    expect(continuations).toEqual(['then', 'finally'])
+    expect(pendingJobs(d1)).toBe(0)
+  })
+})

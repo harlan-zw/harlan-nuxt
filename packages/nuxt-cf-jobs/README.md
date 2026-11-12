@@ -457,6 +457,15 @@ redelivery reclaims it and runs the job again. The run reports
 A write failure never counts as a handler failure. It does not fail the job,
 and it does not run `failed`. A write error that is not transient propagates.
 
+A write can commit and still lose its response. Before it defers a complete or
+fail write, the consumer reads the row once. If the write landed, the run
+continues: it settles the batch and dispatches continuations. If that read
+fails too, the consumer sends a copy of the message with a `settlement`
+marker and acks the original. The copy runs the follow-up work once. It
+claims it with a compare-and-set on the row's `attempts`, so a duplicate
+delivery finds nothing to do. If the write never landed, the copy reclaims
+the row and runs the job again.
+
 ```ts
 createDurableRuntime({
   // Default: isTransientD1WriteError (overload, lost connection, storage reset).

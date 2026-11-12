@@ -47,7 +47,9 @@ function writeThatThrows(errors: unknown[]): ReturnType<typeof vi.fn<Write>> {
   })
 }
 
-async function run(outcome: Outcome, writes: { completeJob?: Write, failJob?: Write, releaseJob?: Write }, extra: Partial<RunDurableJobMessageOptions<StoredJob, StoredJob>> = {}) {
+type Confirm = (...args: unknown[]) => Promise<'landed' | 'not-landed'>
+
+async function run(outcome: Outcome, writes: { completeJob?: Write, failJob?: Write, releaseJob?: Write, confirmLifecycleWrite?: Confirm }, extra: Partial<RunDurableJobMessageOptions<StoredJob, StoredJob>> = {}) {
   const stored = storedJob(outcome)
   const message = createQueueMessage({ jobId: stored.id, queue: 'default' as const }, 1)
   const lifecycle = {
@@ -55,6 +57,7 @@ async function run(outcome: Outcome, writes: { completeJob?: Write, failJob?: Wr
     completeJob: writes.completeJob ?? vi.fn<Write>(async () => {}),
     failJob: writes.failJob ?? vi.fn<Write>(async () => {}),
     releaseJob: writes.releaseJob ?? vi.fn<Write>(async () => {}),
+    ...(writes.confirmLifecycleWrite ? { confirmLifecycleWrite: writes.confirmLifecycleWrite } : {}),
   }
   const onTerminalFailure = vi.fn()
   const result = await runDurableJobMessage<StoredJob, StoredJob>({
@@ -158,6 +161,36 @@ describe('lifecycle write retry', () => {
 
     expect(result.status).toBe('errored')
     expect(releaseJob).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('lifecycle write confirmation', () => {
+  it('acks a stale claimant whose retry misses ownership and whose write never landed', async () => {
+    const completeJob = writeThatThrows([overloaded(), new DurableJobOwnershipError('job_complete')])
+    const { result, message } = await run('complete', { completeJob, confirmLifecycleWrite: async () => 'not-landed' })
+
+    expect(result).toEqual({ status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } })
+    expect(message.acked).toBe(true)
+  })
+
+  it('treats a final transient failure as written when the read shows it landed', async () => {
+    const cause = overloaded()
+    const completeJob = writeThatThrows([cause, cause, cause])
+    const { result, message } = await run('complete', { completeJob, confirmLifecycleWrite: async () => 'landed' })
+
+    expect(result.status).toBe('completed')
+    expect(message.acked).toBe(true)
+  })
+
+  it('bounds the retries when the configured budget is not a finite number', async () => {
+    const cause = overloaded()
+    const releaseJob = writeThatThrows(Array.from({ length: 10 }).fill(cause))
+    const { result } = await run('throw', { releaseJob }, {
+      lifecycleWriteRetry: { retries: Number.POSITIVE_INFINITY, backoffMs: () => 0, redeliveryDelaySeconds: 900 },
+    })
+
+    expect(result.status).toBe('write-deferred')
+    expect(releaseJob).toHaveBeenCalledTimes(3)
   })
 })
 

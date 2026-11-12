@@ -535,6 +535,46 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       return 'in-flight'
     },
 
+    async confirmLifecycleWrite(job, write) {
+      // One row read. `attempts` is unique per claim, so a later claim's
+      // write can never confirm this one.
+      const row = await db.prepare<{ jobs_attempts: number | null, completed_at: number | null, failed_attempts: number | null }>(`
+        SELECT
+          (SELECT attempts FROM ${jobsTable} WHERE id = ?) AS jobs_attempts,
+          (SELECT completed_at FROM ${jobsTable} WHERE id = ?) AS completed_at,
+          (SELECT attempts FROM ${failedJobsTable} WHERE id = ?) AS failed_attempts
+        -- confirm lifecycle write
+      `).bind(job.id, job.id, job.id).first<{ jobs_attempts: number | null, completed_at: number | null, failed_attempts: number | null }>()
+      const landed = write === 'complete'
+        ? row?.jobs_attempts === job.attempts && row.completed_at !== null
+        // `failJob` moves the row, so a landed failure leaves no `jobs` row behind.
+        : row?.failed_attempts === job.attempts && row.jobs_attempts === null
+      return landed ? 'landed' : 'not-landed'
+    },
+
+    async claimPendingSettlement(id, pending) {
+      // Compare-and-set on `attempts`, the column a claim already owns. The
+      // first delivery of a settlement marker bumps it, so a duplicate misses.
+      if (pending.status === 'completed') {
+        const job = await db.prepare<D1DurableJobRecord<Queue>>(`
+          UPDATE ${jobsTable}
+          SET attempts = attempts + 1
+          WHERE id = ? AND attempts = ? AND completed_at IS NOT NULL
+          RETURNING *
+        `).bind(id, pending.attempts).first<D1DurableJobRecord<Queue>>()
+        return job ? { job: { ...job, attempts: pending.attempts } } : null
+      }
+      const failed = await db.prepare<D1FailedDurableJobRecord<Queue>>(`
+        UPDATE ${failedJobsTable}
+        SET attempts = attempts + 1
+        WHERE id = ? AND attempts = ?
+        RETURNING *
+      `).bind(id, pending.attempts).first<D1FailedDurableJobRecord<Queue>>()
+      if (!failed)
+        return null
+      return { job: failedRecordToJob(failed, pending.attempts), error: headlineOf(failed.exception) }
+    },
+
     async completeJob(job, result) {
       const stats = readResultStat(result)
       // Reported durationMs wins; else derive from the reservation (Laravel-style
@@ -1043,6 +1083,34 @@ async function pruneInChunks(
       break
   }
   return total
+}
+
+function failedRecordToJob<Queue extends string>(failed: D1FailedDurableJobRecord<Queue>, attempts: number): D1DurableJobRecord<Queue> {
+  return {
+    id: failed.id,
+    queue: failed.queue,
+    job_type: failed.job_type,
+    batch_id: failed.batch_id,
+    user_id: failed.user_id,
+    site_id: failed.site_id,
+    partner_id: failed.partner_id,
+    trace_id: failed.trace_id,
+    unique_key: failed.unique_key,
+    payload: failed.payload,
+    attempts,
+    max_attempts: failed.max_attempts,
+    backoff: null,
+    reserved_at: null,
+    available_at: failed.failed_at,
+    created_at: failed.failed_at,
+    published_at: null,
+    last_dispatched_at: null,
+    dispatch_attempts: 0,
+    last_dispatch_error: null,
+    completed_at: null,
+    failed_at: failed.failed_at,
+    last_error: failed.exception,
+  }
 }
 
 function currentUnixSeconds(): number {
