@@ -2,7 +2,7 @@ import { isTransientD1Error } from '@harlan-zw/nuxt-cloudflare/d1'
 import { isDurableJobOwnershipError } from './errors'
 
 /** The lifecycle write that settles a claimed row. */
-export type DurableJobLifecycleWrite = 'complete' | 'fail' | 'release'
+export type DurableJobLifecycleWrite = 'complete' | 'fail' | 'release' | 'settlement'
 
 /**
  * A lifecycle write that stayed transient after its in-process retries. The row
