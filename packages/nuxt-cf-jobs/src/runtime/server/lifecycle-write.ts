@@ -94,12 +94,13 @@ export function resolveRedeliveryDelaySeconds(seconds: number | undefined): numb
  * - An ownership miss on a retry means the earlier call committed and only its
  *   response was lost ("Network connection lost"). No other run can claim the
  *   row inside the reservation window, so the write counts as `written`.
- * - A transient failure that outlasts the retries is `deferred`.
+ * - After the final transient failure, check whether the write committed before deferring.
  * - Any other failure is a defect and propagates.
  */
 export async function runLifecycleWrite(input: {
   write: DurableJobLifecycleWrite
   run: () => Promise<unknown>
+  isCommitted?: () => Promise<boolean>
   isTransientError?: IsTransientError
   retry?: LifecycleWriteRetryOptions
   sleep?: (ms: number) => Promise<void>
@@ -119,6 +120,8 @@ export async function runLifecycleWrite(input: {
     if (!isTransient({ error: failure.cause }))
       throw failure.cause
     if (tries > retries) {
+      if (await input.isCommitted?.())
+        return { _tag: 'written' }
       return {
         _tag: 'deferred',
         deferral: {

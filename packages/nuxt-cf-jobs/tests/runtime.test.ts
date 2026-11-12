@@ -791,6 +791,75 @@ describe('onFinish failure (Codex review Area 5)', () => {
 })
 
 describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
+  it.each(['complete', 'fail'] as const)('recovers terminal actions when the final %s commits but loses its response', async (write) => {
+    const stages: string[] = []
+    const onTerminalFailure = vi.fn()
+    const handle = vi.fn(async (_payload: Record<string, unknown>, ctx: JobContext<unknown, unknown, unknown>) => {
+      if (write === 'fail')
+        await ctx.fail('bad input')
+    })
+    const { d1, runtime, messages } = await setup({ work: handle, finish: async () => {} }, {
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
+      onTerminalFailure,
+    })
+    const { jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {})],
+      onFinish: { name: 'finish', payload: {} },
+    })
+    let attempts = 0
+    const loseResponse = async (persist: () => Promise<void>) => {
+      attempts++
+      if (attempts <= 2)
+        throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+      await persist()
+      throw new Error('D1_ERROR: Network connection lost.')
+    }
+    if (write === 'complete') {
+      const persist = runtime.repository.completeJob.bind(runtime.repository)
+      vi.spyOn(runtime.repository, 'completeJob').mockImplementation((...args) => loseResponse(() => persist(...args)))
+    }
+    else {
+      const persist = runtime.repository.failJob.bind(runtime.repository)
+      vi.spyOn(runtime.repository, 'failJob').mockImplementation((...args) => loseResponse(() => persist(...args)))
+    }
+
+    const first = await runtime.consumeMessage(msg(jobIds[0]!))
+    const redelivery = msg(jobIds[0]!)
+    await runtime.consumeMessage(redelivery)
+
+    expect(first.run.status).toBe(write === 'complete' ? 'completed' : 'failed')
+    expect(stages).toEqual(write === 'complete' ? ['then', 'finally'] : ['catch', 'finally'])
+    expect(first.settled?.batchComplete).toBe(true)
+    expect(handle).toHaveBeenCalledTimes(1)
+    expect(onTerminalFailure).toHaveBeenCalledTimes(write === 'fail' ? 1 : 0)
+    expect(redelivery.ack).toHaveBeenCalledTimes(1)
+    expect(messages).toHaveLength(2)
+    expect(d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches').get())
+      .toMatchObject({ pending_jobs: 0, finished_at: expect.any(Number) })
+    d1._db.close()
+  })
+
+  it.each(['complete', 'fail', 'release'] as const)('does not confirm a %s write from a different claim', async (write) => {
+    const { d1, runtime } = await setup({ work: async () => {} })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+    const job = (await runtime.repository.claimJob(jobIds[0]!))!
+    expect(await runtime.repository.isLifecycleWriteCommitted!(job, write)).toBe(false)
+    // A newer claim can share the reservation timestamp but has a different attempt.
+    await runtime.repository.releaseJob!(job)
+    const newerClaim = (await runtime.repository.claimJob(job.id))!
+    if (write === 'complete')
+      await runtime.repository.completeJob(newerClaim)
+    else if (write === 'fail')
+      await runtime.repository.failJob(newerClaim, 'bad input')
+    else
+      await runtime.repository.releaseJob!(newerClaim)
+
+    expect(await runtime.repository.isLifecycleWriteCommitted!(job, write)).toBe(false)
+    expect(await runtime.repository.isLifecycleWriteCommitted!(newerClaim, write)).toBe(true)
+    d1._db.close()
+  })
+
   // Sentry NUXTSEO-PRO-13R: the release write after a handler throw hit a D1
   // overload, the throw escaped `consumeBatch`, and the row stayed reserved.
   function overloadReleases(d1: ReturnType<typeof createSqliteD1>, failures: number) {

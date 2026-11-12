@@ -200,6 +200,8 @@ export interface DurableJobLifecycle<
 > {
   claimJob: (id: string) => Promise<Job | null>
   resolveClaimMiss?: (id: string) => Promise<DurableJobClaimMiss>
+  /** Read persisted state to confirm that this claim committed its write after a lost response. */
+  isLifecycleWriteCommitted?: (job: Job, write: DurableJobLifecycleWrite) => Promise<boolean>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
   failJob: (job: Job, error: string, opts?: Partial<FailOptions> & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
@@ -1016,7 +1018,7 @@ export interface RunDurableJobMessageOptions<
   // The runtime never has bespoke fail options — it settles a terminal failure with a
   // `cause` and nothing else. A repository's own `FailOptions` stays on
   // `DurableJobLifecycle` / `failDurableJob` for callers that drive `failJob` directly.
-  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'completeJob' | 'failJob' | 'releaseJob'>
+  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'isLifecycleWriteCommitted' | 'completeJob' | 'failJob' | 'releaseJob'>
   registry: {
     getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
@@ -1264,7 +1266,15 @@ export async function runDurableJobMessage<
   // the handler catch below, so an overloaded `completeJob` cannot re-run a
   // finished job and an overloaded `releaseJob` cannot fail the whole batch.
   const writeOrDefer = async (write: DurableJobLifecycleWrite, run: () => Promise<unknown>): Promise<RunDurableJobMessageResult | null> => {
-    const outcome = await runLifecycleWrite({ write, run, isTransientError: opts.isTransientError, retry: opts.lifecycleWriteRetry })
+    const outcome = await runLifecycleWrite({
+      write,
+      run,
+      isCommitted: opts.lifecycle.isLifecycleWriteCommitted
+        ? () => opts.lifecycle.isLifecycleWriteCommitted!(storedJob, write)
+        : undefined,
+      isTransientError: opts.isTransientError,
+      retry: opts.lifecycleWriteRetry,
+    })
     if (outcome._tag === 'written')
       return null
     if (outcome._tag === 'obsolete') {
