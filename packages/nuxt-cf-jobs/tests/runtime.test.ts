@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, createParentJobBatch, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -34,7 +34,14 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
           bound = values
           return api
         },
-        async run() { return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } } },
+        async run() {
+          // D1 returns RETURNING rows from `run()` and from `batch()`.
+          if (stmt.columns().length > 0) {
+            const rows = stmt.all(...(bound as never[])) as T[]
+            return { success: true, meta: { changes: rows.length }, results: rows }
+          }
+          return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } }
+        },
         async first<R = T>() { return (stmt.get(...(bound as never[])) ?? null) as R | null },
         async all<R = T>() { return { results: stmt.all(...(bound as never[])) as R[] } },
       }
@@ -50,7 +57,9 @@ function createQueueBinding() {
     messages,
     binding: {
       send: (m: { jobId: string, queue: string }) => { messages.push(m) },
-      sendBatch: (batch: Array<{ jobId: string, queue: string }>) => { messages.push(...batch) },
+      sendBatch: (batch: Array<{ body: { jobId: string, queue: string } } | { jobId: string, queue: string }>) => {
+        messages.push(...batch.map(entry => 'body' in entry ? entry.body : entry))
+      },
     },
   }
 }
@@ -112,7 +121,7 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
   return Number((d1._db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n)
 }
 
-const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), retry: vi.fn() })
+const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, attempts: 1, ack: vi.fn(), retry: vi.fn() })
 
 describe('createDurableJobsRuntime — batch happy path', () => {
   it.each([
@@ -777,15 +786,531 @@ describe('gscdump-parity hooks', () => {
 })
 
 describe('onFinish failure (Codex review Area 5)', () => {
-  it('logs and does not throw when the onFinish continuation cannot be enqueued', async () => {
-    const logs: Array<{ stage: string }> = []
-    const { runtime } = await setup({ work: async () => {} }, { onLog: e => logs.push(e) })
-    // 'ghost' has no route → prepareDurableJob throws inside dispatchOnFinish
-    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'ghost', payload: {} } })
+  it('recovers a failed onFinish enqueue before finishing parent propagation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const logs: Array<{ stage: string }> = []
+      const { d1, runtime, messages } = await setup({ work: async () => {}, finish: async () => {} }, { onLog: (e: { stage: string }) => logs.push(e) })
+      const parentId = await createParentJobBatch({ store: runtime.store })
+      const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], parentBatchId: parentId, onFinish: { name: 'finish', payload: {} } })
+      const stageJob = runtime.repository.stageJob!.bind(runtime.repository)
+      runtime.repository.stageJob = vi.fn().mockRejectedValueOnce(new Error('D1_ERROR: Network connection lost.')).mockImplementation(stageJob)
+      await expect(runtime.consumeMessage(msg(jobIds[0]!))).rejects.toThrow('Network connection lost')
+      expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      expect(messages).toEqual([{ jobId: jobIds[0]!, queue: 'q' }])
+      await runtime.consumeMessage({ body: messages[0]!, ack: vi.fn(), retry: vi.fn() })
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: 0 })
+      expect(d1._db.prepare('SELECT id FROM jobs WHERE job_type = ?').all('finish')).toHaveLength(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
-    const r = await runtime.consumeMessage(msg(jobIds[0]!))
-    expect(r.run.status).toBe('completed')
-    expect(r.settled?.batchComplete).toBe(true) // batch still finishes
-    expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
+describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
+  // Sentry NUXTSEO-PRO-13R: the release write after a handler throw hit a D1
+  // overload, the throw escaped `consumeBatch`, and the row stayed reserved.
+  function overloadReleases(d1: ReturnType<typeof createSqliteD1>, failures: number) {
+    const prepare = d1.prepare.bind(d1)
+    let remaining = failures
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (!query.includes('last_error = COALESCE'))
+        return statement
+      const run = statement.run.bind(statement)
+      statement.run = async () => {
+        if (remaining > 0) {
+          remaining--
+          throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+        }
+        return await run()
+      }
+      return statement
+    }) as typeof d1.prepare
+  }
+
+  it('retries the message past the reservation window and logs a deferred write', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const handle = vi.fn(async () => {
+        throw new Error('upstream 503')
+      })
+      const logs: Array<{ stage: string, write?: string, jobId?: string }> = []
+      const { d1, runtime } = await setup({ flaky: handle }, {
+        reclaimAfterSeconds: 900,
+        lifecycleWriteRetry: { backoffMs: () => 0 },
+        onLog: (event: { stage: string, write?: string, jobId?: string }) => logs.push(event),
+      })
+      const { jobIds } = await runtime.createBatch({ jobs: [await prepare('flaky', {})] })
+      overloadReleases(d1, 3)
+
+      const first = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q', messages: [first] })
+
+      expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 900 })
+      expect(first.ack).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.objectContaining({ stage: 'write-deferred', write: 'release', jobId: jobIds[0] }))
+
+      // The redelivery arrives after the window and runs the job again.
+      vi.setSystemTime(Date.now() + 901_000)
+      const second = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q', messages: [second] })
+
+      expect(handle).toHaveBeenCalledTimes(2)
+      const row = d1._db.prepare('SELECT reserved_at, attempts FROM jobs').get() as { reserved_at: number | null, attempts: number }
+      expect(row).toEqual({ reserved_at: null, attempts: 2 })
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('createDurableJobsRuntime — lost response on the final lifecycle write', () => {
+  // Review finding on #201: the last write try commits, then D1 drops the
+  // response. Deferring then stranded the batch settlement and continuations,
+  // because the redelivery found the row already completed and only acked.
+  const overloaded = () => new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+  const lost = () => new Error('D1_ERROR: Network connection lost.')
+
+  function faultD1(d1: ReturnType<typeof createSqliteD1>, faults: { complete: Array<'overload' | 'commit-then-lose'>, confirm: number }) {
+    const prepare = d1.prepare.bind(d1)
+    const complete = [...faults.complete]
+    let confirm = faults.confirm
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('SET completed_at = unixepoch()')) {
+        const run = statement.run.bind(statement)
+        statement.run = async () => {
+          const fault = complete.shift()
+          if (fault === 'overload')
+            throw overloaded()
+          const result = await run()
+          if (fault === 'commit-then-lose')
+            throw lost()
+          return result
+        }
+      }
+      if (query.includes('-- confirm lifecycle write')) {
+        const first = statement.first.bind(statement)
+        statement.first = (async () => {
+          if (confirm > 0) {
+            confirm--
+            throw overloaded()
+          }
+          return await first()
+        }) as typeof statement.first
+      }
+      return statement
+    }) as typeof d1.prepare
+  }
+
+  async function setupBatch(confirmFailures: number, outcome: 'completed' | 'failed' = 'completed') {
+    const sent: Array<{ message: Record<string, unknown>, delaySeconds?: number }> = []
+    const binding = {
+      send: (message: Record<string, unknown>, opts?: { delaySeconds?: number }) => { sent.push({ message, delaySeconds: opts?.delaySeconds }) },
+      sendBatch: (batch: Array<{ body: Record<string, unknown> } | Record<string, unknown>>) => {
+        for (const entry of batch)
+          sent.push({ message: ('body' in entry ? entry.body : entry) as Record<string, unknown> })
+      },
+    }
+    const continuations: string[] = []
+    const finished = vi.fn(async () => {})
+    const onTerminalFailure = vi.fn(async () => {})
+    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
+      if (outcome === 'failed')
+        await ctx.fail('bad input')
+    }, finish: finished }, {
+      env: { Q: binding },
+      reclaimAfterSeconds: 900,
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+      onTerminalFailure,
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    sent.length = 0
+    faultD1(d1, { complete: ['overload', 'overload', 'commit-then-lose'], confirm: confirmFailures })
+    if (outcome === 'failed') {
+      const batch = d1.batch!.bind(d1)
+      let lose = true
+      d1.batch = async (statements) => {
+        const result = await batch(statements)
+        if (lose) {
+          lose = false
+          throw lost()
+        }
+        return result
+      }
+    }
+    return { d1, runtime, jobId: jobIds[0]!, sent, continuations, onTerminalFailure }
+  }
+
+  const pendingJobs = (d1: ReturnType<typeof createSqliteD1>) =>
+    (d1._db.prepare('SELECT pending_jobs FROM job_batches').get() as { pending_jobs: number }).pending_jobs
+
+  it('confirms the committed write and runs continuations and batch settlement once', async () => {
+    const { d1, runtime, jobId, continuations } = await setupBatch(0)
+
+    const first = msg(jobId)
+    const result = await runtime.consumeMessage(first)
+    // A duplicate delivery of the same message must not settle again.
+    await runtime.consumeMessage(msg(jobId))
+
+    expect(result.run.status).toBe('completed')
+    expect(first.ack).toHaveBeenCalled()
+    expect(continuations).toEqual(['then', 'finally'])
+    expect(pendingJobs(d1)).toBe(0)
+  })
+
+  it('requeues the settlement when the confirming read fails, then settles once on redelivery', async () => {
+    const { d1, runtime, jobId, sent, continuations } = await setupBatch(1)
+
+    const first = msg(jobId)
+    const result = await runtime.consumeMessage(first)
+
+    expect(result.run.status).toBe('write-deferred')
+    expect(first.ack).toHaveBeenCalled()
+    expect(first.retry).not.toHaveBeenCalled()
+    expect(continuations).toEqual([])
+    expect(pendingJobs(d1)).toBe(1)
+    expect(sent).toEqual([{
+      message: { jobId, queue: 'q', settlement: { status: 'completed', attempts: 1 } },
+      delaySeconds: 900,
+    }])
+
+    // Cloudflare may deliver the settlement message twice.
+    const settlement = () => ({ body: sent[0]!.message as { jobId: string, queue: string }, ack: vi.fn(), retry: vi.fn() })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      const redelivered = settlement()
+      const recovered = await runtime.consumeMessage(redelivered)
+      const duplicate = settlement()
+      await runtime.consumeMessage(duplicate)
+
+      expect(recovered.run.status).toBe('settlement-recovered')
+      expect(redelivered.ack).toHaveBeenCalled()
+      expect(duplicate.ack).toHaveBeenCalled()
+      expect(continuations).toEqual(['then', 'finally'])
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      now.mockRestore()
+    }
+  })
+
+  it.each(['completed', 'failed'] as const)('recovers a $outcome settlement claim whose update commits but loses its response', async (outcome) => {
+    const { d1, runtime, jobId, sent, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    await runtime.consumeMessage(msg(jobId))
+    const prepare = d1.prepare.bind(d1)
+    let lose = true
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('RETURNING *') && query.includes('UPDATE') && !query.includes('SET reserved_at')) {
+        const first = statement.first.bind(statement)
+        statement.first = (async () => {
+          const result = await first()
+          if (lose && result) {
+            lose = false
+            throw lost()
+          }
+          return result
+        }) as typeof statement.first
+      }
+      return statement
+    }) as typeof d1.prepare
+    const marker = () => ({ ...msg(jobId), body: sent[0]!.message as { jobId: string, queue: string } })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      expect((await runtime.consumeMessage(marker())).run.status).toBe('claim-error')
+      const early = marker()
+      expect((await runtime.consumeMessage(early)).run.status).toBe('in-flight')
+      expect(early.retry).toHaveBeenCalledWith({ delaySeconds: 900 })
+      expect(early.ack).not.toHaveBeenCalled()
+      expect(continuations).toEqual([])
+      clock.mockReturnValue(Date.now() + 901_000)
+      const retry = marker()
+      expect((await runtime.consumeMessage(retry)).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(marker())
+      expect(retry.ack).toHaveBeenCalledOnce()
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each(['completed', 'failed'] as const)('recovers a $outcome settlement after an isolate stops with a live claim', async (outcome) => {
+    const { d1, runtime, jobId, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    await runtime.consumeMessage(msg(jobId))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      // The isolate receives its claim, then stops before starting follow-up work.
+      const claim = await runtime.repository.claimPendingSettlement!(jobId)
+      expect(claim && 'job' in claim ? claim.job.id : null).toBe(jobId)
+      clock.mockReturnValue(Date.now() + 901_000)
+      expect((await runtime.consumeMessage(msg(jobId))).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(msg(jobId))
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each([
+    { failure: 'throw', outcome: 'completed' },
+    { failure: 'false', outcome: 'completed' },
+    { failure: 'throw', outcome: 'failed' },
+    { failure: 'false', outcome: 'failed' },
+  ] as const)('preserves $outcome settlement intent when publication returns $failure and continues the batch', async ({ failure, outcome }) => {
+    const { d1, runtime, jobId, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    const sibling = await prepare('work', {})
+    await runtime.enqueue(sibling)
+    const send = vi.spyOn(runtime.publisher, 'send').mockImplementationOnce(async () => {
+      if (failure === 'throw')
+        throw new Error('publisher unavailable')
+      return false
+    })
+    const original = { ...msg(jobId), attempts: 1 }
+    const next = { ...msg(sibling.id), attempts: 1 }
+    await runtime.consumeBatch({ queue: 'q', messages: [original, next] })
+    expect(next.ack).toHaveBeenCalledOnce()
+    expect(original.retry).toHaveBeenCalled()
+    send.mockRestore()
+    continuations.length = 0
+    onTerminalFailure.mockClear()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      expect((await runtime.consumeMessage(msg(jobId))).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(msg(jobId))
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+})
+
+describe('createDurableJobsRuntime — follow-up recovery through reconcile', () => {
+  it('counts a DLQ member once after its settlement lease expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const finished = vi.fn(async () => {})
+      const { d1, runtime, messages } = await setup({ work: async () => {}, finish: finished })
+      const { batchId, jobIds } = await runtime.createBatch({
+        jobs: [await prepare('work', {}), await prepare('work', {})],
+        onFinish: { name: 'finish', payload: {} },
+      })
+      const message = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q-dlq', messages: [message] })
+      expect(message.ack).toHaveBeenCalledOnce()
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      for (const delivery of messages.filter(m => m.jobId === jobIds[0]))
+        await runtime.consumeMessage({ body: delivery, ack: vi.fn(), retry: vi.fn() })
+      expect(d1._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches WHERE id = ?').get(batchId))
+        .toEqual({ pending_jobs: 1, failed_jobs: 1 })
+      expect(d1._db.prepare('SELECT id FROM jobs WHERE job_type = ?').all('finish')).toEqual([])
+      expect(finished).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    { deferred: false, loseAt: 1 },
+    { deferred: true, loseAt: 1 },
+    { deferred: false, loseAt: 2 },
+    { deferred: true, loseAt: 2 },
+  ].flatMap(input => (['completed', 'failed'] as const).flatMap(outcome => [false, true].map(liveSibling => ({ ...input, outcome, liveSibling })))))('recovers $outcome settlement response $loseAt, deferred=$deferred, live sibling=$liveSibling', async ({ deferred, loseAt, outcome, liveSibling }) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const dispatch = vi.fn(async (_input: { batch: { id: string } }) => {})
+      const { d1, runtime, messages } = await setup({ work: async (_payload, ctx) => {
+        if (outcome === 'failed')
+          await ctx.fail('bad input')
+      } }, {
+        dispatchOnFinish: dispatch,
+        lifecycleWriteRetry: { retries: deferred ? 0 : 2, backoffMs: () => 0 },
+      })
+      const parentId = await createParentJobBatch({ store: runtime.store, onFinish: { name: 'finish', payload: {} } })
+      const { batchId, jobIds } = await runtime.createBatch({
+        jobs: [await prepare('work', {})],
+        parentBatchId: parentId,
+        onFinish: { name: 'finish', payload: {} },
+      })
+      if (liveSibling)
+        await runtime.createBatch({ jobs: [await prepare('work', {})], parentBatchId: parentId })
+      const batch = d1.batch!.bind(d1)
+      let decrements = 0
+      d1.batch = async (statements) => {
+        const result = await batch(statements)
+        const decremented = result[0]?.results?.[0] as { pending_jobs?: number } | undefined
+        if (decremented?.pending_jobs !== undefined && ++decrements === loseAt) {
+          throw new Error('D1_ERROR: Network connection lost.')
+        }
+        return result
+      }
+      await runtime.consumeMessage(msg(jobIds[0]!))
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      for (const delivery of messages.filter(message => message.jobId === jobIds[0]))
+        await runtime.consumeMessage({ body: delivery, ack: vi.fn(), retry: vi.fn() })
+      await runtime.consumeMessage(msg(jobIds[0]!))
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(batchId)).toEqual({ pending_jobs: 0 })
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: liveSibling ? 1 : 0 })
+      expect(dispatch.mock.calls.map(([input]) => input.batch.id)).toEqual(liveSibling ? [batchId] : [batchId, parentId])
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      expect(messages.filter(message => message.jobId === jobIds[0])).toEqual([])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Option A for #201: the terminal write flags pending follow-up work in its
+  // own row. The reconcile sweep re-sends rows still flagged after their lease.
+  async function setupFollowUp(outcome: 'completed' | 'failed') {
+    const sent: Array<{ jobId: string, queue: string }> = []
+    const binding = {
+      send: (message: { jobId: string, queue: string }) => { sent.push(message) },
+      sendBatch: (batch: Array<{ body: { jobId: string, queue: string } } | { jobId: string, queue: string }>) => {
+        for (const entry of batch)
+          sent.push('body' in entry ? entry.body : entry)
+      },
+    }
+    const continuations: string[] = []
+    const onTerminalFailure = vi.fn(async () => {})
+    const finish = vi.fn(async () => {})
+    const { d1, runtime } = await setup({
+      work: async (_payload, ctx) => {
+        if (outcome === 'failed')
+          await ctx.fail('bad input')
+      },
+      finish,
+    }, {
+      env: { Q: binding },
+      reclaimAfterSeconds: 900,
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+      onTerminalFailure,
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    sent.length = 0
+    const reconcile = async () => {
+      sent.length = 0
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      return [...sent]
+    }
+    const deliver = async (body: { jobId: string, queue: string }) => {
+      const message = { body, ack: vi.fn(), retry: vi.fn() }
+      const result = await runtime.consumeMessage(message)
+      return { result, message }
+    }
+    const finishedBatches = () => Number((d1._db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE job_type = \'finish\'').get() as { n: number }).n)
+    const batch = () => d1._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches').get() as { pending_jobs: number, failed_jobs: number }
+    return { d1, runtime, jobId: jobIds[0]!, continuations, onTerminalFailure, reconcile, deliver, finishedBatches, batch }
+  }
+
+  function overloadFollowUpFlag(d1: ReturnType<typeof createSqliteD1>) {
+    const prepare = d1.prepare.bind(d1)
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('$._cfJobsSettlement.done\', json(\'true\')')) {
+        statement.run = async () => {
+          throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+        }
+      }
+      return statement
+    }) as typeof d1.prepare
+    return () => {
+      d1.prepare = prepare
+    }
+  }
+
+  it.each(['completed', 'failed'] as const)('reruns %s follow-up once after the isolate dies past the terminal write, and a second rerun is a no-op', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { runtime, jobId, continuations, onTerminalFailure, reconcile, deliver, finishedBatches, batch } = await setupFollowUp(outcome)
+      // The isolate claims and writes the terminal outcome, then dies.
+      const claimed = (await runtime.repository.claimJob(jobId))!
+      if (outcome === 'completed')
+        await runtime.repository.completeJob(claimed)
+      else
+        await runtime.repository.failJob(claimed, 'bad input')
+
+      // Inside the lease the sweep leaves the row alone.
+      expect(await reconcile()).toEqual([])
+
+      vi.setSystemTime(Date.now() + 901_000)
+      const swept = await reconcile()
+      expect(swept).toEqual([{ jobId, queue: 'q' }])
+      const { result } = await deliver(swept[0]!)
+
+      expect(result.run.status).toBe('settlement-recovered')
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(batch()).toEqual({ pending_jobs: 0, failed_jobs: outcome === 'failed' ? 1 : 0 })
+      expect(finishedBatches()).toBe(1)
+
+      // Second rerun: nothing is flagged, and a stray delivery changes nothing.
+      vi.setSystemTime(Date.now() + 901_000)
+      expect(await reconcile()).toEqual([])
+      const stray = await deliver({ jobId, queue: 'q' })
+      expect(stray.message.ack).toHaveBeenCalled()
+      expect(continuations).toHaveLength(2)
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('replays completion after the done write fails without duplicating its durable continuation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { d1, jobId, continuations, reconcile, deliver, finishedBatches, batch } = await setupFollowUp('completed')
+      const restore = overloadFollowUpFlag(d1)
+      const first = await deliver({ jobId, queue: 'q' })
+      restore()
+
+      // The decrement and continuation committed. Only flag finalization failed.
+      expect(first.result.run.status).toBe('completed')
+      expect(first.message.ack).toHaveBeenCalled()
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
+
+      vi.setSystemTime(Date.now() + 901_000)
+      const swept = await reconcile()
+      expect(swept).toEqual([{ jobId, queue: 'q' }])
+      await deliver(swept[0]!)
+
+      // Continuations are at-least-once across the crash window; settlement is once.
+      expect(continuations).toEqual(['then', 'finally', 'then', 'finally'])
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
+      vi.setSystemTime(Date.now() + 901_000)
+      expect(await reconcile()).toEqual([])
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })

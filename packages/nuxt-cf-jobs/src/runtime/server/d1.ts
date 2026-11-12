@@ -1,3 +1,4 @@
+import type { DurableJobPendingSettlement, DurableJobSettlementStatus } from './lifecycle-write'
 import type {
   DurableJobFailureEvidenceRepository,
   DurableJobFailureRepository,
@@ -6,10 +7,14 @@ import type {
   DurableJobRecord,
   DurableJobRecoveryRepository,
   DurableJobRepository,
+  DurableJobSettlementFinish,
+  DurableJobSettlementFinished,
   ReleaseDurableJobOptions,
 } from './outbox'
 import type { Result } from './result'
+import { parseDurableBatchRow } from './batch'
 import { describeCause, DurableJobOwnershipError, headlineOf } from './errors'
+import { readPendingSettlement } from './lifecycle-write'
 import { err, ok } from './result'
 
 export interface D1ResultLike<T = unknown> {
@@ -309,7 +314,96 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 ): D1DurableJobRepository<Queue> {
   const jobsTable = opts.jobsTable ?? 'jobs'
   const failedJobsTable = opts.failedJobsTable ?? 'failed_jobs'
+  // Keep intent in the existing row. No queue publication or schema migration
+  // is needed to discover it on ordinary redelivery.
+  const leaseSeconds = Number.isFinite(opts.reclaimAfterSeconds) ? Math.max(900, opts.reclaimAfterSeconds!) : 900
+  const settlementState = (job: D1DurableJobRecord<Queue>, status: DurableJobSettlementStatus) => JSON.stringify({
+    status,
+    attempts: job.attempts,
+    token: `initial:${job.attempts}`,
+    leaseUntil: currentUnixSeconds() + leaseSeconds,
+    batches: [],
+    done: false,
+  })
   const batchesTable = opts.batchesTable ?? 'job_batches'
+  // Persist each decrement's result with the decrement. Keep the flag open
+  // until callbacks and parent propagation finish. Retries replay the result.
+  const finishSettlement = async (
+    id: string,
+    pending: DurableJobPendingSettlement,
+    token: string,
+    finish?: DurableJobSettlementFinish,
+  ): Promise<DurableJobSettlementFinished> => {
+    const table = pending.status === 'completed' ? jobsTable : failedJobsTable
+    const owned = `
+      json_extract(payload, '$._cfJobsSettlement.token') = ?
+      AND json_extract(payload, '$._cfJobsSettlement.done') = 0`
+    const markDone = db.prepare(`
+      UPDATE ${table}
+      SET payload = json_set(payload, '$._cfJobsSettlement.done', json('true'))
+      WHERE id = ? AND attempts = ? AND ${owned}
+    `).bind(id, pending.attempts, token)
+    if (!finish?.batchId) {
+      assertOwnedMutation(await markDone.run(), id)
+      return { batch: null }
+    }
+    if (finish.onFinishDispatched) {
+      const marked = await db.prepare(`
+        UPDATE ${table}
+        SET payload = json_set(payload,
+          '$._cfJobsSettlement.batches[' || (
+            SELECT key FROM json_each(payload, '$._cfJobsSettlement.batches') AS settled
+            WHERE json_extract(settled.value, '$.id') = ?
+          ) || '].onFinishDispatched', json('true'))
+        WHERE id = ? AND attempts = ? AND ${owned}
+      `).bind(finish.batchId, id, pending.attempts, token).run()
+      assertOwnedMutation(marked, id)
+      return { batch: null, onFinishDispatched: true }
+    }
+    const decrement = db.prepare<Record<string, unknown>>(`
+      UPDATE ${batchesTable}
+      SET pending_jobs = pending_jobs - 1,
+          failed_jobs = failed_jobs + ?,
+          updated_at = unixepoch(),
+          finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
+      WHERE id = ? AND pending_jobs > 0
+        AND EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND attempts = ? AND ${owned})
+        AND NOT EXISTS (
+          SELECT 1 FROM ${table}, json_each(payload, '$._cfJobsSettlement.batches') AS settled
+          WHERE ${table}.id = ? AND json_extract(settled.value, '$.id') = ?
+        )
+      RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+    `).bind(finish.failed ? 1 : 0, finish.batchId, id, pending.attempts, token, id, finish.batchId)
+    // changes() refers to the preceding decrement on the same transaction.
+    // Saving only its winner prevents a retry from adopting another member's result.
+    const save = db.prepare(`
+      UPDATE ${table}
+      SET payload = json_set(payload, '$._cfJobsSettlement.batches', json_insert(
+        COALESCE(json_extract(payload, '$._cfJobsSettlement.batches'), '[]'), '$[#]', json((
+          SELECT json_object(
+            'id', id, 'name', name, 'parent_batch_id', parent_batch_id,
+            'total_jobs', total_jobs, 'pending_jobs', pending_jobs, 'failed_jobs', failed_jobs,
+            'on_finish', on_finish, 'allow_failures', allow_failures,
+            'site_id', site_id, 'user_id', user_id, 'finished_at', finished_at
+          ) FROM ${batchesTable} WHERE id = ?
+        ))
+      ))
+      WHERE changes() > 0 AND id = ? AND attempts = ? AND ${owned}
+    `).bind(finish.batchId, id, pending.attempts, token)
+    const read = db.prepare<{ state: string }>(`
+      SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+      FROM ${table} WHERE id = ? AND attempts = ? AND ${owned}
+    `).bind(id, pending.attempts, token)
+    if (!db.batch)
+      throw new Error('D1 batch is required for atomic settlement')
+    const results = await db.batch([decrement as D1PreparedStatementLike<unknown>, save, read])
+    const state = (results[2]?.results as Array<{ state: string }> | undefined)?.[0]?.state
+    if (!state)
+      throw new DurableJobOwnershipError(id)
+    const saved = JSON.parse(state) as { batches?: Record<string, unknown>[] }
+    const row = saved.batches?.find(batch => batch.id === finish.batchId)
+    return { batch: row ? parseDurableBatchRow(row) : null, onFinishDispatched: row?.onFinishDispatched === true }
+  }
 
   // The legacy immediate insert asserts publication (`published_at`), so it must
   // stamp the dispatch columns too. `findDispatchableJobs` reads
@@ -535,6 +629,83 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       return 'in-flight'
     },
 
+    async confirmLifecycleWrite(job, write) {
+      // One row read. `attempts` is unique per claim, so a later claim's
+      // write can never confirm this one.
+      const row = await db.prepare<{ jobs_attempts: number | null, completed_at: number | null, failed_attempts: number | null }>(`
+        SELECT
+          (SELECT attempts FROM ${jobsTable} WHERE id = ?) AS jobs_attempts,
+          (SELECT completed_at FROM ${jobsTable} WHERE id = ?) AS completed_at,
+          (SELECT attempts FROM ${failedJobsTable} WHERE id = ?) AS failed_attempts
+        -- confirm lifecycle write
+      `).bind(job.id, job.id, job.id).first<{ jobs_attempts: number | null, completed_at: number | null, failed_attempts: number | null }>()
+      const landed = write === 'complete'
+        ? row?.jobs_attempts === job.attempts && row.completed_at !== null
+        // `failJob` moves the row, so a landed failure leaves no `jobs` row behind.
+        : row?.failed_attempts === job.attempts && row.jobs_attempts === null
+      return landed ? 'landed' : 'not-landed'
+    },
+
+    async claimPendingSettlement(id, pending) {
+      const row = await db.prepare<{ state: string }>(`
+        SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+        FROM ${jobsTable} WHERE id = ? AND completed_at IS NOT NULL
+        UNION ALL
+        SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+        FROM ${failedJobsTable} WHERE id = ?
+      `).bind(id, id).first<{ state: string }>()
+      if (!row?.state)
+        return null
+      const state = JSON.parse(row.state) as { done?: boolean, leaseUntil?: number }
+      const settlement = readPendingSettlement({ settlement: state })
+      if (!settlement || state.done || (pending && (pending.attempts !== settlement.attempts || pending.status !== settlement.status)))
+        return null
+      const table = settlement.status === 'completed' ? jobsTable : failedJobsTable
+      const token = crypto.randomUUID()
+      const now = currentUnixSeconds()
+      const claimed = await db.prepare<D1DurableJobRecord<Queue> | D1FailedDurableJobRecord<Queue>>(`
+        UPDATE ${table}
+        SET payload = json_set(payload, '$._cfJobsSettlement.token', ?, '$._cfJobsSettlement.leaseUntil', ?)
+        WHERE id = ? AND attempts = ?
+          AND json_extract(payload, '$._cfJobsSettlement.done') = 0
+          AND json_extract(payload, '$._cfJobsSettlement.leaseUntil') <= ?
+        RETURNING *
+      `).bind(token, now + leaseSeconds, id, settlement.attempts, now).first<D1DurableJobRecord<Queue> | D1FailedDurableJobRecord<Queue>>()
+      // An active lease must retry. Acknowledging would lose the last delivery
+      // if the owner died after committing its claim.
+      if (!claimed)
+        return { retryAfterSeconds: Math.max(1, Math.min(43200, (state.leaseUntil ?? now + leaseSeconds) - now)) }
+      const job = 'exception' in claimed ? failedRecordToJob(claimed, settlement.attempts) : claimed
+      return {
+        job,
+        settlement,
+        ...('exception' in claimed ? { error: headlineOf(claimed.exception) } : {}),
+        complete: (finish?: DurableJobSettlementFinish) => finishSettlement(id, settlement, token, finish),
+      }
+    },
+
+    async completePendingSettlement(job, status, finish) {
+      return await finishSettlement(job.id, { status, attempts: job.attempts }, `initial:${job.attempts}`, finish)
+    },
+
+    async findPendingSettlements(query) {
+      // Bounded by the terminal timestamp indexes, so the json filter reads
+      // only rows that turned terminal inside the window.
+      const flagged = `
+        json_extract(payload, '$._cfJobsSettlement.done') = 0
+        AND json_extract(payload, '$._cfJobsSettlement.leaseUntil') <= ?`
+      return await all<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(db.prepare<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(`
+        SELECT id, queue FROM (
+          SELECT id, queue FROM ${jobsTable}
+          WHERE completed_at IS NOT NULL AND completed_at >= ? AND ${flagged}
+          UNION ALL
+          SELECT id, queue FROM ${failedJobsTable}
+          WHERE failed_at >= ? AND ${flagged}
+        )
+        LIMIT ?
+      `).bind(query.terminalAfter, query.now, query.terminalAfter, query.now, query.limit ?? 100))
+    },
+
     async completeJob(job, result) {
       const stats = readResultStat(result)
       // Reported durationMs wins; else derive from the reservation (Laravel-style
@@ -544,6 +715,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       const resultUpdate = await db.prepare(`
         UPDATE ${jobsTable}
         SET completed_at = unixepoch(), reserved_at = NULL,
+            payload = json_set(payload, '$._cfJobsSettlement', json(?)),
             duration_ms = COALESCE(?, duration_ms),
             rows_fetched = COALESCE(?, rows_fetched),
             rows_inserted = COALESCE(?, rows_inserted),
@@ -555,6 +727,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        settlementState(job, 'completed'),
         durationMs,
         stats('rowsFetched') ?? null,
         stats('rowsInserted') ?? null,
@@ -575,7 +748,8 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           exception, attempts, max_attempts, failed_at
         )
         SELECT
-          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key,
+          json_set(payload, '$._cfJobsSettlement', json(?)),
           ?, attempts, max_attempts, unixepoch()
         FROM ${jobsTable}
         WHERE id = ?
@@ -584,6 +758,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        settlementState(job, failOpts?.settlementStatus ?? 'failed'),
         error,
         job.id,
         job.reserved_at,
@@ -1043,6 +1218,34 @@ async function pruneInChunks(
       break
   }
   return total
+}
+
+function failedRecordToJob<Queue extends string>(failed: D1FailedDurableJobRecord<Queue>, attempts: number): D1DurableJobRecord<Queue> {
+  return {
+    id: failed.id,
+    queue: failed.queue,
+    job_type: failed.job_type,
+    batch_id: failed.batch_id,
+    user_id: failed.user_id,
+    site_id: failed.site_id,
+    partner_id: failed.partner_id,
+    trace_id: failed.trace_id,
+    unique_key: failed.unique_key,
+    payload: failed.payload,
+    attempts,
+    max_attempts: failed.max_attempts,
+    backoff: null,
+    reserved_at: null,
+    available_at: failed.failed_at,
+    created_at: failed.failed_at,
+    published_at: null,
+    last_dispatched_at: null,
+    dispatch_attempts: 0,
+    last_dispatch_error: null,
+    completed_at: null,
+    failed_at: failed.failed_at,
+    last_error: failed.exception,
+  }
 }
 
 function currentUnixSeconds(): number {

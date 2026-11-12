@@ -31,6 +31,11 @@ export interface RecoverDurableJobsOptions {
   redispatchGraceSeconds?: number
   limit?: number
   staleError?: string
+  /**
+   * How far back the sweep looks for terminal rows whose follow-up is still
+   * flagged. Bounded by the terminal timestamp indexes. Defaults to 6h.
+   */
+  pendingSettlementSeconds?: number
   /** Settle batches or publish telemetry for rows terminalized by the stale reaper. */
   onTerminalized?: (jobs: DurableJobTerminalized[]) => void | Promise<void>
 }
@@ -48,6 +53,8 @@ export interface RecoverDurableJobsResult<Queue extends string = string> {
    * running memoryless.
    */
   redispatchNoted: number
+  /** Terminal rows re-sent so a consumer reruns their unfinished follow-up. */
+  pendingSettlements: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
   stale: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
   orphaned: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
   dispatchable: Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>
@@ -162,7 +169,19 @@ export async function recoverDurableJobs<
     ? await repository.noteOrphanRedispatch?.(redispatchedIds, { at: nowSeconds }) ?? 0
     : 0
 
+  // A terminal write flags its follow-up in its own row. If the writer died, or
+  // its done write stayed overloaded, the flag outlives the lease. Re-send a
+  // plain message: the consumer leases the follow-up and runs it once.
+  const pendingSettlements = await repository.findPendingSettlements?.({
+    now: nowSeconds,
+    terminalAfter: nowSeconds - Math.max(0, opts.pendingSettlementSeconds ?? 6 * 60 * 60),
+    limit,
+  }) ?? []
+  if (pendingSettlements.length > 0)
+    dispatchResults.push(...await dispatchDurableJobBatch(publisher, pendingSettlements))
+
   return {
+    pendingSettlements,
     redispatchNoted,
     released,
     terminalized: terminalizedJobs.length,

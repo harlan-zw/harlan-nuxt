@@ -67,7 +67,8 @@ void ({ stage: 'totally-made-up' } satisfies CfJobsLogEvent)
 function classify(stage: CfJobsLogStage): 'warn' | 'error' {
   switch (stage) {
     case 'dlq':
-    case 'dlq-obsolete': return 'warn'
+    case 'dlq-obsolete':
+    case 'write-deferred': return 'warn'
     case 'invalid_payload':
     case 'unexpected':
     case 'failed':

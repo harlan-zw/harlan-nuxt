@@ -444,6 +444,51 @@ no extra delivery, so a held row never reaches the dead-letter queue.
 If you set `reconcile: false`, no sweep runs. In that case, raise
 `maxInFlightRetries` or run recovery from the app.
 
+### Overloaded lifecycle writes
+
+After a handler runs, the consumer writes the outcome to the row: complete,
+fail, or release. If D1 sheds load during that write, the consumer retries it
+twice, after 100ms and 400ms. If the write still fails, the consumer retries
+the message after `reclaimAfterSeconds`. The row keeps its reservation, so the
+redelivery reclaims it and runs the job again. The run reports
+`{ status: 'write-deferred', deferral }`, and `onLog` receives the
+`write-deferred` stage. Log that stage at warn: it is expected under load.
+
+A write failure never counts as a handler failure. It does not fail the job,
+and it does not run `failed`. A write error that is not transient propagates.
+
+The complete or fail write also flags follow-up work in the job's own row:
+batch settlement, continuations, and `failed`. No table or migration is
+added. The flag lives under `_cfJobsSettlement` in `payload`. After the
+follow-up runs, one transaction clears the flag and settles the batch, so the
+batch never settles twice.
+
+If the isolate dies after the terminal write, or the clearing write stays
+overloaded, the flag stays set. After its lease (`reclaimAfterSeconds`, at
+least 900s), the reconcile sweep re-sends the job. The consumer leases the
+follow-up and runs it again. Continuations and `failed` are at least once
+in that window, so make them idempotent. Batch settlement runs once. The
+sweep looks back `pendingSettlementSeconds` (default 6h).
+
+A write can also commit and lose its response. Before it defers a complete or
+fail write, the consumer reads the row once. If the write landed, the run
+continues as a success. If that read fails too, the consumer sends a copy of
+the message with a `settlement` marker. If the send fails, the cause goes
+to `onLog` and the row flag still lets reconcile rerun the follow-up.
+
+```ts
+createDurableRuntime({
+  // Default: isTransientD1WriteError (overload, lost connection, storage reset).
+  isTransientError: ({ error }) => isTransientD1WriteError({ error }),
+  lifecycleWriteRetry: {
+    retries: 2,
+    backoffMs: retry => 100 * 4 ** (retry - 1),
+    // Default: reclaimAfterSeconds.
+    redeliveryDelaySeconds: 900,
+  },
+})
+```
+
 `terminalFailureContext` points to an app module that exports
 `createReconcileJobContext`. If your jobs have `failed` callbacks, set it. An
 isolate can die during its final claim. The stale reaper then commits the

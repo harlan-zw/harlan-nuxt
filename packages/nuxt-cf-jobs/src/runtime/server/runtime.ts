@@ -1,12 +1,15 @@
-import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
+import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchRecord, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
 import type { CfJobsBroadcastOptions, CfJobsRuntimeBroadcastOptions } from './broadcast'
 import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository, D1DurableJobRepositoryOptions } from './d1'
+import type { DurableJobLifecycleWrite, DurableJobWriteDeferral, IsTransientError, LifecycleWriteRetryOptions } from './lifecycle-write'
 import type { JobMetricsSink } from './metrics'
 import type {
   DurableJobContinuation,
   DurableJobContinuationStage,
   DurableJobRecord,
   DurableJobScope,
+  DurableJobSettlementFinish,
+  DurableJobSettlementFinished,
   EnqueueDurableJobResult,
   PruneDurableJobsOptions,
   PruneDurableJobsResult,
@@ -20,6 +23,7 @@ import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastReposit
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
+import { finishSettlementWrite } from './lifecycle-write'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
@@ -74,26 +78,128 @@ export async function runDurableJobBatchMessage<
 >(
   opts: RunDurableJobBatchMessageOptions<StoredJob, Job, Message, Env, Db, Logger>,
 ): Promise<RunDurableJobBatchMessageResult> {
-  const run = await runDurableJobMessage(opts)
+  // Keep the queue delivery and settlement lease until batch work also finishes.
+  let ack = false
+  // The follow-up flag is cleared together with the batch decrement, after the run.
+  let finish: ((settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>) | undefined
+  const claimSettlement = opts.lifecycle.claimPendingSettlement
+  const completeSettlement = opts.lifecycle.completePendingSettlement
+  const run = await runDurableJobMessage({
+    ...opts,
+    message: {
+      body: opts.message.body,
+      attempts: opts.message.attempts,
+      ack: () => { ack = true },
+      retry: opts.message.retry.bind(opts.message),
+    },
+    lifecycle: {
+      ...opts.lifecycle,
+      ...(claimSettlement
+        ? {
+            claimPendingSettlement: async (id, pending) => {
+              const claim = await claimSettlement(id, pending)
+              if (!claim || 'retryAfterSeconds' in claim)
+                return claim
+              return {
+                ...claim,
+                complete: async () => {
+                  finish = claim.complete
+                  return { batch: null }
+                },
+              }
+            },
+          }
+        : {}),
+      ...(completeSettlement
+        ? {
+            completePendingSettlement: async (job, status) => {
+              finish = settle => completeSettlement(job, status, settle)
+              return { batch: null }
+            },
+          }
+        : {}),
+    },
+  })
 
-  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted'
-  if (!terminal)
+  const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted' || run.status === 'settlement-recovered'
+  if (!terminal) {
+    if (ack)
+      opts.message.ack()
     return { run, settled: null }
+  }
 
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
-  if (!jobId)
+  if (!jobId) {
+    if (ack)
+      opts.message.ack()
     return { run, settled: null }
+  }
 
-  const settled = await settleBatchMember({
-    store: opts.store,
+  const { settled, settlementDeferral } = await settleDurableJobBatch({
+    ...opts,
     jobId,
-    failed: run.status !== 'completed',
-    dispatchOnFinish: opts.dispatchOnFinish,
+    finish,
+    failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
+  })
+  if (ack)
+    opts.message.ack()
+
+  return { run: settlementDeferral ? { ...run, settlementDeferral } as RunDurableJobMessageResult : run, settled }
+}
+
+async function settleDurableJobBatch(opts: {
+  store: DurableBatchStore
+  jobId: string
+  failed: boolean
+  finish?: (settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>
+  dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
+  onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
+  isTransientError?: IsTransientError
+  lifecycleWriteRetry?: LifecycleWriteRetryOptions
+}): Promise<{ settled: SettleBatchMemberResult, settlementDeferral?: DurableJobWriteDeferral }> {
+  const { finish } = opts
+  let settlementDeferral: DurableJobWriteDeferral | undefined
+  const results = new Map<string, DurableJobSettlementFinished>()
+  const writeSettlement = async (settle?: DurableJobSettlementFinish): Promise<DurableBatchRecord | null> => {
+    let finished: DurableJobSettlementFinished = { batch: null }
+    const flag = await finishSettlementWrite(opts, async () => {
+      finished = await finish!(settle)
+    })
+    settlementDeferral = flag.settlementDeferral
+    if (settle?.batchId && finished.batch)
+      results.set(settle.batchId, finished)
+    return finished.batch
+  }
+  // Retain results for the member and every parent in this settlement's chain.
+  const store: DurableBatchStore = finish
+    ? {
+        ...opts.store,
+        decrementPending: async (batchId, decOpts) => {
+          if (settlementDeferral)
+            return null
+          return await writeSettlement({ batchId, failed: decOpts?.failed })
+        },
+      }
+    : opts.store
+  const settled = await settleBatchMember({
+    store,
+    jobId: opts.jobId,
+    failed: opts.failed,
+    dispatchOnFinish: finish && opts.dispatchOnFinish
+      ? async (input) => {
+        if (results.get(input.batch.id)?.onFinishDispatched)
+          return
+        await opts.dispatchOnFinish!(input)
+        await writeSettlement({ batchId: input.batch.id, onFinishDispatched: true })
+      }
+      : opts.dispatchOnFinish,
   })
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
-  return { run, settled }
+  if (finish && !settlementDeferral)
+    await writeSettlement()
+  return { settled, settlementDeferral }
 }
 
 // ============================================
@@ -117,6 +223,8 @@ export async function runDurableJobBatchMessage<
  * - `dlq-failed`      — durable DLQ bookkeeping failed; the message was retried.
  * - `continuation-failed` — a terminal payload continuation failed to dispatch.
  * - `onfinish-failed` — a batch's `onFinish` continuation threw.
+ * - `write-deferred`  — a durable lifecycle write stayed transient after its
+ *   retries; the message retries later. Expected under D1 load: log it at warn.
  */
 export type CfJobsLogStage
   = | 'invalid_payload'
@@ -127,6 +235,7 @@ export type CfJobsLogStage
     | 'dlq-failed'
     | 'continuation-failed'
     | 'onfinish-failed'
+    | 'write-deferred'
 
 /**
  * Diagnostic entry from the consumer loop (never a throw). When the stage came from a
@@ -142,6 +251,8 @@ export interface CfJobsLogEvent {
   error?: string
   stack?: string
   cause?: unknown
+  /** The lifecycle write behind a `write-deferred` event. */
+  write?: DurableJobLifecycleWrite
 }
 
 export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logger = unknown> {
@@ -259,6 +370,9 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
   inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
   maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
+  isTransientError?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isTransientError']
+  lifecycleWriteRetry?: RunDurableJobMessageOptions<unknown, DispatchableJob>['lifecycleWriteRetry']
+  requeueSettlement?: RunDurableJobMessageOptions<unknown, DispatchableJob>['requeueSettlement']
   completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
@@ -331,11 +445,46 @@ function createStoredJobRetryDelay(onLog: ((event: CfJobsLogEvent) => void) | un
   })
 }
 
-function reportContinuationFailures(
+function reportRunDiagnostics(
   run: RunDurableJobMessageResult,
   onLog: ((event: CfJobsLogEvent) => void) | undefined,
   jobId: string | undefined,
 ): void {
+  const settlementDeferral = 'settlementDeferral' in run ? run.settlementDeferral : undefined
+  if (settlementDeferral) {
+    const { tries, cause } = settlementDeferral
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write: 'settle',
+      error: `follow-up flag kept after ${tries} tries; reconcile reruns the follow-up: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+  }
+  if (run.status === 'write-deferred' && run.deferral.settlementRequeueError !== undefined) {
+    const cause = run.deferral.settlementRequeueError
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write: run.deferral.write,
+      error: `settlement copy not sent; the row flag keeps the follow-up for redelivery or reconcile: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+  }
+  if (run.status === 'write-deferred') {
+    const { write, tries, delaySeconds, cause } = run.deferral
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write,
+      error: `${write} write deferred ${delaySeconds}s after ${tries} tries: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+    return
+  }
   const continuationFailures = 'continuationFailures' in run ? run.continuationFailures ?? [] : []
   for (const failure of continuationFailures) {
     onLog?.({
@@ -372,7 +521,7 @@ function createDefinitionTerminalFailure<Queue extends string, Env, Db, Logger>(
       : opts.registry.getJobDefinition?.(envelope._task)
     if (!definition?.failed)
       return
-    const { _task, _continuations, ...payload } = envelope
+    const { _task, _continuations, _cfJobsSettlement, ...payload } = envelope
     const parsed = parseJobInput(definition as never, payload)
     if (!parsed.success)
       throw jobErrorToException(jobErrors.invalidPayload(envelope._task, parsed.error))
@@ -418,9 +567,14 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
           const claimed = await opts.repository.claimJob(jobId)
           if (claimed) {
             await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)')
-            const settled = await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
-            if (settled.progress && opts.onBatchProgress)
-              await opts.onBatchProgress(settled.progress)
+            await settleDurableJobBatch({
+              ...opts,
+              jobId,
+              failed: true,
+              finish: opts.repository.completePendingSettlement
+                ? settle => opts.repository.completePendingSettlement!(claimed, 'failed', settle)
+                : undefined,
+            })
           }
           else {
             const noted = await opts.repository.noteDlqArrival(jobId, {
@@ -487,6 +641,9 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
         maxInFlightRetries: opts.maxInFlightRetries,
+        isTransientError: opts.isTransientError,
+        lifecycleWriteRetry: opts.lifecycleWriteRetry,
+        requeueSettlement: opts.requeueSettlement,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
@@ -502,7 +659,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
-      reportContinuationFailures(result.run, opts.onLog, jobId)
+      reportRunDiagnostics(result.run, opts.onLog, jobId)
     }
     else {
       await runLightweightMessage({
@@ -581,6 +738,13 @@ export interface CreateDurableJobsRuntimeOptions<
   inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
   /** Retries to spend on a held row before the message acks. Default 2. */
   maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
+  /** Classify a thrown lifecycle write as transient. Default: `isTransientD1WriteError`. */
+  isTransientError?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isTransientError']
+  /**
+   * Retry budget for a transient lifecycle write. `redeliveryDelaySeconds`
+   * defaults to `reclaimAfterSeconds`, so the redelivery can reclaim the row.
+   */
+  lifecycleWriteRetry?: RunDurableJobMessageOptions<unknown, DispatchableJob>['lifecycleWriteRetry']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
   /** Classify a queue as a dead-letter queue (defaults to a `-dlq` suffix check). */
   isDlqQueue?: (queue: string) => boolean
@@ -701,16 +865,13 @@ export function createDurableJobsRuntime<
     { onMissingBinding: opts.onMissingBinding },
   )
 
-  // Default onFinish: enqueue the continuation durably (survives an isolate
-  // recycle, same guarantee the batch members get). This fires AFTER the batch is
-  // already settled + the member message acked, so a throw here can't be retried —
-  // it would silently drop the continuation (and break a parent-batch chain). So
-  // it must never throw: a failed enqueue is logged via onLog and left for the
-  // app's own backstop (e.g. a reconcile cron) to recover.
+  // A stable id deduplicates replay after an ambiguous enqueue or flag write.
+  // If preparation or persistence fails, keep settlement open for recovery.
   const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
       const record = await prepareDurableJob({
+        id: `cf-jobs:batch:${batch.id}:onFinish`,
         name: c.name,
         payload: c.payload,
         registry: opts.registry as never,
@@ -736,10 +897,21 @@ export function createDurableJobsRuntime<
     }
     catch (error) {
       opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: describeCause(error), stack: describeCauseWithStack(error), cause: error })
+      throw error
     }
   })
 
   const dedup = opts.dedup ? createMessageDedup(opts.dedup) : undefined
+
+  // A deferred write leaves the row reserved. A redelivery inside the
+  // reservation window only misses the claim and spends a delivery, so wait
+  // the window out by default.
+  const lifecycleWriteRetry = {
+    ...opts.lifecycleWriteRetry,
+    redeliveryDelaySeconds: opts.lifecycleWriteRetry?.redeliveryDelaySeconds ?? opts.reclaimAfterSeconds,
+  }
+  const requeueSettlement: RunDurableJobMessageOptions<unknown, DispatchableJob>['requeueSettlement'] = ({ message, delaySeconds }) =>
+    publisher.send(message.queue as Queue, { ...message, queue: message.queue as Queue }, { delaySeconds })
 
   return {
     repository,
@@ -763,6 +935,9 @@ export function createDurableJobsRuntime<
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
         maxInFlightRetries: opts.maxInFlightRetries,
+        isTransientError: opts.isTransientError,
+        lifecycleWriteRetry,
+        requeueSettlement,
         maxAttemptsOf: stored => stored.max_attempts,
         completeResult: opts.completeResult,
         createJobScope: opts.createJobScope,
@@ -777,7 +952,7 @@ export function createDurableJobsRuntime<
         dispatchOnFinish,
         onBatchProgress,
       })
-      reportContinuationFailures(result.run, opts.onLog, message.body.jobId)
+      reportRunDiagnostics(result.run, opts.onLog, message.body.jobId)
       return result
     },
     consumeBatch: batch => consumeQueueBatch({
@@ -792,6 +967,9 @@ export function createDurableJobsRuntime<
       claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
       inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
       maxInFlightRetries: opts.maxInFlightRetries,
+      isTransientError: opts.isTransientError,
+      lifecycleWriteRetry,
+      requeueSettlement,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate: dedup?.has,
