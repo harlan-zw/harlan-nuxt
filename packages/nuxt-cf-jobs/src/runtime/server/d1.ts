@@ -535,24 +535,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       return 'in-flight'
     },
 
-    async isLifecycleWriteCommitted(job, write) {
-      if (write === 'fail') {
-        const failed = await db.prepare<{ attempts: number }>(`
-          SELECT attempts FROM ${failedJobsTable} WHERE id = ?
-        `).bind(job.id).first<{ attempts: number }>()
-        return failed?.attempts === job.attempts
-      }
-      const persisted = await db.prepare<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>(`
-        SELECT attempts, reserved_at, completed_at, failed_at FROM ${jobsTable} WHERE id = ?
-      `).bind(job.id).first<Pick<D1DurableJobRecord<Queue>, 'attempts' | 'reserved_at' | 'completed_at' | 'failed_at'>>()
-      // A later claim must never confirm this claim's write.
-      if (!persisted || persisted.attempts !== job.attempts || persisted.reserved_at !== null)
-        return false
-      return write === 'complete'
-        ? persisted.completed_at !== null
-        : persisted.completed_at === null && persisted.failed_at === null
-    },
-
     async completeJob(job, result) {
       const stats = readResultStat(result)
       // Reported durationMs wins; else derive from the reservation (Laravel-style
