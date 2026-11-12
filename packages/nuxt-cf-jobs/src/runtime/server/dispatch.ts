@@ -71,7 +71,7 @@ export async function dispatchRegisteredJob<Job extends DispatchableJob, Env, Db
     return { success: false, error: jobErrors.handlerNotFound(taskName) }
   }
 
-  const { _task, _continuations, ...cleanPayload } = payload
+  const { _task, _continuations, _cfJobsSettlement, ...cleanPayload } = payload
   const parsedPayload = parseJobInput(definition as never, cleanPayload)
   if (!parsedPayload.success) {
     return { success: false, error: jobErrors.invalidPayload(taskName, parsedPayload.error) }

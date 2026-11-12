@@ -888,7 +888,7 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
     }) as typeof d1.prepare
   }
 
-  async function setupBatch(confirmFailures: number) {
+  async function setupBatch(confirmFailures: number, outcome: 'completed' | 'failed' = 'completed') {
     const sent: Array<{ message: Record<string, unknown>, delaySeconds?: number }> = []
     const binding = {
       send: (message: Record<string, unknown>, opts?: { delaySeconds?: number }) => { sent.push({ message, delaySeconds: opts?.delaySeconds }) },
@@ -899,16 +899,33 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
     }
     const continuations: string[] = []
     const finished = vi.fn(async () => {})
-    const { d1, runtime } = await setup({ work: async () => {}, finish: finished }, {
+    const onTerminalFailure = vi.fn(async () => {})
+    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
+      if (outcome === 'failed')
+        await ctx.fail('bad input')
+    }, finish: finished }, {
       env: { Q: binding },
       reclaimAfterSeconds: 900,
       lifecycleWriteRetry: { backoffMs: () => 0 },
       dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+      onTerminalFailure,
     })
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
     sent.length = 0
     faultD1(d1, { complete: ['overload', 'overload', 'commit-then-lose'], confirm: confirmFailures })
-    return { d1, runtime, jobId: jobIds[0]!, sent, continuations }
+    if (outcome === 'failed') {
+      const batch = d1.batch!.bind(d1)
+      let lose = true
+      d1.batch = async (statements) => {
+        const result = await batch(statements)
+        if (lose) {
+          lose = false
+          throw lost()
+        }
+        return result
+      }
+    }
+    return { d1, runtime, jobId: jobIds[0]!, sent, continuations, onTerminalFailure }
   }
 
   const pendingJobs = (d1: ReturnType<typeof createSqliteD1>) =>
@@ -946,15 +963,119 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
 
     // Cloudflare may deliver the settlement message twice.
     const settlement = () => ({ body: sent[0]!.message as { jobId: string, queue: string }, ack: vi.fn(), retry: vi.fn() })
-    const redelivered = settlement()
-    const recovered = await runtime.consumeMessage(redelivered)
-    const duplicate = settlement()
-    await runtime.consumeMessage(duplicate)
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      const redelivered = settlement()
+      const recovered = await runtime.consumeMessage(redelivered)
+      const duplicate = settlement()
+      await runtime.consumeMessage(duplicate)
 
-    expect(recovered.run.status).toBe('settlement-recovered')
-    expect(redelivered.ack).toHaveBeenCalled()
-    expect(duplicate.ack).toHaveBeenCalled()
-    expect(continuations).toEqual(['then', 'finally'])
-    expect(pendingJobs(d1)).toBe(0)
+      expect(recovered.run.status).toBe('settlement-recovered')
+      expect(redelivered.ack).toHaveBeenCalled()
+      expect(duplicate.ack).toHaveBeenCalled()
+      expect(continuations).toEqual(['then', 'finally'])
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      now.mockRestore()
+    }
+  })
+
+  it.each(['completed', 'failed'] as const)('recovers a $outcome settlement claim whose update commits but loses its response', async (outcome) => {
+    const { d1, runtime, jobId, sent, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    await runtime.consumeMessage(msg(jobId))
+    const prepare = d1.prepare.bind(d1)
+    let lose = true
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('RETURNING *') && query.includes('UPDATE') && !query.includes('SET reserved_at')) {
+        const first = statement.first.bind(statement)
+        statement.first = (async () => {
+          const result = await first()
+          if (lose && result) {
+            lose = false
+            throw lost()
+          }
+          return result
+        }) as typeof statement.first
+      }
+      return statement
+    }) as typeof d1.prepare
+    const marker = () => ({ ...msg(jobId), body: sent[0]!.message as { jobId: string, queue: string } })
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      expect((await runtime.consumeMessage(marker())).run.status).toBe('claim-error')
+      const early = marker()
+      expect((await runtime.consumeMessage(early)).run.status).toBe('in-flight')
+      expect(early.retry).toHaveBeenCalledWith({ delaySeconds: 900 })
+      expect(early.ack).not.toHaveBeenCalled()
+      expect(continuations).toEqual([])
+      clock.mockReturnValue(Date.now() + 901_000)
+      const retry = marker()
+      expect((await runtime.consumeMessage(retry)).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(marker())
+      expect(retry.ack).toHaveBeenCalledOnce()
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each(['completed', 'failed'] as const)('recovers a $outcome settlement after an isolate stops with a live claim', async (outcome) => {
+    const { d1, runtime, jobId, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    await runtime.consumeMessage(msg(jobId))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      // The isolate receives its claim, then stops before starting follow-up work.
+      const claim = await runtime.repository.claimPendingSettlement!(jobId)
+      expect(claim && 'job' in claim ? claim.job.id : null).toBe(jobId)
+      clock.mockReturnValue(Date.now() + 901_000)
+      expect((await runtime.consumeMessage(msg(jobId))).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(msg(jobId))
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each([
+    { failure: 'throw', outcome: 'completed' },
+    { failure: 'false', outcome: 'completed' },
+    { failure: 'throw', outcome: 'failed' },
+    { failure: 'false', outcome: 'failed' },
+  ] as const)('preserves $outcome settlement intent when publication returns $failure and continues the batch', async ({ failure, outcome }) => {
+    const { d1, runtime, jobId, continuations, onTerminalFailure } = await setupBatch(1, outcome)
+    const sibling = await prepare('work', {})
+    await runtime.enqueue(sibling)
+    const send = vi.spyOn(runtime.publisher, 'send').mockImplementationOnce(async () => {
+      if (failure === 'throw')
+        throw new Error('publisher unavailable')
+      return false
+    })
+    const original = { ...msg(jobId), attempts: 1 }
+    const next = { ...msg(sibling.id), attempts: 1 }
+    await runtime.consumeBatch({ queue: 'q', messages: [original, next] })
+    expect(next.ack).toHaveBeenCalledOnce()
+    expect(original.retry).toHaveBeenCalled()
+    send.mockRestore()
+    continuations.length = 0
+    onTerminalFailure.mockClear()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      expect((await runtime.consumeMessage(msg(jobId))).run.status).toBe('settlement-recovered')
+      await runtime.consumeMessage(msg(jobId))
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(pendingJobs(d1)).toBe(0)
+    }
+    finally {
+      clock.mockRestore()
+    }
   })
 })

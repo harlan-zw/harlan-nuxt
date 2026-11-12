@@ -190,6 +190,7 @@ export interface DurableJobFailureEvidenceRepository {
  */
 export interface FailDurableJobOptions {
   cause?: unknown
+  settlementStatus?: Exclude<DurableJobSettlementStatus, 'completed'>
 }
 
 export interface DurableJobLifecycle<
@@ -203,11 +204,17 @@ export interface DurableJobLifecycle<
   /** One bounded read: did this claim's complete or fail write land? Used after a lost response. */
   confirmLifecycleWrite?: (job: Job, write: 'complete' | 'fail') => Promise<LifecycleWriteConfirmation>
   /**
-   * Atomically take the follow-up work of a requeued settlement. Returns the
-   * terminal row once per marker, or `null` when the write never landed or the
-   * follow-up already ran. `error` is the persisted failure for fail outcomes.
+   * Lease unfinished follow-up work. Without a marker, discover persisted intent.
+   * Return null if absent or finished. Defer while another lease is active.
    */
-  claimPendingSettlement?: (id: string, pending: DurableJobPendingSettlement) => Promise<{ job: Job, error?: string } | null>
+  claimPendingSettlement?: (id: string, pending?: DurableJobPendingSettlement) => Promise<{
+    job: Job
+    error?: string
+    settlement: DurableJobPendingSettlement
+    complete: () => Promise<void>
+  } | { retryAfterSeconds: number } | null>
+  /** Record follow-up completion for the original terminal writer. */
+  completePendingSettlement?: (job: Job, status: DurableJobSettlementStatus) => Promise<void>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
   failJob: (job: Job, error: string, opts?: Partial<FailOptions> & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
@@ -1025,7 +1032,7 @@ export interface RunDurableJobMessageOptions<
   // The runtime never has bespoke fail options — it settles a terminal failure with a
   // `cause` and nothing else. A repository's own `FailOptions` stays on
   // `DurableJobLifecycle` / `failDurableJob` for callers that drive `failJob` directly.
-  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'confirmLifecycleWrite' | 'claimPendingSettlement' | 'completeJob' | 'failJob' | 'releaseJob'>
+  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'confirmLifecycleWrite' | 'claimPendingSettlement' | 'completePendingSettlement' | 'completeJob' | 'failJob' | 'releaseJob'>
   registry: {
     getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
@@ -1199,9 +1206,9 @@ export async function runDurableJobMessage<
   }
 
   const pending = readPendingSettlement(opts.message.body)
-  if (pending && opts.lifecycle.claimPendingSettlement) {
+  if (opts.lifecycle.claimPendingSettlement) {
     const claimPending = opts.lifecycle.claimPendingSettlement
-    const recovered = await claimPending(jobId, pending).then(
+    const recovered = await claimPending(jobId, pending ?? undefined).then(
       value => ({ value }),
       (error: unknown) => ({ error }),
     )
@@ -1212,8 +1219,13 @@ export async function runDurableJobMessage<
       opts.message.retry({ delaySeconds })
       return { status: 'claim-error', error: jobErrors.claimThrew(recovered.error) }
     }
+    if (recovered.value && 'retryAfterSeconds' in recovered.value) {
+      const delaySeconds = recovered.value.retryAfterSeconds
+      opts.message.retry({ delaySeconds })
+      return { status: 'in-flight', inFlight: { _tag: 'retried', delaySeconds, deliveries: opts.message.attempts ?? 1 } }
+    }
     if (recovered.value)
-      return await runPendingSettlement(opts, pending, recovered.value)
+      return await runPendingSettlement(opts, recovered.value.settlement, recovered.value)
     // The write never landed, or the follow-up already ran. The ordinary claim
     // below tells them apart: it reclaims an abandoned reservation, or misses
     // a resolved row and acks.
@@ -1300,7 +1312,11 @@ export async function runDurableJobMessage<
       // ack it with the follow-up work never run, so requeue the settlement.
       const settlement: DurableJobPendingSettlement = { status: settles, attempts: job.attempts }
       const { delaySeconds } = outcome.deferral
-      const sent = await opts.requeueSettlement({ message: { jobId, queue: job.queue, settlement }, delaySeconds })
+      const sent = await opts.requeueSettlement({ message: { jobId, queue: job.queue, settlement }, delaySeconds }).catch(() => {
+        // Persisted intent remains discoverable on the original delivery.
+        // Retry it when publication fails, without aborting sibling messages.
+        return false
+      })
       if (sent) {
         opts.message.ack()
         return { status: 'write-deferred', deferral: { ...outcome.deferral, settlement } }
@@ -1326,12 +1342,13 @@ export async function runDurableJobMessage<
       // release path below stays on `describeCause` — it fires on every retry
       // and a stack there would be noise. `cause` hands the original throw to the
       // lifecycle hooks so telemetry reports it directly (D1 can only hold text).
-      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error), { cause: error }), 'exhausted')
+      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error), { cause: error, settlementStatus: 'exhausted' }), 'exhausted')
       if (unsettled)
         return unsettled
       await observeSettlement('exhausted', true, error)
       const terminalFailureCause = await runTerminalFailure(error)
       const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+      await opts.lifecycle.completePendingSettlement?.(storedJob, 'exhausted')
       opts.message.ack()
       return {
         status: 'exhausted',
@@ -1381,12 +1398,14 @@ export async function runDurableJobMessage<
 
   if (!dispatch.success) {
     if (opts.failDispatchFailure !== false) {
-      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed'), 'dispatch-failed')
+      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed', { settlementStatus: 'dispatch-failed' }), 'dispatch-failed')
       if (unsettled)
         return unsettled
     }
     await observeSettlement('dispatch-failed', true, dispatch.error)
     const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+    if (opts.failDispatchFailure !== false)
+      await opts.lifecycle.completePendingSettlement?.(storedJob, 'dispatch-failed')
     opts.message.ack()
     return { status: 'dispatch-failed', dispatch, error: dispatch.error, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
   }
@@ -1402,6 +1421,7 @@ export async function runDurableJobMessage<
       await observeSettlement('failed', true, controlError)
       const terminalFailureCause = await runTerminalFailure(new Error(controlError ?? 'Job failed via ctx.fail()'))
       const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+      await opts.lifecycle.completePendingSettlement?.(storedJob, 'failed')
       opts.message.ack()
       return {
         status: 'failed',
@@ -1425,6 +1445,7 @@ export async function runDurableJobMessage<
     return unsettled
   await observeSettlement('completed', false)
   const continuationFailures = await dispatchTerminalContinuations('then', 'finally')
+  await opts.lifecycle.completePendingSettlement?.(storedJob, 'completed')
   opts.message.ack()
   return { status: 'completed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
 }
@@ -1469,18 +1490,19 @@ function createFollowUp<StoredJob>(opts: FollowUpOptions<StoredJob>, storedJob: 
 
 /**
  * Run the follow-up work a terminal write skipped when its confirming read
- * failed. `claimPendingSettlement` already took it, so this runs once.
+ * failed. Complete the lease only after follow-up work has run.
  */
 async function runPendingSettlement<StoredJob, Job extends DispatchableJob, Message extends QueueJobMessage, Env, Db, Logger, CompleteResult>(
   opts: RunDurableJobMessageOptions<StoredJob, Job, Message, Env, Db, Logger, CompleteResult>,
   settlement: DurableJobPendingSettlement,
-  recovered: { job: StoredJob, error?: string },
+  recovered: { job: StoredJob, error?: string, complete: () => Promise<void> },
 ): Promise<RunDurableJobMessageResult> {
   const followUp = createFollowUp(opts, recovered.job, opts.createJobScope?.(recovered.job))
   const continuationsOf = (failures: DurableJobContinuationFailure[]) => failures.length > 0 ? { continuationFailures: failures } : {}
   if (settlement.status === 'completed') {
     await followUp.observeSettlement('completed', false)
     const failures = await followUp.dispatchTerminalContinuations('then', 'finally')
+    await recovered.complete()
     opts.message.ack()
     return { status: 'settlement-recovered', settlement, ...continuationsOf(failures) }
   }
@@ -1489,6 +1511,7 @@ async function runPendingSettlement<StoredJob, Job extends DispatchableJob, Mess
   // A dispatch failure never runs `failed`, the same as the direct path.
   const terminalFailureCause = settlement.status === 'dispatch-failed' ? undefined : await followUp.runTerminalFailure(error)
   const failures = await followUp.dispatchTerminalContinuations('catch', 'finally')
+  await recovered.complete()
   opts.message.ack()
   return {
     status: 'settlement-recovered',

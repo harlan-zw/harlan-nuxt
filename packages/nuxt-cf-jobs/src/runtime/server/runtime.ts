@@ -75,11 +75,48 @@ export async function runDurableJobBatchMessage<
 >(
   opts: RunDurableJobBatchMessageOptions<StoredJob, Job, Message, Env, Db, Logger>,
 ): Promise<RunDurableJobBatchMessageResult> {
-  const run = await runDurableJobMessage(opts)
+  // Keep the queue delivery and settlement lease until batch work also finishes.
+  let ack = false
+  let complete: (() => Promise<void>) | undefined
+  const claimSettlement = opts.lifecycle.claimPendingSettlement
+  const completeSettlement = opts.lifecycle.completePendingSettlement
+  const run = await runDurableJobMessage({
+    ...opts,
+    message: {
+      body: opts.message.body,
+      attempts: opts.message.attempts,
+      ack: () => { ack = true },
+      retry: opts.message.retry.bind(opts.message),
+    },
+    lifecycle: {
+      ...opts.lifecycle,
+      ...(claimSettlement
+        ? {
+            claimPendingSettlement: async (id, pending) => {
+              const claim = await claimSettlement(id, pending)
+              if (!claim || 'retryAfterSeconds' in claim)
+                return claim
+              return {
+                ...claim,
+                complete: async () => { complete = claim.complete },
+              }
+            },
+          }
+        : {}),
+      ...(completeSettlement
+        ? {
+            completePendingSettlement: async (job, status) => { complete = () => completeSettlement(job, status) },
+          }
+        : {}),
+    },
+  })
 
   const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted' || run.status === 'settlement-recovered'
-  if (!terminal)
+  if (!terminal) {
+    if (ack)
+      opts.message.ack()
     return { run, settled: null }
+  }
 
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
   if (!jobId)
@@ -93,6 +130,10 @@ export async function runDurableJobBatchMessage<
   })
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
+
+  await complete?.()
+  if (ack)
+    opts.message.ack()
 
   return { run, settled }
 }
@@ -393,7 +434,7 @@ function createDefinitionTerminalFailure<Queue extends string, Env, Db, Logger>(
       : opts.registry.getJobDefinition?.(envelope._task)
     if (!definition?.failed)
       return
-    const { _task, _continuations, ...payload } = envelope
+    const { _task, _continuations, _cfJobsSettlement, ...payload } = envelope
     const parsed = parseJobInput(definition as never, payload)
     if (!parsed.success)
       throw jobErrorToException(jobErrors.invalidPayload(envelope._task, parsed.error))

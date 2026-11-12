@@ -1,3 +1,4 @@
+import type { DurableJobPendingSettlement, DurableJobSettlementStatus } from './lifecycle-write'
 import type {
   DurableJobFailureEvidenceRepository,
   DurableJobFailureRepository,
@@ -10,6 +11,7 @@ import type {
 } from './outbox'
 import type { Result } from './result'
 import { describeCause, DurableJobOwnershipError, headlineOf } from './errors'
+import { readPendingSettlement } from './lifecycle-write'
 import { err, ok } from './result'
 
 export interface D1ResultLike<T = unknown> {
@@ -309,6 +311,26 @@ export function createD1DurableJobRepository<Queue extends string = string>(
 ): D1DurableJobRepository<Queue> {
   const jobsTable = opts.jobsTable ?? 'jobs'
   const failedJobsTable = opts.failedJobsTable ?? 'failed_jobs'
+  // Keep intent in the existing row. No queue publication or schema migration
+  // is needed to discover it on ordinary redelivery.
+  const leaseSeconds = Number.isFinite(opts.reclaimAfterSeconds) ? Math.max(900, opts.reclaimAfterSeconds!) : 900
+  const settlementState = (job: D1DurableJobRecord<Queue>, status: DurableJobSettlementStatus) => JSON.stringify({
+    status,
+    attempts: job.attempts,
+    token: `initial:${job.attempts}`,
+    leaseUntil: currentUnixSeconds() + leaseSeconds,
+    done: false,
+  })
+  const finishSettlement = async (id: string, pending: DurableJobPendingSettlement, token: string) => {
+    const table = pending.status === 'completed' ? jobsTable : failedJobsTable
+    const result = await db.prepare(`
+      UPDATE ${table}
+      SET payload = json_set(payload, '$._cfJobsSettlement.done', json('true'))
+      WHERE id = ? AND attempts = ?
+        AND json_extract(payload, '$._cfJobsSettlement.token') = ?
+    `).bind(id, pending.attempts, token).run()
+    assertOwnedMutation(result, id)
+  }
   const batchesTable = opts.batchesTable ?? 'job_batches'
 
   // The legacy immediate insert asserts publication (`published_at`), so it must
@@ -553,26 +575,45 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async claimPendingSettlement(id, pending) {
-      // Compare-and-set on `attempts`, the column a claim already owns. The
-      // first delivery of a settlement marker bumps it, so a duplicate misses.
-      if (pending.status === 'completed') {
-        const job = await db.prepare<D1DurableJobRecord<Queue>>(`
-          UPDATE ${jobsTable}
-          SET attempts = attempts + 1
-          WHERE id = ? AND attempts = ? AND completed_at IS NOT NULL
-          RETURNING *
-        `).bind(id, pending.attempts).first<D1DurableJobRecord<Queue>>()
-        return job ? { job: { ...job, attempts: pending.attempts } } : null
-      }
-      const failed = await db.prepare<D1FailedDurableJobRecord<Queue>>(`
-        UPDATE ${failedJobsTable}
-        SET attempts = attempts + 1
-        WHERE id = ? AND attempts = ?
-        RETURNING *
-      `).bind(id, pending.attempts).first<D1FailedDurableJobRecord<Queue>>()
-      if (!failed)
+      const row = await db.prepare<{ state: string }>(`
+        SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+        FROM ${jobsTable} WHERE id = ? AND completed_at IS NOT NULL
+        UNION ALL
+        SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+        FROM ${failedJobsTable} WHERE id = ?
+      `).bind(id, id).first<{ state: string }>()
+      if (!row?.state)
         return null
-      return { job: failedRecordToJob(failed, pending.attempts), error: headlineOf(failed.exception) }
+      const state = JSON.parse(row.state) as { done?: boolean, leaseUntil?: number }
+      const settlement = readPendingSettlement({ settlement: state })
+      if (!settlement || state.done || (pending && (pending.attempts !== settlement.attempts || pending.status !== settlement.status)))
+        return null
+      const table = settlement.status === 'completed' ? jobsTable : failedJobsTable
+      const token = crypto.randomUUID()
+      const now = currentUnixSeconds()
+      const claimed = await db.prepare<D1DurableJobRecord<Queue> | D1FailedDurableJobRecord<Queue>>(`
+        UPDATE ${table}
+        SET payload = json_set(payload, '$._cfJobsSettlement.token', ?, '$._cfJobsSettlement.leaseUntil', ?)
+        WHERE id = ? AND attempts = ?
+          AND json_extract(payload, '$._cfJobsSettlement.done') = 0
+          AND json_extract(payload, '$._cfJobsSettlement.leaseUntil') <= ?
+        RETURNING *
+      `).bind(token, now + leaseSeconds, id, settlement.attempts, now).first<D1DurableJobRecord<Queue> | D1FailedDurableJobRecord<Queue>>()
+      // An active lease must retry. Acknowledging would lose the last delivery
+      // if the owner died after committing its claim.
+      if (!claimed)
+        return { retryAfterSeconds: Math.max(1, Math.min(43200, (state.leaseUntil ?? now + leaseSeconds) - now)) }
+      const job = 'exception' in claimed ? failedRecordToJob(claimed, settlement.attempts) : claimed
+      return {
+        job,
+        settlement,
+        ...('exception' in claimed ? { error: headlineOf(claimed.exception) } : {}),
+        complete: () => finishSettlement(id, settlement, token),
+      }
+    },
+
+    async completePendingSettlement(job, status) {
+      await finishSettlement(job.id, { status, attempts: job.attempts }, `initial:${job.attempts}`)
     },
 
     async completeJob(job, result) {
@@ -584,6 +625,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       const resultUpdate = await db.prepare(`
         UPDATE ${jobsTable}
         SET completed_at = unixepoch(), reserved_at = NULL,
+            payload = json_set(payload, '$._cfJobsSettlement', json(?)),
             duration_ms = COALESCE(?, duration_ms),
             rows_fetched = COALESCE(?, rows_fetched),
             rows_inserted = COALESCE(?, rows_inserted),
@@ -595,6 +637,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        settlementState(job, 'completed'),
         durationMs,
         stats('rowsFetched') ?? null,
         stats('rowsInserted') ?? null,
@@ -615,7 +658,8 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           exception, attempts, max_attempts, failed_at
         )
         SELECT
-          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key, payload,
+          id, queue, job_type, batch_id, user_id, site_id, partner_id, trace_id, unique_key,
+          json_set(payload, '$._cfJobsSettlement', json(?)),
           ?, attempts, max_attempts, unixepoch()
         FROM ${jobsTable}
         WHERE id = ?
@@ -624,6 +668,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        settlementState(job, failOpts?.settlementStatus ?? 'failed'),
         error,
         job.id,
         job.reserved_at,
