@@ -7,9 +7,12 @@ import type {
   DurableJobRecord,
   DurableJobRecoveryRepository,
   DurableJobRepository,
+  DurableJobSettlementFinish,
+  DurableJobSettlementFinished,
   ReleaseDurableJobOptions,
 } from './outbox'
 import type { Result } from './result'
+import { parseDurableBatchRow } from './batch'
 import { describeCause, DurableJobOwnershipError, headlineOf } from './errors'
 import { readPendingSettlement } from './lifecycle-write'
 import { err, ok } from './result'
@@ -321,17 +324,48 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     leaseUntil: currentUnixSeconds() + leaseSeconds,
     done: false,
   })
-  const finishSettlement = async (id: string, pending: DurableJobPendingSettlement, token: string) => {
+  const batchesTable = opts.batchesTable ?? 'job_batches'
+  // Mark follow-up done and, for a batch member, settle the batch in the same
+  // transaction. A rerun after a crash either sees the flag still open and the
+  // batch untouched, or sees both done. It never decrements twice.
+  const finishSettlement = async (
+    id: string,
+    pending: DurableJobPendingSettlement,
+    token: string,
+    finish?: DurableJobSettlementFinish,
+  ): Promise<DurableJobSettlementFinished> => {
     const table = pending.status === 'completed' ? jobsTable : failedJobsTable
-    const result = await db.prepare(`
+    const owned = `
+      json_extract(payload, '$._cfJobsSettlement.token') = ?
+      AND json_extract(payload, '$._cfJobsSettlement.done') = 0`
+    const markDone = db.prepare(`
       UPDATE ${table}
       SET payload = json_set(payload, '$._cfJobsSettlement.done', json('true'))
-      WHERE id = ? AND attempts = ?
-        AND json_extract(payload, '$._cfJobsSettlement.token') = ?
-    `).bind(id, pending.attempts, token).run()
-    assertOwnedMutation(result, id)
+      WHERE id = ? AND attempts = ? AND ${owned}
+    `).bind(id, pending.attempts, token)
+    if (!finish?.batchId) {
+      assertOwnedMutation(await markDone.run(), id)
+      return { batch: null }
+    }
+    const decrement = db.prepare<Record<string, unknown>>(`
+      UPDATE ${batchesTable}
+      SET pending_jobs = pending_jobs - 1,
+          failed_jobs = failed_jobs + ?,
+          updated_at = unixepoch(),
+          finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
+      WHERE id = ? AND pending_jobs > 0
+        AND EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND attempts = ? AND ${owned})
+      RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+    `).bind(finish.failed ? 1 : 0, finish.batchId, id, pending.attempts, token)
+    // Without a transactional batch the two writes are not atomic, so a crash
+    // between them could settle twice. Every D1 binding has `batch`.
+    const [decremented, marked] = typeof db.batch === 'function'
+      ? await db.batch([decrement as D1PreparedStatementLike<unknown>, markDone])
+      : [await decrement.run(), await markDone.run()]
+    assertOwnedMutation(marked!, id)
+    const row = (decremented?.results as Record<string, unknown>[] | undefined)?.[0]
+    return { batch: row ? parseDurableBatchRow(row) : null }
   }
-  const batchesTable = opts.batchesTable ?? 'job_batches'
 
   // The legacy immediate insert asserts publication (`published_at`), so it must
   // stamp the dispatch columns too. `findDispatchableJobs` reads
@@ -608,12 +642,30 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job,
         settlement,
         ...('exception' in claimed ? { error: headlineOf(claimed.exception) } : {}),
-        complete: () => finishSettlement(id, settlement, token),
+        complete: (finish?: DurableJobSettlementFinish) => finishSettlement(id, settlement, token, finish),
       }
     },
 
-    async completePendingSettlement(job, status) {
-      await finishSettlement(job.id, { status, attempts: job.attempts }, `initial:${job.attempts}`)
+    async completePendingSettlement(job, status, finish) {
+      return await finishSettlement(job.id, { status, attempts: job.attempts }, `initial:${job.attempts}`, finish)
+    },
+
+    async findPendingSettlements(query) {
+      // Bounded by the terminal timestamp indexes, so the json filter reads
+      // only rows that turned terminal inside the window.
+      const flagged = `
+        json_extract(payload, '$._cfJobsSettlement.done') = 0
+        AND json_extract(payload, '$._cfJobsSettlement.leaseUntil') <= ?`
+      return await all<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(db.prepare<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(`
+        SELECT id, queue FROM (
+          SELECT id, queue FROM ${jobsTable}
+          WHERE completed_at IS NOT NULL AND completed_at >= ? AND ${flagged}
+          UNION ALL
+          SELECT id, queue FROM ${failedJobsTable}
+          WHERE failed_at >= ? AND ${flagged}
+        )
+        LIMIT ?
+      `).bind(query.terminalAfter, query.now, query.terminalAfter, query.now, query.limit ?? 100))
     },
 
     async completeJob(job, result) {

@@ -110,7 +110,8 @@ export interface D1DurableBatchStoreOptions {
   failedJobsTable?: string
 }
 
-function mapBatchRow(row: Record<string, unknown>): DurableBatchRecord {
+/** Map a raw `job_batches` row. Shared with the D1 repository's follow-up settlement. */
+export function parseDurableBatchRow(row: Record<string, unknown>): DurableBatchRecord {
   return {
     id: row.id as string,
     name: (row.name as string | null) ?? null,
@@ -278,7 +279,7 @@ export function createD1DurableBatchStore(
         WHERE id = ? AND pending_jobs > 0
         RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
       `).bind(decOpts?.failed ? 1 : 0, batchId).first<Record<string, unknown>>()
-      return row ? mapBatchRow(row) : null
+      return row ? parseDurableBatchRow(row) : null
     },
 
     async getJobBatchId(jobId) {
@@ -309,7 +310,7 @@ export function createD1DurableBatchStore(
         WHERE ${orphanedBatchPredicate(batches, jobs, failedJobs, 'created_at <= ?')}
         ORDER BY created_at ASC
         LIMIT ?
-      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(mapBatchRow))
+      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(parseDurableBatchRow))
     },
 
     async findUnrecoverableOrphanedBatches(query) {
@@ -319,7 +320,7 @@ export function createD1DurableBatchStore(
         WHERE ${orphanedBatchPredicate(batches, jobs, failedJobs, 'created_at <= ?', 'unrecoverable')}
         ORDER BY created_at ASC
         LIMIT ?
-      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(mapBatchRow))
+      `).bind(query.before, query.limit ?? 100)).then(rows => rows.map(parseDurableBatchRow))
     },
 
     async finishOrphanedBatch(batchId, query = {}) {
@@ -331,7 +332,7 @@ export function createD1DurableBatchStore(
           AND ${orphanedBatchPredicate(batches, jobs, failedJobs)}
         RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
       `).bind(now, now, batchId).first<Record<string, unknown>>()
-      return row ? mapBatchRow(row) : null
+      return row ? parseDurableBatchRow(row) : null
     },
 
     async finishOrphanedBatches(query) {

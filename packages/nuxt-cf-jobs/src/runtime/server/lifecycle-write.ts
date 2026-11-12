@@ -1,8 +1,8 @@
 import { isTransientD1Error } from '@harlan-zw/nuxt-cloudflare/d1'
 import { isDurableJobOwnershipError } from './errors'
 
-/** The lifecycle write that settles a claimed row. */
-export type DurableJobLifecycleWrite = 'complete' | 'fail' | 'release'
+/** The lifecycle write that settles a claimed row. `settle` clears the follow-up flag. */
+export type DurableJobLifecycleWrite = 'complete' | 'fail' | 'release' | 'settle'
 
 /**
  * A lifecycle write that stayed transient after its in-process retries. The row
@@ -16,6 +16,8 @@ export interface DurableJobWriteDeferral {
   cause: unknown
   /** Present when the follow-up work was requeued on a settlement message. */
   settlement?: DurableJobPendingSettlement
+  /** Why the settlement copy was not sent. The row's flag still lets reconcile rerun it. */
+  settlementRequeueError?: unknown
 }
 
 /** A terminal outcome whose follow-up work (settlement, continuations) has not run. */
@@ -186,4 +188,19 @@ export async function runLifecycleWrite(input: {
       return await confirm(tries, failure.cause, { _tag: 'deferred', deferral: deferral(tries, failure.cause) })
     await sleep(backoffMs(tries))
   }
+}
+
+/**
+ * Clear a follow-up flag with the same transient retry as other lifecycle
+ * writes. A flag that stays set is not an error: the reconcile sweep reruns the
+ * follow-up. `obsolete` means another lease owns it now and will clear it.
+ */
+export async function finishSettlementWrite(
+  opts: { isTransientError?: IsTransientError, lifecycleWriteRetry?: LifecycleWriteRetryOptions },
+  run: () => Promise<unknown>,
+): Promise<{ settlementDeferral?: DurableJobWriteDeferral }> {
+  const outcome = await runLifecycleWrite({ write: 'settle', run, isTransientError: opts.isTransientError, retry: opts.lifecycleWriteRetry })
+  if (outcome._tag === 'written' || outcome._tag === 'obsolete')
+    return {}
+  return { settlementDeferral: outcome.deferral }
 }

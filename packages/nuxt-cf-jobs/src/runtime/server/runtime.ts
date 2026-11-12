@@ -1,13 +1,15 @@
-import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
+import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchRecord, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
 import type { CfJobsBroadcastOptions, CfJobsRuntimeBroadcastOptions } from './broadcast'
 import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository, D1DurableJobRepositoryOptions } from './d1'
-import type { DurableJobLifecycleWrite } from './lifecycle-write'
+import type { DurableJobLifecycleWrite, DurableJobWriteDeferral } from './lifecycle-write'
 import type { JobMetricsSink } from './metrics'
 import type {
   DurableJobContinuation,
   DurableJobContinuationStage,
   DurableJobRecord,
   DurableJobScope,
+  DurableJobSettlementFinish,
+  DurableJobSettlementFinished,
   EnqueueDurableJobResult,
   PruneDurableJobsOptions,
   PruneDurableJobsResult,
@@ -21,6 +23,7 @@ import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastReposit
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
+import { finishSettlementWrite } from './lifecycle-write'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
@@ -77,7 +80,8 @@ export async function runDurableJobBatchMessage<
 ): Promise<RunDurableJobBatchMessageResult> {
   // Keep the queue delivery and settlement lease until batch work also finishes.
   let ack = false
-  let complete: (() => Promise<void>) | undefined
+  // The follow-up flag is cleared together with the batch decrement, after the run.
+  let finish: ((settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>) | undefined
   const claimSettlement = opts.lifecycle.claimPendingSettlement
   const completeSettlement = opts.lifecycle.completePendingSettlement
   const run = await runDurableJobMessage({
@@ -98,14 +102,20 @@ export async function runDurableJobBatchMessage<
                 return claim
               return {
                 ...claim,
-                complete: async () => { complete = claim.complete },
+                complete: async () => {
+                  finish = claim.complete
+                  return { batch: null }
+                },
               }
             },
           }
         : {}),
       ...(completeSettlement
         ? {
-            completePendingSettlement: async (job, status) => { complete = () => completeSettlement(job, status) },
+            completePendingSettlement: async (job, status) => {
+              finish = settle => completeSettlement(job, status, settle)
+              return { batch: null }
+            },
           }
         : {}),
     },
@@ -119,11 +129,37 @@ export async function runDurableJobBatchMessage<
   }
 
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
-  if (!jobId)
+  if (!jobId) {
+    if (ack)
+      opts.message.ack()
     return { run, settled: null }
+  }
 
+  let settlementDeferral: DurableJobWriteDeferral | undefined
+  let memberDecremented = false
+  const clearFlag = async (settle?: DurableJobSettlementFinish): Promise<DurableBatchRecord | null> => {
+    let finished: DurableJobSettlementFinished = { batch: null }
+    const flag = await finishSettlementWrite(opts, async () => {
+      finished = await finish!(settle)
+    })
+    settlementDeferral = flag.settlementDeferral
+    return finished.batch
+  }
+  // Route only this member's decrement through the flag transaction. A parent
+  // batch decrement in the onFinish chain uses the plain store.
+  const store: DurableBatchStore = finish
+    ? {
+        ...opts.store,
+        decrementPending: async (batchId, decOpts) => {
+          if (memberDecremented)
+            return await opts.store.decrementPending(batchId, decOpts)
+          memberDecremented = true
+          return await clearFlag({ batchId, failed: decOpts?.failed })
+        },
+      }
+    : opts.store
   const settled = await settleBatchMember({
-    store: opts.store,
+    store,
     jobId,
     failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
     dispatchOnFinish: opts.dispatchOnFinish,
@@ -131,11 +167,12 @@ export async function runDurableJobBatchMessage<
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
-  await complete?.()
+  if (finish && !memberDecremented)
+    await clearFlag()
   if (ack)
     opts.message.ack()
 
-  return { run, settled }
+  return { run: settlementDeferral ? { ...run, settlementDeferral } as RunDurableJobMessageResult : run, settled }
 }
 
 // ============================================
@@ -386,6 +423,29 @@ function reportRunDiagnostics(
   onLog: ((event: CfJobsLogEvent) => void) | undefined,
   jobId: string | undefined,
 ): void {
+  const settlementDeferral = 'settlementDeferral' in run ? run.settlementDeferral : undefined
+  if (settlementDeferral) {
+    const { tries, cause } = settlementDeferral
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write: 'settle',
+      error: `follow-up flag kept after ${tries} tries; reconcile reruns the follow-up: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+  }
+  if (run.status === 'write-deferred' && run.deferral.settlementRequeueError !== undefined) {
+    const cause = run.deferral.settlementRequeueError
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write: run.deferral.write,
+      error: `settlement copy not sent; the row flag keeps the follow-up for redelivery or reconcile: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+  }
   if (run.status === 'write-deferred') {
     const { write, tries, delaySeconds, cause } = run.deferral
     onLog?.({

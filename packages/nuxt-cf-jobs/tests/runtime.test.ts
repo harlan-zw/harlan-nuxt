@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -34,7 +34,14 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
           bound = values
           return api
         },
-        async run() { return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } } },
+        async run() {
+          // D1 returns RETURNING rows from `run()` and from `batch()`.
+          if (/\bRETURNING\b/i.test(query)) {
+            const rows = stmt.all(...(bound as never[])) as T[]
+            return { success: true, meta: { changes: rows.length }, results: rows }
+          }
+          return { success: true, meta: { changes: Number(stmt.run(...(bound as never[])).changes) } }
+        },
         async first<R = T>() { return (stmt.get(...(bound as never[])) ?? null) as R | null },
         async all<R = T>() { return { results: stmt.all(...(bound as never[])) as R[] } },
       }
@@ -1076,6 +1083,138 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
     }
     finally {
       clock.mockRestore()
+    }
+  })
+})
+
+describe('createDurableJobsRuntime — follow-up recovery through reconcile', () => {
+  // Option A for #201: the terminal write flags pending follow-up work in its
+  // own row. The reconcile sweep re-sends rows still flagged after their lease.
+  async function setupFollowUp(outcome: 'completed' | 'failed') {
+    const sent: Array<{ jobId: string, queue: string }> = []
+    const binding = {
+      send: (message: { jobId: string, queue: string }) => { sent.push(message) },
+      sendBatch: (batch: Array<{ body: { jobId: string, queue: string } } | { jobId: string, queue: string }>) => {
+        for (const entry of batch)
+          sent.push('body' in entry ? entry.body : entry)
+      },
+    }
+    const continuations: string[] = []
+    const onTerminalFailure = vi.fn(async () => {})
+    const finish = vi.fn(async () => {})
+    const { d1, runtime } = await setup({
+      work: async (_payload, ctx) => {
+        if (outcome === 'failed')
+          await ctx.fail('bad input')
+      },
+      finish,
+    }, {
+      env: { Q: binding },
+      reclaimAfterSeconds: 900,
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+      onTerminalFailure,
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
+    sent.length = 0
+    const reconcile = async () => {
+      sent.length = 0
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      return [...sent]
+    }
+    const deliver = async (body: { jobId: string, queue: string }) => {
+      const message = { body, ack: vi.fn(), retry: vi.fn() }
+      const result = await runtime.consumeMessage(message)
+      return { result, message }
+    }
+    const finishedBatches = () => Number((d1._db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE job_type = \'finish\'').get() as { n: number }).n)
+    const batch = () => d1._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches').get() as { pending_jobs: number, failed_jobs: number }
+    return { d1, runtime, jobId: jobIds[0]!, continuations, onTerminalFailure, reconcile, deliver, finishedBatches, batch }
+  }
+
+  function overloadFollowUpFlag(d1: ReturnType<typeof createSqliteD1>) {
+    const prepare = d1.prepare.bind(d1)
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (query.includes('$._cfJobsSettlement.done\', json(\'true\')')) {
+        statement.run = async () => {
+          throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+        }
+      }
+      return statement
+    }) as typeof d1.prepare
+    return () => {
+      d1.prepare = prepare
+    }
+  }
+
+  it.each(['completed', 'failed'] as const)('reruns %s follow-up once after the isolate dies past the terminal write, and a second rerun is a no-op', async (outcome) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { runtime, jobId, continuations, onTerminalFailure, reconcile, deliver, finishedBatches, batch } = await setupFollowUp(outcome)
+      // The isolate claims and writes the terminal outcome, then dies.
+      const claimed = (await runtime.repository.claimJob(jobId))!
+      if (outcome === 'completed')
+        await runtime.repository.completeJob(claimed)
+      else
+        await runtime.repository.failJob(claimed, 'bad input')
+
+      // Inside the lease the sweep leaves the row alone.
+      expect(await reconcile()).toEqual([])
+
+      vi.setSystemTime(Date.now() + 901_000)
+      const swept = await reconcile()
+      expect(swept).toEqual([{ jobId, queue: 'q' }])
+      const { result } = await deliver(swept[0]!)
+
+      expect(result.run.status).toBe('settlement-recovered')
+      expect(continuations).toEqual([outcome === 'completed' ? 'then' : 'catch', 'finally'])
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(batch()).toEqual({ pending_jobs: 0, failed_jobs: outcome === 'failed' ? 1 : 0 })
+      expect(finishedBatches()).toBe(1)
+
+      // Second rerun: nothing is flagged, and a stray delivery changes nothing.
+      vi.setSystemTime(Date.now() + 901_000)
+      expect(await reconcile()).toEqual([])
+      const stray = await deliver({ jobId, queue: 'q' })
+      expect(stray.message.ack).toHaveBeenCalled()
+      expect(continuations).toHaveLength(2)
+      expect(onTerminalFailure).toHaveBeenCalledTimes(outcome === 'failed' ? 1 : 0)
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves the flag for reconcile when the done write stays overloaded, without settling the batch twice', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { d1, jobId, continuations, reconcile, deliver, finishedBatches, batch } = await setupFollowUp('completed')
+      const restore = overloadFollowUpFlag(d1)
+      const first = await deliver({ jobId, queue: 'q' })
+      restore()
+
+      // The run completed and acked; the batch decrement rolled back with the flag.
+      expect(first.result.run.status).toBe('completed')
+      expect(first.message.ack).toHaveBeenCalled()
+      expect(batch().pending_jobs).toBe(1)
+
+      vi.setSystemTime(Date.now() + 901_000)
+      const swept = await reconcile()
+      expect(swept).toEqual([{ jobId, queue: 'q' }])
+      await deliver(swept[0]!)
+
+      // Continuations are at-least-once across the crash window; settlement is once.
+      expect(continuations).toEqual(['then', 'finally', 'then', 'finally'])
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
+      vi.setSystemTime(Date.now() + 901_000)
+      expect(await reconcile()).toEqual([])
+    }
+    finally {
+      vi.useRealTimers()
     }
   })
 })

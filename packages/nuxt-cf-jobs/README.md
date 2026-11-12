@@ -457,14 +457,24 @@ redelivery reclaims it and runs the job again. The run reports
 A write failure never counts as a handler failure. It does not fail the job,
 and it does not run `failed`. A write error that is not transient propagates.
 
-A write can commit and still lose its response. Before it defers a complete or
+The complete or fail write also flags follow-up work in the job's own row:
+batch settlement, continuations, and `failed`. No table or migration is
+added. The flag lives under `_cfJobsSettlement` in `payload`. After the
+follow-up runs, one transaction clears the flag and settles the batch, so the
+batch never settles twice.
+
+If the isolate dies after the terminal write, or the clearing write stays
+overloaded, the flag stays set. After its lease (`reclaimAfterSeconds`, at
+least 900s), the reconcile sweep re-sends the job. The consumer leases the
+follow-up and runs it again. Continuations and `failed` are at least once
+in that window, so make them idempotent. Batch settlement runs once. The
+sweep looks back `pendingSettlementSeconds` (default 6h).
+
+A write can also commit and lose its response. Before it defers a complete or
 fail write, the consumer reads the row once. If the write landed, the run
-continues: it settles the batch and dispatches continuations. If that read
-fails too, the consumer sends a copy of the message with a `settlement`
-marker and acks the original. The copy runs the follow-up work once. It
-claims it with a compare-and-set on the row's `attempts`, so a duplicate
-delivery finds nothing to do. If the write never landed, the copy reclaims
-the row and runs the job again.
+continues as a success. If that read fails too, the consumer sends a copy of
+the message with a `settlement` marker. If the send fails, the cause goes
+to `onLog` and the row flag still lets reconcile rerun the follow-up.
 
 ```ts
 createDurableRuntime({
