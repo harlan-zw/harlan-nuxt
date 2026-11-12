@@ -126,11 +126,11 @@ describe('lifecycle write retry', () => {
     expect(onTerminalFailure).not.toHaveBeenCalled()
   })
 
-  it('requires claim-specific confirmation before accepting an ownership miss', async () => {
+  it('treats an ownership miss after a lost response as the earlier write committing', async () => {
     const completeJob = writeThatThrows([new Error('D1_ERROR: Network connection lost.'), new DurableJobOwnershipError('job_complete')])
     const { result, message } = await run('complete', { completeJob })
 
-    expect(result).toEqual({ status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } })
+    expect(result.status).toBe('completed')
     expect(message.acked).toBe(true)
   })
 

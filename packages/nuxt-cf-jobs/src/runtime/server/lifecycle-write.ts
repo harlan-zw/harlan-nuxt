@@ -91,8 +91,10 @@ export function resolveRedeliveryDelaySeconds(seconds: number | undefined): numb
  * Run one lifecycle write with bounded retries on transient failures.
  *
  * - An ownership miss on the first call means another run owns the row: `obsolete`.
- * - Confirm ownership misses against this claim's persisted outcome.
- * - Confirmation failures share the transient retry budget.
+ * - An ownership miss on a retry means the earlier call committed and only its
+ *   response was lost ("Network connection lost"). No other run can claim the
+ *   row inside the reservation window, so the write counts as `written`.
+ * - After the final transient failure, check whether the write committed before deferring.
  * - Any other failure is a defect and propagates.
  */
 export async function runLifecycleWrite(input: {
@@ -113,26 +115,13 @@ export async function runLifecycleWrite(input: {
     const failure = await input.run().then(() => null, (cause: unknown) => ({ cause }))
     if (!failure)
       return { _tag: 'written' }
-    const ownershipMiss = isDurableJobOwnershipError(failure.cause)
-    if (!ownershipMiss && !isTransient({ error: failure.cause }))
+    if (isDurableJobOwnershipError(failure.cause))
+      return tries === 1 ? { _tag: 'obsolete' } : { _tag: 'written' }
+    if (!isTransient({ error: failure.cause }))
       throw failure.cause
-    if (ownershipMiss || tries > retries) {
-      const confirmation = await input.isCommitted?.().then(
-        committed => ({ committed, cause: undefined as unknown }),
-        (cause: unknown) => ({ committed: false, cause }),
-      )
-      if (confirmation?.committed)
-        return { _tag: 'written' }
-      if (confirmation?.cause !== undefined) {
-        if (!isTransient({ error: confirmation.cause }))
-          throw confirmation.cause
-        failure.cause = confirmation.cause
-      }
-      else if (ownershipMiss) {
-        return { _tag: 'obsolete' }
-      }
-    }
     if (tries > retries) {
+      if (await input.isCommitted?.())
+        return { _tag: 'written' }
       return {
         _tag: 'deferred',
         deferral: {

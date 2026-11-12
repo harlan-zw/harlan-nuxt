@@ -66,17 +66,6 @@ export const cfJobs = sqliteTable('jobs', {
   uniqueIndex('idx_jobs_unique_active').on(t.uniqueKey).where(sql`unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
 ])
 
-export const cfJobSettlements = sqliteTable('jobs_settlements', {
-  jobId: text('job_id').primaryKey(),
-  token: text('token').notNull().unique(),
-  attempts: integer('attempts').notNull(),
-  reservedUntil: integer('reserved_until').notNull(),
-  job: text('job').notNull(),
-  payload: text('payload').notNull(),
-  execution: text('execution').notNull(),
-  writeKind: text('write_kind').notNull(),
-})
-
 export const cfFailedJobs = sqliteTable('failed_jobs', {
   id: text('id').primaryKey(),
   queue: text('queue').notNull(),

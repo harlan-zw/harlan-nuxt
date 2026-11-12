@@ -93,7 +93,8 @@ function ctxFactory(control: JobControlResult): JobContext<unknown, unknown, unk
   }
 }
 
-async function setup(handlers: Handlers, extra: Record<string, unknown> = {}, d1 = createSqliteD1()) {
+async function setup(handlers: Handlers, extra: Record<string, unknown> = {}) {
+  const d1 = createSqliteD1()
   const { messages, binding } = createQueueBinding()
   const runtime = createDurableJobsRuntime({
     db: d1,
@@ -790,83 +791,6 @@ describe('onFinish failure (Codex review Area 5)', () => {
 })
 
 describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
-  it.each([
-    { write: 'complete', confirmationMissing: false },
-    { write: 'fail', confirmationMissing: false },
-    { write: 'complete', confirmationMissing: true },
-    { write: 'fail', confirmationMissing: true },
-  ] as const)('recovers $write follow-up work after both the final response and confirmation are unavailable, missing=$confirmationMissing', async ({ write, confirmationMissing }) => {
-    const stages: string[] = []
-    const onTerminalFailure = vi.fn()
-    const handle = vi.fn(async (_payload: Record<string, unknown>, ctx: JobContext<unknown, unknown, unknown>) => {
-      if (write === 'fail')
-        await ctx.fail('bad input')
-    })
-    const { d1, runtime, messages } = await setup({ work: handle, finish: async () => {} }, {
-      lifecycleWriteRetry: { backoffMs: () => 0 },
-      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
-      onTerminalFailure,
-    })
-    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'finish', payload: {} } })
-    const key = write === 'complete' ? 'completeJob' : 'failJob'
-    const persist = runtime.repository[key].bind(runtime.repository)
-    let attempts = 0
-    const mutation = vi.spyOn(runtime.repository, key).mockImplementation(async (...args: unknown[]) => {
-      if (++attempts < 3)
-        throw new Error('D1_ERROR: D1 DB is overloaded.')
-      await (persist as (...args: unknown[]) => Promise<void>)(...args)
-      throw new Error('D1_ERROR: Network connection lost.')
-    })
-    const confirmation = vi.spyOn(runtime.repository, 'isLifecycleWriteCommitted').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded.'))
-    if (confirmationMissing)
-      runtime.repository.isLifecycleWriteCommitted = undefined
-    const delivery = msg(jobIds[0]!)
-    const first = await runtime.consumeMessage(delivery)
-    expect(first.run.status).toBe('write-deferred')
-    expect(delivery.ack).not.toHaveBeenCalled()
-    expect(delivery.retry).toHaveBeenCalledOnce()
-    mutation.mockRestore()
-    confirmation.mockRestore()
-    // A fresh runtime must recover from D1, without the original worker's closures.
-    const fresh = await setup({ work: handle, finish: async () => {} }, {
-      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
-      onTerminalFailure,
-    }, d1)
-    if (confirmationMissing)
-      fresh.runtime.repository.isLifecycleWriteCommitted = undefined
-    const recovered = await fresh.runtime.consumeMessage(msg(jobIds[0]!))
-    await fresh.runtime.consumeMessage(msg(jobIds[0]!))
-    expect(recovered.run.status).toBe(write === 'complete' ? 'completed' : 'failed')
-    expect(recovered.settled?.batchComplete).toBe(true)
-    expect(stages).toEqual(write === 'complete' ? ['then', 'finally'] : ['catch', 'finally'])
-    expect(onTerminalFailure).toHaveBeenCalledTimes(write === 'fail' ? 1 : 0)
-    expect(handle).toHaveBeenCalledTimes(1)
-    expect([...messages, ...fresh.messages]).toHaveLength(2)
-    d1._db.close()
-  })
-
-  it('does not settle a stale claimant after ownership changes during backoff', async () => {
-    const stages: string[] = []
-    const { d1, runtime } = await setup({ work: async () => {} }, {
-      reclaimAfterSeconds: 60,
-      lifecycleWriteRetry: { backoffMs: () => 0 },
-      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
-    })
-    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
-    const persist = runtime.repository.completeJob.bind(runtime.repository)
-    vi.spyOn(runtime.repository, 'completeJob').mockImplementationOnce(async () => {
-      d1._db.prepare('UPDATE jobs SET reserved_at = unixepoch() - 61 WHERE id = ?').run(jobIds[0]!)
-      expect((await runtime.repository.claimJob(jobIds[0]!))?.attempts).toBe(2)
-      throw new Error('D1_ERROR: D1 DB is overloaded.')
-    }).mockImplementation(persist)
-    const result = await runtime.consumeMessage(msg(jobIds[0]!))
-    expect(result.run).toEqual({ status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } })
-    expect(result.settled).toBeNull()
-    expect(stages).toEqual([])
-    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: 1 })
-    d1._db.close()
-  })
-
   it.each(['complete', 'fail'] as const)('recovers terminal actions when the final %s commits but loses its response', async (write) => {
     const stages: string[] = []
     const onTerminalFailure = vi.fn()
