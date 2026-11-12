@@ -530,7 +530,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         UPDATE ${jobsTable}
         SET reserved_at = ?, attempts = attempts + 1
         WHERE id = ?
-          AND NOT EXISTS (SELECT 1 FROM ${settlementsTable} WHERE job_id = ${jobsTable}.id)
           AND published_at IS NOT NULL
           AND (reserved_at IS NULL OR reserved_at <= ?)
           AND available_at <= ?
@@ -559,9 +558,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     isLifecycleWriteCommitted: confirmWrite,
 
     pendingSettlements: {
-      async has(id) {
-        return !!await db.prepare(`SELECT job_id FROM ${settlementsTable} WHERE job_id = ?`).bind(id).first()
-      },
       async claim(id) {
         const now = currentUnixSeconds()
         const record = await db.prepare<{
@@ -576,8 +572,8 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           RETURNING token, job, payload, execution, write_kind
         `).bind(crypto.randomUUID(), now + settlementLeaseSeconds, id, now).first()
         if (!record) {
-          const existing = await db.prepare<{ reserved_until: number }>(`SELECT reserved_until FROM ${settlementsTable} WHERE job_id = ?`).bind(id).first()
-          return existing ? { _tag: 'busy', delaySeconds: Math.max(1, existing.reserved_until - now) } : { _tag: 'none' }
+          const existing = await db.prepare(`SELECT job_id FROM ${settlementsTable} WHERE job_id = ?`).bind(id).first()
+          return existing ? { _tag: 'busy' } : { _tag: 'none' }
         }
         const settlement: PendingDurableJobSettlement<D1DurableJobRecord<Queue>> = {
           token: record.token,
@@ -873,22 +869,11 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       ))
     },
 
-    async findPendingSettlements(query) {
-      return await all<{ id: string, queue: Queue }>(db.prepare<{ id: string, queue: Queue }>(`
-        SELECT job_id AS id, json_extract(job, '$.queue') AS queue
-        FROM ${settlementsTable}
-        WHERE reserved_until <= ?
-        ORDER BY reserved_until ASC
-        LIMIT ?
-      `).bind(query.now, query.limit))
-    },
-
     async findStaleReservedJobs(query) {
       return await all<D1DurableJobRecord<Queue>>(db.prepare<D1DurableJobRecord<Queue>>(`
         SELECT *
         FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM ${settlementsTable} WHERE job_id = ${jobsTable}.id)
           AND reserved_at <= ?
           AND completed_at IS NULL
           AND failed_at IS NULL
@@ -911,7 +896,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           SELECT id
           FROM ${jobsTable}
           WHERE reserved_at IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM ${settlementsTable} WHERE job_id = ${jobsTable}.id)
             AND reserved_at <= ?
             AND completed_at IS NULL
             AND failed_at IS NULL
@@ -962,7 +946,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           attempts, max_attempts, ?
         FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM ${settlementsTable} WHERE job_id = ${jobsTable}.id)
           AND reserved_at <= ?
           AND completed_at IS NULL
           AND failed_at IS NULL
@@ -982,7 +965,6 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       const deleteStatement = db.prepare(`
         DELETE FROM ${jobsTable}
         WHERE reserved_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM ${settlementsTable} WHERE job_id = ${jobsTable}.id)
           AND reserved_at <= ?
           AND completed_at IS NULL
           AND failed_at IS NULL

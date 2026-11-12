@@ -203,10 +203,9 @@ export interface DurableJobLifecycle<
   /** Read persisted state to confirm that this claim committed its write after a lost response. */
   isLifecycleWriteCommitted?: (job: Job, write: DurableJobLifecycleWrite) => Promise<boolean>
   pendingSettlements?: {
-    has: (id: string) => Promise<boolean>
     claim: (id: string) => Promise<
       | { _tag: 'none' }
-      | { _tag: 'busy', delaySeconds: number }
+      | { _tag: 'busy' }
       | { _tag: 'ready', settlement: PendingDurableJobSettlement<Job>, committed: boolean }
     >
     save: (settlement: PendingDurableJobSettlement<Job>) => Promise<boolean>
@@ -287,8 +286,6 @@ export interface DurableJobRecoveryRepository<
    */
   noteOrphanRedispatch?: (ids: readonly string[], opts?: { at?: number }) => Promise<number>
   findStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<Record[]>
-  /** Saved terminal work has its own recovery source, including deleted job rows. */
-  findPendingSettlements?: (query: { now: number, limit: number }) => Promise<Array<Pick<DurableJobRecord<Queue>, 'id' | 'queue'>>>
   releaseStaleReservedJobs?: (query: DurableJobStaleRecoveryQuery) => Promise<number>
   /**
    * Terminally fail stale-reserved jobs that have already exhausted their
@@ -1216,17 +1213,12 @@ export async function runDurableJobMessage<
   try {
     const recovery = await opts.lifecycle.pendingSettlements?.claim(jobId)
     if (recovery?._tag === 'busy') {
-      const inFlight = resolveInFlightClaimMiss({
-        jobId,
-        deliveries: opts.message.attempts,
-        delaySeconds: recovery.delaySeconds,
-        maxRetries: opts.maxInFlightRetries,
-      })
-      if (inFlight._tag === 'retried')
-        opts.message.retry({ delaySeconds: inFlight.delaySeconds })
-      else
-        opts.message.ack()
-      return { status: 'in-flight', inFlight }
+      const deliveries = normalizeDeliveries(opts.message.attempts)
+      const delaySeconds = typeof opts.inFlightRetryDelaySeconds === 'function'
+        ? opts.inFlightRetryDelaySeconds({ jobId, deliveries })
+        : opts.inFlightRetryDelaySeconds ?? 10
+      opts.message.retry({ delaySeconds })
+      return { status: 'in-flight', inFlight: { _tag: 'retried', deliveries, delaySeconds } }
     }
     if (recovery?._tag === 'ready') {
       pending = recovery.settlement

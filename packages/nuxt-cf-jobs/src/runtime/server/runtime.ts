@@ -21,7 +21,6 @@ import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastReposit
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
 import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
-import { runLifecycleWrite } from './lifecycle-write'
 import { createMessageDedup } from './message-dedup'
 import { metricsSinkToRepoHooks } from './metrics'
 import { createQueuePublisher, enqueueDurableJob, prepareDurableJob, pruneDurableJobs, runDurableJobMessage } from './outbox'
@@ -95,33 +94,23 @@ export async function runDurableJobBatchMessage<
       },
     },
   })
-  const finish = async (): Promise<RunDurableJobMessageResult> => {
-    if (finishToken) {
-      const token = finishToken
-      const outcome = await runLifecycleWrite({
-        write: run.status === 'completed' ? 'complete' : 'fail',
-        run: () => pendingSettlements!.finish(token),
-        isTransientError: opts.isTransientError,
-        retry: opts.lifecycleWriteRetry,
-      })
-      if (outcome._tag === 'deferred') {
-        opts.message.retry({ delaySeconds: outcome.deferral.delaySeconds })
-        return { status: 'write-deferred', deferral: outcome.deferral }
-      }
-    }
+  const finish = async (): Promise<void> => {
+    if (finishToken)
+      await pendingSettlements!.finish(finishToken)
     if (acknowledged)
       opts.message.ack()
-    return run
   }
 
   const terminal = run.status === 'completed' || run.status === 'failed' || run.status === 'dispatch-failed' || run.status === 'exhausted'
   if (!terminal) {
-    return { run: await finish(), settled: null }
+    await finish()
+    return { run, settled: null }
   }
 
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
   if (!jobId) {
-    return { run: await finish(), settled: null }
+    await finish()
+    return { run, settled: null }
   }
 
   const settled = await settleBatchMember({
@@ -133,7 +122,8 @@ export async function runDurableJobBatchMessage<
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
-  return { run: await finish(), settled }
+  await finish()
+  return { run, settled }
 }
 
 // ============================================
@@ -458,21 +448,13 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
   opts: ConsumeQueueBatchOptions<Queue, Env, Db, Logger>,
 ): Promise<void> {
   const isDlq = opts.isDlqQueue ?? defaultIsDlqQueue
-  let messages = opts.batch.messages
 
   if (isDlq(opts.batch.queue)) {
-    const pendingMessages: QueueMessage[] = []
-    messages = pendingMessages
     for (const message of opts.batch.messages) {
       const body = (message.body ?? {}) as Record<string, unknown>
       const jobId = typeof body.jobId === 'string' ? body.jobId : undefined
       const taskName = typeof body._task === 'string' ? body._task : undefined
       try {
-        // Saved execution wins over transport exhaustion, even after the job row is deleted.
-        if (jobId && await opts.repository.pendingSettlements?.has(jobId)) {
-          pendingMessages.push(message)
-          continue
-        }
         let stage: Extract<CfJobsLogStage, 'dlq' | 'dlq-obsolete'> = 'dlq'
         if (jobId) {
           // Laravel's "exhausted → failed_jobs" transition. Claim FIRST: only when
@@ -515,11 +497,12 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         message.retry({ delaySeconds })
       }
     }
+    return
   }
 
   const batchStartedMs = Date.now()
   const cpuBudget = opts.maxBatchCpuMs
-  for (const message of messages) {
+  for (const message of opts.batch.messages) {
     // CPU guard: defer the rest of the batch once we've burned the budget.
     if (cpuBudget != null && Date.now() - batchStartedMs > cpuBudget) {
       message.retry({ delaySeconds: opts.cpuGuardRetryDelaySeconds ?? 5 })
