@@ -334,7 +334,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
   const runSettlementStage = async <T>(
     job: D1DurableJobRecord<Queue>,
     token: string,
-    stage: 'observer' | 'terminal-failure' | 'then' | 'catch' | 'finally' | `batch-finish:${string}`,
+    stage: 'observer' | 'terminal-failure' | 'then' | 'catch' | 'finally',
     run: () => Promise<T>,
   ): Promise<T | undefined> => {
     const row = await db.prepare<{ state: string, failed: number }>(`

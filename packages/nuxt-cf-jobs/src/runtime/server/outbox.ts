@@ -217,7 +217,7 @@ export interface DurableJobLifecycle<
   /** Record follow-up completion for the original terminal writer. */
   completePendingSettlement?: (job: Job, status: DurableJobSettlementStatus) => Promise<void>
   /** Resume follow-up stages whose receipts survived a settlement lease. */
-  runSettlementStage?: <T>(job: Job, stage: 'observer' | 'terminal-failure' | DurableJobContinuationStage | `batch-finish:${string}`, run: () => Promise<T>) => Promise<T | undefined>
+  runSettlementStage?: <T>(job: Job, stage: 'observer' | 'terminal-failure' | DurableJobContinuationStage, run: () => Promise<T>) => Promise<T | undefined>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
   failJob: (job: Job, error: string, opts?: Partial<FailOptions> & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
@@ -1118,21 +1118,16 @@ export interface RunDurableJobMessageOptions<
    * never fail on transient infra errors. `maxAttempts` is `maxAttemptsOf`'s value.
    */
   isPermanentFailure?: (input: { error: unknown, storedJob: StoredJob, attempts: number, maxAttempts: number | undefined }) => boolean
-  /**
-   * Runs after terminal failure persistence. Deduplicate external effects with
-   * dispatchKey if a delivery stops before its receipt commits.
-   */
-  onTerminalFailure?: (input: { error: unknown, storedJob: StoredJob, dispatchKey: string }) => void | Promise<void>
+  /** Runs once, after terminal failure persistence and only when retries are exhausted. */
+  onTerminalFailure?: (input: { error: unknown, storedJob: StoredJob }) => void | Promise<void>
   /** Required visibility fallback for settlement observer defects. Defaults to console.error. */
   onObserverError?: (input: { stage: 'settlement' | 'terminal-failure', cause: unknown, storedJob: StoredJob }) => void | Promise<void>
   /**
    * Dispatch the job payload's `then`/`catch`/`finally` continuations after a
    * terminal outcome: `then`+`finally` on success, `catch`+`finally` on terminal
    * failure, none on a release/retry.
-   * Use dispatchKey plus the continuation index for durable dispatch ids.
-   * Recovery reuses the key if a delivery stops before its receipt commits.
    */
-  dispatchContinuations?: (input: { storedJob: StoredJob, stage: DurableJobContinuationStage, dispatchKey: string }) => void | Promise<void>
+  dispatchContinuations?: (input: { storedJob: StoredJob, stage: DurableJobContinuationStage }) => void | Promise<void>
 }
 
 export interface DurableJobSettlement<StoredJob> {
@@ -1485,26 +1480,13 @@ async function runSettlementFollowUp(
 
 type FollowUpOptions<StoredJob> = Pick<
   RunDurableJobMessageOptions<StoredJob, DispatchableJob>,
-  'onObserverError' | 'onTerminalFailure' | 'dispatchContinuations' | 'lifecycle' | 'toDispatchableJob'
+  'onObserverError' | 'onTerminalFailure' | 'dispatchContinuations' | 'lifecycle'
 >
 
 function createFollowUp<StoredJob>(opts: FollowUpOptions<StoredJob>, storedJob: StoredJob, scope: DurableJobScope<StoredJob> | undefined) {
   const startedMs = Date.now()
-  const job = opts.toDispatchableJob(storedJob)
-  const dispatchKey = (stage: string) => JSON.stringify([job.id, job.attempts, stage])
-  // Keep successful effects separate from their receipts. A receipt retry must
-  // reuse the result, including undefined, instead of calling the app again.
-  const completed = new Map<string, unknown>()
-  const runStage = <T>(stage: 'observer' | 'terminal-failure' | DurableJobContinuationStage, run: () => Promise<T>) => {
-    const effect = async () => {
-      if (completed.has(stage))
-        return completed.get(stage) as T
-      const value = await run()
-      completed.set(stage, value)
-      return value
-    }
-    return opts.lifecycle.runSettlementStage ? opts.lifecycle.runSettlementStage(storedJob, stage, effect) : effect()
-  }
+  const runStage = <T>(stage: 'observer' | 'terminal-failure' | DurableJobContinuationStage, run: () => Promise<T>) =>
+    opts.lifecycle.runSettlementStage ? opts.lifecycle.runSettlementStage(storedJob, stage, run) : run()
   const settle = async (status: RunDurableJobMessageResult['status'], permanent: boolean, error?: unknown): Promise<void> => {
     await scope?.onSettled?.({ storedJob, status, durationMs: Date.now() - startedMs, permanent, error })
   }
@@ -1523,7 +1505,7 @@ function createFollowUp<StoredJob>(opts: FollowUpOptions<StoredJob>, storedJob: 
   const runTerminalFailure = async (error: unknown): Promise<unknown | undefined> => {
     if (!opts.onTerminalFailure)
       return undefined
-    return await runStage('terminal-failure', () => Promise.resolve(opts.onTerminalFailure?.({ error, storedJob, dispatchKey: dispatchKey('terminal-failure') }))
+    return await runStage('terminal-failure', () => Promise.resolve(opts.onTerminalFailure?.({ error, storedJob }))
       .then(() => undefined)
       .catch(async (cause: unknown) => {
         await reportObserverError(opts.onObserverError, { stage: 'terminal-failure', cause, storedJob })
@@ -1537,13 +1519,11 @@ function createFollowUp<StoredJob>(opts: FollowUpOptions<StoredJob>, storedJob: 
     for (const stage of stages) {
       // Catch application failures inside the stage. Persistence failures
       // propagate to the bounded settlement retry, preserving unfinished intent.
-      const failure = await runStage(stage, () =>
-        Promise.resolve()
-          .then(() => opts.dispatchContinuations?.({ storedJob, stage, dispatchKey: dispatchKey(stage) }))
-          .then(() => undefined)
-          .catch((cause: unknown): DurableJobContinuationFailure => ({ stage, cause })))
-      if (failure)
-        failures.push(failure)
+      await runStage(stage, async () => {
+        await Promise.resolve().then(() => opts.dispatchContinuations?.({ storedJob, stage })).catch((cause: unknown) => {
+          failures.push({ stage, cause })
+        })
+      })
     }
     return failures
   }
@@ -1559,11 +1539,11 @@ async function runPendingSettlement<StoredJob, Job extends DispatchableJob, Mess
   settlement: DurableJobPendingSettlement,
   recovered: { job: StoredJob, error?: string, complete: () => Promise<void>, runSettlementStage?: DurableJobLifecycle<StoredJob>['runSettlementStage'] },
 ): Promise<RunDurableJobMessageResult> {
-  const followUp = createFollowUp({
-    ...opts,
-    lifecycle: { ...opts.lifecycle, runSettlementStage: recovered.runSettlementStage ?? opts.lifecycle.runSettlementStage },
-  }, recovered.job, opts.createJobScope?.(recovered.job))
   return await runSettlementFollowUp(opts, async () => {
+    const followUp = createFollowUp({
+      ...opts,
+      lifecycle: { ...opts.lifecycle, runSettlementStage: recovered.runSettlementStage ?? opts.lifecycle.runSettlementStage },
+    }, recovered.job, opts.createJobScope?.(recovered.job))
     const continuationsOf = (failures: DurableJobContinuationFailure[]) => failures.length > 0 ? { continuationFailures: failures } : {}
     if (settlement.status === 'completed') {
       await followUp.observeSettlement('completed', false)
