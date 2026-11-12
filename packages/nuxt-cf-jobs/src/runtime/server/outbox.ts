@@ -1,4 +1,5 @@
 import type { JobError } from './errors'
+import type { DurableJobLifecycleWrite, DurableJobWriteDeferral, IsTransientError, LifecycleWriteRetryOptions } from './lifecycle-write'
 import type { SendBackpressureOptions } from './queue'
 import type { AnyJobDefinition, JobNameOf, JobPayloadByName, JobQueueByName } from './registry'
 import type { Result } from './result'
@@ -15,7 +16,8 @@ import type {
   QueueSendOptions,
 } from './types'
 import { dispatchRegisteredJob } from './dispatch'
-import { describeCause, describeCauseWithStack, formatJobError, isDurableJobOwnershipError, jobErrors, jobErrorToException } from './errors'
+import { describeCause, describeCauseWithStack, formatJobError, jobErrors, jobErrorToException } from './errors'
+import { runLifecycleWrite } from './lifecycle-write'
 import { buildJobPayload } from './payload'
 import { createJobTraceId, createJobUniqueKey, resolveJobBackoff, resolveJobMaxAttempts } from './policy'
 import { sendBatchChunked, withSendBackpressure } from './queue'
@@ -995,6 +997,7 @@ export type DurableJobMessageStatus
     | 'errored'
     | 'exhausted'
     | 'claim-error'
+    | 'write-deferred'
 
 export interface RunDurableJobMessageOptions<
   StoredJob,
@@ -1054,6 +1057,17 @@ export interface RunDurableJobMessageOptions<
    * only when the app runs no recovery sweep.
    */
   maxInFlightRetries?: number
+  /**
+   * Decide whether a THROWN lifecycle write (complete, fail, release) is a
+   * transient store failure. A transient write retries in process with backoff.
+   * If it still fails, the message retries after
+   * `lifecycleWriteRetry.redeliveryDelaySeconds` and the result is
+   * `write-deferred`. Any other write failure propagates. Default:
+   * {@link isTransientD1WriteError}.
+   */
+  isTransientError?: IsTransientError
+  /** Retry budget for a transient lifecycle write. See {@link LifecycleWriteRetryOptions}. */
+  lifecycleWriteRetry?: LifecycleWriteRetryOptions
   failDispatchFailure?: boolean
   completeResult?: (input: { job: StoredJob, dispatch: DispatchResult }) => unknown | Promise<unknown>
   /**
@@ -1126,6 +1140,9 @@ export interface DurableJobContinuationFailure {
  *   original throw). Distinct from `released` (a deliberate `ctx.release()`).
  * - `exhausted`: the handler threw AND `attempts` reached `maxAttemptsOf` — the job
  *   was failed (→ `failed_jobs`) rather than retried. Terminal.
+ * - `write-deferred`: a lifecycle write (complete, fail, release) stayed transient
+ *   after its in-process retries. The row keeps its reservation and the message
+ *   retries after `deferral.delaySeconds`, so the redelivery can reclaim it.
  * - `claim-error`: the claim step itself threw (e.g. an overloaded backing store)
  *   before any handler ran; the message is retried with backoff. Non-terminal, so
  *   the row is left untouched for the redelivery to re-claim. Distinct from a
@@ -1142,6 +1159,7 @@ export type RunDurableJobMessageResult
     | { status: 'errored', error: JobError }
     | { status: 'exhausted', error: JobError, terminalFailureCause?: unknown, continuationFailures?: DurableJobContinuationFailure[] }
     | { status: 'claim-error', error: JobError }
+    | { status: 'write-deferred', deferral: DurableJobWriteDeferral }
 
 export async function runDurableJobMessage<
   StoredJob,
@@ -1242,100 +1260,24 @@ export async function runDurableJobMessage<
     }
     return failures
   }
-  const obsoleteDelivery = (error: unknown): RunDurableJobMessageResult | null => {
-    if (!isDurableJobOwnershipError(error))
+  // A lifecycle write that fails is never a handler failure. Writes run outside
+  // the handler catch below, so an overloaded `completeJob` cannot re-run a
+  // finished job and an overloaded `releaseJob` cannot fail the whole batch.
+  const writeOrDefer = async (write: DurableJobLifecycleWrite, run: () => Promise<unknown>): Promise<RunDurableJobMessageResult | null> => {
+    const outcome = await runLifecycleWrite({ write, run, isTransientError: opts.isTransientError, retry: opts.lifecycleWriteRetry })
+    if (outcome._tag === 'written')
       return null
-    opts.message.ack()
-    return { status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } }
-  }
-
-  try {
-    const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
-      registry: opts.registry,
-      job,
-      traceMarker: opts.traceMarker,
-      createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
-    })
-    const dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())
-
-    if (!dispatch.success) {
-      if (opts.failDispatchFailure !== false) {
-        try {
-          await failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed')
-        }
-        catch (error) {
-          const obsolete = obsoleteDelivery(error)
-          if (obsolete)
-            return obsolete
-          throw error
-        }
-      }
-      await observeSettlement('dispatch-failed', true, dispatch.error)
-      const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+    if (outcome._tag === 'obsolete') {
       opts.message.ack()
-      return { status: 'dispatch-failed', dispatch, error: dispatch.error, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
+      return { status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } }
     }
-
-    if (dispatch.control?.handled) {
-      // Persist the control outcome — an ack alone would leave the row reserved
-      // (and, for `release`, silently drop the job instead of redelivering it).
-      if (dispatch.control.action === 'failed') {
-        try {
-          await failDurableJob(opts.lifecycle, storedJob, dispatch.control.error ?? 'Job failed via ctx.fail()')
-        }
-        catch (error) {
-          const obsolete = obsoleteDelivery(error)
-          if (obsolete)
-            return obsolete
-          throw error
-        }
-        await observeSettlement('failed', true, dispatch.control.error)
-        const terminalFailureCause = await runTerminalFailure(new Error(dispatch.control.error ?? 'Job failed via ctx.fail()'))
-        const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
-        opts.message.ack()
-        return {
-          status: 'failed',
-          dispatch,
-          ...(terminalFailureCause === undefined ? {} : { terminalFailureCause }),
-          ...(continuationFailures.length > 0 ? { continuationFailures } : {}),
-        }
-      }
-      const delaySeconds = dispatch.control.delaySeconds ?? 0
-      try {
-        await releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: dispatch.control.error })
-      }
-      catch (error) {
-        const obsolete = obsoleteDelivery(error)
-        if (obsolete)
-          return obsolete
-        throw error
-      }
-      await observeSettlement('released', false, dispatch.control.error)
-      opts.message.retry({ delaySeconds })
-      return { status: 'released', dispatch }
-    }
-
-    const result = await opts.completeResult?.({ job: storedJob, dispatch })
-    const hasStats = Object.keys(reportedStats).length > 0
-    // Back-compat: with no reported stats, pass the result through untouched.
-    const completeWith = hasStats
-      ? { ...(result && typeof result === 'object' ? result : {}), ...reportedStats }
-      : result
-    try {
-      await completeDurableJob(opts.lifecycle, storedJob, completeWith)
-    }
-    catch (error) {
-      const obsolete = obsoleteDelivery(error)
-      if (obsolete)
-        return obsolete
-      throw error
-    }
-    await observeSettlement('completed', false)
-    const continuationFailures = await dispatchTerminalContinuations('then', 'finally')
-    opts.message.ack()
-    return { status: 'completed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
+    // The row keeps its reservation. Never ack here: no message would remain
+    // to finish the job until the reconcile sweep found it.
+    opts.message.retry({ delaySeconds: outcome.deferral.delaySeconds })
+    return { status: 'write-deferred', deferral: outcome.deferral }
   }
-  catch (error) {
+
+  const settleThrow = async (error: unknown): Promise<RunDurableJobMessageResult> => {
     // Terminal-failure decision: the caller's predicate (e.g. "never fail on
     // transient infra errors") wins; default is the Laravel cap attempts >= max.
     // `job.attempts` already counts this run (claim incremented it).
@@ -1344,20 +1286,14 @@ export async function runDurableJobMessage<
       ? opts.isPermanentFailure({ error, storedJob, attempts: job.attempts, maxAttempts })
       : (typeof maxAttempts === 'number' && job.attempts >= maxAttempts)
     if (permanent) {
-      try {
-        // Terminal: this row is the ONLY record of the defect once the message is
-        // acked, so persist the stack + cause chain, not just `.message`. The
-        // release path below stays on `describeCause` — it fires on every retry
-        // and a stack there would be noise. `cause` hands the original throw to the
-        // lifecycle hooks so telemetry reports it directly (D1 can only hold text).
-        await failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error), { cause: error })
-      }
-      catch (failError) {
-        const obsolete = obsoleteDelivery(failError)
-        if (obsolete)
-          return obsolete
-        throw failError
-      }
+      // Terminal: this row is the ONLY record of the defect once the message is
+      // acked, so persist the stack + cause chain, not just `.message`. The
+      // release path below stays on `describeCause` — it fires on every retry
+      // and a stack there would be noise. `cause` hands the original throw to the
+      // lifecycle hooks so telemetry reports it directly (D1 can only hold text).
+      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, describeCauseWithStack(error), { cause: error }))
+      if (unsettled)
+        return unsettled
       await observeSettlement('exhausted', true, error)
       const terminalFailureCause = await runTerminalFailure(error)
       const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
@@ -1372,22 +1308,90 @@ export async function runDurableJobMessage<
     const delaySeconds = typeof opts.retryDelaySeconds === 'function'
       ? opts.retryDelaySeconds({ error, job: storedJob })
       : opts.retryDelaySeconds ?? 0
-    try {
-      await releaseDurableJob(opts.lifecycle, storedJob, {
-        delaySeconds,
-        error: describeCause(error),
-      })
-    }
-    catch (releaseError) {
-      const obsolete = obsoleteDelivery(releaseError)
-      if (obsolete)
-        return obsolete
-      throw releaseError
-    }
+    const unsettled = await writeOrDefer('release', () => releaseDurableJob(opts.lifecycle, storedJob, {
+      delaySeconds,
+      error: describeCause(error),
+    }))
+    if (unsettled)
+      return unsettled
     await observeSettlement('errored', false, error)
     opts.message.retry({ delaySeconds })
     return { status: 'errored', error: jobErrors.handlerThrew(error) }
   }
+
+  // Handler region: a throw here is the job's own failure. `completeResult` is
+  // caller code that shapes the completion, so it belongs to the run.
+  let dispatch: DispatchResult
+  let completeWith: unknown
+  try {
+    const runOnce = (): Promise<DispatchResult> => dispatchRegisteredJob({
+      registry: opts.registry,
+      job,
+      traceMarker: opts.traceMarker,
+      createContext: async input => ({ ...(await opts.createJobContext({ ...input, storedJob })), reportStats }),
+    })
+    dispatch = await (scope?.wrapDispatch ? scope.wrapDispatch(runOnce) : runOnce())
+    if (dispatch.success && !dispatch.control?.handled) {
+      const result = await opts.completeResult?.({ job: storedJob, dispatch })
+      const hasStats = Object.keys(reportedStats).length > 0
+      // Back-compat: with no reported stats, pass the result through untouched.
+      completeWith = hasStats
+        ? { ...(result && typeof result === 'object' ? result : {}), ...reportedStats }
+        : result
+    }
+  }
+  catch (error) {
+    return await settleThrow(error)
+  }
+
+  if (!dispatch.success) {
+    if (opts.failDispatchFailure !== false) {
+      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, dispatch.error ? formatJobError(dispatch.error) : 'Job dispatch failed'))
+      if (unsettled)
+        return unsettled
+    }
+    await observeSettlement('dispatch-failed', true, dispatch.error)
+    const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+    opts.message.ack()
+    return { status: 'dispatch-failed', dispatch, error: dispatch.error, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
+  }
+
+  if (dispatch.control?.handled) {
+    // Persist the control outcome — an ack alone would leave the row reserved
+    // (and, for `release`, silently drop the job instead of redelivering it).
+    if (dispatch.control.action === 'failed') {
+      const controlError = dispatch.control.error
+      const unsettled = await writeOrDefer('fail', () => failDurableJob(opts.lifecycle, storedJob, controlError ?? 'Job failed via ctx.fail()'))
+      if (unsettled)
+        return unsettled
+      await observeSettlement('failed', true, controlError)
+      const terminalFailureCause = await runTerminalFailure(new Error(controlError ?? 'Job failed via ctx.fail()'))
+      const continuationFailures = await dispatchTerminalContinuations('catch', 'finally')
+      opts.message.ack()
+      return {
+        status: 'failed',
+        dispatch,
+        ...(terminalFailureCause === undefined ? {} : { terminalFailureCause }),
+        ...(continuationFailures.length > 0 ? { continuationFailures } : {}),
+      }
+    }
+    const delaySeconds = dispatch.control.delaySeconds ?? 0
+    const controlError = dispatch.control.error
+    const unsettled = await writeOrDefer('release', () => releaseDurableJob(opts.lifecycle, storedJob, { delaySeconds, error: controlError }))
+    if (unsettled)
+      return unsettled
+    await observeSettlement('released', false, controlError)
+    opts.message.retry({ delaySeconds })
+    return { status: 'released', dispatch }
+  }
+
+  const unsettled = await writeOrDefer('complete', () => completeDurableJob(opts.lifecycle, storedJob, completeWith))
+  if (unsettled)
+    return unsettled
+  await observeSettlement('completed', false)
+  const continuationFailures = await dispatchTerminalContinuations('then', 'finally')
+  opts.message.ack()
+  return { status: 'completed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
 }
 
 async function reportObserverError<StoredJob>(

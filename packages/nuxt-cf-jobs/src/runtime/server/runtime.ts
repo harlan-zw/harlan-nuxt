@@ -1,6 +1,7 @@
 import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
 import type { CfJobsBroadcastOptions, CfJobsRuntimeBroadcastOptions } from './broadcast'
 import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository, D1DurableJobRepositoryOptions } from './d1'
+import type { DurableJobLifecycleWrite } from './lifecycle-write'
 import type { JobMetricsSink } from './metrics'
 import type {
   DurableJobContinuation,
@@ -117,6 +118,8 @@ export async function runDurableJobBatchMessage<
  * - `dlq-failed`      — durable DLQ bookkeeping failed; the message was retried.
  * - `continuation-failed` — a terminal payload continuation failed to dispatch.
  * - `onfinish-failed` — a batch's `onFinish` continuation threw.
+ * - `write-deferred`  — a durable lifecycle write stayed transient after its
+ *   retries; the message retries later. Expected under D1 load: log it at warn.
  */
 export type CfJobsLogStage
   = | 'invalid_payload'
@@ -127,6 +130,7 @@ export type CfJobsLogStage
     | 'dlq-failed'
     | 'continuation-failed'
     | 'onfinish-failed'
+    | 'write-deferred'
 
 /**
  * Diagnostic entry from the consumer loop (never a throw). When the stage came from a
@@ -142,6 +146,8 @@ export interface CfJobsLogEvent {
   error?: string
   stack?: string
   cause?: unknown
+  /** The lifecycle write behind a `write-deferred` event. */
+  write?: DurableJobLifecycleWrite
 }
 
 export interface RunLightweightMessageOptions<Env = unknown, Db = unknown, Logger = unknown> {
@@ -259,6 +265,8 @@ export interface ConsumeQueueBatchOptions<Queue extends string, Env, Db, Logger>
   claimRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['claimRetryDelaySeconds']
   inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
   maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
+  isTransientError?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isTransientError']
+  lifecycleWriteRetry?: RunDurableJobMessageOptions<unknown, DispatchableJob>['lifecycleWriteRetry']
   completeResult?: RunDurableJobMessageOptions<D1DurableJobRecord<Queue>, DispatchableJob, { jobId: string, queue: string }, Env, Db, Logger>['completeResult']
   /** Defaults to a `-dlq` suffix check. */
   isDlqQueue?: (queue: string) => boolean
@@ -331,11 +339,23 @@ function createStoredJobRetryDelay(onLog: ((event: CfJobsLogEvent) => void) | un
   })
 }
 
-function reportContinuationFailures(
+function reportRunDiagnostics(
   run: RunDurableJobMessageResult,
   onLog: ((event: CfJobsLogEvent) => void) | undefined,
   jobId: string | undefined,
 ): void {
+  if (run.status === 'write-deferred') {
+    const { write, tries, delaySeconds, cause } = run.deferral
+    onLog?.({
+      stage: 'write-deferred',
+      jobId,
+      write,
+      error: `${write} write deferred ${delaySeconds}s after ${tries} tries: ${describeCause(cause)}`,
+      stack: describeCauseWithStack(cause),
+      cause,
+    })
+    return
+  }
   const continuationFailures = 'continuationFailures' in run ? run.continuationFailures ?? [] : []
   for (const failure of continuationFailures) {
     onLog?.({
@@ -487,6 +507,8 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
         maxInFlightRetries: opts.maxInFlightRetries,
+        isTransientError: opts.isTransientError,
+        lifecycleWriteRetry: opts.lifecycleWriteRetry,
         completeResult: opts.completeResult,
         // Honour the stored job's attempt cap (Laravel worker model).
         maxAttemptsOf: stored => stored.max_attempts,
@@ -502,7 +524,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
         dispatchOnFinish: opts.dispatchOnFinish,
         onBatchProgress: opts.onBatchProgress,
       })
-      reportContinuationFailures(result.run, opts.onLog, jobId)
+      reportRunDiagnostics(result.run, opts.onLog, jobId)
     }
     else {
       await runLightweightMessage({
@@ -581,6 +603,13 @@ export interface CreateDurableJobsRuntimeOptions<
   inFlightRetryDelaySeconds?: RunDurableJobMessageOptions<unknown, DispatchableJob>['inFlightRetryDelaySeconds']
   /** Retries to spend on a held row before the message acks. Default 2. */
   maxInFlightRetries?: RunDurableJobMessageOptions<unknown, DispatchableJob>['maxInFlightRetries']
+  /** Classify a thrown lifecycle write as transient. Default: `isTransientD1WriteError`. */
+  isTransientError?: RunDurableJobMessageOptions<unknown, DispatchableJob>['isTransientError']
+  /**
+   * Retry budget for a transient lifecycle write. `redeliveryDelaySeconds`
+   * defaults to `reclaimAfterSeconds`, so the redelivery can reclaim the row.
+   */
+  lifecycleWriteRetry?: RunDurableJobMessageOptions<unknown, DispatchableJob>['lifecycleWriteRetry']
   onMissingBinding?: (queue: Queue, count: number) => void | Promise<void>
   /** Classify a queue as a dead-letter queue (defaults to a `-dlq` suffix check). */
   isDlqQueue?: (queue: string) => boolean
@@ -741,6 +770,14 @@ export function createDurableJobsRuntime<
 
   const dedup = opts.dedup ? createMessageDedup(opts.dedup) : undefined
 
+  // A deferred write leaves the row reserved. A redelivery inside the
+  // reservation window only misses the claim and spends a delivery, so wait
+  // the window out by default.
+  const lifecycleWriteRetry = {
+    ...opts.lifecycleWriteRetry,
+    redeliveryDelaySeconds: opts.lifecycleWriteRetry?.redeliveryDelaySeconds ?? opts.reclaimAfterSeconds,
+  }
+
   return {
     repository,
     store,
@@ -763,6 +800,8 @@ export function createDurableJobsRuntime<
         claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
         inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
         maxInFlightRetries: opts.maxInFlightRetries,
+        isTransientError: opts.isTransientError,
+        lifecycleWriteRetry,
         maxAttemptsOf: stored => stored.max_attempts,
         completeResult: opts.completeResult,
         createJobScope: opts.createJobScope,
@@ -777,7 +816,7 @@ export function createDurableJobsRuntime<
         dispatchOnFinish,
         onBatchProgress,
       })
-      reportContinuationFailures(result.run, opts.onLog, message.body.jobId)
+      reportRunDiagnostics(result.run, opts.onLog, message.body.jobId)
       return result
     },
     consumeBatch: batch => consumeQueueBatch({
@@ -792,6 +831,8 @@ export function createDurableJobsRuntime<
       claimRetryDelaySeconds: opts.claimRetryDelaySeconds,
       inFlightRetryDelaySeconds: opts.inFlightRetryDelaySeconds,
       maxInFlightRetries: opts.maxInFlightRetries,
+      isTransientError: opts.isTransientError,
+      lifecycleWriteRetry,
       completeResult: opts.completeResult,
       isDlqQueue: opts.isDlqQueue,
       isDuplicate: dedup?.has,

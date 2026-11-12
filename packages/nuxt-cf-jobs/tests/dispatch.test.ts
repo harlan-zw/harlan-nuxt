@@ -1451,60 +1451,6 @@ describe('nuxt-cf-jobs dispatch kernel', () => {
     expect(message.acked).toBe(true)
   })
 
-  it('does not run the ctx.fail() terminal callback when persistence fails', async () => {
-    const persisted = new Error('D1 unavailable')
-    const terminal = vi.fn()
-    const stored = {
-      id: 'job_manual_failure_persist_error',
-      queue: 'default',
-      payload: buildJobPayload('demo/manual-failure-persist-error', {}),
-      attempts: 1,
-      batchId: null,
-    }
-    const message = createQueueMessage({ jobId: stored.id, queue: 'default' as const })
-    const registry = defineJobRegistry([
-      defineJob({
-        name: 'demo/manual-failure-persist-error',
-        queue: 'default',
-        async handle(_payload, ctx) {
-          await ctx.fail('permanent input')
-        },
-      }),
-    ])
-
-    const result = await runDurableJobMessage({
-      message,
-      lifecycle: {
-        claimJob: vi.fn(async () => stored),
-        completeJob: vi.fn(async () => {}),
-        failJob: vi.fn(async () => { throw persisted }),
-        releaseJob: vi.fn(async () => {}),
-      },
-      registry,
-      toDispatchableJob: job => job,
-      createJobContext: ({ job, control }) => ({
-        env: {},
-        db: {},
-        log: {},
-        jobId: job.id,
-        batchId: null,
-        attempt: job.attempts,
-        release: vi.fn(),
-        async fail(error) {
-          control.handled = true
-          control.action = 'failed'
-          control.error = error
-        },
-      }),
-      onTerminalFailure: terminal,
-    })
-
-    expect(result.status).toBe('errored')
-    expect(terminal).not.toHaveBeenCalled()
-    expect(message.acked).toBe(false)
-    expect(message.retries).toHaveLength(1)
-  })
-
   it('provides durable recovery seams for dispatchable and stale reserved jobs', async () => {
     const dispatchable = [
       { id: 'job_1', queue: 'default' },

@@ -789,3 +789,62 @@ describe('onFinish failure (Codex review Area 5)', () => {
     expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
   })
 })
+
+describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
+  // Sentry NUXTSEO-PRO-13R: the release write after a handler throw hit a D1
+  // overload, the throw escaped `consumeBatch`, and the row stayed reserved.
+  function overloadReleases(d1: ReturnType<typeof createSqliteD1>, failures: number) {
+    const prepare = d1.prepare.bind(d1)
+    let remaining = failures
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      if (!query.includes('last_error = COALESCE'))
+        return statement
+      const run = statement.run.bind(statement)
+      statement.run = async () => {
+        if (remaining > 0) {
+          remaining--
+          throw new Error('D1_ERROR: D1 DB is overloaded. Requests queued for too long.')
+        }
+        return await run()
+      }
+      return statement
+    }) as typeof d1.prepare
+  }
+
+  it('retries the message past the reservation window and logs a deferred write', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const handle = vi.fn(async () => {
+        throw new Error('upstream 503')
+      })
+      const logs: Array<{ stage: string, write?: string, jobId?: string }> = []
+      const { d1, runtime } = await setup({ flaky: handle }, {
+        reclaimAfterSeconds: 900,
+        lifecycleWriteRetry: { backoffMs: () => 0 },
+        onLog: (event: { stage: string, write?: string, jobId?: string }) => logs.push(event),
+      })
+      const { jobIds } = await runtime.createBatch({ jobs: [await prepare('flaky', {})] })
+      overloadReleases(d1, 3)
+
+      const first = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q', messages: [first] })
+
+      expect(first.retry).toHaveBeenCalledWith({ delaySeconds: 900 })
+      expect(first.ack).not.toHaveBeenCalled()
+      expect(logs).toContainEqual(expect.objectContaining({ stage: 'write-deferred', write: 'release', jobId: jobIds[0] }))
+
+      // The redelivery arrives after the window and runs the job again.
+      vi.setSystemTime(Date.now() + 901_000)
+      const second = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q', messages: [second] })
+
+      expect(handle).toHaveBeenCalledTimes(2)
+      const row = d1._db.prepare('SELECT reserved_at, attempts FROM jobs').get() as { reserved_at: number | null, attempts: number }
+      expect(row).toEqual({ reserved_at: null, attempts: 2 })
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+})
