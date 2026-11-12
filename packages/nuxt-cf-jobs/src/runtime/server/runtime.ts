@@ -1,7 +1,7 @@
 import type { BatchProgress, CreateJobBatchOptions, CreateJobBatchResult, DurableBatchRecord, DurableBatchStore, SettleBatchMemberOptions, SettleBatchMemberResult } from './batch'
 import type { CfJobsBroadcastOptions, CfJobsRuntimeBroadcastOptions } from './broadcast'
 import type { D1DatabaseLike, D1DurableJobRecord, D1DurableJobRepository, D1DurableJobRepositoryOptions } from './d1'
-import type { DurableJobLifecycleWrite, DurableJobWriteDeferral } from './lifecycle-write'
+import type { DurableJobLifecycleWrite, DurableJobWriteDeferral, IsTransientError, LifecycleWriteRetryOptions } from './lifecycle-write'
 import type { JobMetricsSink } from './metrics'
 import type {
   DurableJobContinuation,
@@ -135,44 +135,71 @@ export async function runDurableJobBatchMessage<
     return { run, settled: null }
   }
 
+  const { settled, settlementDeferral } = await settleDurableJobBatch({
+    ...opts,
+    jobId,
+    finish,
+    failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
+  })
+  if (ack)
+    opts.message.ack()
+
+  return { run: settlementDeferral ? { ...run, settlementDeferral } as RunDurableJobMessageResult : run, settled }
+}
+
+async function settleDurableJobBatch(opts: {
+  store: DurableBatchStore
+  jobId: string
+  failed: boolean
+  finish?: (settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>
+  dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
+  onBatchProgress?: (progress: BatchProgress) => void | Promise<void>
+  isTransientError?: IsTransientError
+  lifecycleWriteRetry?: LifecycleWriteRetryOptions
+}): Promise<{ settled: SettleBatchMemberResult, settlementDeferral?: DurableJobWriteDeferral }> {
+  const { finish } = opts
   let settlementDeferral: DurableJobWriteDeferral | undefined
-  let memberDecremented = false
-  const clearFlag = async (settle?: DurableJobSettlementFinish): Promise<DurableBatchRecord | null> => {
+  const results = new Map<string, DurableJobSettlementFinished>()
+  const writeSettlement = async (settle?: DurableJobSettlementFinish): Promise<DurableBatchRecord | null> => {
     let finished: DurableJobSettlementFinished = { batch: null }
     const flag = await finishSettlementWrite(opts, async () => {
       finished = await finish!(settle)
     })
     settlementDeferral = flag.settlementDeferral
+    if (settle?.batchId && finished.batch)
+      results.set(settle.batchId, finished)
     return finished.batch
   }
-  // Route only this member's decrement through the flag transaction. A parent
-  // batch decrement in the onFinish chain uses the plain store.
+  // Retain results for the member and every parent in this settlement's chain.
   const store: DurableBatchStore = finish
     ? {
         ...opts.store,
         decrementPending: async (batchId, decOpts) => {
-          if (memberDecremented)
-            return await opts.store.decrementPending(batchId, decOpts)
-          memberDecremented = true
-          return await clearFlag({ batchId, failed: decOpts?.failed })
+          if (settlementDeferral)
+            return null
+          return await writeSettlement({ batchId, failed: decOpts?.failed })
         },
       }
     : opts.store
   const settled = await settleBatchMember({
     store,
-    jobId,
-    failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
-    dispatchOnFinish: opts.dispatchOnFinish,
+    jobId: opts.jobId,
+    failed: opts.failed,
+    dispatchOnFinish: finish && opts.dispatchOnFinish
+      ? async (input) => {
+        if (results.get(input.batch.id)?.onFinishDispatched)
+          return
+        await opts.dispatchOnFinish!(input)
+        await writeSettlement({ batchId: input.batch.id, onFinishDispatched: true })
+      }
+      : opts.dispatchOnFinish,
   })
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
-  if (finish && !memberDecremented)
-    await clearFlag()
-  if (ack)
-    opts.message.ack()
-
-  return { run: settlementDeferral ? { ...run, settlementDeferral } as RunDurableJobMessageResult : run, settled }
+  if (finish && !settlementDeferral)
+    await writeSettlement()
+  return { settled, settlementDeferral }
 }
 
 // ============================================
@@ -540,9 +567,14 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
           const claimed = await opts.repository.claimJob(jobId)
           if (claimed) {
             await opts.repository.failJob(claimed, 'Exhausted retries (dead-letter queue)')
-            const settled = await settleBatchMember({ store: opts.store, jobId, failed: true, dispatchOnFinish: opts.dispatchOnFinish })
-            if (settled.progress && opts.onBatchProgress)
-              await opts.onBatchProgress(settled.progress)
+            await settleDurableJobBatch({
+              ...opts,
+              jobId,
+              failed: true,
+              finish: opts.repository.completePendingSettlement
+                ? settle => opts.repository.completePendingSettlement!(claimed, 'failed', settle)
+                : undefined,
+            })
           }
           else {
             const noted = await opts.repository.noteDlqArrival(jobId, {
@@ -833,16 +865,13 @@ export function createDurableJobsRuntime<
     { onMissingBinding: opts.onMissingBinding },
   )
 
-  // Default onFinish: enqueue the continuation durably (survives an isolate
-  // recycle, same guarantee the batch members get). This fires AFTER the batch is
-  // already settled + the member message acked, so a throw here can't be retried —
-  // it would silently drop the continuation (and break a parent-batch chain). So
-  // it must never throw: a failed enqueue is logged via onLog and left for the
-  // app's own backstop (e.g. a reconcile cron) to recover.
+  // A stable id deduplicates replay after an ambiguous enqueue or flag write.
+  // If preparation or persistence fails, keep settlement open for recovery.
   const dispatchOnFinish: SettleBatchMemberOptions['dispatchOnFinish'] = opts.dispatchOnFinish ?? (async ({ continuation, batch }) => {
     const c = continuation as DurableJobContinuation
     try {
       const record = await prepareDurableJob({
+        id: `cf-jobs:batch:${batch.id}:onFinish`,
         name: c.name,
         payload: c.payload,
         registry: opts.registry as never,
@@ -868,6 +897,7 @@ export function createDurableJobsRuntime<
     }
     catch (error) {
       opts.onLog?.({ stage: 'onfinish-failed', taskName: c.name, jobId: batch.id, error: describeCause(error), stack: describeCauseWithStack(error), cause: error })
+      throw error
     }
   })
 

@@ -322,12 +322,12 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     attempts: job.attempts,
     token: `initial:${job.attempts}`,
     leaseUntil: currentUnixSeconds() + leaseSeconds,
+    batches: [],
     done: false,
   })
   const batchesTable = opts.batchesTable ?? 'job_batches'
-  // Mark follow-up done and, for a batch member, settle the batch in the same
-  // transaction. A rerun after a crash either sees the flag still open and the
-  // batch untouched, or sees both done. It never decrements twice.
+  // Persist each decrement's result with the decrement. Keep the flag open
+  // until callbacks and parent propagation finish. Retries replay the result.
   const finishSettlement = async (
     id: string,
     pending: DurableJobPendingSettlement,
@@ -347,6 +347,19 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       assertOwnedMutation(await markDone.run(), id)
       return { batch: null }
     }
+    if (finish.onFinishDispatched) {
+      const marked = await db.prepare(`
+        UPDATE ${table}
+        SET payload = json_set(payload,
+          '$._cfJobsSettlement.batches[' || (
+            SELECT key FROM json_each(payload, '$._cfJobsSettlement.batches') AS settled
+            WHERE json_extract(settled.value, '$.id') = ?
+          ) || '].onFinishDispatched', json('true'))
+        WHERE id = ? AND attempts = ? AND ${owned}
+      `).bind(finish.batchId, id, pending.attempts, token).run()
+      assertOwnedMutation(marked, id)
+      return { batch: null, onFinishDispatched: true }
+    }
     const decrement = db.prepare<Record<string, unknown>>(`
       UPDATE ${batchesTable}
       SET pending_jobs = pending_jobs - 1,
@@ -355,16 +368,41 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
       WHERE id = ? AND pending_jobs > 0
         AND EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND attempts = ? AND ${owned})
+        AND NOT EXISTS (
+          SELECT 1 FROM ${table}, json_each(payload, '$._cfJobsSettlement.batches') AS settled
+          WHERE ${table}.id = ? AND json_extract(settled.value, '$.id') = ?
+        )
       RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
-    `).bind(finish.failed ? 1 : 0, finish.batchId, id, pending.attempts, token)
-    // Without a transactional batch the two writes are not atomic, so a crash
-    // between them could settle twice. Every D1 binding has `batch`.
-    const [decremented, marked] = typeof db.batch === 'function'
-      ? await db.batch([decrement as D1PreparedStatementLike<unknown>, markDone])
-      : [await decrement.run(), await markDone.run()]
-    assertOwnedMutation(marked!, id)
-    const row = (decremented?.results as Record<string, unknown>[] | undefined)?.[0]
-    return { batch: row ? parseDurableBatchRow(row) : null }
+    `).bind(finish.failed ? 1 : 0, finish.batchId, id, pending.attempts, token, id, finish.batchId)
+    // changes() refers to the preceding decrement on the same transaction.
+    // Saving only its winner prevents a retry from adopting another member's result.
+    const save = db.prepare(`
+      UPDATE ${table}
+      SET payload = json_set(payload, '$._cfJobsSettlement.batches', json_insert(
+        COALESCE(json_extract(payload, '$._cfJobsSettlement.batches'), '[]'), '$[#]', json((
+          SELECT json_object(
+            'id', id, 'name', name, 'parent_batch_id', parent_batch_id,
+            'total_jobs', total_jobs, 'pending_jobs', pending_jobs, 'failed_jobs', failed_jobs,
+            'on_finish', on_finish, 'allow_failures', allow_failures,
+            'site_id', site_id, 'user_id', user_id, 'finished_at', finished_at
+          ) FROM ${batchesTable} WHERE id = ?
+        ))
+      ))
+      WHERE changes() > 0 AND id = ? AND attempts = ? AND ${owned}
+    `).bind(finish.batchId, id, pending.attempts, token)
+    const read = db.prepare<{ state: string }>(`
+      SELECT json_extract(payload, '$._cfJobsSettlement') AS state
+      FROM ${table} WHERE id = ? AND attempts = ? AND ${owned}
+    `).bind(id, pending.attempts, token)
+    if (!db.batch)
+      throw new Error('D1 batch is required for atomic settlement')
+    const results = await db.batch([decrement as D1PreparedStatementLike<unknown>, save, read])
+    const state = (results[2]?.results as Array<{ state: string }> | undefined)?.[0]?.state
+    if (!state)
+      throw new DurableJobOwnershipError(id)
+    const saved = JSON.parse(state) as { batches?: Record<string, unknown>[] }
+    const row = saved.batches?.find(batch => batch.id === finish.batchId)
+    return { batch: row ? parseDurableBatchRow(row) : null, onFinishDispatched: row?.onFinishDispatched === true }
   }
 
   // The legacy immediate insert asserts publication (`published_at`), so it must

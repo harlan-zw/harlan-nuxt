@@ -194,15 +194,18 @@ export interface FailDurableJobOptions {
   settlementStatus?: Exclude<DurableJobSettlementStatus, 'completed'>
 }
 
-/** Batch settlement to commit with the follow-up done flag. */
+/** Settle a batch, record its callback, or finalize follow-up when no batch is supplied. */
 export interface DurableJobSettlementFinish {
   batchId?: string | null
   failed?: boolean
+  onFinishDispatched?: true
 }
 
 export interface DurableJobSettlementFinished {
   /** The member's batch after this settlement, or `null` when nothing was decremented. */
   batch: DurableBatchRecord | null
+  /** The saved batch callback already returned successfully. */
+  onFinishDispatched?: boolean
 }
 
 /**
@@ -235,7 +238,7 @@ export interface DurableJobLifecycle<
   } | { retryAfterSeconds: number } | null>
   /**
    * Record follow-up completion for the original terminal writer. With a
-   * `batchId`, settle that batch in the same transaction. Throws
+   * `batchId`, persist and replay that batch's decrement result until finalization. Throws
    * `DurableJobOwnershipError` when the follow-up is no longer this writer's.
    */
   completePendingSettlement?: (job: Job, status: DurableJobSettlementStatus, finish?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>

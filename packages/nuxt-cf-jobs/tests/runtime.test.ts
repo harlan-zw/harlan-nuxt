@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, createParentJobBatch, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -36,7 +36,7 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
         },
         async run() {
           // D1 returns RETURNING rows from `run()` and from `batch()`.
-          if (/\bRETURNING\b/i.test(query)) {
+          if (stmt.columns().length > 0) {
             const rows = stmt.all(...(bound as never[])) as T[]
             return { success: true, meta: { changes: rows.length }, results: rows }
           }
@@ -57,7 +57,9 @@ function createQueueBinding() {
     messages,
     binding: {
       send: (m: { jobId: string, queue: string }) => { messages.push(m) },
-      sendBatch: (batch: Array<{ jobId: string, queue: string }>) => { messages.push(...batch) },
+      sendBatch: (batch: Array<{ body: { jobId: string, queue: string } } | { jobId: string, queue: string }>) => {
+        messages.push(...batch.map(entry => 'body' in entry ? entry.body : entry))
+      },
     },
   }
 }
@@ -119,7 +121,7 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
   return Number((d1._db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n)
 }
 
-const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), retry: vi.fn() })
+const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, attempts: 1, ack: vi.fn(), retry: vi.fn() })
 
 describe('createDurableJobsRuntime — batch happy path', () => {
   it.each([
@@ -784,16 +786,28 @@ describe('gscdump-parity hooks', () => {
 })
 
 describe('onFinish failure (Codex review Area 5)', () => {
-  it('logs and does not throw when the onFinish continuation cannot be enqueued', async () => {
-    const logs: Array<{ stage: string }> = []
-    const { runtime } = await setup({ work: async () => {} }, { onLog: e => logs.push(e) })
-    // 'ghost' has no route → prepareDurableJob throws inside dispatchOnFinish
-    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], onFinish: { name: 'ghost', payload: {} } })
-
-    const r = await runtime.consumeMessage(msg(jobIds[0]!))
-    expect(r.run.status).toBe('completed')
-    expect(r.settled?.batchComplete).toBe(true) // batch still finishes
-    expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
+  it('recovers a failed onFinish enqueue before finishing parent propagation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const logs: Array<{ stage: string }> = []
+      const { d1, runtime, messages } = await setup({ work: async () => {}, finish: async () => {} }, { onLog: (e: { stage: string }) => logs.push(e) })
+      const parentId = await createParentJobBatch({ store: runtime.store })
+      const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})], parentBatchId: parentId, onFinish: { name: 'finish', payload: {} } })
+      const stageJob = runtime.repository.stageJob!.bind(runtime.repository)
+      runtime.repository.stageJob = vi.fn().mockRejectedValueOnce(new Error('D1_ERROR: Network connection lost.')).mockImplementation(stageJob)
+      await expect(runtime.consumeMessage(msg(jobIds[0]!))).rejects.toThrow('Network connection lost')
+      expect(logs.some(l => l.stage === 'onfinish-failed')).toBe(true)
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      expect(messages).toEqual([{ jobId: jobIds[0]!, queue: 'q' }])
+      await runtime.consumeMessage({ body: messages[0]!, ack: vi.fn(), retry: vi.fn() })
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: 0 })
+      expect(d1._db.prepare('SELECT id FROM jobs WHERE job_type = ?').all('finish')).toHaveLength(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1088,6 +1102,87 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
 })
 
 describe('createDurableJobsRuntime — follow-up recovery through reconcile', () => {
+  it('counts a DLQ member once after its settlement lease expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const finished = vi.fn(async () => {})
+      const { d1, runtime, messages } = await setup({ work: async () => {}, finish: finished })
+      const { batchId, jobIds } = await runtime.createBatch({
+        jobs: [await prepare('work', {}), await prepare('work', {})],
+        onFinish: { name: 'finish', payload: {} },
+      })
+      const message = msg(jobIds[0]!)
+      await runtime.consumeBatch({ queue: 'q-dlq', messages: [message] })
+      expect(message.ack).toHaveBeenCalledOnce()
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      for (const delivery of messages.filter(m => m.jobId === jobIds[0]))
+        await runtime.consumeMessage({ body: delivery, ack: vi.fn(), retry: vi.fn() })
+      expect(d1._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches WHERE id = ?').get(batchId))
+        .toEqual({ pending_jobs: 1, failed_jobs: 1 })
+      expect(d1._db.prepare('SELECT id FROM jobs WHERE job_type = ?').all('finish')).toEqual([])
+      expect(finished).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    { deferred: false, loseAt: 1 },
+    { deferred: true, loseAt: 1 },
+    { deferred: false, loseAt: 2 },
+    { deferred: true, loseAt: 2 },
+  ].flatMap(input => (['completed', 'failed'] as const).flatMap(outcome => [false, true].map(liveSibling => ({ ...input, outcome, liveSibling })))))('recovers $outcome settlement response $loseAt, deferred=$deferred, live sibling=$liveSibling', async ({ deferred, loseAt, outcome, liveSibling }) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const dispatch = vi.fn(async (_input: { batch: { id: string } }) => {})
+      const { d1, runtime, messages } = await setup({ work: async (_payload, ctx) => {
+        if (outcome === 'failed')
+          await ctx.fail('bad input')
+      } }, {
+        dispatchOnFinish: dispatch,
+        lifecycleWriteRetry: { retries: deferred ? 0 : 2, backoffMs: () => 0 },
+      })
+      const parentId = await createParentJobBatch({ store: runtime.store, onFinish: { name: 'finish', payload: {} } })
+      const { batchId, jobIds } = await runtime.createBatch({
+        jobs: [await prepare('work', {})],
+        parentBatchId: parentId,
+        onFinish: { name: 'finish', payload: {} },
+      })
+      if (liveSibling)
+        await runtime.createBatch({ jobs: [await prepare('work', {})], parentBatchId: parentId })
+      const batch = d1.batch!.bind(d1)
+      let decrements = 0
+      d1.batch = async (statements) => {
+        const result = await batch(statements)
+        const decremented = result[0]?.results?.[0] as { pending_jobs?: number } | undefined
+        if (decremented?.pending_jobs !== undefined && ++decrements === loseAt) {
+          throw new Error('D1_ERROR: Network connection lost.')
+        }
+        return result
+      }
+      await runtime.consumeMessage(msg(jobIds[0]!))
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      for (const delivery of messages.filter(message => message.jobId === jobIds[0]))
+        await runtime.consumeMessage({ body: delivery, ack: vi.fn(), retry: vi.fn() })
+      await runtime.consumeMessage(msg(jobIds[0]!))
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(batchId)).toEqual({ pending_jobs: 0 })
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: liveSibling ? 1 : 0 })
+      expect(dispatch.mock.calls.map(([input]) => input.batch.id)).toEqual(liveSibling ? [batchId] : [batchId, parentId])
+      messages.length = 0
+      vi.setSystemTime(Date.now() + 901_000)
+      await recoverDurableJobs(runtime.repository, runtime.publisher, { limit: 10 })
+      expect(messages.filter(message => message.jobId === jobIds[0])).toEqual([])
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   // Option A for #201: the terminal write flags pending follow-up work in its
   // own row. The reconcile sweep re-sends rows still flagged after their lease.
   async function setupFollowUp(outcome: 'completed' | 'failed') {
@@ -1188,7 +1283,7 @@ describe('createDurableJobsRuntime — follow-up recovery through reconcile', ()
     }
   })
 
-  it('leaves the flag for reconcile when the done write stays overloaded, without settling the batch twice', async () => {
+  it('replays completion after the done write fails without duplicating its durable continuation', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const { d1, jobId, continuations, reconcile, deliver, finishedBatches, batch } = await setupFollowUp('completed')
@@ -1196,10 +1291,11 @@ describe('createDurableJobsRuntime — follow-up recovery through reconcile', ()
       const first = await deliver({ jobId, queue: 'q' })
       restore()
 
-      // The run completed and acked; the batch decrement rolled back with the flag.
+      // The decrement and continuation committed. Only flag finalization failed.
       expect(first.result.run.status).toBe('completed')
       expect(first.message.ack).toHaveBeenCalled()
-      expect(batch().pending_jobs).toBe(1)
+      expect(batch().pending_jobs).toBe(0)
+      expect(finishedBatches()).toBe(1)
 
       vi.setSystemTime(Date.now() + 901_000)
       const swept = await reconcile()
