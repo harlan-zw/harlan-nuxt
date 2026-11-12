@@ -47,12 +47,9 @@ export interface InsertDurableBatchInput {
 }
 
 /**
- * Persistence contract for batch bookkeeping. The atomicity guarantee that makes
- * `onFinish` fire exactly once lives entirely in `decrementPending`: it MUST
- * decrement `pending_jobs` and return the *post-decrement* row in a single atomic
- * step, so that under concurrent settles exactly one caller observes
- * `pendingJobs === 0`. The D1 implementation gets this from SQLite's single-writer
- * serialization of `UPDATE ... RETURNING`.
+ * Batch bookkeeping must choose one final member. `decrementPending` saves the
+ * post-decrement row and member receipt in one transaction. Recovery returns
+ * that saved row. Only the final member resumes the batch completion chain.
  */
 export interface DurableBatchStore {
   insertBatch: (input: InsertDurableBatchInput) => Promise<void>
@@ -69,9 +66,10 @@ export interface DurableBatchStore {
   /**
    * Atomically decrement `pending_jobs` (and `failed_jobs` when `failed`), set
    * `finished_at` on the 1→0 transition, and return the resulting row. Returns
-   * `null` when the batch does not exist or has already settled.
+   * `null` when the batch does not exist or has already settled without a member
+   * receipt. With a member receipt, return its saved post-decrement row.
    */
-  decrementPending: (batchId: string, opts?: { failed?: boolean, member?: { jobId: string, attempts: number } }) => Promise<DurableBatchRecord | null>
+  decrementPending: (batchId: string, opts?: { failed?: boolean, member?: { jobId: string, attempts: number, failed?: boolean } }) => Promise<DurableBatchRecord | null>
   /** Resolve the batch a job belongs to (checks active then failed jobs). */
   getJobBatchId: (jobId: string) => Promise<string | null>
   /** Grow a batch's counters (used for parent batches / dynamically-added members). */
@@ -273,10 +271,12 @@ export function createD1DurableBatchStore(
         if (!db.batch)
           throw new Error('Atomic member settlement requires D1Database.batch')
         const { jobId, attempts } = decOpts.member
-        const table = decOpts.failed ? failedJobs : jobs
+        // Parent counters never count failures. Their receipt still belongs to
+        // the original terminal member, which may live in failed_jobs.
+        const table = (decOpts.member.failed ?? decOpts.failed) ? failedJobs : jobs
         // The receipt and counter commit together. A lost response cannot count
         // this attempt twice, even after a different settlement lease takes over.
-        const [result] = await db.batch([
+        await db.batch([
           db.prepare(`
             UPDATE ${batches}
             SET pending_jobs = pending_jobs - 1,
@@ -284,20 +284,42 @@ export function createD1DurableBatchStore(
                 finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
             WHERE id = ? AND pending_jobs > 0 AND EXISTS (
               SELECT 1 FROM ${table}
-              WHERE id = ? AND batch_id = ? AND attempts = ?
-                AND COALESCE(json_extract(payload, '$._cfJobsSettlement.batchAttempt'), -1) != ?
+              WHERE id = ? AND attempts = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM json_each(payload, '$._cfJobsSettlement.batchReceipts')
+                  WHERE json_extract(value, '$.id') = ?
+                )
             )
-            RETURNING *
-          `).bind(decOpts.failed ? 1 : 0, batchId, jobId, batchId, attempts, attempts),
+          `).bind(decOpts.failed ? 1 : 0, batchId, jobId, attempts, batchId),
           db.prepare(`
             UPDATE ${table}
-            SET payload = json_set(payload, '$._cfJobsSettlement.batchAttempt', ?)
-            WHERE id = ? AND batch_id = ? AND attempts = ?
+            SET payload = json_set(payload, '$._cfJobsSettlement.batchReceipts', json_insert(
+                COALESCE(json_extract(payload, '$._cfJobsSettlement.batchReceipts'), '[]'), '$[#]',
+                json_object('id', ?, 'row', json((
+                  SELECT json_object(
+                    'id', id, 'name', name, 'parent_batch_id', parent_batch_id,
+                    'total_jobs', total_jobs, 'pending_jobs', pending_jobs, 'failed_jobs', failed_jobs,
+                    'on_finish', on_finish, 'allow_failures', allow_failures,
+                    'site_id', site_id, 'user_id', user_id, 'finished_at', finished_at
+                  ) FROM ${batches} WHERE id = ?
+                )))
+              ))
+            WHERE id = ? AND attempts = ?
               AND EXISTS (SELECT 1 FROM ${batches} WHERE id = ?)
-          `).bind(attempts, jobId, batchId, attempts, batchId),
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(payload, '$._cfJobsSettlement.batchReceipts')
+                WHERE json_extract(value, '$.id') = ?
+              )
+          `).bind(batchId, batchId, jobId, attempts, batchId, batchId),
         ])
-        const row = result?.results?.[0] as Record<string, unknown> | undefined
-        return row ? mapBatchRow(row) : null
+        // Read the saved result even after a lost transaction response. Only
+        // the final member saved pending_jobs=0, so only it resumes the chain.
+        const receipt = await db.prepare<{ row: string }>(`
+          SELECT json_extract(value, '$.row') AS row
+          FROM ${table}, json_each(payload, '$._cfJobsSettlement.batchReceipts')
+          WHERE ${table}.id = ? AND attempts = ? AND json_extract(value, '$.id') = ?
+        `).bind(jobId, attempts, batchId).first<{ row: string }>()
+        return receipt ? mapBatchRow(JSON.parse(receipt.row)) : null
       }
       const row = await db.prepare<Record<string, unknown>>(`
         UPDATE ${batches}
@@ -498,6 +520,8 @@ export interface DispatchBatchOnFinishInput<
   /** The batch's `onFinish` continuation, with `batchId` injected into its payload. */
   continuation: DurableJobContinuation<Name, Payload & { batchId: string }, Queue>
   batch: DurableBatchRecord
+  /** Stable across recovery deliveries. Use as the durable dispatch id. */
+  dispatchKey: string
 }
 
 export interface SettleBatchMemberOptions<
@@ -566,6 +590,7 @@ async function fireOnFinishChain<
   store: DurableBatchStore,
   batch: DurableBatchRecord,
   dispatch: SettleBatchMemberOptions<Name, Payload, Queue>['dispatchOnFinish'],
+  member?: { jobId: string, attempts: number, failed?: boolean },
 ): Promise<boolean> {
   let dispatched = false
   if (batch.onFinish && dispatch) {
@@ -576,6 +601,7 @@ async function fireOnFinishChain<
         payload: { ...continuation.payload, batchId: batch.id },
       } as DispatchBatchOnFinishInput<Name, Payload, Queue>['continuation'],
       batch,
+      dispatchKey: `batch:${batch.id}:on-finish`,
     })
     dispatched = true
   }
@@ -583,9 +609,9 @@ async function fireOnFinishChain<
   // Bubble up: a completed child decrements its parent; the parent fires when it
   // in turn reaches 0. Parent decrements are never counted as failures.
   if (batch.parentBatchId) {
-    const parent = await store.decrementPending(batch.parentBatchId)
+    const parent = await store.decrementPending(batch.parentBatchId, member ? { member } : undefined)
     if (parent && parent.pendingJobs === 0)
-      dispatched = (await fireOnFinishChain(store, parent, dispatch)) || dispatched
+      dispatched = (await fireOnFinishChain(store, parent, dispatch, member)) || dispatched
   }
 
   return dispatched
@@ -670,7 +696,7 @@ export async function settleBatchMember<
 
   const batch = await opts.store.decrementPending(batchId, {
     failed: opts.failed,
-    member: opts.jobId && opts.attempts !== undefined ? { jobId: opts.jobId, attempts: opts.attempts } : undefined,
+    member: opts.jobId && opts.attempts !== undefined ? { jobId: opts.jobId, attempts: opts.attempts, failed: opts.failed } : undefined,
   })
   if (!batch)
     return { batchComplete: false, onFinishDispatched: false }
@@ -679,7 +705,8 @@ export async function settleBatchMember<
   if (batch.pendingJobs !== 0)
     return { batchComplete: false, onFinishDispatched: false, progress }
 
-  const onFinishDispatched = await fireOnFinishChain(opts.store, batch, opts.dispatchOnFinish)
+  const member = opts.jobId && opts.attempts !== undefined ? { jobId: opts.jobId, attempts: opts.attempts, failed: opts.failed } : undefined
+  const onFinishDispatched = await fireOnFinishChain(opts.store, batch, opts.dispatchOnFinish, member)
   return { batchComplete: true, onFinishDispatched, progress }
 }
 

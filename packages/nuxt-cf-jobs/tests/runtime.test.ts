@@ -121,6 +121,167 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
 const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, attempts: 1, ack: vi.fn(), retry: vi.fn() })
 
 describe('settlement recovery boundaries', () => {
+  it.each(['then', 'terminal-failure'] as const)('retries a successful %s receipt without repeating its callback', async (stage) => {
+    const continuation = vi.fn()
+    const terminalFailure = vi.fn()
+    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
+      if (stage === 'terminal-failure')
+        await ctx.fail('bad input')
+    } }, {
+      dispatchContinuations: continuation,
+      onTerminalFailure: terminalFailure,
+      lifecycleWriteRetry: { backoffMs: () => 0 },
+    })
+    const record = await prepare('work', {})
+    await runtime.enqueue(record)
+    const prepareStatement = d1.prepare.bind(d1)
+    let reject = true
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepareStatement<T>(query)
+      const bind = statement.bind.bind(statement)
+      statement.bind = (...values) => {
+        bind(...values)
+        if (query.includes('SET payload = json_set(payload, ?,') && values[0] === `$._cfJobsSettlement.stages.${stage}`) {
+          const run = statement.run.bind(statement)
+          statement.run = async () => {
+            if (reject) {
+              reject = false
+              throw new Error('D1_ERROR: D1 DB is overloaded')
+            }
+            return run()
+          }
+        }
+        return statement
+      }
+      return statement
+    }) as typeof d1.prepare
+    const message = msg(record.id)
+    const result = await runtime.consumeMessage(message)
+    expect(result.run.status).toBe(stage === 'then' ? 'completed' : 'failed')
+    expect(continuation.mock.calls.filter(([input]) => input.stage === 'then')).toHaveLength(stage === 'then' ? 1 : 0)
+    expect(terminalFailure).toHaveBeenCalledTimes(stage === 'terminal-failure' ? 1 : 0)
+    expect(message.ack).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { lostAt: 1, failed: false },
+    { lostAt: 2, failed: false },
+    { lostAt: 1, failed: true },
+    { lostAt: 2, failed: true },
+  ])('resumes final-member onFinish and parent propagation after decrement $lostAt loses its response, failed=$failed', async ({ lostAt, failed }) => {
+    const finish = vi.fn()
+    const { d1, runtime } = await setup({ work: async (_payload, ctx) => {
+      if (failed)
+        await ctx.fail('bad input')
+    } }, { dispatchOnFinish: finish })
+    await runtime.store.insertBatch({ id: 'parent', totalJobs: 0, pendingJobs: 0, onFinish: JSON.stringify({ name: 'parentFinish', payload: {} }) })
+    const { batchId, jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {})],
+      parentBatchId: 'parent',
+      onFinish: { name: 'finish', payload: {} },
+    })
+    const batch = d1.batch!.bind(d1)
+    let calls = 0
+    d1.batch = async (statements) => {
+      const result = await batch(statements)
+      if (++calls === lostAt) {
+        throw new Error('decrement response lost')
+      }
+      return result
+    }
+    await expect(runtime.consumeMessage(msg(jobIds[0]!))).rejects.toThrow('decrement response lost')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      const message = msg(jobIds[0]!)
+      expect((await runtime.consumeMessage(message)).run.status).toBe('settlement-recovered')
+      expect(message.ack).toHaveBeenCalledOnce()
+      await runtime.consumeMessage(msg(jobIds[0]!))
+      expect(finish.mock.calls.map(([input]) => input.batch.id)).toEqual([batchId, 'parent'])
+      expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get('parent')).toMatchObject({ pending_jobs: 0 })
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each(['then', 'terminal-failure', 'batch-finish'] as const)('uses stable dispatch ids after %s receipts exhaust retries and a fresh runtime recovers', async (stage) => {
+    const d1 = createSqliteD1()
+    const { binding } = createQueueBinding()
+    const calls: string[] = []
+    const makeRuntime = () => {
+      const runtime = createDurableJobsRuntime({
+        db: d1,
+        env: { Q: binding },
+        registry: createRegistry({ work: async (_payload, ctx) => {
+          if (stage === 'terminal-failure')
+            await ctx.fail('bad input')
+        }, finish: async () => {}, followup: async () => {} }),
+        resolveQueueBinding: () => 'Q',
+        createJobContext: ({ control }) => ctxFactory(control),
+        lifecycleWriteRetry: { backoffMs: () => 0 },
+        dispatchContinuations: async ({ stage: continuationStage, dispatchKey }) => {
+          if (stage !== 'then' || continuationStage !== 'then')
+            return
+          calls.push(dispatchKey)
+          await runtime.enqueue(await prepareDurableJob({ id: dispatchKey, name: 'followup', payload: {}, route: { queue: 'q', jobType: 'followup' } }))
+        },
+        onTerminalFailure: async ({ dispatchKey }) => {
+          calls.push(dispatchKey)
+          await runtime.enqueue(await prepareDurableJob({ id: dispatchKey, name: 'followup', payload: {}, route: { queue: 'q', jobType: 'followup' } }))
+        },
+      })
+      return runtime
+    }
+    const runtime = makeRuntime()
+    await runtime.repository.migrate()
+    const { jobIds } = await runtime.createBatch({
+      jobs: stage === 'batch-finish' ? [await prepare('work', {})] : [await prepare('work', {}), await prepare('work', {})],
+      onFinish: stage === 'batch-finish' ? { name: 'finish', payload: {} } : undefined,
+    })
+    let failures = 3
+    const prepareStatement = d1.prepare.bind(d1)
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepareStatement<T>(query)
+      const bind = statement.bind.bind(statement)
+      statement.bind = (...values) => {
+        bind(...values)
+        if (query.includes('SET payload = json_set(payload, ?,') && String(values[0]).startsWith(`$._cfJobsSettlement.stages.${stage}`)) {
+          const run = statement.run.bind(statement)
+          statement.run = async () => {
+            if (failures-- > 0)
+              throw new Error('D1_ERROR: D1 DB is overloaded')
+            return run()
+          }
+        }
+        return statement
+      }
+      return statement
+    }) as typeof d1.prepare
+    const original = msg(jobIds[0]!)
+    expect((await runtime.consumeMessage(original)).run.status).toBe('write-deferred')
+    expect(original.ack).not.toHaveBeenCalled()
+    expect(original.retry).toHaveBeenCalledOnce()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 901_000)
+    try {
+      failures = 1
+      const recovered = msg(jobIds[0]!)
+      expect((await makeRuntime().consumeMessage(recovered)).run.status).toBe('settlement-recovered')
+      expect(recovered.ack).toHaveBeenCalledOnce()
+      expect(d1._db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE job_type = ?').get(stage === 'batch-finish' ? 'finish' : 'followup')).toMatchObject({ n: 1 })
+      if (stage !== 'batch-finish') {
+        expect(calls).toHaveLength(2)
+        expect(calls[0]).toBe(calls[1])
+        await makeRuntime().consumeMessage(msg(jobIds[1]!))
+        expect(calls).toHaveLength(3)
+        expect(calls[0]).not.toBe(calls[2])
+        expect(d1._db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE job_type = ?').get('followup')).toMatchObject({ n: 2 })
+      }
+    }
+    finally {
+      clock.mockRestore()
+    }
+  })
+
   it.each(['rollback', 'lost-response'] as const)('keeps the member receipt and decrement atomic after $mode', async (mode) => {
     const continuations = vi.fn()
     const finish = vi.fn()
@@ -137,7 +298,7 @@ describe('settlement recovery boundaries', () => {
       const prepareStatement = d1.prepare.bind(d1)
       d1.prepare = (<T>(query: string) => {
         const statement = prepareStatement<T>(query)
-        if (query.includes('SET payload = json_set(payload, \'$._cfJobsSettlement.batchAttempt\'')) {
+        if (query.includes('SET payload = json_set(payload, \'$._cfJobsSettlement.batchReceipts\'')) {
           const run = statement.run.bind(statement)
           statement.run = async () => {
             if (interrupt) {
