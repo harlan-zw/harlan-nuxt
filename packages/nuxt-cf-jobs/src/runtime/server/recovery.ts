@@ -68,6 +68,7 @@ export async function recoverDurableJobs<
   const redeliveryGraceSeconds = Math.max(0, opts.redeliveryGraceSeconds ?? 120)
   const limit = opts.limit ?? 100
   const staleBefore = nowSeconds - staleSeconds
+  const pending = await repository.findPendingSettlements?.({ now: nowSeconds, limit }) ?? []
 
   // Terminalize exhausted stale reservations FIRST (move them to failed_jobs).
   // Doing this before the find/release below means the revive path only ever
@@ -134,9 +135,9 @@ export async function recoverDurableJobs<
     : []
 
   const releasedIds = new Set(stale.slice(0, released).map(job => job.id))
-  const dispatchable = uniqueJobs(redeliveryGraceSeconds > 0
+  const dispatchable = uniqueJobs([...pending, ...(redeliveryGraceSeconds > 0
     ? [...unpublished, ...staleReleased, ...orphaned.filter(job => !releasedIds.has(job.id))]
-    : [...unpublished, ...stale.slice(0, released), ...staleReleased, ...orphaned]).slice(0, limit)
+    : [...unpublished, ...stale.slice(0, released), ...staleReleased, ...orphaned])]).slice(0, limit)
   const publicationRepository = repository as DurableJobRecoveryRepository<Queue, Record> & Partial<DurableJobPublicationRepository>
   const dispatchResults: Array<DispatchDurableJobBatchResult<Queue>> = publicationRepository.markJobsPublished && publicationRepository.noteJobsDispatchFailure
     ? (await publishDurableJobBatch(

@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -50,7 +50,7 @@ function createQueueBinding() {
     messages,
     binding: {
       send: (m: { jobId: string, queue: string }) => { messages.push(m) },
-      sendBatch: (batch: Array<{ jobId: string, queue: string }>) => { messages.push(...batch) },
+      sendBatch: (batch: Array<{ body: { jobId: string, queue: string } }>) => { messages.push(...batch.map(entry => entry.body)) },
     },
   }
 }
@@ -111,7 +111,7 @@ function rows(d1: ReturnType<typeof createSqliteD1>, table: string): number {
   return Number((d1._db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n)
 }
 
-const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, ack: vi.fn(), retry: vi.fn() })
+const msg = (jobId: string) => ({ body: { jobId, queue: 'q' }, attempts: 1, ack: vi.fn(), retry: vi.fn() })
 
 describe('createDurableJobsRuntime — batch happy path', () => {
   it.each([
@@ -790,6 +790,92 @@ describe('onFinish failure (Codex review Area 5)', () => {
 })
 
 describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
+  it.each([1, 3])('preserves a deferred success through stale reconciliation with maxAttempts=%s', async (maxAttempts) => {
+    const handle = vi.fn(async () => {})
+    const stages: string[] = []
+    const { d1, runtime } = await setup({ work: handle }, {
+      lifecycleWriteRetry: { retries: 0 },
+      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+    d1._db.prepare('UPDATE jobs SET max_attempts = ?').run(maxAttempts)
+    const mutation = vi.spyOn(runtime.repository, 'completeJob').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded.'))
+    expect((await runtime.consumeMessage(msg(jobIds[0]!))).run.status).toBe('write-deferred')
+    mutation.mockRestore()
+    await recoverDurableJobs(runtime.repository, runtime.publisher, { now: Math.floor(Date.now() / 1000) + 901 })
+    const recovered = await runtime.consumeMessage(msg(jobIds[0]!))
+    expect(recovered.run.status).toBe('completed')
+    expect(recovered.settled?.batchComplete).toBe(true)
+    expect(stages).toEqual(['then', 'finally'])
+    expect(handle).toHaveBeenCalledTimes(1)
+    expect(rows(d1, 'failed_jobs')).toBe(0)
+    d1._db.close()
+  })
+
+  it.each(['complete', 'fail'] as const)('recovers saved %s follow-up work after lease retries reach the DLQ', async (write) => {
+    const handle = vi.fn(async () => {})
+    const stages: string[] = []
+    const onTerminalFailure = vi.fn()
+    const { d1, runtime, messages } = await setup({ work: handle }, {
+      reclaimAfterSeconds: 900,
+      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
+      onTerminalFailure,
+    })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
+    const job = (await runtime.repository.claimJob(jobIds[0]!))!
+    await runtime.repository.pendingSettlements!.save({
+      token: crypto.randomUUID(),
+      job,
+      write,
+      execution: write === 'complete'
+        ? { _tag: 'dispatch', dispatch: { success: true } }
+        : { _tag: 'throw', error: 'bad input' },
+    })
+    if (write === 'complete')
+      await runtime.repository.completeJob(job)
+    else
+      await runtime.repository.failJob(job, 'bad input')
+    const retry = msg(job.id)
+    await runtime.consumeMessage(retry)
+    expect(retry.retry).toHaveBeenCalledWith({ delaySeconds: expect.any(Number) })
+    for (let attempts = 2; attempts <= 4; attempts++)
+      await runtime.consumeBatch({ queue: 'q-dlq', messages: [{ ...msg(job.id), attempts }] })
+    // No original queue delivery remains. A fresh sweep must recreate transport.
+    d1._db.prepare('UPDATE jobs_settlements SET reserved_until = 0').run()
+    messages.length = 0
+    const sweep = await recoverDurableJobs(runtime.repository, runtime.publisher)
+    expect(sweep.dispatchable).toContainEqual({ id: job.id, queue: 'q' })
+    const fresh = await setup({ work: handle }, {
+      dispatchContinuations: ({ stage }: { stage: string }) => stages.push(stage),
+      onTerminalFailure,
+    }, d1)
+    await fresh.runtime.consumeMessage(msg(messages[0]!.jobId))
+    expect(handle).not.toHaveBeenCalled()
+    expect(stages).toEqual(write === 'complete' ? ['then', 'finally'] : ['catch', 'finally'])
+    expect(onTerminalFailure).toHaveBeenCalledTimes(write === 'fail' ? 1 : 0)
+    expect(d1._db.prepare('SELECT pending_jobs, failed_jobs FROM job_batches').get())
+      .toMatchObject({ pending_jobs: 0, failed_jobs: write === 'fail' ? 1 : 0 })
+    expect(retry.retry.mock.calls[0]![0].delaySeconds).toBeGreaterThanOrEqual(900)
+    d1._db.close()
+  })
+
+  it('defers transient settlement cleanup without aborting sibling messages', async () => {
+    const handle = vi.fn(async () => {})
+    const { d1, runtime } = await setup({ work: handle }, { lifecycleWriteRetry: { backoffMs: () => 0 } })
+    const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {}), await prepare('work', {})] })
+    const cleanup = vi.spyOn(runtime.repository.pendingSettlements!, 'finish')
+    for (let i = 0; i < 3; i++)
+      cleanup.mockRejectedValueOnce(new Error('D1_ERROR: D1 DB is overloaded.'))
+    const first = msg(jobIds[0]!)
+    const second = msg(jobIds[1]!)
+    await runtime.consumeBatch({ queue: 'q', messages: [first, second] })
+    expect(first.retry).toHaveBeenCalledOnce()
+    expect(first.ack).not.toHaveBeenCalled()
+    expect(second.ack).toHaveBeenCalledOnce()
+    expect(handle).toHaveBeenCalledTimes(2)
+    d1._db.close()
+  })
+
   it.each([
     { write: 'complete', confirmationMissing: false },
     { write: 'fail', confirmationMissing: false },
@@ -845,7 +931,7 @@ describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
     d1._db.close()
   })
 
-  it('does not settle a stale claimant after ownership changes during backoff', async () => {
+  it('prevents a new handler claim while saved execution is waiting for a write', async () => {
     const stages: string[] = []
     const { d1, runtime } = await setup({ work: async () => {} }, {
       reclaimAfterSeconds: 60,
@@ -855,15 +941,15 @@ describe('createDurableJobsRuntime — overloaded lifecycle write', () => {
     const { jobIds } = await runtime.createBatch({ jobs: [await prepare('work', {})] })
     const persist = runtime.repository.completeJob.bind(runtime.repository)
     vi.spyOn(runtime.repository, 'completeJob').mockImplementationOnce(async () => {
-      d1._db.prepare('UPDATE jobs SET reserved_at = unixepoch() - 61 WHERE id = ?').run(jobIds[0]!)
-      expect((await runtime.repository.claimJob(jobIds[0]!))?.attempts).toBe(2)
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000)
+      expect(await runtime.repository.claimJob(jobIds[0]!)).toBeNull()
+      clock.mockRestore()
       throw new Error('D1_ERROR: D1 DB is overloaded.')
     }).mockImplementation(persist)
     const result = await runtime.consumeMessage(msg(jobIds[0]!))
-    expect(result.run).toEqual({ status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } })
-    expect(result.settled).toBeNull()
-    expect(stages).toEqual([])
-    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches').get()).toMatchObject({ pending_jobs: 1 })
+    expect(result.run.status).toBe('completed')
+    expect(result.settled?.batchComplete).toBe(true)
+    expect(stages).toEqual(['then', 'finally'])
     d1._db.close()
   })
 
