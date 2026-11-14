@@ -51,8 +51,8 @@ catalog:
   typescript: ^5.9.3
   unbuild: ^3.6.1
   unstorage: ^1.17.5
-  vite: ^8.3.2
-  vitest: ^4.1.10
+  vite: ^8.3.3
+  vitest: ^5.0.5
   vue: ^3.5.43
   vue-router: ^5.3.1
   vue-tsc: ^3.3.9
