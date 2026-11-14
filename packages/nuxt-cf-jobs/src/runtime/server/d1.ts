@@ -689,21 +689,34 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     },
 
     async findPendingSettlements(query) {
-      // Bounded by the terminal timestamp indexes, so the json filter reads
-      // only rows that turned terminal inside the window.
+      // Both ends of the window are ranges on the terminal timestamp indexes,
+      // so the json filter reads only the window. A two-sided range also keeps
+      // the planner on the index when statistics show most rows terminal.
+      // A terminal write sets leaseUntil to its own time plus the lease, and a
+      // claim only moves it later. A row inside its first lease is never
+      // eligible, so the window ends one lease ago.
+      const terminalBefore = query.now - leaseSeconds
       const flagged = `
         json_extract(payload, '$._cfJobsSettlement.done') = 0
         AND json_extract(payload, '$._cfJobsSettlement.leaseUntil') <= ?`
       return await all<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(db.prepare<Pick<D1DurableJobRecord<Queue>, 'id' | 'queue'>>(`
         SELECT id, queue FROM (
           SELECT id, queue FROM ${jobsTable}
-          WHERE completed_at IS NOT NULL AND completed_at >= ? AND ${flagged}
+          WHERE completed_at IS NOT NULL AND completed_at >= ? AND completed_at <= ? AND ${flagged}
           UNION ALL
           SELECT id, queue FROM ${failedJobsTable}
-          WHERE failed_at >= ? AND ${flagged}
+          WHERE failed_at >= ? AND failed_at <= ? AND ${flagged}
         )
         LIMIT ?
-      `).bind(query.terminalAfter, query.now, query.terminalAfter, query.now, query.limit ?? 100))
+      `).bind(
+        query.terminalAfter,
+        terminalBefore,
+        query.now,
+        query.terminalAfter,
+        terminalBefore,
+        query.now,
+        query.limit ?? 100,
+      ))
     },
 
     async completeJob(job, result) {
