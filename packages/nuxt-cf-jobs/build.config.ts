@@ -10,6 +10,7 @@ export default defineBuildConfig({
   externals: [
     '#app',
     '#imports',
+    'node:sqlite',
     'nitropack',
     'nitropack/types',
   ],
