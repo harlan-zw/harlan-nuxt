@@ -85,6 +85,12 @@ const runtimeConfigPluginPath = resolve(
     ? 'runtime/server/plugins/runtime-config.ts'
     : 'runtime/server/plugins/runtime-config.js',
 )
+const requestLifetimePluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/request-lifetime.ts'
+    : 'runtime/server/plugins/request-lifetime.js',
+)
 
 /**
  * Cloudflare context worth one flat record per request.
@@ -183,6 +189,7 @@ export function configureNitroCloudflare(
   }, authored._tag === 'authored' ? authored.config : {})
 
   addNitroPlugin(nitro, runtimeConfigPluginPath)
+  addNitroPlugin(nitro, requestLifetimePluginPath)
 
   if (nitro.cloudflare.wrangler.cache?.enabled)
     addNitroPlugin(nitro, workersCachePluginPath)

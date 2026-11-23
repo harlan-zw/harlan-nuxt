@@ -144,6 +144,14 @@ describe('configureNitroCloudflare', () => {
 
     expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/runtime-config\.ts$/))
   })
+
+  it('keeps each Worker request alive until its response settles', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/request-lifetime\.ts$/))
+  })
 })
 
 describe('authored Wrangler config', () => {
