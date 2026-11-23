@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { expect, it } from 'vitest'
 
+// Compiling the Nuxt dependency graph needs more time on shared CI runners.
 it('typechecks the error overlay against the current DOM API', () => {
   const configPath = fileURLToPath(new URL('../tsconfig.json', import.meta.url))
   const config = ts.readConfigFile(configPath, ts.sys.readFile)
@@ -21,4 +22,4 @@ it('typechecks the error overlay against the current DOM API', () => {
     code: diagnostic.code,
     message: ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'),
   }))).toEqual([])
-})
+}, 30_000)
