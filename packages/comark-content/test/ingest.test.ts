@@ -20,6 +20,14 @@ afterEach(async () => {
 })
 
 describe('markdown ingestion', () => {
+  it('links bare domains in content', async () => {
+    const parse = await createContentParser()
+
+    expect((await parse('Visit www.example.com')).nodes).toMatchObject([
+      ['p', {}, 'Visit ', ['a', { href: 'http://www.example.com' }, 'www.example.com']],
+    ])
+  })
+
   it('highlights fenced code when requested', async () => {
     const parse = await createContentParser({ highlight: true })
     const document = await parse('```ts{1} [app.ts]\nconst ready = true\n```')
