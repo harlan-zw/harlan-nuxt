@@ -7,7 +7,7 @@ import process from 'node:process'
 import { test } from 'node:test'
 import { parse, stringify } from 'yaml'
 
-for (const lane of ['stable']) {
+for (const lane of ['stable', 'nightly']) {
   test(`${lane} locked content parser links bare domains`, async () => {
     const lock = parse(await readFile(new URL(`../test/nuxt-migration/locks/${lane}.yaml`, import.meta.url), 'utf8'))
     const content = Object.entries(lock.snapshots).find(([name]) => name.startsWith('@harlan-zw/comark-content@file:'))?.[1] as { dependencies: Record<string, string> }
