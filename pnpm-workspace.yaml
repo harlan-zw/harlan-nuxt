@@ -19,13 +19,13 @@ catalog:
   '@harlan-zw/jev': ^0.3.0
   '@sentry/cloudflare': ^10.70.0 || ^11.0.0
   '@sentry/nuxt': ^10.70.0 || ^11.0.0
-  '@nuxt/kit': ^4.6.0
+  '@nuxt/kit': ^4.6.4
   '@nuxt/module-builder': ^1.0.2
-  '@nuxt/schema': ^4.6.0
-  '@nuxt/test-utils': ^4.1.0
-  '@types/node': ^26.1.1
+  '@nuxt/schema': ^4.6.4
+  '@nuxt/test-utils': ^4.4.0
+  '@types/node': ^26.6.6
   '@vitest/coverage-v8': 4.1.10
-  '@vue/test-utils': ^2.4.11
+  '@vue/test-utils': ^2.6.0
   '@vueuse/core': ^14.4.0
   citty: ^0.2.2
   comark: 0.6.2
@@ -33,33 +33,33 @@ catalog:
   consola: ^3.4.2
   defu: ^6.1.7
   drizzle-orm: 1.0.0-rc.4
-  eslint: ^10.8.1
+  eslint: ^10.15.0
   eslint-plugin-harlanzw: ^0.17.1
-  eslint-plugin-vue: ^10.10.0
-  evlog: ^2.26.0
+  eslint-plugin-vue: ^10.12.1
+  evlog: ^2.37.1
   h3: 2.0.1-rc.25
   happy-dom: ^20.11.1
   jiti: ^2.7.0
   nitro: 3.0.260903-beta
-  nitropack: ^2.13.4
-  nuxt: ^4.6.0
-  ohash: ^2.0.11
+  nitropack: ^2.13.6
+  nuxt: ^4.6.4
+  ohash: ^2.0.12
   pathe: ^2.0.3
-  pino: ^10.3.1
+  pino: ^10.4.0
   rangi: ^2.2.0
-  rollup: ^4.62.4
+  rollup: ^4.68.8
   typescript: ^5.9.3
   unbuild: ^3.6.1
-  unstorage: ^1.17.5
-  vite: ^8.3.2
+  unstorage: ^1.17.6
+  vite: ^8.3.8
   vitest: ^4.1.10
-  vue: ^3.5.43
-  vue-router: ^5.3.1
-  vue-tsc: ^3.3.9
+  vue: ^3.5.46
+  vue-router: ^5.5.1
+  vue-tsc: ^3.3.14
   wrangler: ^4.120.1
-  yaml: ^2.9.0
-  zod: ^4.4.3
-  playwright: ^1.63.0
+  yaml: ^2.9.1
+  zod: ^4.6.7
+  playwright: ^1.65.1
 
 ignoredBuiltDependencies:
   - esbuild
