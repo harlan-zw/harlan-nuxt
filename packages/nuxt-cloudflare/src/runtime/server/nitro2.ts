@@ -3,6 +3,9 @@ import { defineNitroPlugin as definePlugin } from 'nitropack/runtime'
 
 export { useRuntimeConfig } from 'nitropack/runtime'
 
+/** Registers a plugin that receives the Nitro app itself, not the hook-adapted copy. */
+export const defineNitroAppPlugin: (setup: NitroAppPlugin) => NitroAppPlugin = definePlugin
+
 export function defineNitroPlugin(setup: NitroAppPlugin) {
   return definePlugin((app) => {
     const hooks = app.hooks
