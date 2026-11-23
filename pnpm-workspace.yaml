@@ -38,7 +38,7 @@ catalog:
   eslint-plugin-vue: ^10.12.1
   evlog: ^2.37.1
   h3: 2.0.1-rc.25
-  happy-dom: ^20.11.1
+  happy-dom: ^21.0.4
   jiti: ^2.7.0
   nitro: 3.0.260903-beta
   nitropack: ^2.13.6
@@ -52,7 +52,7 @@ catalog:
   unbuild: ^3.6.1
   unstorage: ^1.17.6
   vite: ^8.3.8
-  vitest: ^4.1.10
+  vitest: ^4.1.11
   vue: ^3.5.46
   vue-router: ^5.5.1
   vue-tsc: ^3.3.14
