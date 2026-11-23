@@ -11,6 +11,10 @@ export default defineNuxtConfig({
   future: {
     compatibilityVersion: 5,
   },
+  // This fixture exercises server auto-imports, which Nuxt 5 disables by default.
+  experimental: {
+    nitroAutoImports: true,
+  },
   modules: [
     '../../../src/module',
     ...(measureSize ? ['../../../../nuxt-dx/src/module'] : []),
