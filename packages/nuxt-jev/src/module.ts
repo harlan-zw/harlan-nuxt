@@ -1,10 +1,11 @@
+import type { NuxtModule } from '@nuxt/schema'
 import type { ModuleOptions } from './types'
 import { defineNuxtModule } from '@nuxt/kit'
 import defu from 'defu'
 
 export type { ModuleOptions } from './types'
 
-export default defineNuxtModule<ModuleOptions>({
+const module: NuxtModule<ModuleOptions> = defineNuxtModule<ModuleOptions>({
   meta: {
     name: '@harlan-zw/nuxt-jev',
     configKey: 'jev',
@@ -28,3 +29,5 @@ export default defineNuxtModule<ModuleOptions>({
     ) as typeof nuxt.options.runtimeConfig.jev
   },
 })
+
+export default module
