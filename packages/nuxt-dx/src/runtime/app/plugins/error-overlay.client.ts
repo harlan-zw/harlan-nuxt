@@ -733,7 +733,7 @@ export default defineNuxtPlugin({
       useEventListener(badge, 'click', () => {
         if (Date.now() < suppressClickUntil)
           return
-        setPanelOpen(panel.hidden)
+        setPanelOpen(Boolean(panel.hidden))
       })
       useEventListener(closeButton, 'click', () => setPanelOpen(false, true))
       useEventListener(clearButton, 'click', () => {
