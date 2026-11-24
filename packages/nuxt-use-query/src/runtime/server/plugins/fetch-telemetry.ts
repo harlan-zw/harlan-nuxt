@@ -1,3 +1,4 @@
+import type { ServerRequest } from 'nitro/types'
 import type { DuplicateFetchTelemetryEvent, FetchSummaryTelemetryEvent, FetchTelemetryEvent, FetchTelemetryState, FetchTimeoutTelemetryEvent, FetchWaterfallTelemetryEvent, LargePayloadTelemetryEvent, NestedFetchTelemetryEvent, RecursiveFetchTelemetryEvent, SlowFetchTelemetryEvent } from '../../telemetry'
 import { consola } from 'consola'
 import { defineNitroPlugin, useEvent, useRuntimeConfig } from '#nuxt-use-query/nitro'
@@ -423,8 +424,13 @@ function nativeRequest(request: Request, opts: Record<string, unknown> | undefin
     ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)])
     : request.signal
   const next = new Request(request, { headers: opts?.headers as HeadersInit | undefined, signal })
-  const platform = request as Request & { context?: unknown, runtime?: unknown }
-  return Object.assign(next, { context: platform.context, runtime: platform.runtime })
+  const platform = request as ServerRequest
+  return Object.assign(next, {
+    context: platform.context,
+    ip: platform.ip,
+    runtime: platform.runtime,
+    waitUntil: platform.waitUntil?.bind(platform),
+  })
 }
 
 function readOptions() {
