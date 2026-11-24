@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { useNitro } from '@nuxt/kit'
+import { getRollupConfig } from 'nitropack/rollup'
 import { loadNuxt } from 'nuxt'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import sponsorsModule from '../src/module'
@@ -27,6 +28,7 @@ async function loadSite(input: {
   options?: Record<string, unknown>
   runtimeConfig?: Record<string, unknown>
   lateNitroToken?: boolean
+  lateInitToken?: 'slot' | 'sponsors' | 'config'
 }): Promise<Nuxt> {
   for (const [name, value] of Object.entries(input.env)) {
     process.env[name] = value
@@ -41,6 +43,17 @@ async function loadSite(input: {
       modules: [
         (_options, nuxt) => sponsorsModule({ login: 'harlan-zw', ...input.options }, nuxt),
         (_options, nuxt) => {
+          if (input.lateInitToken) {
+            nuxt.hook('nitro:init', (nitro) => {
+              const sponsors = { ...nitro.options.runtimeConfig.githubSponsors, token: PLACEHOLDER }
+              if (input.lateInitToken === 'config')
+                nitro.options.runtimeConfig = { ...nitro.options.runtimeConfig, githubSponsors: sponsors }
+              else if (input.lateInitToken === 'sponsors')
+                nitro.options.runtimeConfig.githubSponsors = sponsors
+              else
+                (nitro.options.runtimeConfig.githubSponsors as { token: string }).token = PLACEHOLDER
+            })
+          }
           if (input.lateNitroToken) {
             nuxt.hook('nitro:config', (config) => {
               config.runtimeConfig ??= {}
@@ -57,6 +70,32 @@ async function loadSite(input: {
 }
 
 describe('build-time token boundary', () => {
+  it.each(['slot', 'sponsors', 'config'] as const)('rejects a later nitro:init token at bundle serialization after replacing %s', async (lateInitToken) => {
+    const output: string[] = []
+    for (const stream of [process.stdout, process.stderr]) {
+      vi.spyOn(stream, 'write').mockImplementation((chunk) => {
+        output.push(String(chunk))
+        return true
+      })
+    }
+    const error = await loadSite({ env: {}, options: { mode: 'runtime' }, lateInitToken })
+      // Exercise Nitro's real config replacement without a full site build.
+      .then(nuxt => nuxt.runWithContext(async () => {
+        const config = getRollupConfig(useNitro())
+        for (const plugin of config.plugins ?? []) {
+          if (!plugin || !('name' in plugin) || plugin.name !== 'replace' || !('transform' in plugin) || !plugin.transform)
+            continue
+          const transform = typeof plugin.transform === 'function' ? plugin.transform : plugin.transform.handler
+          await Reflect.apply(transform, {}, ['export default process.env.RUNTIME_CONFIG', 'runtime-config.js'])
+        }
+        return undefined
+      }))
+      .catch((cause: unknown) => String(cause))
+    expect(error).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(error?.includes(PLACEHOLDER)).toBe(false)
+    expect(output.join('').includes(PLACEHOLDER)).toBe(false)
+  })
+
   it.each([
     ['the default env name', 'NUXT_GITHUB_SPONSORS_TOKEN', {}],
     ['an aliased env name', 'NUXT_GITHUB_AUTH_TOKEN', { tokenEnv: 'NUXT_GITHUB_AUTH_TOKEN' }],
