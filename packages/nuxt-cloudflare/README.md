@@ -87,6 +87,16 @@ Persistent KV mounts are never wrapped. The expiry policy applies only to cache 
 
 Everything below is optional. The defaults cover a plain deploy.
 
+### Local development with Node
+
+If Miniflare cannot load your Nitro 3 app, set `nuxtCloudflare.dev: true` in `nuxt.config.ts`.
+`nuxt dev` runs the app in Node with local bindings from its Wrangler config.
+Wrangler stores local binding data in `.wrangler/state/v3` and disables remote bindings.
+Set `dev.configPath` or `dev.persistDir` to use paths relative to the Nuxt root.
+Set `dev.persistDir: false` to keep binding data in memory.
+
+### KV cache
+
 If you have no cache mount, configure one:
 
 ```ts

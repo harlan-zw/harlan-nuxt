@@ -1,11 +1,13 @@
 import type {} from '@harlan-zw/nuxt-checkin'
 import type { Nuxt } from '@nuxt/schema'
+import type { NitroConfig as Nitro3Config } from 'nitro/types'
 import type { Nitro } from 'nitropack/types'
 import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy, WranglerConfigInput } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
+import { pathToFileURL } from 'node:url'
+import { addTemplate, addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -18,6 +20,7 @@ import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticA
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
+  findProjectWranglerConfig,
   formatWranglerDiagnostics,
   readAuthoredWranglerConfig,
   readWranglerJsonFile,
@@ -34,6 +37,13 @@ export interface ModuleOptions {
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
+  /** Run Nitro 3 in Node during development with local Wrangler bindings. */
+  dev?: boolean | {
+    /** Wrangler config path relative to the Nuxt root. Defaults to the root Wrangler config. */
+    configPath?: string
+    /** Local state directory relative to the Nuxt root. Defaults to `.wrangler/state/v3`. */
+    persistDir?: string | false
+  }
   doctor?: WranglerDiagnosticPolicy
   kvCache?: false | {
     binding: string
@@ -324,6 +334,57 @@ async function auditGeneratedWranglerConfig(
 export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void {
   if (!options.enabled)
     return
+  if (nuxt.options.dev && options.dev) {
+    if (getNitroVersion(nuxt) !== 3)
+      throw new Error('[nuxt-cloudflare] nuxtCloudflare.dev requires Nitro 3.')
+
+    const rootDir = nuxt.options.rootDir
+    const { configPath, persistDir } = options.dev === true ? {} : options.dev
+    const platform = {
+      rootDir,
+      configPath: configPath ? resolve(rootDir, configPath) : findProjectWranglerConfig(rootDir),
+      persist: persistDir === false ? false : { path: resolve(rootDir, persistDir ?? '.wrangler/state/v3') },
+    }
+    const factory = resolve(import.meta.dirname, import.meta.url.endsWith('.ts')
+      ? 'runtime/server/plugins/dev-proxy.ts'
+      : 'runtime/server/plugins/dev-proxy.js')
+    let cloudflareConfig = nuxt.options.nitro as NitroCloudflareShape
+    const plugin = addTemplate({
+      filename: 'nuxt-cloudflare-dev-proxy.mjs',
+      // Nitro invokes plugins synchronously. Module evaluation must await the proxy.
+      getContents: () => `import { createDevProxy } from ${JSON.stringify(pathToFileURL(factory).href)}\nexport default await createDevProxy(${JSON.stringify({ ...platform, wrangler: cloudflareConfig.cloudflare?.wrangler })})`,
+      write: true,
+    })
+
+    nuxt.hook('nitro:config', (nitroConfig) => {
+      cloudflareConfig = nitroConfig as NitroCloudflareShape
+      const devConfig = nitroConfig as Pick<Nitro3Config, 'devServer' | 'noExternals' | 'plugins' | 'rolldownConfig'>
+      devConfig.devServer = { ...devConfig.devServer, runner: 'node-worker' }
+      devConfig.plugins = [plugin.dst, ...(devConfig.plugins ?? [])]
+      if (devConfig.noExternals !== true)
+        devConfig.noExternals = [...(devConfig.noExternals || []), '@harlan-zw/nuxt-cloudflare']
+
+      // Let Node await the standalone plugin before loading Nitro's app graph.
+      // Inlining its top-level await creates a cycle in Rolldown's dev bundle.
+      const rolldown = devConfig.rolldownConfig
+      const external = rolldown?.external
+      const paths = rolldown?.output?.paths
+      const pluginUrl = pathToFileURL(plugin.dst).href
+      devConfig.rolldownConfig = {
+        ...rolldown,
+        external: typeof external === 'function'
+          ? (id, importer, resolved) => id === plugin.dst || external(id, importer, resolved)
+          : [plugin.dst, ...[external ?? []].flat()],
+        output: {
+          ...rolldown?.output,
+          // Node treats raw drive letters as URL schemes and hashes as fragments.
+          paths: typeof paths === 'function'
+            ? id => id === plugin.dst ? pluginUrl : paths(id)
+            : { ...paths, [plugin.dst]: pluginUrl },
+        },
+      }
+    })
+  }
   if (options.checks?.length) {
     const checkResolver = createResolver(import.meta.url)
     nuxt.hook('checkin:register', (registry) => {
