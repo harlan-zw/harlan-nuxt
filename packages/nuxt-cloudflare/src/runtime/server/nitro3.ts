@@ -1,5 +1,6 @@
 import type { NitroAppPlugin } from 'nitro/types'
 import { definePlugin } from 'nitro'
+import { useRequest } from 'nitro/context'
 
 export { useRuntimeConfig } from 'nuxt/server'
 
@@ -27,4 +28,18 @@ export function defineNitroPlugin(setup: NitroAppPlugin) {
     }) as typeof hooks.hook
     return setup({ ...app, hooks: adapted })
   })
+}
+
+/**
+ * The request Nitro serves now, from its async context. Undefined outside a
+ * request, or when `experimental.asyncContext` is off.
+ */
+export function currentRequest(): Request | undefined {
+  try {
+    return useRequest()
+  }
+  catch {
+    // `useRequest` throws outside a request context. The caller then keeps its own lifetime.
+    return undefined
+  }
 }
