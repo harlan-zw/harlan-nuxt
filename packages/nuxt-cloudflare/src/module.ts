@@ -481,12 +481,11 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
         return
 
       nitro.hooks.hook('prerender:init', (prerenderer) => {
-        const { kv } = prerenderer.options as typeof prerenderer.options & {
-          kv?: Record<string, NitroStorageMount>
-        }
-        // Nitro 3 resolves app overrides before this hook. Its Node prerenderer has no Worker bindings.
-        if (kv?.cache?.driver === cacheDriverPath)
-          kv.cache = { driver: 'memory' }
+        const { storage, devStorage } = prerenderer.options
+        // Nitro 3 merges devStorage over storage for Node prerendering.
+        const mounts = devStorage?.cache ? devStorage : storage
+        if (mounts?.cache?.driver === cacheDriverPath)
+          mounts.cache = { driver: 'memory' }
       })
 
       nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(
