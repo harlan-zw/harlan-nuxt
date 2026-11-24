@@ -50,7 +50,7 @@ export default defineNuxtConfig({
 Set `NUXT_GITHUB_SPONSORS_TOKEN`. The token must be a classic token, because a
 fine-grained token cannot call the GitHub GraphQL API.
 
-The token never enters runtime config, so it never ships in the server bundle.
+The build never writes the token into runtime config, so it never ships in the server bundle.
 The route reads it from the environment on each request. A prerender reads the
 build environment. A deployed server reads its own environment, for example a
 Worker secret. If `runtimeConfig.githubSponsors.token` has a value in your
@@ -92,7 +92,8 @@ out of the rendered HTML and need no `onMounted` gate of your own. It needs the
 token in the server's runtime environment.
 
 At runtime the route reads `tokenEnv` first. If that is unset, it reads
-`NUXT_GITHUB_SPONSORS_TOKEN` through Nuxt's runtime config override.
+`NUXT_GITHUB_SPONSORS_TOKEN` from the Worker request bindings, then through
+Nuxt's runtime config override.
 
 ## Tier keys
 
