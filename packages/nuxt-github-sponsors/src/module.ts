@@ -60,44 +60,15 @@ export default defineNuxtModule<ModuleOptions>({
     const token = detectSponsorToken(process.env, tokenEnv)
     const privateConfig = nuxt.options.runtimeConfig as Record<string, unknown>
     const existingPrivate = privateConfig.githubSponsors as Record<string, unknown> | undefined
-    const assertEmptyToken = (runtimeConfig: Record<string, unknown>) => {
-      const sponsors = runtimeConfig.githubSponsors as Record<string, unknown> | undefined
-      if (sponsors?.token) {
-        throw new TypeError([
-          'runtimeConfig.githubSponsors.token must be empty.',
-          'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
-          `Set the token in the ${tokenEnv} environment variable instead.`,
-        ].join(' '))
-      }
+    // Checks the site's own config. A later build hook that writes the slot is out of
+    // scope: guarding that means patching Nitro internals.
+    if (existingPrivate?.token) {
+      throw new TypeError([
+        'runtimeConfig.githubSponsors.token must be empty.',
+        'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
+        `Set the token in the ${tokenEnv} environment variable instead.`,
+      ].join(' '))
     }
-    assertEmptyToken(privateConfig)
-    const guardSerialization = (options: { runtimeConfig: Record<string, unknown> }) => {
-      const protect = (config: Record<string, unknown>) => {
-        // Nitro 2 and 3 call JSON.stringify when emitting runtime config.
-        // Check then, since later hooks can still populate or replace the slot.
-        Object.defineProperty(config, 'toJSON', {
-          configurable: true,
-          value: () => {
-            assertEmptyToken(config)
-            return config
-          },
-        })
-        return config
-      }
-      let config = protect(options.runtimeConfig)
-      Object.defineProperty(options, 'runtimeConfig', {
-        configurable: true,
-        enumerable: true,
-        get: () => config,
-        set: (value: Record<string, unknown>) => { config = protect(value) },
-      })
-    }
-    nuxt.hook('nitro:init', (nitro) => {
-      assertEmptyToken(nitro.options.runtimeConfig)
-      guardSerialization(nitro.options)
-      // Nitro creates a separate instance for prerendering.
-      nitro.hooks.hook('prerender:init', renderer => guardSerialization(renderer.options))
-    })
     privateConfig.githubSponsors = {
       login,
       tiers,
