@@ -60,15 +60,31 @@ export default defineNuxtModule<ModuleOptions>({
     const token = detectSponsorToken(process.env, tokenEnv)
     const privateConfig = nuxt.options.runtimeConfig as Record<string, unknown>
     const existingPrivate = privateConfig.githubSponsors as Record<string, unknown> | undefined
-    // Checks the site's own config. A later build hook that writes the slot is out of
-    // scope: guarding that means patching Nitro internals.
-    if (existingPrivate?.token) {
-      throw new TypeError([
-        'runtimeConfig.githubSponsors.token must be empty.',
-        'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
-        `Set the token in the ${tokenEnv} environment variable instead.`,
-      ].join(' '))
+    const assertEmptyToken = (runtimeConfig: Record<string, unknown>) => {
+      const sponsors = runtimeConfig.githubSponsors as Record<string, unknown> | undefined
+      if (sponsors?.token) {
+        throw new TypeError([
+          'runtimeConfig.githubSponsors.token must be empty.',
+          'Nitro writes runtime config into the server bundle.',
+          `Set the token in the ${tokenEnv} environment variable instead.`,
+        ].join(' '))
+      }
     }
+    assertEmptyToken(privateConfig)
+    nuxt.hook('nitro:init', (nitro) => {
+      const guardBuild = (instance: typeof nitro) => {
+        instance.hooks.hook('rollup:before', (server, config) => {
+          // Build start runs after Nitro's build hooks and before runtime config loads.
+          const guard = {
+            name: 'nuxt-github-sponsors-token',
+            buildStart: () => assertEmptyToken(server.options.runtimeConfig),
+          }
+          config.plugins = [config.plugins ?? [], guard].flat()
+        })
+      }
+      guardBuild(nitro)
+      nitro.hooks.hook('prerender:init', guardBuild)
+    })
     privateConfig.githubSponsors = {
       login,
       tiers,
@@ -76,8 +92,7 @@ export default defineNuxtModule<ModuleOptions>({
       // The env name, never its value. The route reads the value per request.
       tokenEnv,
       ...existingPrivate,
-      // Always empty in the bundle. It stays declared because Nitro applies an env
-      // override, here NUXT_GITHUB_SPONSORS_TOKEN, only to a key that exists.
+      // Declare an empty key so Nitro can apply NUXT_GITHUB_SPONSORS_TOKEN at runtime.
       token: '',
     }
     const publicConfig = nuxt.options.runtimeConfig.public as Record<string, unknown>

@@ -41,7 +41,7 @@ export default defineEventHandler(async (event): Promise<GitHubSponsorsResponse>
   // eslint-disable-next-line node/prefer-global/process
   const token = readSponsorToken(globalThis.process?.env ?? {}, {
     tokenEnv: config.tokenEnv,
-    token: typeof workerToken === 'string' ? workerToken : config.token,
+    token: (typeof workerToken === 'string' && workerToken.trim()) || config.token,
   })
   if (!token)
     return toGitHubSponsorsResponse({ _tag: 'unavailable', reason: 'not-configured' }, fallback, new Date().toISOString())
