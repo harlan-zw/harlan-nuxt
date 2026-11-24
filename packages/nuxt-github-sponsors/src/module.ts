@@ -73,13 +73,31 @@ export default defineNuxtModule<ModuleOptions>({
     assertEmptyToken(privateConfig)
     nuxt.hook('nitro:init', (nitro) => {
       const guardBuild = (instance: typeof nitro) => {
-        instance.hooks.hook('rollup:before', (server, config) => {
-          // Build start runs after Nitro's build hooks and before runtime config loads.
-          const guard = {
-            name: 'nuxt-github-sponsors-token',
-            buildStart: () => assertEmptyToken(server.options.runtimeConfig),
+        instance.hooks.hook('rollup:before', (server) => {
+          // Nitro 2 and 3 stringify this object after async build plugins finish.
+          // Validate the snapshot at serialization, rather than at build start.
+          const protect = (runtimeConfig: typeof server.options.runtimeConfig) => {
+            Object.defineProperty(runtimeConfig, 'toJSON', {
+              configurable: true,
+              value() {
+                const config = { ...runtimeConfig }
+                const sponsors = config.githubSponsors
+                if (sponsors)
+                  config.githubSponsors = { ...sponsors }
+                assertEmptyToken(config)
+                return config
+              },
+            })
+            return runtimeConfig
           }
-          config.plugins = [config.plugins ?? [], guard].flat()
+          let runtimeConfig = protect(server.options.runtimeConfig)
+          // Reapply the guard when a later plugin replaces the whole config.
+          Object.defineProperty(server.options, 'runtimeConfig', {
+            configurable: true,
+            enumerable: true,
+            get: () => runtimeConfig,
+            set: (config) => { runtimeConfig = protect(config) },
+          })
         })
       }
       guardBuild(nitro)

@@ -43,7 +43,9 @@ async function loadSite(input: {
       dev: false,
       devtools: { enabled: false },
       runtimeConfig: input.runtimeConfig,
-      modules: [[sponsorsModule, { login: 'harlan-zw', ...input.options }]],
+      modules: [async (_options, nuxt) => {
+        await sponsorsModule({ login: 'harlan-zw', ...input.options }, nuxt)
+      }],
       hooks: input.hooks,
     },
   })
@@ -121,5 +123,74 @@ describe('build-time token boundary', () => {
     const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
     expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
     expect(String(error)).not.toContain(PLACEHOLDER)
+  }, 30_000)
+
+  it.each([
+    { target: 'server', replace: false },
+    { target: 'server', replace: true },
+    { target: 'prerender', replace: false },
+    { target: 'prerender', replace: true },
+  ])('rejects an async $target plugin token before runtime config is emitted (replace: $replace)', async ({ target, replace }) => {
+    let injected = false
+    let emitted = false
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' } })
+    const nitro = nuxt.runWithContext(() => useNitro())
+    const install = (instance: typeof nitro) => {
+      instance.hooks.hook('rollup:before', (server, config) => {
+        config.plugins = [config.plugins ?? [], {
+          name: 'late-sponsors-token-fixture',
+          async buildStart() {
+            await new Promise(resolve => setTimeout(resolve, 10))
+            if (replace) {
+              server.options.runtimeConfig = {
+                ...server.options.runtimeConfig,
+                githubSponsors: { ...server.options.runtimeConfig.githubSponsors, token: PLACEHOLDER },
+              }
+            }
+            else {
+              ;(server.options.runtimeConfig.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+            }
+            injected = true
+          },
+          generateBundle() {
+            emitted = true
+          },
+        }].flat()
+      })
+    }
+    if (target === 'prerender') {
+      nitro.options.prerender.routes.push('/')
+      nitro.hooks.hook('prerender:init', install)
+    }
+    else {
+      install(nitro)
+    }
+
+    const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
+    expect(injected).toBe(true)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+    expect(emitted).toBe(false)
+  }, 30_000)
+
+  it('emits an empty token slot when a runtime build has an environment token', async () => {
+    const nuxt = await loadSite({
+      env: { NUXT_GITHUB_SPONSORS_TOKEN: PLACEHOLDER },
+      options: { mode: 'runtime' },
+    })
+    const nitro = nuxt.runWithContext(() => useNitro())
+    let serialized: string | undefined
+    nitro.hooks.hook('rollup:before', (server, config) => {
+      config.plugins = [config.plugins ?? [], {
+        name: 'sponsors-runtime-config-fixture',
+        generateBundle() {
+          serialized = JSON.stringify(server.options.runtimeConfig)
+        },
+      }].flat()
+    })
+
+    await buildNuxt(nuxt)
+    expect(JSON.parse(serialized!)).toMatchObject({ githubSponsors: { login: 'harlan-zw', token: '' } })
+    expect(serialized).not.toContain(PLACEHOLDER)
   }, 30_000)
 })
