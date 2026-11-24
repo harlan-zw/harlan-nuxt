@@ -357,11 +357,21 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
 
     nuxt.hook('nitro:config', (nitroConfig) => {
       cloudflareConfig = nitroConfig as NitroCloudflareShape
-      const devConfig = nitroConfig as Pick<Nitro3Config, 'devServer' | 'noExternals' | 'plugins'>
+      const devConfig = nitroConfig as Pick<Nitro3Config, 'devServer' | 'noExternals' | 'plugins' | 'rolldownConfig'>
       devConfig.devServer = { ...devConfig.devServer, runner: 'node-worker' }
       devConfig.plugins = [plugin.dst, ...(devConfig.plugins ?? [])]
       if (devConfig.noExternals !== true)
         devConfig.noExternals = [...(devConfig.noExternals || []), '@harlan-zw/nuxt-cloudflare']
+
+      // Let Node await the standalone plugin before loading Nitro's app graph.
+      // Inlining its top-level await creates a cycle in Rolldown's dev bundle.
+      const external = devConfig.rolldownConfig?.external
+      devConfig.rolldownConfig = {
+        ...devConfig.rolldownConfig,
+        external: typeof external === 'function'
+          ? (id, importer, resolved) => id === plugin.dst || external(id, importer, resolved)
+          : [plugin.dst, ...[external ?? []].flat()],
+      }
     })
   }
   if (options.checks?.length) {
