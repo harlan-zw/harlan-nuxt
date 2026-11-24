@@ -1,4 +1,3 @@
-import type { JSONCParseError } from 'confbox'
 import type { WranglerConfigInput } from './wrangler'
 import { existsSync, readFileSync } from 'node:fs'
 import { parseJSON, parseJSONC, parseTOML } from 'confbox'
@@ -17,15 +16,8 @@ function parseWranglerConfigSource(path: string, source: string): WranglerConfig
   const extension = extname(path)
   if (extension === '.toml')
     return parseTOML(source) as WranglerConfigInput
-  if (extension === '.jsonc') {
-    const errors: JSONCParseError[] = []
-    const config = parseJSONC(source, { errors }) as WranglerConfigInput
-    if (errors.length > 0) {
-      const { error, offset } = errors[0]!
-      throw new SyntaxError(`JSONC parse error ${error} at offset ${offset}`)
-    }
-    return config
-  }
+  if (extension === '.jsonc')
+    return parseJSONC(source) as WranglerConfigInput
   return parseJSON(source) as WranglerConfigInput
 }
 

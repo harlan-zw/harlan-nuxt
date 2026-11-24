@@ -1,5 +1,5 @@
 import type { WideEventRecord } from '../src/runtime/server/index'
-import { afterAll, bench, describe } from 'vitest'
+import { afterAll, describe, it } from 'vitest'
 import { shouldEmitWideEvent } from '../src/runtime/server/production-policy'
 
 const exclude = /^(?:\/api\/_nuxt_icon\/.*|\/api\/_content\/.*|\/api\/_mdc\/.*)$/
@@ -23,19 +23,25 @@ afterAll(() => {
 })
 
 describe('production request policy', () => {
-  bench('default', () => {
-    sink = true
+  it('default', async ({ bench }) => {
+    await bench('default', () => {
+      sink = true
+    }).run()
   })
 
-  bench('mdream policy, sampled request', () => {
-    sink = !exclude.test(request.path!)
-      && !exclude.test(request.path!)
-      && shouldEmitWideEvent(request, sampling)
+  it('mdream policy, sampled request', async ({ bench }) => {
+    await bench('mdream policy, sampled request', () => {
+      sink = !exclude.test(request.path!)
+        && !exclude.test(request.path!)
+        && shouldEmitWideEvent(request, sampling)
+    }).run()
   })
 
-  bench('mdream policy, status kept', () => {
-    sink = !exclude.test(error.path!)
-      && !exclude.test(error.path!)
-      && shouldEmitWideEvent(error, sampling)
+  it('mdream policy, status kept', async ({ bench }) => {
+    await bench('mdream policy, status kept', () => {
+      sink = !exclude.test(error.path!)
+        && !exclude.test(error.path!)
+        && shouldEmitWideEvent(error, sampling)
+    }).run()
   })
 })

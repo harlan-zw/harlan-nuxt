@@ -31,7 +31,7 @@ describe('html details ingestion', () => {
     ].join('\n'))
 
     expect(document.nodes).toMatchObject([
-      ['details', { ':open': 'true', 'class': 'benchmarks', 'id': 'results' }, ['summary', {}, 'Benchmark results'], ['p', {}, 'The ', ['strong', {}, 'smaller'], ' build.'], ['table', {}, ['thead', {}, ['tr', {}, ['th', {}, 'Metric'], ['th', {}, 'v6']]], ['tbody', {}, ['tr', {}, ['td', {}, 'Browser'], ['td', {}, '14.9 KB']]]],
+      ['details', { open: true, class: 'benchmarks', id: 'results' }, ['summary', {}, 'Benchmark results'], ['p', {}, 'The ', ['strong', {}, 'smaller'], ' build.'], ['table', {}, ['thead', {}, ['tr', {}, ['th', {}, 'Metric'], ['th', {}, 'v6']]], ['tbody', {}, ['tr', {}, ['td', {}, 'Browser'], ['td', {}, '14.9 KB']]]],
       ],
       ['p', {}, 'After the disclosure.'],
     ])

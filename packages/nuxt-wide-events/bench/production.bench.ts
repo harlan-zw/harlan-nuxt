@@ -1,24 +1,15 @@
+import type { BenchRunOptions } from 'vitest'
 import { deepStrictEqual } from 'node:assert/strict'
 import { createLogger, initLogger } from 'evlog'
 import pino from 'pino'
-import { afterAll, beforeAll, bench, describe } from 'vitest'
+import { afterAll, beforeAll, describe, it } from 'vitest'
 import { addWideEventFields, captureWideEventError, emitWideEvent, startWideEvent } from '../src/runtime/server/index'
 
 const BENCH_OPTIONS = {
   time: 2_000,
   warmupIterations: 1_000,
   warmupTime: 500,
-} satisfies NonNullable<Parameters<typeof bench>[2]>
-
-const EVLOG_BENCH_OPTIONS = {
-  ...BENCH_OPTIONS,
-  setup: () => initEvlog(false),
-} satisfies NonNullable<Parameters<typeof bench>[2]>
-
-const EVLOG_REDACTION_BENCH_OPTIONS = {
-  ...BENCH_OPTIONS,
-  setup: () => initEvlog(true),
-} satisfies NonNullable<Parameters<typeof bench>[2]>
+} satisfies BenchRunOptions
 
 const REQUEST_ID = 'req_abc123'
 const STARTED_AT = 10
@@ -264,114 +255,164 @@ beforeAll(() => {
 
 for (const scenario of FIELD_SCENARIOS) {
   describe(`production lifecycle, ${scenario.label}, JSON serialization`, () => {
-    bench('nuxt-wide-events', () => {
-      sink = JSON.stringify(buildWideEvent(scenario.fields))
-    }, BENCH_OPTIONS)
-    bench('evlog 2.26.0, redaction disabled', () => {
-      sink = JSON.stringify(buildEvlogEvent(scenario.fields))
-    }, EVLOG_BENCH_OPTIONS)
-    bench('evlog 2.26.0, runtime redaction enabled', () => {
-      sink = JSON.stringify(buildEvlogEvent(scenario.fields))
-    }, EVLOG_REDACTION_BENCH_OPTIONS)
-    bench('pino 10.3.1, in-memory destination', () => {
-      writePinoEvent(scenario.fields)
-    }, BENCH_OPTIONS)
-    bench('raw object plus JSON.stringify', () => {
-      sink = JSON.stringify(buildRawEvent(scenario.fields))
-    }, BENCH_OPTIONS)
+    it('nuxt-wide-events', async ({ bench }) => {
+      await bench('nuxt-wide-events', () => {
+        sink = JSON.stringify(buildWideEvent(scenario.fields))
+      }).run(BENCH_OPTIONS)
+    })
+    it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+      await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+        sink = JSON.stringify(buildEvlogEvent(scenario.fields))
+      }).run(BENCH_OPTIONS)
+    })
+    it('evlog 2.26.0, runtime redaction enabled', async ({ bench }) => {
+      await bench('evlog 2.26.0, runtime redaction enabled', { beforeAll: () => initEvlog(true) }, () => {
+        sink = JSON.stringify(buildEvlogEvent(scenario.fields))
+      }).run(BENCH_OPTIONS)
+    })
+    it('pino 10.3.1, in-memory destination', async ({ bench }) => {
+      await bench('pino 10.3.1, in-memory destination', () => {
+        writePinoEvent(scenario.fields)
+      }).run(BENCH_OPTIONS)
+    })
+    it('raw object plus JSON.stringify', async ({ bench }) => {
+      await bench('raw object plus JSON.stringify', () => {
+        sink = JSON.stringify(buildRawEvent(scenario.fields))
+      }).run(BENCH_OPTIONS)
+    })
   })
 }
 
 describe('production lifecycle, runtime clocks and request ID', () => {
-  bench('nuxt-wide-events', () => {
-    sink = JSON.stringify(buildRuntimeWideEvent())
-  }, BENCH_OPTIONS)
-  bench('evlog 2.26.0, redaction disabled', () => {
-    sink = JSON.stringify(buildRuntimeEvlogEvent())
-  }, EVLOG_BENCH_OPTIONS)
-  bench('pino 10.3.1, in-memory destination', writeRuntimePinoEvent, BENCH_OPTIONS)
-  bench('raw object plus JSON.stringify', () => {
-    sink = JSON.stringify(buildRuntimeRawEvent())
-  }, BENCH_OPTIONS)
+  it('nuxt-wide-events', async ({ bench }) => {
+    await bench('nuxt-wide-events', () => {
+      sink = JSON.stringify(buildRuntimeWideEvent())
+    }).run(BENCH_OPTIONS)
+  })
+  it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+      sink = JSON.stringify(buildRuntimeEvlogEvent())
+    }).run(BENCH_OPTIONS)
+  })
+  it('pino 10.3.1, in-memory destination', async ({ bench }) => {
+    await bench('pino 10.3.1, in-memory destination', writeRuntimePinoEvent).run(BENCH_OPTIONS)
+  })
+  it('raw object plus JSON.stringify', async ({ bench }) => {
+    await bench('raw object plus JSON.stringify', () => {
+      sink = JSON.stringify(buildRuntimeRawEvent())
+    }).run(BENCH_OPTIONS)
+  })
 })
 
 describe('production error lifecycle, five fields, JSON serialization', () => {
-  bench('nuxt-wide-events', () => {
-    sink = JSON.stringify(buildWideErrorEvent())
-  }, BENCH_OPTIONS)
-  bench('evlog 2.26.0, redaction disabled', () => {
-    sink = JSON.stringify(buildEvlogErrorEvent())
-  }, EVLOG_BENCH_OPTIONS)
-  bench('evlog 2.26.0, runtime redaction enabled', () => {
-    sink = JSON.stringify(buildEvlogErrorEvent())
-  }, EVLOG_REDACTION_BENCH_OPTIONS)
-  bench('pino 10.3.1, in-memory destination', writePinoErrorEvent, BENCH_OPTIONS)
-  bench('raw object plus JSON.stringify', () => {
-    sink = JSON.stringify(buildRawErrorEvent())
-  }, BENCH_OPTIONS)
+  it('nuxt-wide-events', async ({ bench }) => {
+    await bench('nuxt-wide-events', () => {
+      sink = JSON.stringify(buildWideErrorEvent())
+    }).run(BENCH_OPTIONS)
+  })
+  it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+      sink = JSON.stringify(buildEvlogErrorEvent())
+    }).run(BENCH_OPTIONS)
+  })
+  it('evlog 2.26.0, runtime redaction enabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, runtime redaction enabled', { beforeAll: () => initEvlog(true) }, () => {
+      sink = JSON.stringify(buildEvlogErrorEvent())
+    }).run(BENCH_OPTIONS)
+  })
+  it('pino 10.3.1, in-memory destination', async ({ bench }) => {
+    await bench('pino 10.3.1, in-memory destination', writePinoErrorEvent).run(BENCH_OPTIONS)
+  })
+  it('raw object plus JSON.stringify', async ({ bench }) => {
+    await bench('raw object plus JSON.stringify', () => {
+      sink = JSON.stringify(buildRawErrorEvent())
+    }).run(BENCH_OPTIONS)
+  })
 })
 
 describe('production lifecycle, five fields, no serialization', () => {
-  bench('nuxt-wide-events', () => {
-    sink = buildWideEvent(fields5)
-  }, BENCH_OPTIONS)
-  bench('evlog 2.26.0, redaction disabled', () => {
-    sink = buildEvlogEvent(fields5)
-  }, EVLOG_BENCH_OPTIONS)
-  bench('evlog 2.26.0, runtime redaction enabled', () => {
-    sink = buildEvlogEvent(fields5)
-  }, EVLOG_REDACTION_BENCH_OPTIONS)
-  bench('raw object construction', () => {
-    sink = buildRawEvent(fields5)
-  }, BENCH_OPTIONS)
+  it('nuxt-wide-events', async ({ bench }) => {
+    await bench('nuxt-wide-events', () => {
+      sink = buildWideEvent(fields5)
+    }).run(BENCH_OPTIONS)
+  })
+  it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+      sink = buildEvlogEvent(fields5)
+    }).run(BENCH_OPTIONS)
+  })
+  it('evlog 2.26.0, runtime redaction enabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, runtime redaction enabled', { beforeAll: () => initEvlog(true) }, () => {
+      sink = buildEvlogEvent(fields5)
+    }).run(BENCH_OPTIONS)
+  })
+  it('raw object construction', async ({ bench }) => {
+    await bench('raw object construction', () => {
+      sink = buildRawEvent(fields5)
+    }).run(BENCH_OPTIONS)
+  })
 })
 
 describe('field collection, five fields, no emit', () => {
-  bench('nuxt-wide-events', () => {
-    const event = request()
-    startWideEvent(event, REQUEST_ID, STARTED_AT)
-    addWideEventFields(event, fields5 as never)
-    sink = event
-  }, BENCH_OPTIONS)
+  it('nuxt-wide-events', async ({ bench }) => {
+    await bench('nuxt-wide-events', () => {
+      const event = request()
+      startWideEvent(event, REQUEST_ID, STARTED_AT)
+      addWideEventFields(event, fields5 as never)
+      sink = event
+    }).run(BENCH_OPTIONS)
+  })
 
-  bench('evlog 2.26.0, redaction disabled', () => {
-    const log = createLogger({ requestId: REQUEST_ID })
-    log.set(fields5)
-    sink = log
-  }, EVLOG_BENCH_OPTIONS)
+  it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+      const log = createLogger({ requestId: REQUEST_ID })
+      log.set(fields5)
+      sink = log
+    }).run(BENCH_OPTIONS)
+  })
 })
 
 describe('production burst, 100 serialized events', () => {
-  bench('nuxt-wide-events', () => {
-    let result = ''
-    for (let index = 0; index < 100; index++)
-      result = JSON.stringify(buildWideEvent(fields5))
-    sink = result
-  }, BENCH_OPTIONS)
+  it('nuxt-wide-events', async ({ bench }) => {
+    await bench('nuxt-wide-events', () => {
+      let result = ''
+      for (let index = 0; index < 100; index++)
+        result = JSON.stringify(buildWideEvent(fields5))
+      sink = result
+    }).run(BENCH_OPTIONS)
+  })
 
-  bench('evlog 2.26.0, redaction disabled', () => {
-    let result = ''
-    for (let index = 0; index < 100; index++)
-      result = JSON.stringify(buildEvlogEvent(fields5))
-    sink = result
-  }, EVLOG_BENCH_OPTIONS)
+  it('evlog 2.26.0, redaction disabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, redaction disabled', { beforeAll: () => initEvlog(false) }, () => {
+      let result = ''
+      for (let index = 0; index < 100; index++)
+        result = JSON.stringify(buildEvlogEvent(fields5))
+      sink = result
+    }).run(BENCH_OPTIONS)
+  })
 
-  bench('evlog 2.26.0, runtime redaction enabled', () => {
-    let result = ''
-    for (let index = 0; index < 100; index++)
-      result = JSON.stringify(buildEvlogEvent(fields5))
-    sink = result
-  }, EVLOG_REDACTION_BENCH_OPTIONS)
+  it('evlog 2.26.0, runtime redaction enabled', async ({ bench }) => {
+    await bench('evlog 2.26.0, runtime redaction enabled', { beforeAll: () => initEvlog(true) }, () => {
+      let result = ''
+      for (let index = 0; index < 100; index++)
+        result = JSON.stringify(buildEvlogEvent(fields5))
+      sink = result
+    }).run(BENCH_OPTIONS)
+  })
 
-  bench('pino 10.3.1, in-memory destination', () => {
-    for (let index = 0; index < 100; index++)
-      writePinoEvent(fields5)
-  }, BENCH_OPTIONS)
+  it('pino 10.3.1, in-memory destination', async ({ bench }) => {
+    await bench('pino 10.3.1, in-memory destination', () => {
+      for (let index = 0; index < 100; index++)
+        writePinoEvent(fields5)
+    }).run(BENCH_OPTIONS)
+  })
 
-  bench('raw object plus JSON.stringify', () => {
-    let result = ''
-    for (let index = 0; index < 100; index++)
-      result = JSON.stringify(buildRawEvent(fields5))
-    sink = result
-  }, BENCH_OPTIONS)
+  it('raw object plus JSON.stringify', async ({ bench }) => {
+    await bench('raw object plus JSON.stringify', () => {
+      let result = ''
+      for (let index = 0; index < 100; index++)
+        result = JSON.stringify(buildRawEvent(fields5))
+      sink = result
+    }).run(BENCH_OPTIONS)
+  })
 })

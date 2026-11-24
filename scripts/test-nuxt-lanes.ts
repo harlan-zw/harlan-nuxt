@@ -103,7 +103,7 @@ await writeFile(resolve(fixture, 'nuxt.config.ts'), `
 import { defineNuxtConfig } from 'nuxt/config'
 ${modules.map((name, index) => `import module${index} from '${name}'`).join('\n')}
 const modules = [${modules.map((_, index) => `module${index}`).join(', ')}]
-${lane === 'nightly' ? `for (const module of modules) { const meta = await module.getMeta(); meta.compatibility = { ...meta.compatibility, nuxt: '^4.6.0 || ^5.0.0 || ${NIGHTLY}' } }` : ''}
+${lane === 'nightly' ? `for (const module of modules) { const meta = await module.getMeta?.(); if (meta) meta.compatibility = { ...meta.compatibility, nuxt: '^4.6.0 || ^5.0.0 || ${NIGHTLY}' } }` : ''}
 export default defineNuxtConfig({
   modules,
   compatibilityDate: '2026-10-01',

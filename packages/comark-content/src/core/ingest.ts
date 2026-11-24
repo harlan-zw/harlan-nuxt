@@ -7,8 +7,9 @@ import type { RemoteCheckoutPolicy } from './remote'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { createMarkdownParser } from 'comark'
-import headings from 'comark/plugins/headings'
+import linkify from 'comark/plugins/linkify'
 import rangi from 'comark/plugins/rangi'
+import titleDescription from 'comark/plugins/title-description'
 import toc from 'comark/plugins/toc'
 import { contentHookCollection, contentHookFile, parserOptions } from '../hooks'
 import { collectComponentTags } from '../runtime/components/names'
@@ -47,7 +48,8 @@ type IngestionOptions = ContentHook & {
 const plainParser = createMarkdownParser({
   plugins: [
     details,
-    headings(),
+    linkify({ fuzzyLink: true, urlAuth: true }),
+    titleDescription(),
     toc({ depth: 3, searchDepth: 3 }),
   ],
 })
@@ -59,7 +61,8 @@ export async function createContentParser(options: Pick<IngestionOptions, 'highl
   const parse = createMarkdownParser({
     plugins: [
       details,
-      headings(),
+      linkify({ fuzzyLink: true, urlAuth: true }),
+      titleDescription(),
       toc({ depth: 3, searchDepth: 3 }),
       rangi({
         classPrefix: 'rangi',
