@@ -366,12 +366,22 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
 
       // Let Node await the standalone plugin before loading Nitro's app graph.
       // Inlining its top-level await creates a cycle in Rolldown's dev bundle.
-      const external = devConfig.rolldownConfig?.external
+      const rolldown = devConfig.rolldownConfig
+      const external = rolldown?.external
+      const paths = rolldown?.output?.paths
+      const pluginUrl = pathToFileURL(plugin.dst).href
       devConfig.rolldownConfig = {
-        ...devConfig.rolldownConfig,
+        ...rolldown,
         external: typeof external === 'function'
           ? (id, importer, resolved) => id === plugin.dst || external(id, importer, resolved)
           : [plugin.dst, ...[external ?? []].flat()],
+        output: {
+          ...rolldown?.output,
+          // Node treats raw drive letters as URL schemes and hashes as fragments.
+          paths: typeof paths === 'function'
+            ? id => id === plugin.dst ? pluginUrl : paths(id)
+            : { ...paths, [plugin.dst]: pluginUrl },
+        },
       }
     })
   }
