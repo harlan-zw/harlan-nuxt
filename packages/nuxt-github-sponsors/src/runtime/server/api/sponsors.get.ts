@@ -2,10 +2,13 @@ import type { GitHubSponsorsResponse, SponsorOverride, SponsorTier } from '../..
 import { defineEventHandler, useRuntimeConfig } from 'nuxt/server'
 import { defineCachedFunction } from '#nuxt-github-sponsors/nitro'
 import { fetchGitHubSponsorships, preparePublicSponsors, toGitHubSponsorsResponse } from '../github'
+import { readSponsorToken } from '../token'
 
 interface SponsorsRuntimeConfig {
   githubSponsors: {
-    token?: string
+    /** Empty in the bundle. Only a runtime env override fills it. */
+    token: string
+    tokenEnv: string
     login: string
     tiers: SponsorTier[]
     overrides: Record<string, SponsorOverride>
@@ -32,7 +35,10 @@ const cachedSponsorships = defineCachedFunction(async (input: { login: string, t
 export default defineEventHandler(async (): Promise<GitHubSponsorsResponse> => {
   const config = readSponsorsConfig()
   const fallback = preparePublicSponsors([], config.tiers, config.overrides).collection
-  const token = config.token?.trim()
+  // `globalThis.process` because Nitro reads its own env overrides the same way,
+  // so this works wherever runtime config overrides work, Workers included.
+  // eslint-disable-next-line node/prefer-global/process
+  const token = readSponsorToken(globalThis.process?.env ?? {}, config)
   if (!token)
     return toGitHubSponsorsResponse({ _tag: 'unavailable', reason: 'not-configured' }, fallback, new Date().toISOString())
 

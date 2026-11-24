@@ -4,11 +4,11 @@ import process from 'node:process'
 import { addImports, addServerHandler, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import {
   DEFAULT_TOKEN_ENV,
+  detectSponsorToken,
   normalizeRoute,
   planSponsorDelivery,
   renderSponsorTierAugmentation,
   resolveSponsorTiers,
-  resolveSponsorToken,
 } from './options'
 
 export interface ModuleOptions {
@@ -57,15 +57,26 @@ export default defineNuxtModule<ModuleOptions>({
     nuxt.options.alias['#nuxt-github-sponsors/nitro'] = serverRuntime
     ;(nuxt.options.nitro.alias ??= {})['#nuxt-github-sponsors/nitro'] = serverRuntime
 
-    const token = resolveSponsorToken(process.env, tokenEnv)
+    const token = detectSponsorToken(process.env, tokenEnv)
     const privateConfig = nuxt.options.runtimeConfig as Record<string, unknown>
     const existingPrivate = privateConfig.githubSponsors as Record<string, unknown> | undefined
+    if (existingPrivate?.token) {
+      throw new TypeError([
+        'runtimeConfig.githubSponsors.token must be empty.',
+        'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
+        `Set the token in the ${tokenEnv} environment variable instead.`,
+      ].join(' '))
+    }
     privateConfig.githubSponsors = {
-      token: token._tag === 'ok' ? token.token : '',
       login,
       tiers,
       overrides: options.overrides ?? {},
+      // The env name, never its value. The route reads the value per request.
+      tokenEnv,
       ...existingPrivate,
+      // Always empty in the bundle. It stays declared because Nitro applies an env
+      // override, here NUXT_GITHUB_SPONSORS_TOKEN, only to a key that exists.
+      token: '',
     }
     const publicConfig = nuxt.options.runtimeConfig.public as Record<string, unknown>
     const existingPublic = publicConfig.githubSponsors as Record<string, unknown> | undefined
