@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite'
-import { normalize, relative } from 'pathe'
+import { normalize, relative, resolve } from 'pathe'
 import { formatWideEventSourceIssues, transformWideEventSource } from './source-validation'
 
 const SOURCE_PATTERN = /\.[cm]?[jt]sx?$/i
@@ -7,13 +7,15 @@ const SOURCE_PATTERN = /\.[cm]?[jt]sx?$/i
 export function createWideEventValidationPlugin(
   rootDir: string,
   fields: ReadonlySet<string>,
+  typesDir?: string,
 ): Plugin {
+  const generatedServerImports = typesDir && resolve(typesDir, 'types/server-imports.mjs')
   return {
     name: 'nuxt-wide-events:validate-fields',
     enforce: 'pre',
     transform(source, id) {
       const file = sourceFile(id)
-      if (!file)
+      if (!file || file === generatedServerImports)
         return null
 
       const displayFile = normalize(relative(rootDir, file))

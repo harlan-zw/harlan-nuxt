@@ -103,7 +103,11 @@ export default defineNuxtModule<ModuleOptions>({
     nitro.alias['#wide-events/config'] = configTemplate.dst
     nitro.rollupConfig ||= {}
     nitro.rollupConfig.plugins ||= []
-    nitro.rollupConfig.plugins.push(createWideEventValidationPlugin(nuxt.options.rootDir, fields))
+    nitro.rollupConfig.plugins.push(createWideEventValidationPlugin(
+      nuxt.options.rootDir,
+      fields,
+      nuxt.options.typesDir || nuxt.options.buildDir,
+    ))
 
     if (enabled && (options.request ?? true)) {
       addNitroPlugin(resolver.resolve(nuxt.options.dev

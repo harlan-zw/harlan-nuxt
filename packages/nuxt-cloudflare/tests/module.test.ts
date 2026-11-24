@@ -155,6 +155,24 @@ describe('configureNitroCloudflare', () => {
 })
 
 describe('authored Wrangler config', () => {
+  it('emits each compatibility flag once when Nitro 3 merges the authored config', () => {
+    const authoredFlags = ['nodejs_compat', 'global_fetch_strictly_public']
+    const rootDir = projectWithWranglerConfig(JSON.stringify({ compatibility_flags: authoredFlags }))
+    const nitro: NitroCloudflareShape = {
+      cloudflare: { wrangler: { compatibility_flags: ['global_fetch_strictly_public', 'enable_nodejs_http_modules'] } },
+    }
+
+    configureNitroCloudflare(nitro, {}, { rootDir, nitroVersion: 3 })
+
+    const written = [...nitro.cloudflare!.wrangler!.compatibility_flags!, ...authoredFlags]
+    expect(written.toSorted()).toEqual([
+      'enable_nodejs_http_modules',
+      'global_fetch_strictly_public',
+      'no_nodejs_compat_v2',
+      'nodejs_compat',
+    ])
+  })
+
   it('keeps authored observability and source maps over module defaults', () => {
     const rootDir = projectWithWranglerConfig(JSON.stringify({
       observability: { logs: { head_sampling_rate: 1 } },

@@ -3,9 +3,9 @@ import type { Nuxt } from '@nuxt/schema'
 import type { Nitro } from 'nitropack/types'
 import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
-import type { WorkersCachePolicy } from './wrangler'
+import type { WorkersCachePolicy, WranglerConfigInput } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, createResolver, defineNuxtModule, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
+import { addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -152,6 +152,7 @@ export function findPopulatedRuntimeSecretPaths(
 }
 
 export interface NitroCloudflareContext {
+  nitroVersion?: number
   /** The project directory Wrangler and Nitro read the authored config from. */
   rootDir?: string
   /** Whether Nuxt emits server source maps. */
@@ -164,6 +165,18 @@ function addNitroPlugin(nitro: NitroCloudflareShape, path: string): void {
     nitro.plugins.push(path)
 }
 
+function leaveAuthoredCompatibilityFlags(config: WranglerConfigInput, authored: WranglerConfigInput): void {
+  const authoredFlags = new Set(authored.compatibility_flags)
+  if (config.compatibility_flags)
+    config.compatibility_flags = config.compatibility_flags.filter(flag => !authoredFlags.has(flag))
+
+  for (const [name, environment] of Object.entries(config.env ?? {})) {
+    const authoredEnvironment = authored.env?.[name]
+    if (authoredEnvironment)
+      leaveAuthoredCompatibilityFlags(environment, authoredEnvironment)
+  }
+}
+
 export function configureNitroCloudflare(
   nitro: NitroCloudflareShape,
   options: ModuleOptions,
@@ -172,6 +185,7 @@ export function configureNitroCloudflare(
   const authored = readAuthoredWranglerConfig(context.rootDir)
   if (authored._tag === 'invalid')
     throw new Error(`[nuxt-cloudflare] Wrangler config "${authored.path}" cannot be parsed: ${authored.reason}`)
+  const authoredConfig = authored._tag === 'authored' ? authored.config : {}
 
   nitro.preset ??= 'cloudflare-module'
   nitro.cloudflare ??= {}
@@ -186,7 +200,11 @@ export function configureNitroCloudflare(
     uploadSourceMaps: options.sourceMaps ?? nitro.sourceMap ?? context.serverSourceMaps ?? false,
     versionMetadataBinding: options.versionMetadataBinding,
     workersCache: resolveModuleWorkersCachePolicy(options),
-  }, authored._tag === 'authored' ? authored.config : {})
+  }, authoredConfig)
+
+  // Nitro 3 appends the authored arrays when it writes the Wrangler config.
+  if (context.nitroVersion === 3)
+    leaveAuthoredCompatibilityFlags(nitro.cloudflare.wrangler, authoredConfig)
 
   addNitroPlugin(nitro, runtimeConfigPluginPath)
   addNitroPlugin(nitro, requestLifetimePluginPath)
@@ -318,6 +336,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     nuxt.options.nitro as NitroCloudflareShape,
     options,
     {
+      nitroVersion: getNitroVersion(nuxt),
       rootDir: nuxt.options.rootDir,
       serverSourceMaps: Boolean(nuxt.options.sourcemap.server),
     },

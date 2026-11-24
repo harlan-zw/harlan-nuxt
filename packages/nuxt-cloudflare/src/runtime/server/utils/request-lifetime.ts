@@ -8,6 +8,13 @@ export interface LocalFetchInit {
 /** Nitro 2's in-process fetch, `nitroApp.localFetch`. */
 export type LocalFetch = (input: string, init?: LocalFetchInit) => Promise<Response>
 
+interface WorkerRequest extends Request {
+  waitUntil?: (promise: Promise<unknown>) => void
+}
+
+/** Nitro 3's in-process fetch. The Cloudflare entry attaches `waitUntil` to the request. */
+export type NativeFetch = (request: WorkerRequest) => Response | Promise<Response>
+
 /**
  * Wraps Nitro's `localFetch` so each Worker request stays alive until its own
  * response settles.
@@ -27,6 +34,14 @@ export function keepRequestAlive(localFetch: LocalFetch): LocalFetch {
     const response = Promise.resolve(localFetch(input, init))
     // The caller receives any rejection; this copy only extends the lifetime.
     init?.context?.waitUntil?.(response.then(() => undefined, () => undefined))
+    return response
+  }
+}
+
+export function keepNativeRequestAlive(fetch: NativeFetch): NativeFetch {
+  return (request) => {
+    const response = fetch(request)
+    request.waitUntil?.(Promise.resolve(response).then(() => undefined, () => undefined))
     return response
   }
 }
