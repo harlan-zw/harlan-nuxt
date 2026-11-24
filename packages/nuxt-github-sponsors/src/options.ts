@@ -10,8 +10,9 @@ export const DEFAULT_TIERS: SponsorTier[] = [
   { key: 'gold', minimumMonthlyDollars: 25 },
 ]
 
-export type SponsorTokenResult
-  = { _tag: 'ok', token: string }
+/** Presence only. The build never holds the token value, so it cannot write it anywhere. */
+export type SponsorTokenPresence
+  = { _tag: 'present' }
     | { _tag: 'missing', tokenEnv: string }
 
 export type SponsorDeliveryPlan
@@ -23,16 +24,19 @@ export type SponsorDeliveryPlan
 /**
  * A fine-grained GitHub token cannot call the GraphQL API, so sites alias the
  * sponsors token to another secret. `tokenEnv` names that secret directly.
+ *
+ * Nitro serializes runtime config into the server bundle, and server source maps
+ * carry it to Sentry. The build therefore asks only whether the token exists. The
+ * server route reads the value at request time, see `readSponsorToken`.
  */
-export function resolveSponsorToken(env: Record<string, string | undefined>, tokenEnv: string): SponsorTokenResult {
-  const token = env[tokenEnv]?.trim()
-  return token ? { _tag: 'ok', token } : { _tag: 'missing', tokenEnv }
+export function detectSponsorToken(env: Record<string, string | undefined>, tokenEnv: string): SponsorTokenPresence {
+  return env[tokenEnv]?.trim() ? { _tag: 'present' } : { _tag: 'missing', tokenEnv }
 }
 
-export function planSponsorDelivery(mode: SponsorsMode, token: SponsorTokenResult): SponsorDeliveryPlan {
+export function planSponsorDelivery(mode: SponsorsMode, token: SponsorTokenPresence): SponsorDeliveryPlan {
   if (mode !== 'prerender')
     return { _tag: mode }
-  if (token._tag === 'ok')
+  if (token._tag === 'present')
     return { _tag: 'prerender' }
   return {
     _tag: 'prerender-skipped',
