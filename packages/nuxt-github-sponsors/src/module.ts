@@ -60,13 +60,19 @@ export default defineNuxtModule<ModuleOptions>({
     const token = detectSponsorToken(process.env, tokenEnv)
     const privateConfig = nuxt.options.runtimeConfig as Record<string, unknown>
     const existingPrivate = privateConfig.githubSponsors as Record<string, unknown> | undefined
-    if (existingPrivate?.token) {
-      throw new TypeError([
-        'runtimeConfig.githubSponsors.token must be empty.',
-        'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
-        `Set the token in the ${tokenEnv} environment variable instead.`,
-      ].join(' '))
+    const assertEmptyToken = (runtimeConfig: Record<string, unknown>) => {
+      const sponsors = runtimeConfig.githubSponsors as Record<string, unknown> | undefined
+      if (sponsors?.token) {
+        throw new TypeError([
+          'runtimeConfig.githubSponsors.token must be empty.',
+          'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
+          `Set the token in the ${tokenEnv} environment variable instead.`,
+        ].join(' '))
+      }
     }
+    assertEmptyToken(privateConfig)
+    // Nitro resolves this config after all nitro:config hooks and before bundling.
+    nuxt.hook('nitro:init', nitro => assertEmptyToken(nitro.options.runtimeConfig))
     privateConfig.githubSponsors = {
       login,
       tiers,
