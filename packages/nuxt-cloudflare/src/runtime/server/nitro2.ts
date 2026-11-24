@@ -61,3 +61,11 @@ export function defineNitroPlugin(setup: NitroAppPlugin) {
     return setup({ ...app, hooks: adapted })
   })
 }
+
+/**
+ * Nitro 2 passes the Worker context to `localFetch` in its init, so the request
+ * lifetime needs no enclosing request.
+ */
+export function currentRequest(): Request | undefined {
+  return undefined
+}

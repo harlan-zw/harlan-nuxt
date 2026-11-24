@@ -1,7 +1,7 @@
 import type { LocalFetch } from '../src/runtime/server/utils/request-lifetime'
 import { describe, expect, it, vi } from 'vitest'
 import requestLifetimePlugin from '../src/runtime/server/plugins/request-lifetime'
-import { keepRequestAlive } from '../src/runtime/server/utils/request-lifetime'
+import { keepNativeRequestAlive, keepRequestAlive } from '../src/runtime/server/utils/request-lifetime'
 
 vi.mock('nitropack/runtime', () => ({
   defineNitroPlugin: (setup: unknown) => setup,
@@ -54,6 +54,59 @@ describe('keepRequestAlive', () => {
 
     await expect(localFetch('/internal')).resolves.toBe(body)
     await expect(localFetch('/internal', { context: {} })).resolves.toBe(body)
+  })
+})
+
+describe('keepNativeRequestAlive', () => {
+  type WorkerRequest = Request & { waitUntil?: (promise: Promise<unknown>) => void }
+
+  function workerRequest(url: string, kept: Promise<unknown>[]): WorkerRequest {
+    return Object.assign(new Request(url), { waitUntil: (promise: Promise<unknown>) => void kept.push(promise) })
+  }
+
+  // `serverFetch` and `$fetch('/api/…')` dispatch a new Request with no `waitUntil`. A cached
+  // handler in that sub-request registered nothing, so a caller that answered first stranded
+  // the handler's shared resolution for every later request in the isolate.
+  it('keeps the enclosing Worker request alive until a sub-request answers', async () => {
+    const kept: Promise<unknown>[] = []
+    const worker = workerRequest('https://example.test/api/stats.json', kept)
+    const pending = deferred<Response>()
+    const fetch = keepNativeRequestAlive(() => pending.promise, () => worker)
+
+    void fetch(new Request('http://localhost/api/npm/nuxt/downloads'))
+    let workerDone = false
+    void Promise.all(kept).then(() => workerDone = true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(workerDone).toBe(false)
+
+    pending.resolve(new Response('fresh'))
+    await Promise.all(kept)
+    expect(workerDone).toBe(true)
+  })
+
+  it('hands background work of a sub-request to the enclosing Worker request', async () => {
+    const kept: Promise<unknown>[] = []
+    const worker = workerRequest('https://example.test/api/stats.json', kept)
+    const refresh = Promise.resolve('fresh')
+    const fetch = keepNativeRequestAlive((request: WorkerRequest) => {
+      request.waitUntil?.(refresh)
+      return new Response('stale')
+    }, () => worker)
+
+    await fetch(new Request('http://localhost/api/github/nuxt@nuxt/stars'))
+
+    expect(kept).toContain(refresh)
+  })
+
+  it('keeps the lifetime a request already has', async () => {
+    const workerKept: Promise<unknown>[] = []
+    const ownKept: Promise<unknown>[] = []
+    const worker = workerRequest('https://example.test/api/stats.json', workerKept)
+    const fetch = keepNativeRequestAlive(() => new Response('ok'), () => worker)
+
+    await fetch(workerRequest('https://example.test/', ownKept))
+
+    expect({ own: ownKept.length, worker: workerKept.length }).toEqual({ own: 1, worker: 0 })
   })
 })
 

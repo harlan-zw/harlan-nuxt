@@ -8,7 +8,7 @@ export interface LocalFetchInit {
 /** Nitro 2's in-process fetch, `nitroApp.localFetch`. */
 export type LocalFetch = (input: string, init?: LocalFetchInit) => Promise<Response>
 
-interface WorkerRequest extends Request {
+export interface WorkerRequest extends Request {
   waitUntil?: (promise: Promise<unknown>) => void
 }
 
@@ -38,8 +38,27 @@ export function keepRequestAlive(localFetch: LocalFetch): LocalFetch {
   }
 }
 
-export function keepNativeRequestAlive(fetch: NativeFetch): NativeFetch {
+/**
+ * Wraps Nitro 3's `fetch` so each Worker request stays alive until its own
+ * response settles.
+ *
+ * `serverFetch` and `$fetch('/api/…')` dispatch a new Request without
+ * `waitUntil`. Such a sub-request takes the `waitUntil` of the request that
+ * makes it, read through `enclosingRequest`. A cached handler in the
+ * sub-request then registers its resolution, refresh and cache write with the
+ * Worker, and the Worker stays alive until the sub-request answers, even when
+ * its caller stops waiting.
+ */
+export function keepNativeRequestAlive(
+  fetch: NativeFetch,
+  enclosingRequest: () => WorkerRequest | undefined = () => undefined,
+): NativeFetch {
   return (request) => {
+    if (!request.waitUntil) {
+      const waitUntil = enclosingRequest()?.waitUntil
+      if (waitUntil)
+        request.waitUntil = waitUntil
+    }
     const response = fetch(request)
     request.waitUntil?.(Promise.resolve(response).then(() => undefined, () => undefined))
     return response
