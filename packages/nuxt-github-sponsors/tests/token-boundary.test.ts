@@ -1,25 +1,28 @@
-import type { Nuxt } from '@nuxt/schema'
-import { mkdtemp } from 'node:fs/promises'
+import type { Nuxt, NuxtHooks } from '@nuxt/schema'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
-import { useNitro } from '@nuxt/kit'
-import { getRollupConfig } from 'nitropack/rollup'
+import { buildNuxt, useNitro } from '@nuxt/kit'
+import { build as buildNitro, createNitro } from 'nitro/builder'
 import { loadNuxt } from 'nuxt'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import sponsorsModule from '../src/module'
 
 const PLACEHOLDER = 'inertSponsorsTokenPlaceholder9q4z'
 
 const touchedEnv = new Set<string>()
 const openNuxts: Nuxt[] = []
+const roots: string[] = []
+const openNitros: Awaited<ReturnType<typeof createNitro>>[] = []
 
 afterEach(async () => {
-  vi.restoreAllMocks()
   for (const name of touchedEnv)
     delete process.env[name]
   touchedEnv.clear()
+  await Promise.all(openNitros.splice(0).map(nitro => nitro.close()))
   await Promise.all(openNuxts.splice(0).map(nuxt => nuxt.close()))
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
 /** Runs the module the way a site build does, with the token in the build env. */
@@ -27,41 +30,26 @@ async function loadSite(input: {
   env: Record<string, string>
   options?: Record<string, unknown>
   runtimeConfig?: Record<string, unknown>
-  lateNitroToken?: boolean
-  lateInitToken?: 'slot' | 'sponsors' | 'config'
+  hooks?: Partial<NuxtHooks>
 }): Promise<Nuxt> {
   for (const [name, value] of Object.entries(input.env)) {
     process.env[name] = value
     touchedEnv.add(name)
   }
+  const cwd = await mkdtemp(join(tmpdir(), 'nuxt-github-sponsors-'))
+  roots.push(cwd)
+  await symlink(new URL('../node_modules', import.meta.url), join(cwd, 'node_modules'), 'dir')
   const nuxt = await loadNuxt({
-    cwd: await mkdtemp(join(tmpdir(), 'nuxt-github-sponsors-')),
+    cwd,
     ready: false,
     overrides: {
       dev: false,
+      devtools: { enabled: false },
       runtimeConfig: input.runtimeConfig,
-      modules: [
-        (_options, nuxt) => sponsorsModule({ login: 'harlan-zw', ...input.options }, nuxt),
-        (_options, nuxt) => {
-          if (input.lateInitToken) {
-            nuxt.hook('nitro:init', (nitro) => {
-              const sponsors = { ...nitro.options.runtimeConfig.githubSponsors, token: PLACEHOLDER }
-              if (input.lateInitToken === 'config')
-                nitro.options.runtimeConfig = { ...nitro.options.runtimeConfig, githubSponsors: sponsors }
-              else if (input.lateInitToken === 'sponsors')
-                nitro.options.runtimeConfig.githubSponsors = sponsors
-              else
-                (nitro.options.runtimeConfig.githubSponsors as { token: string }).token = PLACEHOLDER
-            })
-          }
-          if (input.lateNitroToken) {
-            nuxt.hook('nitro:config', (config) => {
-              config.runtimeConfig ??= {}
-              config.runtimeConfig.githubSponsors = { token: PLACEHOLDER }
-            })
-          }
-        },
-      ],
+      modules: [async (_options, nuxt) => {
+        await sponsorsModule({ login: 'harlan-zw', ...input.options }, nuxt)
+      }],
+      hooks: input.hooks,
     },
   })
   openNuxts.push(nuxt)
@@ -70,32 +58,6 @@ async function loadSite(input: {
 }
 
 describe('build-time token boundary', () => {
-  it.each(['slot', 'sponsors', 'config'] as const)('rejects a later nitro:init token at bundle serialization after replacing %s', async (lateInitToken) => {
-    const output: string[] = []
-    for (const stream of [process.stdout, process.stderr]) {
-      vi.spyOn(stream, 'write').mockImplementation((chunk) => {
-        output.push(String(chunk))
-        return true
-      })
-    }
-    const error = await loadSite({ env: {}, options: { mode: 'runtime' }, lateInitToken })
-      // Exercise Nitro's real config replacement without a full site build.
-      .then(nuxt => nuxt.runWithContext(async () => {
-        const config = getRollupConfig(useNitro())
-        for (const plugin of config.plugins ?? []) {
-          if (!plugin || !('name' in plugin) || plugin.name !== 'replace' || !('transform' in plugin) || !plugin.transform)
-            continue
-          const transform = typeof plugin.transform === 'function' ? plugin.transform : plugin.transform.handler
-          await Reflect.apply(transform, {}, ['export default process.env.RUNTIME_CONFIG', 'runtime-config.js'])
-        }
-        return undefined
-      }))
-      .catch((cause: unknown) => String(cause))
-    expect(error).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
-    expect(error?.includes(PLACEHOLDER)).toBe(false)
-    expect(output.join('').includes(PLACEHOLDER)).toBe(false)
-  })
-
   it.each([
     ['the default env name', 'NUXT_GITHUB_SPONSORS_TOKEN', {}],
     ['an aliased env name', 'NUXT_GITHUB_AUTH_TOKEN', { tokenEnv: 'NUXT_GITHUB_AUTH_TOKEN' }],
@@ -119,21 +81,188 @@ describe('build-time token boundary', () => {
     expect(String(error)).not.toContain(PLACEHOLDER)
   })
 
-  it.each(['prerender', 'runtime', 'client'])('rejects a later nitro:config token in %s mode without echoing it', async (mode) => {
-    const output: string[] = []
-    for (const stream of [process.stdout, process.stderr]) {
-      vi.spyOn(stream, 'write').mockImplementation((chunk) => {
-        output.push(String(chunk))
-        return true
+  it.each<{ label: string, hooks: Partial<NuxtHooks> }>([
+    {
+      label: 'nitro:config',
+      hooks: {
+        'nitro:config': (config) => {
+          ;(config.runtimeConfig!.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+        },
+      },
+    },
+    {
+      label: 'nitro:init',
+      hooks: {
+        'nitro:init': (nitro) => {
+          ;(nitro.options.runtimeConfig.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+        },
+      },
+    },
+    {
+      label: 'prerender:init',
+      hooks: {
+        'nitro:init': (nitro) => {
+          nitro.options.prerender.routes.push('/')
+          nitro.hooks.hook('prerender:init', (renderer) => {
+            ;(renderer.options.runtimeConfig.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+          })
+        },
+      },
+    },
+  ])('stops the build if $label puts a token in runtime config', async ({ hooks }) => {
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' }, hooks })
+    const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+  }, 30_000)
+
+  it('checks runtime config after later Nitro build hooks run', async () => {
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' } })
+    const nitro = nuxt.runWithContext(() => useNitro())
+    nitro.hooks.hook('rollup:before', (server) => {
+      ;(server.options.runtimeConfig.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+    })
+
+    const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+  }, 30_000)
+
+  it.each([
+    { target: 'server', replace: false },
+    { target: 'server', replace: true },
+    { target: 'prerender', replace: false },
+    { target: 'prerender', replace: true },
+  ])('rejects an async $target plugin token before runtime config is emitted (replace: $replace)', async ({ target, replace }) => {
+    let injected = false
+    let emitted = false
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' } })
+    const nitro = nuxt.runWithContext(() => useNitro())
+    const install = (instance: typeof nitro) => {
+      instance.hooks.hook('rollup:before', (server, config) => {
+        config.plugins = [config.plugins ?? [], {
+          name: 'late-sponsors-token-fixture',
+          async buildStart() {
+            await new Promise(resolve => setTimeout(resolve, 10))
+            if (replace) {
+              server.options.runtimeConfig = {
+                ...server.options.runtimeConfig,
+                githubSponsors: { ...server.options.runtimeConfig.githubSponsors, token: PLACEHOLDER },
+              }
+            }
+            else {
+              ;(server.options.runtimeConfig.githubSponsors as Record<string, unknown>).token = PLACEHOLDER
+            }
+            injected = true
+          },
+          generateBundle() {
+            emitted = true
+          },
+        }].flat()
       })
     }
-    const error = await loadSite({
-      env: {},
-      options: { mode },
-      lateNitroToken: true,
-    }).then(() => undefined, (cause: unknown) => String(cause))
-    expect(error).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
-    expect(error).not.toContain(PLACEHOLDER)
-    expect(output.join('')).not.toContain(PLACEHOLDER)
-  })
+    if (target === 'prerender') {
+      nitro.options.prerender.routes.push('/')
+      nitro.hooks.hook('prerender:init', install)
+    }
+    else {
+      install(nitro)
+    }
+
+    const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
+    expect(injected).toBe(true)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+    expect(emitted).toBe(false)
+  }, 30_000)
+
+  it.each([
+    { target: 'server', version: 2 },
+    { target: 'prerender', version: 2 },
+    { target: 'server', version: 3 },
+    { target: 'prerender', version: 3 },
+  ])('rejects a late $target sponsor serializer token before bundle generation (Nitro $version)', async ({ target, version }) => {
+    let injected = false
+    let serialized = false
+    let emitted = false
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' } })
+    const nuxtNitro = nuxt.runWithContext(() => useNitro())
+    const root = await mkdtemp(join(tmpdir(), 'sponsor-serializer-'))
+    roots.push(root)
+    await symlink(new URL('../node_modules', import.meta.url), join(root, 'node_modules'), 'dir')
+    const entry = join(root, 'entry.ts')
+    await writeFile(entry, 'import { useRuntimeConfig } from \'nitro/runtime-config\'\nexport default () => useRuntimeConfig()\n')
+    const nitro3 = version === 3
+      ? await createNitro({
+          rootDir: root,
+          entry,
+          preset: target === 'prerender' ? 'nitro-prerender' : 'node-server',
+          runtimeConfig: { githubSponsors: { token: '' } },
+          logLevel: 0,
+        })
+      : undefined
+    if (nitro3) {
+      openNitros.push(nitro3)
+      // Pass a real Nitro 3 builder through the module's renderer boundary.
+      await nuxtNitro.hooks.callHook('prerender:init', nitro3 as unknown as typeof nuxtNitro)
+    }
+    const nitro = (nitro3 as unknown as typeof nuxtNitro | undefined) ?? nuxtNitro
+    const install = (instance: typeof nitro) => {
+      instance.hooks.hook('rollup:before', (server, config) => {
+        config.plugins = [config.plugins ?? [], {
+          name: 'late-sponsor-serializer-fixture',
+          buildStart() {
+            Object.assign(server.options.runtimeConfig, { githubSponsors: {
+              ...server.options.runtimeConfig.githubSponsors,
+              token: '',
+              toJSON() {
+                serialized = true
+                return { token: PLACEHOLDER }
+              },
+            } })
+            injected = true
+          },
+          generateBundle() {
+            emitted = true
+          },
+        }].flat()
+      })
+    }
+    if (target === 'prerender' && !nitro3) {
+      nitro.options.prerender.routes.push('/')
+      nitro.hooks.hook('prerender:init', install)
+    }
+    else {
+      install(nitro)
+    }
+
+    const build = nitro3 ? buildNitro(nitro3) : buildNuxt(nuxt)
+    const error = await build.catch((cause: unknown) => cause)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(injected).toBe(true)
+    expect(serialized).toBe(true)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+    expect(emitted).toBe(false)
+  }, 30_000)
+
+  it('emits an empty token slot when a runtime build has an environment token', async () => {
+    const nuxt = await loadSite({
+      env: { NUXT_GITHUB_SPONSORS_TOKEN: PLACEHOLDER },
+      options: { mode: 'runtime' },
+    })
+    const nitro = nuxt.runWithContext(() => useNitro())
+    let serialized: string | undefined
+    nitro.hooks.hook('rollup:before', (server, config) => {
+      config.plugins = [config.plugins ?? [], {
+        name: 'sponsors-runtime-config-fixture',
+        generateBundle() {
+          serialized = JSON.stringify(server.options.runtimeConfig)
+        },
+      }].flat()
+    })
+
+    await buildNuxt(nuxt)
+    expect(JSON.parse(serialized!)).toMatchObject({ githubSponsors: { login: 'harlan-zw', token: '' } })
+    expect(serialized).not.toContain(PLACEHOLDER)
+  }, 30_000)
 })

@@ -65,38 +65,43 @@ export default defineNuxtModule<ModuleOptions>({
       if (sponsors?.token) {
         throw new TypeError([
           'runtimeConfig.githubSponsors.token must be empty.',
-          'Nitro writes runtime config into the server bundle, so a value there ships with the deploy.',
+          'Nitro writes runtime config into the server bundle.',
           `Set the token in the ${tokenEnv} environment variable instead.`,
         ].join(' '))
       }
     }
     assertEmptyToken(privateConfig)
-    const guardSerialization = (options: { runtimeConfig: Record<string, unknown> }) => {
-      const protect = (config: Record<string, unknown>) => {
-        // Nitro 2 and 3 call JSON.stringify when emitting runtime config.
-        // Check then, since later hooks can still populate or replace the slot.
-        Object.defineProperty(config, 'toJSON', {
-          configurable: true,
-          value: () => {
-            assertEmptyToken(config)
-            return config
-          },
-        })
-        return config
-      }
-      let config = protect(options.runtimeConfig)
-      Object.defineProperty(options, 'runtimeConfig', {
-        configurable: true,
-        enumerable: true,
-        get: () => config,
-        set: (value: Record<string, unknown>) => { config = protect(value) },
-      })
-    }
     nuxt.hook('nitro:init', (nitro) => {
-      assertEmptyToken(nitro.options.runtimeConfig)
-      guardSerialization(nitro.options)
-      // Nitro creates a separate instance for prerendering.
-      nitro.hooks.hook('prerender:init', renderer => guardSerialization(renderer.options))
+      const guardBuild = (instance: typeof nitro) => {
+        instance.hooks.hook('rollup:before', (server) => {
+          // Nitro 2 and 3 stringify this object after async build plugins finish.
+          // Validate the snapshot at serialization, rather than at build start.
+          const protect = (runtimeConfig: typeof server.options.runtimeConfig) => {
+            Object.defineProperty(runtimeConfig, 'toJSON', {
+              configurable: true,
+              enumerable: false,
+              value() {
+                // Resolve nested serializers and getters once. Validate and emit
+                // the same plain JSON data, so they cannot change it afterwards.
+                const config = JSON.parse(JSON.stringify({ ...runtimeConfig }))
+                assertEmptyToken(config)
+                return config
+              },
+            })
+            return runtimeConfig
+          }
+          let runtimeConfig = protect(server.options.runtimeConfig)
+          // Reapply the guard when a later plugin replaces the whole config.
+          Object.defineProperty(server.options, 'runtimeConfig', {
+            configurable: true,
+            enumerable: true,
+            get: () => runtimeConfig,
+            set: (config) => { runtimeConfig = protect(config) },
+          })
+        })
+      }
+      guardBuild(nitro)
+      nitro.hooks.hook('prerender:init', guardBuild)
     })
     privateConfig.githubSponsors = {
       login,
@@ -105,8 +110,7 @@ export default defineNuxtModule<ModuleOptions>({
       // The env name, never its value. The route reads the value per request.
       tokenEnv,
       ...existingPrivate,
-      // Always empty in the bundle. It stays declared because Nitro applies an env
-      // override, here NUXT_GITHUB_SPONSORS_TOKEN, only to a key that exists.
+      // Declare an empty key so Nitro can apply NUXT_GITHUB_SPONSORS_TOKEN at runtime.
       token: '',
     }
     const publicConfig = nuxt.options.runtimeConfig.public as Record<string, unknown>
