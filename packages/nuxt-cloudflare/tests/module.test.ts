@@ -194,6 +194,32 @@ describe('setupCloudflareModule', () => {
     vi.unstubAllEnvs()
   })
 
+  it('replaces the Worker KV cache only for a Nitro 3 prerender that inherits it', () => {
+    interface PrerenderOptions {
+      kv?: NitroCloudflareShape['storage']
+      storage?: NitroCloudflareShape['storage']
+    }
+    const { callbacks, nuxt } = nuxtWithCapturedHooks(false)
+    setupCloudflareModule({ bindingTypes: false, enabled: true, kvCache: { binding: 'CACHE' } }, nuxt)
+
+    const hook = vi.fn<(name: string, handler: (prerenderer: { options: PrerenderOptions }) => void) => void>()
+    Reflect.apply(callbacks['nitro:init']!, undefined, [{ hooks: { hook }, options: { preset: 'cloudflare-module' } }])
+    const prerender = hook.mock.calls.find(([name]) => name === 'prerender:init')?.[1]
+    const workerStorage = (nuxt.options.nitro as NitroCloudflareShape).storage
+    const kv = { ...workerStorage, assets: { driver: 'memory' } }
+    const authored = { kv: { cache: { driver: 'fs', base: '/tmp/custom-prerender-cache' } } }
+    const nitro2 = { storage: { ...workerStorage } }
+
+    prerender?.({ options: { kv } })
+    prerender?.({ options: authored })
+    prerender?.({ options: nitro2 })
+
+    expect(kv).toEqual({ assets: { driver: 'memory' }, cache: { driver: 'memory' } })
+    expect(authored.kv.cache).toEqual({ driver: 'fs', base: '/tmp/custom-prerender-cache' })
+    expect(workerStorage?.cache).toMatchObject({ binding: 'CACHE', defaultTtl: 2_592_000 })
+    expect(nitro2.storage.cache).toEqual(workerStorage?.cache)
+  })
+
   it('finds build environment secrets copied into runtime config without returning their values', () => {
     const config = {
       generated: { runtimeSyncSecret: 'generated-at-build' },
