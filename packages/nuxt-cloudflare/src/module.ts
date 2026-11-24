@@ -6,6 +6,7 @@ import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy, WranglerConfigInput } from './wrangler'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { addTemplate, addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
@@ -351,7 +352,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     const plugin = addTemplate({
       filename: 'nuxt-cloudflare-dev-proxy.mjs',
       // Nitro invokes plugins synchronously. Module evaluation must await the proxy.
-      getContents: () => `import { createDevProxy } from ${JSON.stringify(factory)}\nexport default await createDevProxy(${JSON.stringify({ ...platform, wrangler: cloudflareConfig.cloudflare?.wrangler })})`,
+      getContents: () => `import { createDevProxy } from ${JSON.stringify(pathToFileURL(factory).href)}\nexport default await createDevProxy(${JSON.stringify({ ...platform, wrangler: cloudflareConfig.cloudflare?.wrangler })})`,
       write: true,
     })
 
