@@ -242,6 +242,15 @@ describe('validateWideEventSource', () => {
 })
 
 describe('createWideEventValidationPlugin', () => {
+  it('skips the Nitro 3 server auto-import re-exports in the generated types directory', () => {
+    const plugin = createWideEventValidationPlugin('/app', fields, '/app/.nuxt-types')
+    const source = `export { addWideEventFields } from '@harlan-zw/nuxt-wide-events/server'`
+
+    expect(runTransform(plugin, source, '/app/.nuxt-types/types/server-imports.mjs?build')).toBeNull()
+    expect(() => runTransform(plugin, source, '/app/server/server-imports.mjs'))
+      .toThrow('server/server-imports.mjs:1 Wide Event APIs must be called directly.')
+  })
+
   it('marks validated inline Fields as compiler-owned', () => {
     const plugin = createWideEventValidationPlugin('/app', fields)
     const valid = runTransform(plugin, `addWideEventFields(event, { 'user.id': '123' })`, '/workspace/shared/event.ts')

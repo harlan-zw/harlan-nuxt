@@ -61,6 +61,27 @@ describe('request lifetime plugin', () => {
   // `nitropack/runtime` is mocked above, so the default export is the setup function itself.
   const setup = requestLifetimePlugin as unknown as (app: object) => void
 
+  it('keeps the native Nitro 3 Worker request alive until its response finishes', async () => {
+    const pending = deferred<Response>()
+    const waitUntil = vi.fn<(promise: Promise<unknown>) => void>()
+    const request = Object.assign(new Request('https://example.test/'), { waitUntil })
+    const nitroApp = { fetch: vi.fn<(request: Request) => Promise<Response>>(() => pending.promise) }
+
+    setup(nitroApp)
+    const response = nitroApp.fetch(request)
+    expect(waitUntil).toHaveBeenCalledTimes(1)
+    const workerLifetime = waitUntil.mock.calls[0]![0]
+    let settled = false
+    void workerLifetime.then(() => settled = true)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    const body = new Response('ok')
+    pending.resolve(body)
+    await expect(response).resolves.toBe(body)
+    await expect(workerLifetime).resolves.toBeUndefined()
+  })
+
   it('replaces localFetch on the Nitro app the Worker entry calls', async () => {
     const waitUntil = vi.fn<(promise: Promise<unknown>) => void>()
     const original = vi.fn<LocalFetch>(async () => new Response('ok'))
@@ -72,6 +93,15 @@ describe('request lifetime plugin', () => {
     expect(nitroApp.localFetch).not.toBe(original)
     expect(original).toHaveBeenCalledTimes(1)
     expect(waitUntil).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps synchronous Nitro 3 responses synchronous outside Workers', () => {
+    const body = new Response('internal')
+    const nitroApp = { fetch: vi.fn<(request: Request) => Response>(() => body) }
+
+    setup(nitroApp)
+
+    expect(nitroApp.fetch(new Request('https://example.test/'))).toBe(body)
   })
 
   it('leaves an app without localFetch unchanged', () => {
