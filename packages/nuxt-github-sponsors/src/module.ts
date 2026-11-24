@@ -79,11 +79,11 @@ export default defineNuxtModule<ModuleOptions>({
           const protect = (runtimeConfig: typeof server.options.runtimeConfig) => {
             Object.defineProperty(runtimeConfig, 'toJSON', {
               configurable: true,
+              enumerable: false,
               value() {
-                const config = { ...runtimeConfig }
-                const sponsors = config.githubSponsors
-                if (sponsors)
-                  config.githubSponsors = { ...sponsors }
+                // Resolve nested serializers and getters once. Validate and emit
+                // the same plain JSON data, so they cannot change it afterwards.
+                const config = JSON.parse(JSON.stringify({ ...runtimeConfig }))
                 assertEmptyToken(config)
                 return config
               },

@@ -1,9 +1,10 @@
 import type { Nuxt, NuxtHooks } from '@nuxt/schema'
-import { mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { buildNuxt, useNitro } from '@nuxt/kit'
+import { build as buildNitro, createNitro } from 'nitro/builder'
 import { loadNuxt } from 'nuxt'
 import { afterEach, describe, expect, it } from 'vitest'
 import sponsorsModule from '../src/module'
@@ -13,11 +14,13 @@ const PLACEHOLDER = 'inertSponsorsTokenPlaceholder9q4z'
 const touchedEnv = new Set<string>()
 const openNuxts: Nuxt[] = []
 const roots: string[] = []
+const openNitros: Awaited<ReturnType<typeof createNitro>>[] = []
 
 afterEach(async () => {
   for (const name of touchedEnv)
     delete process.env[name]
   touchedEnv.clear()
+  await Promise.all(openNitros.splice(0).map(nitro => nitro.close()))
   await Promise.all(openNuxts.splice(0).map(nuxt => nuxt.close()))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -169,6 +172,75 @@ describe('build-time token boundary', () => {
     const error = await buildNuxt(nuxt).catch((cause: unknown) => cause)
     expect(injected).toBe(true)
     expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(String(error)).not.toContain(PLACEHOLDER)
+    expect(emitted).toBe(false)
+  }, 30_000)
+
+  it.each([
+    { target: 'server', version: 2 },
+    { target: 'prerender', version: 2 },
+    { target: 'server', version: 3 },
+    { target: 'prerender', version: 3 },
+  ])('rejects a late $target sponsor serializer token before bundle generation (Nitro $version)', async ({ target, version }) => {
+    let injected = false
+    let serialized = false
+    let emitted = false
+    const nuxt = await loadSite({ env: {}, options: { mode: 'runtime' } })
+    const nuxtNitro = nuxt.runWithContext(() => useNitro())
+    const root = await mkdtemp(join(tmpdir(), 'sponsor-serializer-'))
+    roots.push(root)
+    await symlink(new URL('../node_modules', import.meta.url), join(root, 'node_modules'), 'dir')
+    const entry = join(root, 'entry.ts')
+    await writeFile(entry, 'import { useRuntimeConfig } from \'nitro/runtime-config\'\nexport default () => useRuntimeConfig()\n')
+    const nitro3 = version === 3
+      ? await createNitro({
+          rootDir: root,
+          entry,
+          preset: target === 'prerender' ? 'nitro-prerender' : 'node-server',
+          runtimeConfig: { githubSponsors: { token: '' } },
+          logLevel: 0,
+        })
+      : undefined
+    if (nitro3) {
+      openNitros.push(nitro3)
+      // Pass a real Nitro 3 builder through the module's renderer boundary.
+      await nuxtNitro.hooks.callHook('prerender:init', nitro3 as unknown as typeof nuxtNitro)
+    }
+    const nitro = (nitro3 as unknown as typeof nuxtNitro | undefined) ?? nuxtNitro
+    const install = (instance: typeof nitro) => {
+      instance.hooks.hook('rollup:before', (server, config) => {
+        config.plugins = [config.plugins ?? [], {
+          name: 'late-sponsor-serializer-fixture',
+          buildStart() {
+            Object.assign(server.options.runtimeConfig, { githubSponsors: {
+              ...server.options.runtimeConfig.githubSponsors,
+              token: '',
+              toJSON() {
+                serialized = true
+                return { token: PLACEHOLDER }
+              },
+            } })
+            injected = true
+          },
+          generateBundle() {
+            emitted = true
+          },
+        }].flat()
+      })
+    }
+    if (target === 'prerender' && !nitro3) {
+      nitro.options.prerender.routes.push('/')
+      nitro.hooks.hook('prerender:init', install)
+    }
+    else {
+      install(nitro)
+    }
+
+    const build = nitro3 ? buildNitro(nitro3) : buildNuxt(nuxt)
+    const error = await build.catch((cause: unknown) => cause)
+    expect(String(error)).toMatch(/runtimeConfig\.githubSponsors\.token must be empty/)
+    expect(injected).toBe(true)
+    expect(serialized).toBe(true)
     expect(String(error)).not.toContain(PLACEHOLDER)
     expect(emitted).toBe(false)
   }, 30_000)
