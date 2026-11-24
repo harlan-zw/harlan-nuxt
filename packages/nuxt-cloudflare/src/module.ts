@@ -347,13 +347,16 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     const factory = resolve(import.meta.dirname, import.meta.url.endsWith('.ts')
       ? 'runtime/server/plugins/dev-proxy.ts'
       : 'runtime/server/plugins/dev-proxy.js')
+    let cloudflareConfig = nuxt.options.nitro as NitroCloudflareShape
     const plugin = addTemplate({
       filename: 'nuxt-cloudflare-dev-proxy.mjs',
-      getContents: () => `import { createDevProxy } from ${JSON.stringify(factory)}\nexport default createDevProxy(${JSON.stringify(platform)})`,
+      // Nitro invokes plugins synchronously. Module evaluation must await the proxy.
+      getContents: () => `import { createDevProxy } from ${JSON.stringify(factory)}\nexport default await createDevProxy(${JSON.stringify({ ...platform, wrangler: cloudflareConfig.cloudflare?.wrangler })})`,
       write: true,
     })
 
     nuxt.hook('nitro:config', (nitroConfig) => {
+      cloudflareConfig = nitroConfig as NitroCloudflareShape
       const devConfig = nitroConfig as Pick<Nitro3Config, 'devServer' | 'noExternals' | 'plugins'>
       devConfig.devServer = { ...devConfig.devServer, runner: 'node-worker' }
       devConfig.plugins = [plugin.dst, ...(devConfig.plugins ?? [])]
