@@ -498,6 +498,15 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
       // fails a build that is otherwise fine.
       if (!nitro.options.preset?.includes('cloudflare'))
         return
+
+      nitro.hooks.hook('prerender:init', (prerenderer) => {
+        const { storage, devStorage } = prerenderer.options
+        // Nitro 3 merges devStorage over storage for Node prerendering.
+        const mounts = devStorage?.cache ? devStorage : storage
+        if (mounts?.cache?.driver === cacheDriverPath)
+          mounts.cache = { driver: 'memory' }
+      })
+
       nitro.hooks.hook('compiled', () => auditGeneratedWranglerConfig(
         nitro,
         options,

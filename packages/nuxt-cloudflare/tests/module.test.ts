@@ -4,6 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// Nitro does not expose its mount resolver through nitro/builder.
+// @ts-expect-error the installed resolver has no declaration file.
+// eslint-disable-next-line antfu/no-import-dist, antfu/no-import-node-modules-by-path
+import { resolveStorageMounts } from '../node_modules/nitro/dist/_build/common.mjs'
 import {
   configureNitroCloudflare,
   findPopulatedRuntimeSecretPaths,
@@ -210,6 +214,43 @@ describe('resolveBindingTypeAudit', () => {
 describe('setupCloudflareModule', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
+  })
+
+  it.each<{ devStorage: NonNullable<NitroCloudflareShape['storage']>, expectedDriver: string }>([
+    { devStorage: {}, expectedDriver: 'memory' },
+    { devStorage: { cache: { driver: 'fs', base: '/tmp/custom-prerender-cache' } }, expectedDriver: 'fs' },
+  ])('resolves the Nitro 3 prerender cache to $expectedDriver and keeps Worker KV', ({ devStorage, expectedDriver }) => {
+    interface PrerenderOptions {
+      preset: string
+      dev: boolean
+      storage: NonNullable<NitroCloudflareShape['storage']>
+      devStorage: NitroCloudflareShape['storage']
+    }
+    const { callbacks, nuxt } = nuxtWithCapturedHooks(false)
+    setupCloudflareModule({ bindingTypes: false, enabled: true, kvCache: { binding: 'CACHE' } }, nuxt)
+
+    const hook = vi.fn<(name: string, handler: (prerenderer: { options: PrerenderOptions }) => void) => void>()
+    Reflect.apply(callbacks['nitro:init']!, undefined, [{ hooks: { hook }, options: { preset: 'cloudflare-module' } }])
+    const prerender = hook.mock.calls.find(([name]) => name === 'prerender:init')![1]
+    const worker = {
+      preset: 'cloudflare-module',
+      dev: false,
+      storage: (nuxt.options.nitro as NitroCloudflareShape).storage!,
+      devStorage,
+    }
+    const options = { ...worker, preset: 'nitro-prerender', storage: { ...worker.storage } }
+
+    prerender({ options })
+
+    const mounts = resolveStorageMounts(options)
+    expect(mounts.find((mount: { path: string }) => mount.path === 'cache')).toMatchObject({
+      name: expectedDriver,
+      options: expectedDriver === 'fs' ? { base: '/tmp/custom-prerender-cache' } : {},
+    })
+    expect(resolveStorageMounts(worker).find((mount: { path: string }) => mount.path === 'cache')).toMatchObject({
+      name: expect.stringMatching(/\/src\/storage\.ts$/),
+      options: { binding: 'CACHE', defaultTtl: 2_592_000 },
+    })
   })
 
   it('finds build environment secrets copied into runtime config without returning their values', () => {
