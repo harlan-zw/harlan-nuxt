@@ -1,11 +1,12 @@
 import type {} from '@harlan-zw/nuxt-checkin'
 import type { Nuxt } from '@nuxt/schema'
+import type { NitroConfig as Nitro3Config } from 'nitro/types'
 import type { Nitro } from 'nitropack/types'
 import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
 import type { WorkersCachePolicy, WranglerConfigInput } from './wrangler'
 import process from 'node:process'
-import { addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
+import { addTemplate, addTypeTemplate, createResolver, defineNuxtModule, getNitroVersion, hasNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
 import { resolve } from 'pathe'
 import {
   diagnoseWranglerSourceConfigs,
@@ -18,6 +19,7 @@ import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticA
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
+  findProjectWranglerConfig,
   formatWranglerDiagnostics,
   readAuthoredWranglerConfig,
   readWranglerJsonFile,
@@ -34,6 +36,13 @@ export interface ModuleOptions {
   enabled?: boolean
   compatibilityDate?: string
   compatibilityMaxAgeDays?: number
+  /** Run Nitro 3 in Node during development with local Wrangler bindings. */
+  dev?: boolean | {
+    /** Wrangler config path relative to the Nuxt root. Defaults to the root Wrangler config. */
+    configPath?: string
+    /** Local state directory relative to the Nuxt root. Defaults to `.wrangler/state/v3`. */
+    persistDir?: string | false
+  }
   doctor?: WranglerDiagnosticPolicy
   kvCache?: false | {
     binding: string
@@ -324,6 +333,34 @@ async function auditGeneratedWranglerConfig(
 export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void {
   if (!options.enabled)
     return
+  if (nuxt.options.dev && options.dev) {
+    if (getNitroVersion(nuxt) !== 3)
+      throw new Error('[nuxt-cloudflare] nuxtCloudflare.dev requires Nitro 3.')
+
+    const rootDir = nuxt.options.rootDir
+    const { configPath, persistDir } = options.dev === true ? {} : options.dev
+    const platform = {
+      rootDir,
+      configPath: configPath ? resolve(rootDir, configPath) : findProjectWranglerConfig(rootDir),
+      persist: persistDir === false ? false : { path: resolve(rootDir, persistDir ?? '.wrangler/state/v3') },
+    }
+    const factory = resolve(import.meta.dirname, import.meta.url.endsWith('.ts')
+      ? 'runtime/server/plugins/dev-proxy.ts'
+      : 'runtime/server/plugins/dev-proxy.js')
+    const plugin = addTemplate({
+      filename: 'nuxt-cloudflare-dev-proxy.mjs',
+      getContents: () => `import { createDevProxy } from ${JSON.stringify(factory)}\nexport default createDevProxy(${JSON.stringify(platform)})`,
+      write: true,
+    })
+
+    nuxt.hook('nitro:config', (nitroConfig) => {
+      const devConfig = nitroConfig as Pick<Nitro3Config, 'devServer' | 'noExternals' | 'plugins'>
+      devConfig.devServer = { ...devConfig.devServer, runner: 'node-worker' }
+      devConfig.plugins = [plugin.dst, ...(devConfig.plugins ?? [])]
+      if (devConfig.noExternals !== true)
+        devConfig.noExternals = [...(devConfig.noExternals || []), '@harlan-zw/nuxt-cloudflare']
+    })
+  }
   if (options.checks?.length) {
     const checkResolver = createResolver(import.meta.url)
     nuxt.hook('checkin:register', (registry) => {
