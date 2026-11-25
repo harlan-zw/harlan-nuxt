@@ -5,7 +5,7 @@ import {
   collectFetchTelemetryOptionWarnings,
   DEFAULT_FETCH_TELEMETRY_OPTIONS,
   normalizeFetchTelemetryOptions,
-} from '../runtime/telemetry'
+} from '../runtime/telemetry.ts'
 
 export type ModuleTelemetryOptions = boolean | Partial<FetchTelemetryRuntimeOptions>
 

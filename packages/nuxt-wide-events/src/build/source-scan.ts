@@ -1,6 +1,6 @@
 import type { Plugin } from 'vite'
 import { normalize, relative, resolve } from 'pathe'
-import { formatWideEventSourceIssues, transformWideEventSource } from './source-validation'
+import { formatWideEventSourceIssues, transformWideEventSource } from './source-validation.ts'
 
 const SOURCE_PATTERN = /\.[cm]?[jt]sx?$/i
 

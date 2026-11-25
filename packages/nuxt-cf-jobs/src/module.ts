@@ -6,21 +6,21 @@ import type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 import { relative, resolve } from 'node:path'
 import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import { addImportsDir, addNitroPlugin, addServerHandler, addServerImports, addTemplate, createResolver, defineNuxtModule, resolveServerVariant, useLogger } from '@nuxt/kit'
-import { resolveLayeredDirs } from './build/layers'
-import { inlineTemplateInNitroDev } from './build/nitro-dev'
-import { installRegistryTemplates } from './build/registry'
-import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast-constants'
-import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks'
+import { resolveLayeredDirs } from './build/layers.ts'
+import { inlineTemplateInNitroDev } from './build/nitro-dev.ts'
+import { installRegistryTemplates } from './build/registry.ts'
+import { CF_JOBS_BROADCAST_DEFAULT_ROUTE } from './runtime/shared/broadcast-constants.ts'
+import { buildCronUnion, buildScheduledTasks, collectTasks, findDuplicateTaskNames } from './tasks.ts'
 import {
   crossCheckCrons,
   enrichQueuesWithConsumerConfig,
   parseWranglerConfig,
   reconcileQueues,
   renderSuggestedCronsToml,
-} from './wrangler'
+} from './wrangler.ts'
 
-export { generateRegistryTemplate, generateRegistryTypesTemplate } from './build/registry'
 export type { RegistrySource, RegistrySourcesContext } from './build/registry'
+export { generateRegistryTemplate, generateRegistryTypesTemplate } from './build/registry.ts'
 export type { BroadcastOptions, ModuleOptions, ReconcileOptions } from './types'
 
 declare module '@nuxt/schema' {

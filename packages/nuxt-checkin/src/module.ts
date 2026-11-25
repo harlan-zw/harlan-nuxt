@@ -4,9 +4,9 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { addServerTemplate, addTypeTemplate, createResolver, defineNuxtModule, getLayerDirectories, resolveFiles, resolveServerVariant } from '@nuxt/kit'
 import { isAbsolute, resolve } from 'pathe'
-import { bundleChecks } from './build/bundle'
-import { readCheckId } from './build/discovery'
-import { runChecks } from './runtime/server/index'
+import { bundleChecks } from './build/bundle.ts'
+import { readCheckId } from './build/discovery.ts'
+import { runChecks } from './runtime/server/index.ts'
 
 export type { CheckRegistration, CheckRegistry, ModuleOptions } from './types'
 

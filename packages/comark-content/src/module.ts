@@ -20,19 +20,19 @@ import {
   updateTemplates,
   useLogger,
 } from '@nuxt/kit'
-import { version } from '../package.json'
-import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components'
-import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSources } from './config'
-import { createContentAssetPlan, createContentRevision, syncContentAssets } from './core/asset'
-import { ingestCollections } from './core/ingest'
-import { isMarkdownWatchEvent } from './core/source'
+import pkg from '../package.json' with { type: 'json' }
+import { addUnprefixedContentAliases, contentComponentDirectories, localizeNuxtUiProseComponents, renderComponentManifest } from './components.ts'
+import { assertCloudflareCacheModule, assertSupportedOptions, mergeCollectionSources } from './config.ts'
+import { createContentAssetPlan, createContentRevision, syncContentAssets } from './core/asset.ts'
+import { ingestCollections } from './core/ingest.ts'
+import { isMarkdownWatchEvent } from './core/source.ts'
 
-export * from './config'
-export { contentRangiLanguages, contentRangiTheme } from './core/rangi'
+export * from './config.ts'
+export { contentRangiLanguages, contentRangiTheme } from './core/rangi.ts'
 export type * from './highlight'
 export type * from './hooks'
-export { nodeToText, walkNodes } from './runtime/core/ast'
 export type { NodeVisitor } from './runtime/core/ast'
+export { nodeToText, walkNodes } from './runtime/core/ast.ts'
 export type * from './runtime/types'
 
 export interface ModuleOptions {
@@ -77,7 +77,7 @@ export default defineNuxtModule<ModuleOptions>({
     name: '@harlan-zw/comark-content',
     // Without this, getNuxtModuleVersion() returns false, so every consumer
     // calling hasNuxtModuleCompatibility() sees no version and fails closed.
-    version,
+    version: pkg.version,
     configKey: 'content',
     compatibility: { nuxt: '^4.6.0 || ^5.0.0' },
   },

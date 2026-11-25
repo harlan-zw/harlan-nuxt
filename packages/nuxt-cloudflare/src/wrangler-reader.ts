@@ -2,7 +2,7 @@ import type { WranglerConfigInput } from './wrangler'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'pathe'
 import { unstable_readConfig } from 'wrangler'
-import { findProjectWranglerConfig } from './wrangler-file'
+import { findProjectWranglerConfig } from './wrangler-file.ts'
 
 export interface ReadProjectWranglerOptions {
   config?: string

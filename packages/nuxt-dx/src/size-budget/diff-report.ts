@@ -1,7 +1,7 @@
 import type { EntryChange, SnapshotDiff } from './diff'
 import { colors } from 'consola/utils'
-import { SCOPE } from './scope'
-import { formatBytes, formatDelta } from './size'
+import { SCOPE } from './scope.ts'
+import { formatBytes, formatDelta } from './size.ts'
 
 /** Heading on every report, so a reader finds the same block in a long summary. */
 const HEADING = '### 📦 Runtime size budget'

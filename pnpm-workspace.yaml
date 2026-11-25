@@ -28,7 +28,7 @@ catalog:
   '@cloudflare/workers-types': ^5.20260811.1
   '@harlan-zw/jev': ^0.3.0
   '@nuxt/kit': ^4.6.4
-  '@nuxt/module-builder': ^1.0.2
+  '@nuxt/module-builder': 2.0.0-alpha.1
   '@nuxt/schema': ^4.6.4
   '@nuxt/test-utils': ^4.4.0
   '@sentry/cloudflare': ^10.70.0 || ^11.0.0
@@ -58,6 +58,7 @@ catalog:
   pino: ^10.4.0
   pkg-pr-new: 0.0.94
   playwright: ^1.65.1
+  tsdown: ^0.23.7
 
   rangi: ^2.2.0
   rollup: ^4.68.8

@@ -1,5 +1,5 @@
 import { isAbsolute, join, relative, sep } from 'node:path'
-import { componentCandidates, componentMatchesTag } from './runtime/components/names'
+import { componentCandidates, componentMatchesTag } from './runtime/components/names.ts'
 
 interface NuxtLayer { config?: { srcDir?: string, dir?: { app?: string } } }
 

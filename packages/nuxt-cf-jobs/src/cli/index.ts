@@ -18,11 +18,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
 import { defineCommand, runMain } from 'citty'
-import { d1DurableJobMigrationSql } from '../runtime/server/d1'
-import { recentTerminalJobs, snapshotDurableQueues } from '../runtime/server/dev-worker-snapshot'
-import { collectTasks } from '../tasks'
-import { parseWranglerConfig } from '../wrangler'
-import { D1ResolutionError, execD1, execD1Batch, resolveD1Target } from './d1'
+import { d1DurableJobMigrationSql } from '../runtime/server/d1.ts'
+import { recentTerminalJobs, snapshotDurableQueues } from '../runtime/server/dev-worker-snapshot.ts'
+import { collectTasks } from '../tasks.ts'
+import { parseWranglerConfig } from '../wrangler.ts'
+import { D1ResolutionError, execD1, execD1Batch, resolveD1Target } from './d1.ts'
 import {
   activeJobsSql,
   backpressureSql,
@@ -36,8 +36,8 @@ import {
   retrySql,
   staleReservedSql,
   summarizeBackpressure,
-} from './queries'
-import { color, humanizeSeconds, nextCronRun, relativeTime, table, truncate } from './render'
+} from './queries.ts'
+import { color, humanizeSeconds, nextCronRun, relativeTime, table, truncate } from './render.ts'
 
 const CONFIRM_YES_RE = /^y(?:es)?$/i
 

@@ -12,7 +12,7 @@ import {
   objectValue,
   parseStaticModule,
   stringValue,
-} from './static-ast'
+} from './static-ast.ts'
 
 const LISTENER_KEYS = new Set([
   'name',

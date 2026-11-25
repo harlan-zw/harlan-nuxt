@@ -1,7 +1,7 @@
 import type { Check, CheckContext } from '@harlan-zw/nuxt-checkin/server'
 import { defineCheck, fail, pass, unavailable, warn } from '@harlan-zw/nuxt-checkin/server'
 import { resolveCloudflareBindings } from '@harlan-zw/nuxt-cloudflare/bindings'
-import { backpressureSql } from './cli/queries'
+import { backpressureSql } from './cli/queries.ts'
 
 export interface QueueCheckOptions {
   id: string

@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, rename, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
-import { err, ok, sourceError } from './result'
+import { err, ok, sourceError } from './result.ts'
 
 export interface RemoteSource {
   repository: GitRepository

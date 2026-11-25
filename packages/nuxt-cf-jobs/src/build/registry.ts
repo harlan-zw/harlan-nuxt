@@ -4,10 +4,10 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import { addTemplate, addTypeTemplate, resolveFiles, useLogger } from '@nuxt/kit'
-import { cfJobsAppExportNames } from '../runtime/shared/app-exports'
-import { extractJobMeta } from './extract-job-meta'
-import { resolveLayeredDirs } from './layers'
-import { inlineTemplateInNitroDev } from './nitro-dev'
+import { cfJobsAppExportNames } from '../runtime/shared/app-exports.ts'
+import { extractJobMeta } from './extract-job-meta.ts'
+import { resolveLayeredDirs } from './layers.ts'
+import { inlineTemplateInNitroDev } from './nitro-dev.ts'
 
 const WINDOWS_SLASH_RE = /\\/g
 const JOB_FILE_EXTENSION_RE = /\.[cm]?tsx?$/

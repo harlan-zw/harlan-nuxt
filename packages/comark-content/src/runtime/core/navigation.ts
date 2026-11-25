@@ -1,6 +1,6 @@
 import type { ContentNavigationItem, ContentSearchSection, NavigationCollectionItem, PageCollectionItemBase } from '../types'
-import { nodeToText } from './ast'
-import { generatedTitle } from './path'
+import { nodeToText } from './ast.ts'
+import { generatedTitle } from './path.ts'
 
 function navigationItem(page: NavigationCollectionItem, fields: string[]): ContentNavigationItem {
   const navigation = page.navigation

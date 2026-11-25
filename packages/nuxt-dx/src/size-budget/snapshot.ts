@@ -2,8 +2,8 @@ import type { MeasuredTarget } from './rollup'
 import type { BudgetScope } from './scope'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { displayId } from './report'
-import { isBudgetScope } from './scope'
+import { displayId } from './report.ts'
+import { isBudgetScope } from './scope.ts'
 
 /**
  * Bumped whenever the shape changes, so `compare` refuses a report it cannot read.

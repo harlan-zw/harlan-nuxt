@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { findProjectWranglerConfig } from '@harlan-zw/nuxt-cloudflare/wrangler'
-import { parseWranglerConfig } from '../wrangler'
+import { parseWranglerConfig } from '../wrangler.ts'
 
 const execFileAsync = promisify(execFile)
 const JSON_START_RE = /[[{]/

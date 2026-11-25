@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 import { loadNuxt } from '@nuxt/kit'
-import { runExternalChecks } from '../runtime/external/index'
+import { runExternalChecks } from '../runtime/external/index.ts'
 
 interface CliDependencies {
   cwd?: string

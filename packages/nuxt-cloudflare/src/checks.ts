@@ -1,6 +1,6 @@
 import type { Check } from '@harlan-zw/nuxt-checkin/server'
 import { defineCheck, pass, unavailable } from '@harlan-zw/nuxt-checkin/server'
-import { resolveCloudflareBindings } from './bindings'
+import { resolveCloudflareBindings } from './bindings.ts'
 
 export interface D1CheckOptions {
   id: string

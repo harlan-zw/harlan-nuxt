@@ -9,7 +9,7 @@ import {
   planSponsorDelivery,
   renderSponsorTierAugmentation,
   resolveSponsorTiers,
-} from './options'
+} from './options.ts'
 
 export interface ModuleOptions {
   login: string

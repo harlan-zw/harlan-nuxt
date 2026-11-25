@@ -1,7 +1,7 @@
 import type { PayloadUsageReport } from '../runtime/app/payload-usage'
 import type { DiagnosticIssue } from '../runtime/app/report'
-import { formatPayloadUsage } from '../runtime/app/payload-usage'
-import { formatIssueLine, issueSignature } from '../runtime/app/report'
+import { formatPayloadUsage } from '../runtime/app/payload-usage.ts'
+import { formatIssueLine, issueSignature } from '../runtime/app/report.ts'
 
 export type InspectionReport = {
   url: string

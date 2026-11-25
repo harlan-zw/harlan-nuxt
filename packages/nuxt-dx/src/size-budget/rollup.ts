@@ -3,7 +3,7 @@ import type { Plugin as VitePlugin } from 'vite'
 import type { CostMeasurement, GraphModule } from './graph'
 import type { BudgetScope } from './scope'
 import type { BudgetTarget } from './targets'
-import { measureCost } from './graph'
+import { measureCost } from './graph.ts'
 
 export interface MeasuredTarget {
   scope: BudgetScope

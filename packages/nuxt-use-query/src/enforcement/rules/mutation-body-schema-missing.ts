@@ -1,5 +1,5 @@
 import type { ContractRule } from '../types'
-import { getLiteralString, getObjectProperties } from '../ast'
+import { getLiteralString, getObjectProperties } from '../ast.ts'
 
 const BODY_METHODS = new Set(['POST', 'PATCH', 'PUT'])
 

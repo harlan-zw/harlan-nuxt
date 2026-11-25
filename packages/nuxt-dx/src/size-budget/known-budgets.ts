@@ -1,5 +1,5 @@
 import type { BudgetScope } from './scope'
-import { kilobytesToBytes } from './size'
+import { kilobytesToBytes } from './size.ts'
 
 export interface KnownBudget {
   scope: BudgetScope

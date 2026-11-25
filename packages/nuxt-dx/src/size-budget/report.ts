@@ -2,8 +2,8 @@ import type { TreeItem } from 'consola/utils'
 import type { BudgetVerdict } from './budget'
 import type { BudgetScope } from './scope'
 import { colors, formatTree } from 'consola/utils'
-import { SCOPE } from './scope'
-import { formatBytes } from './size'
+import { SCOPE } from './scope.ts'
+import { formatBytes } from './size.ts'
 
 /**
  * Rollup ids carry virtual prefixes and query suffixes that make paths unreadable in a

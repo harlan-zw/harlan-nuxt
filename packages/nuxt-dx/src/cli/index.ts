@@ -8,11 +8,11 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { defineCommand, runMain } from 'citty'
 import { colors } from 'consola/utils'
-import { diffSnapshots } from '../size-budget/diff'
-import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../size-budget/diff-report'
-import { kilobytesToBytes } from '../size-budget/size'
-import { parseSnapshot } from '../size-budget/snapshot'
-import { inspect, installBrowser } from './inspect'
+import { formatDiffMarkdown, formatDiffVerdict, formatMissingBaselineMarkdown } from '../size-budget/diff-report.ts'
+import { diffSnapshots } from '../size-budget/diff.ts'
+import { kilobytesToBytes } from '../size-budget/size.ts'
+import { parseSnapshot } from '../size-budget/snapshot.ts'
+import { inspect, installBrowser } from './inspect.ts'
 
 /** A target growing by more than this fails the comparison. */
 const DEFAULT_THRESHOLD_KB = 10

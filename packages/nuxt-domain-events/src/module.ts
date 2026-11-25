@@ -1,11 +1,11 @@
 import type { ModuleOptions } from './types'
 import { resolve } from 'node:path'
 import { addServerImports, createResolver, defineNuxtModule, useLogger } from '@nuxt/kit'
-import { collectSetupWarnings, resolveLayerFile, resolveQueueNames } from './build/options'
-import { installEventRegistryTemplates } from './build/registry'
-import { resolveRuntimeFile } from './build/runtime-file'
+import { collectSetupWarnings, resolveLayerFile, resolveQueueNames } from './build/options.ts'
+import { installEventRegistryTemplates } from './build/registry.ts'
+import { resolveRuntimeFile } from './build/runtime-file.ts'
 
-export { generateEventRegistryContracts, generateEventRegistryTemplate, generateEventRegistryTypes } from './build/registry'
+export { generateEventRegistryContracts, generateEventRegistryTemplate, generateEventRegistryTypes } from './build/registry.ts'
 export type { ModuleOptions } from './types'
 
 export default defineNuxtModule<ModuleOptions>({

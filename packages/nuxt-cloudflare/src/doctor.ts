@@ -1,9 +1,9 @@
 import type { WranglerDiagnostic, WranglerDiagnosticOptions } from './wrangler'
 import type { ReadProjectWranglerOptions } from './wrangler-reader'
-import { diagnoseWranglerSourceConfigs, discoverWranglerSourceConfigs } from './diagnostics'
-import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveConfigStaticAssetDirectory } from './static-assets'
-import { diagnoseWranglerConfig } from './wrangler'
-import { readProjectWranglerConfig } from './wrangler-reader'
+import { diagnoseWranglerSourceConfigs, discoverWranglerSourceConfigs } from './diagnostics.ts'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveConfigStaticAssetDirectory } from './static-assets.ts'
+import { readProjectWranglerConfig } from './wrangler-reader.ts'
+import { diagnoseWranglerConfig } from './wrangler.ts'
 
 export interface DiagnoseWranglerProjectOptions extends ReadProjectWranglerOptions, WranglerDiagnosticOptions {}
 

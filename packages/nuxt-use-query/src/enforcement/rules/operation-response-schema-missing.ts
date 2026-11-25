@@ -1,5 +1,5 @@
 import type { ContractRule } from '../types'
-import { getObjectProperties } from '../ast'
+import { getObjectProperties } from '../ast.ts'
 
 export const operationResponseSchemaMissingRule: ContractRule = {
   code: 'operation-response-schema-missing',

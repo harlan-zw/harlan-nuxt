@@ -1,6 +1,6 @@
 import type { MarkdownDocument, Node } from 'comark'
 
-export { contentRangiLanguages, contentRangiTheme } from '../runtime/shared/rangi-theme'
+export { contentRangiLanguages, contentRangiTheme } from '../runtime/shared/rangi-theme.ts'
 
 function addThemeVariables(node: Node, inRangi = false): void {
   if (typeof node === 'string' || node[0] === null)

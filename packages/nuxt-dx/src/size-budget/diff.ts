@@ -1,7 +1,7 @@
 import type { BudgetBundle, BudgetScope } from './scope'
 import type { SizeBudgetSnapshot, SnapshotEntry } from './snapshot'
-import { BUDGET_SCOPES, SCOPE } from './scope'
-import { entryKey } from './snapshot'
+import { BUDGET_SCOPES, SCOPE } from './scope.ts'
+import { entryKey } from './snapshot.ts'
 
 export type ChangeKind = 'added' | 'removed' | 'grown' | 'shrunk' | 'unchanged'
 

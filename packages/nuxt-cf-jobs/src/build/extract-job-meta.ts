@@ -5,7 +5,7 @@ import {
   hasStaticObjectProperty,
   numberLiteralValue,
   stringLiteralValue,
-} from './static-ast'
+} from './static-ast.ts'
 
 /**
  * Statically-extracted metadata from a job source file's `defineJob({...})` call.

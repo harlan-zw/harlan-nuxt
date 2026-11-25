@@ -1,5 +1,5 @@
 import type { BudgetOverride, BudgetSubject } from './budget'
-import { overrideMatches } from './budget'
+import { overrideMatches } from './budget.ts'
 
 export interface OverrideUsage {
   /** Marks every fragment these entries match as used. */

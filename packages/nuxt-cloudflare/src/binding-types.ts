@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import process from 'node:process'
 import { dirname, resolve } from 'pathe'
-import { readAuthoredWranglerConfig } from './wrangler-file'
+import { readAuthoredWranglerConfig } from './wrangler-file.ts'
 
 interface BindingTypeGenerationOptions {
   buildDir: string

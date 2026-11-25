@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { defineCommand } from 'citty'
 import { chromium } from 'playwright'
-import { discoverDevServer, resolveInspectionTarget } from '../dev-server'
-import { HYDRATION_SUMMARY_ERROR } from '../runtime/app/hydration'
-import { createInspectionReport, formatInspectionReport } from './inspect-report'
+import { discoverDevServer, resolveInspectionTarget } from '../dev-server.ts'
+import { HYDRATION_SUMMARY_ERROR } from '../runtime/app/hydration.ts'
+import { createInspectionReport, formatInspectionReport } from './inspect-report.ts'
 
 export const inspect = defineCommand({
   meta: { name: 'inspect', description: 'Inspect a route for client errors, warnings, hydration mismatches, and unread payload fields' },

@@ -102,8 +102,8 @@
     "node": "^22.22.3 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
-    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "build": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "nuxt-module-build prepare && tsdown",
     "prepack": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -150,8 +150,8 @@
     "eslint": "catalog:",
     "nitro": "catalog:",
     "nuxt": "catalog:",
+    "tsdown": "catalog:",
     "typescript": "catalog:",
-    "unbuild": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }
