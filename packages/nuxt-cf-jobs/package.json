@@ -138,7 +138,7 @@
   },
   "scripts": {
     "build": "nuxt-module-build prepare && tsdown",
-    "dev:prepare": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "test": "pnpm run build && vitest run --project unit",
     "test:unit": "pnpm run build && vitest run --project unit",

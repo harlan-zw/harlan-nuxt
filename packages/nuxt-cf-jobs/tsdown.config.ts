@@ -9,11 +9,7 @@ export default defineConfig({
         './src/cli/index',
       ],
       externals: [
-        '#app',
-        '#imports',
-        'node:sqlite',
         'nitropack',
-        'nitropack/types',
       ],
     }),
   ],

@@ -68,7 +68,7 @@
   },
   "scripts": {
     "build": "nuxt-module-build prepare && tsdown",
-    "dev:prepare": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

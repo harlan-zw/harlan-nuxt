@@ -8,10 +8,7 @@ export default defineConfig({
         './src/build/index',
       ],
       externals: [
-        '#app',
-        '#imports',
         'nitropack',
-        'nitropack/types',
       ],
     }),
   ],

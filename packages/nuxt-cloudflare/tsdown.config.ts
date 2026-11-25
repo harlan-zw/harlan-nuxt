@@ -15,9 +15,6 @@ export default defineConfig({
         './src/wrangler',
         './src/cli/index',
       ],
-      externals: [
-        'wrangler',
-      ],
     }),
   ],
 })

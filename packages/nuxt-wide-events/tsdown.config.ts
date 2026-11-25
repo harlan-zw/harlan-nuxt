@@ -8,10 +8,8 @@ export default defineConfig({
         './src/build/index',
       ],
       externals: [
-        '#imports',
         '#wide-events/config',
         'nitropack',
-        'nitropack/types',
       ],
     }),
   ],

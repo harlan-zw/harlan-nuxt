@@ -7,10 +7,6 @@ export default defineConfig({
       entries: [
         './src/cli/index',
       ],
-      externals: [
-        '#app',
-        '#imports',
-      ],
     }),
   ],
 })

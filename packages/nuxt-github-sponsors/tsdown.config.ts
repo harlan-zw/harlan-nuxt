@@ -3,13 +3,6 @@ import { defineConfig } from 'tsdown'
 
 export default defineConfig({
   plugins: [
-    builder({
-      externals: [
-        '#app',
-        '#imports',
-        'nitropack',
-        'nitropack/runtime',
-      ],
-    }),
+    builder(),
   ],
 })

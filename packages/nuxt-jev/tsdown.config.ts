@@ -8,9 +8,7 @@ export default defineConfig({
         './src/schema',
       ],
       externals: [
-        '#imports',
         'nitropack',
-        'nitropack/types',
       ],
     }),
   ],

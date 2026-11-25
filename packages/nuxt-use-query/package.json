@@ -123,7 +123,7 @@
     "build": "nuxt-module-build prepare && tsdown",
     "dev": "nuxt dev playground",
     "dev:build": "nuxt build playground",
-    "dev:prepare": "nuxt-module-build prepare && tsdown && nuxt prepare playground && nuxt prepare test/fixture",
+    "dev:prepare": "pnpm run build && nuxt prepare playground && nuxt prepare test/fixture",
     "prepare:fixtures": "nuxt prepare playground && nuxt prepare test/fixture",
     "prepack": "pnpm run build",
     "test": "pnpm run prepare:fixtures && vitest run",

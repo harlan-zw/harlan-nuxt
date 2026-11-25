@@ -67,7 +67,7 @@
     "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
     "bench:warm-ingest": "node ./bench/warm-ingest/run.mjs",
     "build": "nuxt-module-build prepare && tsdown",
-    "dev:prepare": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "prepack": "pnpm run build",
