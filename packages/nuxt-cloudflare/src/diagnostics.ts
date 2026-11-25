@@ -1,7 +1,7 @@
 import type { WranglerDiagnostic, WranglerDiagnosticCode } from './wrangler'
 import { existsSync } from 'node:fs'
 import { dirname, extname, resolve } from 'pathe'
-import { WRANGLER_DIAGNOSTIC_CODES } from './wrangler'
+import { WRANGLER_DIAGNOSTIC_CODES } from './wrangler.ts'
 
 export type WranglerDiagnosticPolicy
   = | { _tag: 'advisory' }

@@ -1,6 +1,6 @@
 import type { CostTarget } from './graph'
 import type { BudgetScope } from './scope'
-import { matchTargetId } from './match'
+import { matchTargetId } from './match.ts'
 
 export interface RuntimeEntry {
   scope: BudgetScope

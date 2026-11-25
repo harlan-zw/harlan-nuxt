@@ -5,11 +5,11 @@ import type {
   RuleContext,
 } from './types'
 import { normalize } from 'pathe'
-import { createSourceAstAnalyzer } from './ast'
-import { createDirectoryMatcher, resolveContractQueryEnforcementOptions } from './options'
-import { extractScriptSource, parseSourceAst } from './parse'
-import { readSourceFilesFromDisk } from './read'
-import { contractRules } from './rules'
+import { createSourceAstAnalyzer } from './ast.ts'
+import { createDirectoryMatcher, resolveContractQueryEnforcementOptions } from './options.ts'
+import { extractScriptSource, parseSourceAst } from './parse.ts'
+import { readSourceFilesFromDisk } from './read.ts'
+import { contractRules } from './rules/index.ts'
 
 /**
  * Server code is exempt from the client-side API literal rule. A route

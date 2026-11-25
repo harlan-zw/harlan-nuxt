@@ -66,8 +66,8 @@
     "bench": "node ./bench/run.mjs",
     "bench:site:harlanzw": "node ./bench/site-harlanzw/run.mjs",
     "bench:warm-ingest": "node ./bench/warm-ingest/run.mjs",
-    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
-    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "build": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "prepack": "pnpm run build",
@@ -93,6 +93,7 @@
     "eslint": "catalog:",
     "jiti": "catalog:",
     "nuxt": "catalog:",
+    "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:"

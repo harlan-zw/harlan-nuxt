@@ -13,10 +13,10 @@ import {
   diagnoseWranglerSourceConfigs,
   discoverWranglerSourceConfigs,
   evaluateWranglerDiagnostics,
-} from './diagnostics'
-import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache'
-import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache'
-import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory } from './static-assets'
+} from './diagnostics.ts'
+import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache.ts'
+import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache.ts'
+import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory } from './static-assets.ts'
 import {
   applyCloudflareDefaults,
   diagnoseWranglerConfig,
@@ -24,7 +24,7 @@ import {
   formatWranglerDiagnostics,
   readAuthoredWranglerConfig,
   readWranglerJsonFile,
-} from './wrangler'
+} from './wrangler.ts'
 
 export interface ModuleOptions {
   /** Register checks through the public check-in API. */
@@ -275,7 +275,7 @@ async function auditGeneratedWranglerConfig(
   if (result._tag === 'invalid')
     throw new Error(`[nuxt-cloudflare] Generated Wrangler config is invalid: ${result.reason}`)
   // Keep Wrangler's CLI runtime out of Nuxt module evaluation and development startup.
-  const { readProjectWranglerConfig } = await import('./wrangler-reader')
+  const { readProjectWranglerConfig } = await import('./wrangler-reader.ts')
   const validated = readProjectWranglerConfig({ config: path, cwd: rootDir })
   if (validated._tag === 'invalid')
     throw new Error('[nuxt-cloudflare] Generated Wrangler config fails Wrangler schema validation. Run Wrangler locally for validation details.')
@@ -287,7 +287,7 @@ async function auditGeneratedWranglerConfig(
     )
   }
   if (audit._tag === 'compare') {
-    const { assertCloudflareBindingTypesCurrent } = await import('./binding-types')
+    const { assertCloudflareBindingTypesCurrent } = await import('./binding-types.ts')
     await assertCloudflareBindingTypesCurrent({
       buildDir,
       compatibilityDate: result.config.compatibility_date,
@@ -439,7 +439,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     const bindingTypesTemplate = addTypeTemplate({
       filename: 'types/cloudflare-bindings.d.ts',
       getContents: async () => {
-        const { prepareCloudflareBindingTypes } = await import('./binding-types')
+        const { prepareCloudflareBindingTypes } = await import('./binding-types.ts')
         const compatibilityDate = nuxt.options.compatibilityDate
         const cacheDir = typeof options.bindingTypes === 'object'
           ? options.bindingTypes.cacheDir

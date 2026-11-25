@@ -1,6 +1,6 @@
 import type { CostMeasurement } from './graph'
 import type { BudgetScope } from './scope'
-import { knownBudgetBytes } from './known-budgets'
+import { knownBudgetBytes } from './known-budgets.ts'
 
 export interface BudgetVerdict {
   path: string

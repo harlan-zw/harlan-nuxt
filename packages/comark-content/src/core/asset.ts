@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { createNavigationSource, createSearchSections } from '../runtime/core/navigation'
+import { createNavigationSource, createSearchSections } from '../runtime/core/navigation.ts'
 
 export const encodeCollectionAsset = (value: unknown): Uint8Array => gzipSync(JSON.stringify(value), { level: 9 })
 

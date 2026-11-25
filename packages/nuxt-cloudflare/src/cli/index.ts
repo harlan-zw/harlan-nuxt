@@ -2,10 +2,10 @@
 import process from 'node:process'
 import { defineCommand, runMain } from 'citty'
 import { resolve } from 'pathe'
-import { evaluateWranglerDiagnostics, parseWranglerAllowedWarnings } from '../diagnostics'
-import { diagnoseWranglerProject } from '../doctor'
-import { formatWranglerDiagnostics } from '../wrangler'
-import { readCliVersion } from './meta'
+import { evaluateWranglerDiagnostics, parseWranglerAllowedWarnings } from '../diagnostics.ts'
+import { diagnoseWranglerProject } from '../doctor.ts'
+import { formatWranglerDiagnostics } from '../wrangler.ts'
+import { readCliVersion } from './meta.ts'
 
 const doctor = defineCommand({
   meta: { name: 'doctor', description: 'Audit the effective Wrangler configuration' },

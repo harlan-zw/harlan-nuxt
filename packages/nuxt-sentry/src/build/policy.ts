@@ -6,7 +6,7 @@ import type {
   SerializedPattern,
   StatusRange,
 } from '../runtime/shared/types'
-import { BROWSER_EXTENSION_DENY_URLS, BROWSER_NOISE_MESSAGES } from '../runtime/shared/noise'
+import { BROWSER_EXTENSION_DENY_URLS, BROWSER_NOISE_MESSAGES } from '../runtime/shared/noise.ts'
 
 /**
  * Build time resolution of the Report Policy.

@@ -1,7 +1,7 @@
 import type { ContractQueryEnforcementOptions } from './enforcement'
 import type { ModuleRuntimeConfig, ModuleTelemetryOptions } from './module/telemetry'
 import { addImports, addPlugin, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant } from '@nuxt/kit'
-import { setupFetchTelemetryModule } from './module/telemetry'
+import { setupFetchTelemetryModule } from './module/telemetry.ts'
 
 // `nuxt-use-query` — TanStack-Query-shaped wrapper over Nuxt's `useFetch` /
 // `useAsyncData`. Built on Nuxt primitives (refreshNuxtData, clearNuxtData,
@@ -129,7 +129,7 @@ export {}
         const {
           formatContractQueryViolations,
           scanContractQueryViolations,
-        } = await import('./enforcement')
+        } = await import('./enforcement/index.ts')
         const violations = await scanContractQueryViolations(nuxt.options.rootDir, options.contracts)
         if (!violations.length)
           return

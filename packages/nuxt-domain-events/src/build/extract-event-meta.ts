@@ -10,7 +10,7 @@ import {
   objectValue,
   parseStaticModule,
   stringValue,
-} from './static-ast'
+} from './static-ast.ts'
 
 const EVENT_KEYS = new Set(['name', 'transport', 'input', 'codec', 'enabled'])
 const LOCAL_TRANSPORT_KEYS = new Set(['_tag'])

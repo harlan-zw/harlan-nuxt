@@ -2,7 +2,7 @@ import type { ContractQuerySourceFile, ResolvedContractQueryEnforcementOptions }
 import { readdir, readFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { normalize } from 'pathe'
-import { createDirectoryMatcher, normalizePattern, segmentPatternToRegExp } from './options'
+import { createDirectoryMatcher, normalizePattern, segmentPatternToRegExp } from './options.ts'
 
 const SOURCE_READ_CONCURRENCY = 32
 

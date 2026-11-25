@@ -1,10 +1,10 @@
 import type { ContractRule } from '../types'
-import { apiLiteralOutsideQueryRule } from './api-literal-outside-query'
-import { missingContractImportRule } from './missing-contract-import'
-import { mutationBodySchemaMissingRule } from './mutation-body-schema-missing'
-import { operationResponseSchemaMissingRule } from './operation-response-schema-missing'
-import { queryFileWithoutOperationRule } from './query-file-without-operation'
-import { serverRouteMissingContractRule } from './server-route-missing-contract'
+import { apiLiteralOutsideQueryRule } from './api-literal-outside-query.ts'
+import { missingContractImportRule } from './missing-contract-import.ts'
+import { mutationBodySchemaMissingRule } from './mutation-body-schema-missing.ts'
+import { operationResponseSchemaMissingRule } from './operation-response-schema-missing.ts'
+import { queryFileWithoutOperationRule } from './query-file-without-operation.ts'
+import { serverRouteMissingContractRule } from './server-route-missing-contract.ts'
 
 export {
   apiLiteralOutsideQueryRule,

@@ -7,8 +7,8 @@ import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { addTemplate, addTypeTemplate, resolveFiles, resolveServerVariant } from '@nuxt/kit'
-import { extractEventMeta } from './extract-event-meta'
-import { extractListenerMeta } from './extract-listener-meta'
+import { extractEventMeta } from './extract-event-meta.ts'
+import { extractListenerMeta } from './extract-listener-meta.ts'
 
 const SOURCE_EXTENSION_RE = /\.[cm]?[jt]sx?$/
 const WINDOWS_SLASH_RE = /\\/g

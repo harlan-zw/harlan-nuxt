@@ -59,8 +59,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "nuxt-module-build build --stub && nuxt-module-build prepare && nuxt-module-build build",
-    "dev:prepare": "nuxt-module-build build --stub && nuxt-module-build prepare",
+    "build": "nuxt-module-build prepare && tsdown",
+    "dev:prepare": "pnpm run build",
     "prepack": "pnpm run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -93,8 +93,8 @@
     "h3": "catalog:",
     "nitro": "catalog:",
     "nuxt": "catalog:",
+    "tsdown": "catalog:",
     "typescript": "catalog:",
-    "unbuild": "catalog:",
     "vitest": "catalog:",
     "vue": "catalog:"
   }

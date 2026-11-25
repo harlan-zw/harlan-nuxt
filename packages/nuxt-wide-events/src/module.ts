@@ -1,10 +1,10 @@
 import type { WideEventFieldRegistry } from './build/contributed-fields'
 import type { ModuleOptions } from './types'
 import { addNitroPlugin, addServerImports, addTemplate, addTypeTemplate, createResolver, defineNuxtModule, resolveServerVariant } from '@nuxt/kit'
-import { createWideEventFieldRegistry } from './build/contributed-fields'
-import { formatWideEventFieldIssues, resolveWideEventFields } from './build/fields'
-import { resolveWideEventsRuntimeConfig, serializeWideEventsRuntimeConfig } from './build/runtime-config'
-import { createWideEventValidationPlugin } from './build/source-scan'
+import { createWideEventFieldRegistry } from './build/contributed-fields.ts'
+import { formatWideEventFieldIssues, resolveWideEventFields } from './build/fields.ts'
+import { resolveWideEventsRuntimeConfig, serializeWideEventsRuntimeConfig } from './build/runtime-config.ts'
+import { createWideEventValidationPlugin } from './build/source-scan.ts'
 
 export type { ModuleOptions } from './types'
 

@@ -8,7 +8,7 @@ import {
   getStaticObjectValue,
   stringArrayValue,
   stringLiteralValue,
-} from './build/static-ast'
+} from './build/static-ast.ts'
 
 // Strip the source extension so the handler path is extensionless — both `.ts`
 // family (app source) and `.js` family (the module's own compiled tasks dir).

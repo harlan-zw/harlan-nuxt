@@ -1,5 +1,5 @@
 import { Visitor } from 'vite'
-import { directoryPatternToRegExp } from './options'
+import { directoryPatternToRegExp } from './options.ts'
 
 export interface RpcOperationCall {
   /** `defineNuxtRpcQuery` | `defineNuxtRpcMutation` | `defineNuxtQueryGroup` */

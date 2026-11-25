@@ -1,7 +1,7 @@
 export {
   matchesAnyDirectory,
   resolveContractQueryEnforcementOptions,
-} from './options'
+} from './options.ts'
 
 export {
   apiLiteralOutsideQueryRule,
@@ -10,12 +10,12 @@ export {
   operationResponseSchemaMissingRule,
   queryFileWithoutOperationRule,
   serverRouteMissingContractRule,
-} from './rules'
+} from './rules/index.ts'
 export {
   createContractQueryEnforcer,
   formatContractQueryViolations,
   scanContractQueryViolations,
-} from './scan'
+} from './scan.ts'
 export type {
   ContractQueryEnforcementOptions,
   ContractRule,

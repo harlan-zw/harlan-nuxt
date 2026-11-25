@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from 'node:process'
-import { runCli } from './run'
+import { runCli } from './run.ts'
 
 runCli(process.argv.slice(2)).then((code) => {
   process.exitCode = code
