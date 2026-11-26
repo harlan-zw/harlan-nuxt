@@ -11,7 +11,7 @@ import { defineNuxtConfig } from 'nuxt/config'
  */
 export default defineNuxtConfig({
   compatibilityDate: '2026-08-08',
-  modules: [[cloudflareModule, { sourceMaps: false }]],
+  modules: [[cloudflareModule, { sourceMaps: false, fast404: true }]],
 
   // Stands in for `nuxt-skew-protection`, which this package must not depend
   // on. The contract is a shape on runtime config, so a literal is a faithful

@@ -113,4 +113,15 @@ describe('cache contract, real server', () => {
     expect(policy).not.toMatch(/s-maxage=[1-9]/)
     expect(policy).not.toMatch(/public/)
   })
+
+  it('keeps fast404 plain-text edge caching intact alongside Workers Cache', async () => {
+    const res = await fetch(`${base}/wp-login.php`)
+
+    expect(res.status).toBe(404)
+    expect(res.headers.get('content-type')).toContain('text/plain')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('cloudflare-cdn-cache-control')).toBe('public, max-age=300')
+    expect(res.headers.get('x-robots-tag')).toBe('noindex')
+    await expect(res.text()).resolves.toBe('Not Found')
+  })
 })

@@ -4,6 +4,8 @@ import type { NitroConfig as Nitro3Config } from 'nitro/types'
 import type { Nitro } from 'nitropack/types'
 import type { D1CheckOptions } from './checks'
 import type { WranglerDiagnosticPolicy } from './diagnostics'
+import type { Fast404Options } from './runtime/server/utils/fast-404'
+import type { Static404FallbackOptions } from './runtime/server/utils/static-404-fallback'
 import type { WorkersCachePolicy, WranglerConfigInput } from './wrangler'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
@@ -15,6 +17,8 @@ import {
   evaluateWranglerDiagnostics,
 } from './diagnostics.ts'
 import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } from './html-cache.ts'
+import { resolveFast404Policy } from './runtime/server/utils/fast-404.ts'
+import { resolveStatic404FallbackPolicy } from './runtime/server/utils/static-404-fallback.ts'
 import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache.ts'
 import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory } from './static-assets.ts'
 import {
@@ -25,6 +29,11 @@ import {
   readAuthoredWranglerConfig,
   readWranglerJsonFile,
 } from './wrangler.ts'
+
+export type { Fast404Options, Fast404Policy } from './runtime/server/utils/fast-404'
+export { DEFAULT_FAST_404_ALLOW_PREFIXES, DEFAULT_FAST_404_EDGE_CACHE_TTL_SECONDS, resolveFast404Policy } from './runtime/server/utils/fast-404.ts'
+export type { Static404FallbackOptions, Static404FallbackPolicy } from './runtime/server/utils/static-404-fallback'
+export { DEFAULT_STATIC_404_ASSET_PATH, resolveStatic404FallbackPolicy } from './runtime/server/utils/static-404-fallback.ts'
 
 export interface ModuleOptions {
   /** Register checks through the public check-in API. */
@@ -45,6 +54,11 @@ export interface ModuleOptions {
     persistDir?: string | false
   }
   doctor?: WranglerDiagnosticPolicy
+  /**
+   * Short-circuit scanner, CMS, dotfile, and missing static-asset requests with
+   * a plain-text 404 before Vue SSR runs. Disabled by default.
+   */
+  fast404?: boolean | Fast404Options
   kvCache?: false | {
     binding: string
     defaultTtl?: number
@@ -54,6 +68,12 @@ export interface ModuleOptions {
   publicVarNames?: string[]
   requiredSecrets?: string[]
   sourceMaps?: boolean
+  /**
+   * Serve a prerendered `/404.html` from Cloudflare Workers `ASSETS` when a
+   * runtime HTML request returns 404, skipping the second `/__nuxt_error` SSR pass.
+   * Disabled by default.
+   */
+  static404Fallback?: boolean | Static404FallbackOptions
   tracesSampleRate?: number
   versionMetadataBinding?: string
   workersCache?: WorkersCachePolicy
@@ -63,12 +83,19 @@ interface NitroStorageMount extends Record<string, unknown> {
   driver?: unknown
 }
 
+export interface NitroCloudflareHandler {
+  route?: string
+  handler: string
+  middleware?: boolean
+}
+
 export interface NitroCloudflareShape {
   cloudflare?: {
     deployConfig?: boolean
     nodeCompat?: boolean
     wrangler?: import('./wrangler').WranglerConfigInput
   }
+  handlers?: NitroCloudflareHandler[]
   preset?: string
   plugins?: string[]
   sourceMap?: boolean
@@ -100,6 +127,18 @@ const requestLifetimePluginPath = resolve(
   import.meta.url.endsWith('.ts')
     ? 'runtime/server/plugins/request-lifetime.ts'
     : 'runtime/server/plugins/request-lifetime.js',
+)
+const fast404MiddlewarePath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/middleware/fast-404.ts'
+    : 'runtime/server/middleware/fast-404.js',
+)
+const static404FallbackPluginPath = resolve(
+  import.meta.dirname,
+  import.meta.url.endsWith('.ts')
+    ? 'runtime/server/plugins/static-404-fallback.ts'
+    : 'runtime/server/plugins/static-404-fallback.js',
 )
 
 /**
@@ -162,6 +201,7 @@ export function findPopulatedRuntimeSecretPaths(
 }
 
 export interface NitroCloudflareContext {
+  dev?: boolean
   nitroVersion?: number
   /** The project directory Wrangler and Nitro read the authored config from. */
   rootDir?: string
@@ -173,6 +213,12 @@ function addNitroPlugin(nitro: NitroCloudflareShape, path: string): void {
   nitro.plugins ??= []
   if (!nitro.plugins.includes(path))
     nitro.plugins.push(path)
+}
+
+function addNitroMiddleware(nitro: NitroCloudflareShape, path: string): void {
+  nitro.handlers ??= []
+  if (!nitro.handlers.some(entry => entry.handler === path))
+    nitro.handlers.unshift({ middleware: true, handler: path })
 }
 
 function leaveAuthoredCompatibilityFlags(config: WranglerConfigInput, authored: WranglerConfigInput): void {
@@ -216,8 +262,16 @@ export function configureNitroCloudflare(
   if (context.nitroVersion === 3)
     leaveAuthoredCompatibilityFlags(nitro.cloudflare.wrangler, authoredConfig)
 
+  const fast404Policy = resolveFast404Policy(options.fast404)
+  const static404Policy = resolveStatic404FallbackPolicy(options.static404Fallback)
+
   addNitroPlugin(nitro, runtimeConfigPluginPath)
+  if (static404Policy._tag === 'enabled' && !context.dev)
+    addNitroPlugin(nitro, static404FallbackPluginPath)
   addNitroPlugin(nitro, requestLifetimePluginPath)
+
+  if (fast404Policy._tag === 'enabled')
+    addNitroMiddleware(nitro, fast404MiddlewarePath)
 
   if (nitro.cloudflare.wrangler.cache?.enabled)
     addNitroPlugin(nitro, workersCachePluginPath)
@@ -397,6 +451,7 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     nuxt.options.nitro as NitroCloudflareShape,
     options,
     {
+      dev: nuxt.options.dev,
       nitroVersion: getNitroVersion(nuxt),
       rootDir: nuxt.options.rootDir,
       serverSourceMaps: Boolean(nuxt.options.sourcemap.server),
@@ -477,6 +532,31 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
     }
   })
   nuxt.hook('nitro:config', (nitroConfig) => {
+    const fast404Policy = resolveFast404Policy(options.fast404)
+    const static404Policy = resolveStatic404FallbackPolicy(options.static404Fallback)
+    if (fast404Policy._tag === 'enabled' || (static404Policy._tag === 'enabled' && !nuxt.options.dev)) {
+      nuxt.options.runtimeConfig.nuxtCloudflare = {
+        ...(typeof nuxt.options.runtimeConfig.nuxtCloudflare === 'object'
+          ? nuxt.options.runtimeConfig.nuxtCloudflare
+          : {}),
+        ...(fast404Policy._tag === 'enabled'
+          ? {
+              fast404: {
+                allowPrefixes: [...fast404Policy.allowPrefixes],
+                edgeCacheTtlSeconds: fast404Policy.edgeCacheTtlSeconds,
+              },
+            }
+          : {}),
+        ...(static404Policy._tag === 'enabled' && !nuxt.options.dev
+          ? {
+              static404Fallback: {
+                assetPath: static404Policy.assetPath,
+              },
+            }
+          : {}),
+      }
+    }
+
     const policy = resolveModuleWorkersCachePolicy(options)
     if (policy._tag === 'disabled')
       return

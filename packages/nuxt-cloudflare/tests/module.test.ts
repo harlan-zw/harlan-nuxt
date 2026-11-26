@@ -156,6 +156,39 @@ describe('configureNitroCloudflare', () => {
 
     expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/request-lifetime\.ts$/))
   })
+
+  it('keeps fast404 and static404Fallback disabled by default', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, {})
+
+    expect(nitro.handlers).toBeUndefined()
+    expect(nitro.plugins?.some(plugin => /static-404-fallback\.[jt]s$/.test(plugin))).toBeFalsy()
+  })
+
+  it('registers fast404 middleware and static404Fallback plugin when opted in', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, { fast404: true, static404Fallback: true })
+
+    expect(nitro.handlers).toContainEqual({
+      middleware: true,
+      handler: expect.stringMatching(/\/runtime\/server\/middleware\/fast-404\.ts$/),
+    })
+    expect(nitro.plugins).toContainEqual(expect.stringMatching(/\/runtime\/server\/plugins\/static-404-fallback\.ts$/))
+  })
+
+  it('skips static404Fallback in development while keeping fast404 active', () => {
+    const nitro: NitroCloudflareShape = {}
+
+    configureNitroCloudflare(nitro, { fast404: true, static404Fallback: true }, { dev: true })
+
+    expect(nitro.handlers).toContainEqual({
+      middleware: true,
+      handler: expect.stringMatching(/\/runtime\/server\/middleware\/fast-404\.ts$/),
+    })
+    expect(nitro.plugins?.some(plugin => /static-404-fallback\.[jt]s$/.test(plugin))).toBeFalsy()
+  })
 })
 
 describe('authored Wrangler config', () => {
@@ -353,5 +386,29 @@ describe('setupCloudflareModule', () => {
 
     expect(disabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(false)
     expect(enabled.nuxt.options.nitro.cloudflare?.wrangler?.upload_source_maps).toBe(true)
+  })
+
+  it('publishes fast404 and static404Fallback runtime config even when Workers Cache is disabled', () => {
+    const { callbacks, nuxt } = nuxtWithCapturedHooks(false)
+
+    setupCloudflareModule({
+      bindingTypes: false,
+      enabled: true,
+      workersCache: { _tag: 'disabled' },
+      fast404: { allowPrefixes: ['/feed.xml'], edgeCacheTtlSeconds: 600 },
+      static404Fallback: { assetPath: '/errors/404.html' },
+    }, nuxt)
+
+    Reflect.apply(callbacks['nitro:config']!, undefined, [{}])
+
+    expect(nuxt.options.runtimeConfig.nuxtCloudflare).toEqual({
+      fast404: {
+        allowPrefixes: ['/feed.xml'],
+        edgeCacheTtlSeconds: 600,
+      },
+      static404Fallback: {
+        assetPath: '/errors/404.html',
+      },
+    })
   })
 })

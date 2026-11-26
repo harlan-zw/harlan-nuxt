@@ -152,6 +152,25 @@ export default defineNuxtConfig({
 
 It emits `max-age`, never `s-maxage`. Cloudflare reads `s-maxage` as `proxy-revalidate`, which turns off `stale-while-revalidate` and `stale-if-error`. A policy that looks like it serves stale then blocks on revalidation. If a route rule you wrote by hand hits this, the module warns at build.
 
+### Fast 404 and prerendered 404 fallback
+
+Both options are disabled by default. Enable them in `nuxt.config.ts` to skip Vue SSR on scanner requests and runtime HTML 404 pages:
+
+```ts
+export default defineNuxtConfig({
+  nuxtCloudflare: {
+    fast404: {
+      allowPrefixes: ['/feed.xml'],
+      edgeCacheTtlSeconds: 300,
+    },
+    static404Fallback: true,
+  },
+})
+```
+
+- `fast404` answers dotfile, CMS, server-script, and missing static-asset requests with plain-text `404`, `cache-control: no-store`, `cloudflare-cdn-cache-control: public, max-age=300`, and `x-robots-tag: noindex`. Built-in Nuxt, SEO, and Cloudflare dynamic prefixes pass through untouched.
+- `static404Fallback` intercepts internal `/__nuxt_error` renders for HTML `GET` and `HEAD` 404s and serves the prerendered `/404.html` directly from Cloudflare Workers `ASSETS`. JSON and API requests, non-`GET`/`HEAD` requests, non-404 errors, and sites without `/404.html` fall back to Nuxt's error renderer.
+
 ## Cost controls
 
 Cloudflare pricing changes. Before you set a budget, check the linked pricing pages.
