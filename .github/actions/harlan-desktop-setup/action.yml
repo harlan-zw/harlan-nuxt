@@ -12,7 +12,7 @@ inputs:
   node-version:
     description: Node to install. Keep this the version production builds on.
     required: false
-    default: '24'
+    default: '26.13.0'
   install:
     description: Set to `false` to install by hand, for a job that needs different flags.
     required: false
