@@ -2,6 +2,10 @@ import type { LocalFetch, NativeFetch, WorkerRequest } from '../src/runtime/serv
 import type { AssetsFetcher } from '../src/runtime/server/utils/static-404-fallback'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  findStatic404FallbackWarnings,
+  formatStatic404FallbackWarnings,
+} from '../src/module'
+import {
   fetchStatic404Asset,
   resolveStatic404FallbackPolicy,
   shouldServeStatic404Fallback,
@@ -428,5 +432,173 @@ describe('wrapLocalFetchWithStatic404 (Nitro 2)', () => {
 
     expect(originalLocalFetch).not.toHaveBeenCalled()
     expect(fetchedUrls).toEqual(['https://a.test/404.html', 'https://localhost/404.html'])
+  })
+})
+
+describe('findStatic404FallbackWarnings', () => {
+  it('returns no warnings when static404Fallback is disabled', () => {
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: undefined,
+      compatibilityVersion: 5,
+      inlineErrorRendering: true,
+      prerenderErrorPages: false,
+    })).toEqual([])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: false,
+      compatibilityVersion: 5,
+      inlineErrorRendering: true,
+      prerenderErrorPages: false,
+    })).toEqual([])
+  })
+
+  it('handles Nuxt 4 defaults and explicit flags accurately', () => {
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: true,
+    })).toEqual([])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: [404, 500],
+    })).toEqual([])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: false,
+    })).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: false,
+      },
+    ])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: [500],
+    })).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: false,
+      },
+    ])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      inlineErrorRendering: true,
+      prerenderErrorPages: true,
+    })).toEqual([
+      {
+        _tag: 'inline-error-rendering',
+        source: 'explicit',
+      },
+    ])
+  })
+
+  it('warns on Nuxt 5 compatibility defaults until inlineErrorRendering is disabled and prerenderErrorPages is enabled', () => {
+    const warnings = findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 5,
+    })
+
+    expect(warnings).toEqual([
+      {
+        _tag: 'inline-error-rendering',
+        source: 'compatibility-version',
+      },
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: false,
+      },
+    ])
+
+    const formatted = formatStatic404FallbackWarnings(warnings)
+    expect(formatted).toContain('experimental.inlineErrorRendering: false')
+    expect(formatted).toContain('experimental.prerenderErrorPages: true')
+    expect(formatted).toContain('nitro.prerender.routes')
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 5,
+      inlineErrorRendering: false,
+      prerenderErrorPages: false,
+    })).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: false,
+      },
+    ])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 5,
+      inlineErrorRendering: false,
+      prerenderErrorPages: true,
+    })).toEqual([])
+  })
+
+  it('detects existing /404.html prerender configuration without false positives', () => {
+    const viaRoutes = findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: false,
+      prerenderRoutes: ['/404.html'],
+    })
+    expect(viaRoutes).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: true,
+      },
+    ])
+    expect(formatStatic404FallbackWarnings(viaRoutes)).not.toContain('nitro.prerender.routes')
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: false,
+      routeRules: { '/404.html': { prerender: true } },
+    })).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: true,
+      },
+    ])
+
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: true,
+      compatibilityVersion: 4,
+      prerenderErrorPages: false,
+      staticPreset: true,
+    })).toEqual([
+      {
+        _tag: 'prerender-error-pages-disabled',
+        assetPath: '/404.html',
+        prerenderRouteConfigured: true,
+      },
+    ])
+
+    // Custom asset paths are not controlled by Nuxt's /404.html SPA shell toggle,
+    // but inlineErrorRendering still prevents /__nuxt_error interception.
+    expect(findStatic404FallbackWarnings({
+      static404Fallback: { assetPath: '/errors/404.html' },
+      compatibilityVersion: 5,
+      prerenderErrorPages: false,
+    })).toEqual([
+      {
+        _tag: 'inline-error-rendering',
+        source: 'compatibility-version',
+      },
+    ])
   })
 })

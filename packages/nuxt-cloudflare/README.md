@@ -171,6 +171,24 @@ export default defineNuxtConfig({
 - `fast404` answers dotfile, CMS, server-script, and missing static-asset requests with plain-text `404`, `cache-control: no-store`, `cloudflare-cdn-cache-control: public, max-age=300`, and `x-robots-tag: noindex`. Built-in Nuxt, SEO, and Cloudflare dynamic prefixes pass through untouched.
 - `static404Fallback` intercepts internal `/__nuxt_error` renders for HTML `GET` and `HEAD` 404s and serves the prerendered `/404.html` directly from Cloudflare Workers `ASSETS`. JSON and API requests, non-`GET`/`HEAD` requests, non-404 errors, and sites without `/404.html` fall back to Nuxt's error renderer.
 
+On Nuxt 4.7+ with `future.compatibilityVersion: 5`, `experimental.inlineErrorRendering` defaults to `true`, which bypasses `/__nuxt_error` so `static404Fallback` never runs. Without `experimental.prerenderErrorPages: true`, `/404.html` prerenders as an empty SPA shell. Set both flags and prerender `/404.html` when enabling `static404Fallback`:
+
+```ts
+export default defineNuxtConfig({
+  experimental: {
+    inlineErrorRendering: false,
+    prerenderErrorPages: true,
+  },
+  nitro: {
+    prerender: {
+      routes: ['/404.html'],
+    },
+  },
+})
+```
+
+The module warns during `nitro:config` when `static404Fallback` conflicts with either setting.
+
 ## Cost controls
 
 Cloudflare pricing changes. Before you set a budget, check the linked pricing pages.
