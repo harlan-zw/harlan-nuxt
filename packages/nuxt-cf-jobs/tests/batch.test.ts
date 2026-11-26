@@ -17,24 +17,31 @@ import {
 // serialization for the concurrency guarantee under test.
 function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
   const db = new DatabaseSync(':memory:')
+  // Serialize transactions to match D1's single-writer execution under Promise.all.
+  let txQueue: Promise<unknown> = Promise.resolve()
   return {
     _db: db,
     async exec(query: string) {
       db.exec(query)
     },
-    async batch(statements) {
-      db.exec('BEGIN')
-      const results: Array<{ success?: boolean, meta?: { changes?: number } }> = []
-      try {
-        for (const statement of statements)
-          results.push(await statement.run())
-        db.exec('COMMIT')
-        return results
+    batch(statements) {
+      const runBatch = async () => {
+        db.exec('BEGIN')
+        const results: Array<{ success?: boolean, meta?: { changes?: number }, results?: unknown[] }> = []
+        try {
+          for (const statement of statements)
+            results.push(await statement.run())
+          db.exec('COMMIT')
+          return results
+        }
+        catch (error) {
+          db.exec('ROLLBACK')
+          throw error
+        }
       }
-      catch (error) {
-        db.exec('ROLLBACK')
-        throw error
-      }
+      const next = txQueue.then(runBatch, runBatch)
+      txQueue = next.catch(() => {})
+      return next
     },
     prepare<T = unknown>(query: string): D1PreparedStatementLike<T> {
       const stmt = db.prepare(query)
@@ -45,6 +52,11 @@ function createSqliteD1(): D1DatabaseLike & { _db: DatabaseSync } {
           return api
         },
         async run() {
+          // D1 returns RETURNING rows from `run()` and from `batch()`.
+          if (stmt.columns().length > 0) {
+            const rows = stmt.all(...(bound as never[])) as T[]
+            return { success: true, meta: { changes: rows.length }, results: rows }
+          }
           const r = stmt.run(...(bound as never[]))
           return { success: true, meta: { changes: Number(r.changes) } }
         },

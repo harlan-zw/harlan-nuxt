@@ -1,4 +1,4 @@
-import type { D1DatabaseLike } from './d1'
+import type { D1DatabaseLike, D1PreparedStatementLike } from './d1'
 import type {
   DispatchDurableJobBatchResult,
   DurableJobContinuation,
@@ -270,6 +270,36 @@ export function createD1DurableBatchStore(
     },
 
     async decrementPending(batchId, decOpts) {
+      const failedDelta = decOpts?.failed ? 1 : 0
+      const returningColumns = 'id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at'
+      // Split final (pending_jobs = 1) and intermediate (pending_jobs > 1) inside
+      // one D1 transaction so intermediate decrements omit `finished_at` from SET
+      // and avoid rewriting `idx_job_batches_finished_at` on every member settle.
+      if (typeof db.batch === 'function') {
+        const finalStmt = db.prepare<Record<string, unknown>>(`
+          UPDATE ${batches}
+          SET pending_jobs = 0,
+              failed_jobs = failed_jobs + ?,
+              updated_at = unixepoch(),
+              finished_at = COALESCE(finished_at, unixepoch())
+          WHERE id = ? AND pending_jobs = 1
+          RETURNING ${returningColumns}
+        `).bind(failedDelta, batchId)
+        const intermediateStmt = db.prepare<Record<string, unknown>>(`
+          UPDATE ${batches}
+          SET pending_jobs = pending_jobs - 1,
+              failed_jobs = failed_jobs + ?,
+              updated_at = unixepoch()
+          WHERE id = ? AND pending_jobs > 1
+          RETURNING ${returningColumns}
+        `).bind(failedDelta, batchId)
+        const [finalResult, intermediateResult] = await db.batch([
+          finalStmt as D1PreparedStatementLike<unknown>,
+          intermediateStmt as D1PreparedStatementLike<unknown>,
+        ])
+        const row = (finalResult?.results?.[0] ?? intermediateResult?.results?.[0]) as Record<string, unknown> | undefined
+        return row ? parseDurableBatchRow(row) : null
+      }
       const row = await db.prepare<Record<string, unknown>>(`
         UPDATE ${batches}
         SET pending_jobs = pending_jobs - 1,
@@ -277,8 +307,8 @@ export function createD1DurableBatchStore(
             updated_at = unixepoch(),
             finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
         WHERE id = ? AND pending_jobs > 0
-        RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
-      `).bind(decOpts?.failed ? 1 : 0, batchId).first<Record<string, unknown>>()
+        RETURNING ${returningColumns}
+      `).bind(failedDelta, batchId).first<Record<string, unknown>>()
       return row ? parseDurableBatchRow(row) : null
     },
 
