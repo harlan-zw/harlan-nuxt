@@ -17,7 +17,7 @@ export const cfJobBatches = sqliteTable('job_batches', {
   updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
   finishedAt: integer('finished_at'),
 }, t => [
-  index('idx_job_batches_site').on(t.siteId),
+  index('idx_job_batches_site').on(t.siteId).where(sql`site_id IS NOT NULL`),
   index('idx_job_batches_parent').on(t.parentBatchId),
   index('idx_job_batches_finished_at').on(t.finishedAt),
 ])
@@ -56,12 +56,9 @@ export const cfJobs = sqliteTable('jobs', {
   index('idx_jobs_dispatchable').on(t.availableAt).where(sql`published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL`),
   index('idx_jobs_stale_reserved').on(t.reservedAt).where(sql`reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
   index('idx_jobs_active').on(t.createdAt).where(sql`completed_at IS NULL AND failed_at IS NULL`),
-  index('idx_jobs_user').on(t.userId),
-  index('idx_jobs_site').on(t.siteId),
-  index('idx_jobs_partner').on(t.partnerId),
   index('idx_jobs_type').on(t.jobType),
-  index('idx_jobs_batch').on(t.batchId),
-  index('idx_jobs_sync_dedup').on(t.siteId, t.jobType),
+  index('idx_jobs_batch').on(t.batchId).where(sql`batch_id IS NOT NULL`),
+  index('idx_jobs_sync_dedup').on(t.siteId, t.jobType).where(sql`site_id IS NOT NULL`),
   index('idx_jobs_completed_at').on(t.completedAt).where(sql`completed_at IS NOT NULL`),
   uniqueIndex('idx_jobs_unique_active').on(t.uniqueKey).where(sql`unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL`),
 ])

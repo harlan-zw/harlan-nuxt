@@ -186,7 +186,19 @@ export const d1DurableJobMigrationSql = [
   'DROP INDEX IF EXISTS idx_failed_jobs_trace',
   'DROP INDEX IF EXISTS idx_failed_jobs_site',
   'DROP INDEX IF EXISTS idx_failed_jobs_batch',
-  'CREATE INDEX IF NOT EXISTS idx_job_batches_site ON job_batches (site_id)',
+  // Drop redundant and unused `jobs` indexes to reduce D1 write amplification:
+  // - `idx_jobs_site` duplicates the leading column of `idx_jobs_sync_dedup (site_id, job_type)`.
+  // - `idx_jobs_user` and `idx_jobs_partner` index optional tenant metadata with no package
+  //   SQL reader; host apps that filter them define targeted partial indexes.
+  'DROP INDEX IF EXISTS idx_jobs_site',
+  'DROP INDEX IF EXISTS idx_jobs_user',
+  'DROP INDEX IF EXISTS idx_jobs_partner',
+  // Recreate nullable-column indexes with partial predicates so existing
+  // databases pick up the narrower definitions and skip NULL index writes.
+  'DROP INDEX IF EXISTS idx_job_batches_site',
+  'DROP INDEX IF EXISTS idx_jobs_batch',
+  'DROP INDEX IF EXISTS idx_jobs_sync_dedup',
+  'CREATE INDEX IF NOT EXISTS idx_job_batches_site ON job_batches (site_id) WHERE site_id IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_parent ON job_batches (parent_batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_finished_at ON job_batches (finished_at)',
   // Recovery scans are global. Keep these partial indexes bounded to live rows and align
@@ -194,12 +206,9 @@ export const d1DurableJobMigrationSql = [
   'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_stale_reserved ON jobs (reserved_at) WHERE reserved_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
   'CREATE INDEX IF NOT EXISTS idx_jobs_active ON jobs (created_at) WHERE completed_at IS NULL AND failed_at IS NULL',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs (user_id)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_site ON jobs (site_id)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_partner ON jobs (partner_id)',
   'CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs (job_type)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs (batch_id)',
-  'CREATE INDEX IF NOT EXISTS idx_jobs_sync_dedup ON jobs (site_id, job_type)',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs (batch_id) WHERE batch_id IS NOT NULL',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_sync_dedup ON jobs (site_id, job_type) WHERE site_id IS NOT NULL',
   // Partial index backing pruneCompletedJobs (completed_at IS NOT NULL AND <= ?).
   'CREATE INDEX IF NOT EXISTS idx_jobs_completed_at ON jobs (completed_at) WHERE completed_at IS NOT NULL',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_unique_active ON jobs (unique_key) WHERE unique_key IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL',
@@ -360,23 +369,36 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       assertOwnedMutation(marked, id)
       return { batch: null, onFinishDispatched: true }
     }
-    const decrement = db.prepare<Record<string, unknown>>(`
-      UPDATE ${batchesTable}
-      SET pending_jobs = pending_jobs - 1,
-          failed_jobs = failed_jobs + ?,
-          updated_at = unixepoch(),
-          finished_at = CASE WHEN pending_jobs = 1 AND finished_at IS NULL THEN unixepoch() ELSE finished_at END
-      WHERE id = ? AND pending_jobs > 0
+    // Split the final (pending_jobs = 1) and intermediate (pending_jobs > 1)
+    // decrements inside one transaction. SQLite rewrites `idx_job_batches_finished_at`
+    // whenever `finished_at` appears in SET, even if CASE keeps it NULL. Running
+    // the final transition first prevents a 2→1 decrement from also matching `= 1`,
+    // and omitting `finished_at` from the intermediate UPDATE skips both index writes.
+    const settlementGuard = `
         AND EXISTS (SELECT 1 FROM ${table} WHERE id = ? AND attempts = ? AND ${owned})
         AND NOT EXISTS (
           SELECT 1 FROM ${table}, json_each(payload, '$._cfJobsSettlement.batches') AS settled
           WHERE ${table}.id = ? AND json_extract(settled.value, '$.id') = ?
-        )
-      RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
-    `).bind(finish.failed ? 1 : 0, finish.batchId, id, pending.attempts, token, id, finish.batchId)
+        )`
+    const failedDelta = finish.failed ? 1 : 0
+    const decrementFinal = db.prepare(`
+      UPDATE ${batchesTable}
+      SET pending_jobs = 0,
+          failed_jobs = failed_jobs + ?,
+          updated_at = unixepoch(),
+          finished_at = COALESCE(finished_at, unixepoch())
+      WHERE id = ? AND pending_jobs = 1${settlementGuard}
+    `).bind(failedDelta, finish.batchId, id, pending.attempts, token, id, finish.batchId)
+    const decrementIntermediate = db.prepare(`
+      UPDATE ${batchesTable}
+      SET pending_jobs = pending_jobs - 1,
+          failed_jobs = failed_jobs + ?,
+          updated_at = unixepoch()
+      WHERE id = ? AND pending_jobs > 1${settlementGuard}
+    `).bind(failedDelta, finish.batchId, id, pending.attempts, token, id, finish.batchId)
     // changes() refers to the preceding decrement on the same transaction.
     // Saving only its winner prevents a retry from adopting another member's result.
-    const save = db.prepare(`
+    const saveSql = `
       UPDATE ${table}
       SET payload = json_set(payload, '$._cfJobsSettlement.batches', json_insert(
         COALESCE(json_extract(payload, '$._cfJobsSettlement.batches'), '[]'), '$[#]', json((
@@ -389,15 +411,17 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         ))
       ))
       WHERE changes() > 0 AND id = ? AND attempts = ? AND ${owned}
-    `).bind(finish.batchId, id, pending.attempts, token)
+    `
+    const saveFinal = db.prepare(saveSql).bind(finish.batchId, id, pending.attempts, token)
+    const saveIntermediate = db.prepare(saveSql).bind(finish.batchId, id, pending.attempts, token)
     const read = db.prepare<{ state: string }>(`
       SELECT json_extract(payload, '$._cfJobsSettlement') AS state
       FROM ${table} WHERE id = ? AND attempts = ? AND ${owned}
     `).bind(id, pending.attempts, token)
     if (!db.batch)
       throw new Error('D1 batch is required for atomic settlement')
-    const results = await db.batch([decrement as D1PreparedStatementLike<unknown>, save, read])
-    const state = (results[2]?.results as Array<{ state: string }> | undefined)?.[0]?.state
+    const results = await db.batch([decrementFinal, saveFinal, decrementIntermediate, saveIntermediate, read])
+    const state = (results[4]?.results as Array<{ state: string }> | undefined)?.[0]?.state
     if (!state)
       throw new DurableJobOwnershipError(id)
     const saved = JSON.parse(state) as { batches?: Record<string, unknown>[] }
