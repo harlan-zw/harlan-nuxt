@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { contentAssetStampPath, createContentAssetPlan, createContentRevision, encodeCollectionAsset, syncContentAssets } from '../src/core/asset'
 import { createIndexedCollectionQuery } from '../src/runtime/core/query'
-import { decodeCollectionAsset } from '../src/runtime/server/asset'
+import { clearDecodedCollectionAssetCache, decodeCollectionAsset } from '../src/runtime/server/asset'
 import { createContentStorage } from '../src/runtime/server/storage-core'
 
 const body: PageCollectionItemBase['body'] = {
@@ -236,5 +236,170 @@ describe('generated asset synchronisation', () => {
     await syncContentAssets({ outputDir, revision: 'two', reuseUnchanged: true, createPlan: planFor(pages) })
 
     await expect(readdir(outputDir)).resolves.toEqual(['collections.json.gz', 'pages'])
+  })
+})
+
+describe('collection asset decode cache', () => {
+  afterEach(() => {
+    clearDecodedCollectionAssetCache()
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+
+  it('decodes repeated production reads once even when storage returns fresh byte buffers', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const NativeDecompressionStream = globalThis.DecompressionStream
+    let decompressions = 0
+    vi.spyOn(globalThis, 'DecompressionStream').mockImplementation(function (this: DecompressionStream, format: CompressionFormat) {
+      decompressions += 1
+      return new NativeDecompressionStream(format)
+    } as unknown as typeof DecompressionStream)
+
+    const encoded = encodeCollectionAsset(pages)
+    const first = await decodeCollectionAsset<PageCollectionItemBase[]>(encoded, 'pages/index')
+    const second = await decodeCollectionAsset<PageCollectionItemBase[]>(encoded, 'pages/index')
+    const third = await decodeCollectionAsset<PageCollectionItemBase[]>(Uint8Array.from(encoded), 'pages/index')
+
+    expect(decompressions).toBe(1)
+    expect(second).toBe(first)
+    expect(third).toBe(first)
+    expect(first).toEqual(pages)
+    expect(Object.isFrozen(first)).toBe(true)
+    expect(Object.isFrozen(first[0])).toBe(true)
+    expect(Object.isFrozen(first[0]!.body.nodes)).toBe(true)
+    expect(() => {
+      ;(first as PageCollectionItemBase[]).push(pages[0]!)
+    }).toThrow(TypeError)
+  })
+
+  it('invalidates cached assets when the revision or compressed payload changes', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const NativeDecompressionStream = globalThis.DecompressionStream
+    let decompressions = 0
+    vi.spyOn(globalThis, 'DecompressionStream').mockImplementation(function (this: DecompressionStream, format: CompressionFormat) {
+      decompressions += 1
+      return new NativeDecompressionStream(format)
+    } as unknown as typeof DecompressionStream)
+
+    const firstBytes = encodeCollectionAsset([{ title: 'V1' }])
+    const secondBytes = encodeCollectionAsset([{ title: 'V2' }])
+
+    const v1 = await decodeCollectionAsset<Array<{ title: string }>>(firstBytes, 'pages/index', {
+      cache: { _tag: 'Bounded', revision: 'rev-1' },
+    })
+    const v1Again = await decodeCollectionAsset<Array<{ title: string }>>(firstBytes, 'pages/index', {
+      cache: { _tag: 'Bounded', revision: 'rev-1' },
+    })
+    const v1NewRev = await decodeCollectionAsset<Array<{ title: string }>>(firstBytes, 'pages/index', {
+      cache: { _tag: 'Bounded', revision: 'rev-2' },
+    })
+    const v2 = await decodeCollectionAsset<Array<{ title: string }>>(secondBytes, 'pages/index', {
+      cache: { _tag: 'Bounded', revision: 'rev-2' },
+    })
+
+    expect(decompressions).toBe(3)
+    expect(v1Again).toBe(v1)
+    expect(v1NewRev).not.toBe(v1)
+    expect(v2).toEqual([{ title: 'V2' }])
+  })
+
+  it('never serves cached content in development mode or when caching is disabled', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    const NativeDecompressionStream = globalThis.DecompressionStream
+    let decompressions = 0
+    vi.spyOn(globalThis, 'DecompressionStream').mockImplementation(function (this: DecompressionStream, format: CompressionFormat) {
+      decompressions += 1
+      return new NativeDecompressionStream(format)
+    } as unknown as typeof DecompressionStream)
+
+    const encoded = encodeCollectionAsset([{ title: 'Dev' }])
+    const first = await decodeCollectionAsset(encoded, 'pages/index')
+    const second = await decodeCollectionAsset(encoded, 'pages/index')
+
+    expect(decompressions).toBe(2)
+    expect(second).not.toBe(first)
+
+    vi.stubEnv('NODE_ENV', 'production')
+    await decodeCollectionAsset(encoded, 'pages/index', { cache: { _tag: 'Disabled' } })
+    await decodeCollectionAsset(encoded, 'pages/index', { cache: { _tag: 'Disabled' } })
+    expect(decompressions).toBe(4)
+  })
+
+  it('evicts the least recently used entry past maxEntries and never caches failed decodes', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    const NativeDecompressionStream = globalThis.DecompressionStream
+    let decompressions = 0
+    vi.spyOn(globalThis, 'DecompressionStream').mockImplementation(function (this: DecompressionStream, format: CompressionFormat) {
+      decompressions += 1
+      return new NativeDecompressionStream(format)
+    } as unknown as typeof DecompressionStream)
+
+    const a = encodeCollectionAsset({ id: 'a' })
+    const b = encodeCollectionAsset({ id: 'b' })
+    const c = encodeCollectionAsset({ id: 'c' })
+
+    await expect(decodeCollectionAsset(new Uint8Array([1, 2, 3]), 'a', { cache: { _tag: 'Bounded', maxEntries: 2 } })).rejects.toThrow('a.json.gz:1:1')
+
+    await decodeCollectionAsset(a, 'a', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+    await decodeCollectionAsset(b, 'b', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+    // Touch 'a' so 'b' becomes the oldest entry.
+    await decodeCollectionAsset(a, 'a', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+    await decodeCollectionAsset(c, 'c', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+    // 'a' stays cached, 'b' was evicted and decodes again.
+    await decodeCollectionAsset(a, 'a', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+    await decodeCollectionAsset(b, 'b', { cache: { _tag: 'Bounded', maxEntries: 2 } })
+
+    // 1 failed + a + b + c + b(re-decoded) = 5
+    expect(decompressions).toBe(5)
+  })
+
+  it('skips repeated raw asset reads in immutable production storage', async () => {
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
+    const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
+    const reads: string[] = []
+    const storage = createContentStorage(async (path) => {
+      reads.push(path)
+      return assets.get(path) ?? null
+    }, {
+      cache: { _tag: 'Bounded' },
+      immutableAssets: true,
+    })
+
+    const first = await storage.loadCollectionIndex('pages')
+    const second = await storage.loadCollectionIndex('pages')
+
+    expect(second).toBe(first)
+    expect(reads).toEqual(['pages/index.json.gz'])
+  })
+
+  it('memoizes immutable storage reads when cache option is omitted and respects non-finite maxEntries', async () => {
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
+    const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
+
+    const defaultReads: string[] = []
+    const defaultStorage = createContentStorage(async (path) => {
+      defaultReads.push(path)
+      return assets.get(path) ?? null
+    }, {
+      immutableAssets: true,
+    })
+
+    const first = await defaultStorage.loadCollectionIndex('pages')
+    const second = await defaultStorage.loadCollectionIndex('pages')
+    expect(second).toBe(first)
+    expect(defaultReads).toEqual(['pages/index.json.gz'])
+
+    const infiniteReads: string[] = []
+    const infiniteStorage = createContentStorage(async (path) => {
+      infiniteReads.push(path)
+      return assets.get(path) ?? null
+    }, {
+      cache: { _tag: 'Bounded', maxEntries: Number.POSITIVE_INFINITY },
+      immutableAssets: true,
+    })
+
+    await infiniteStorage.loadCollectionIndex('pages')
+    await infiniteStorage.loadCollectionIndex('pages')
+    expect(infiniteReads).toEqual(['pages/index.json.gz', 'pages/index.json.gz'])
   })
 })
