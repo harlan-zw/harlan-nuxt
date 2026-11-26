@@ -1,7 +1,7 @@
 import type { D1DatabaseLike, D1PreparedStatementLike, JobContext, JobControlResult, JobDefinition, JobMetricsEvent } from '#cf-jobs/server'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
-import { consumeQueueBatch, createDurableJobsRuntime, createParentJobBatch, prepareDurableJob, recoverDurableJobs, runLightweightMessage } from '#cf-jobs/server'
+import { consumeQueueBatch, createDurableJobsRuntime, createParentJobBatch, prepareDurableJob, recoverDurableJobs, runDurableJobBatchMessage, runLightweightMessage } from '#cf-jobs/server'
 
 function prepare(name: string, payload: Record<string, unknown>) {
   return prepareDurableJob({ name, payload, route: { queue: 'q', jobType: name } })
@@ -879,13 +879,36 @@ describe('createDurableJobsRuntime — lost response on the final lifecycle writ
 
   function faultD1(d1: ReturnType<typeof createSqliteD1>, faults: { complete: Array<'overload' | 'commit-then-lose'>, confirm: number }) {
     const prepare = d1.prepare.bind(d1)
+    const batch = d1.batch!.bind(d1)
     const complete = [...faults.complete]
     let confirm = faults.confirm
+    let inBatch = false
+    const completeStatements = new WeakSet<D1PreparedStatementLike<unknown>>()
+    d1.batch = async (statements) => {
+      const isComplete = statements.some(statement => completeStatements.has(statement))
+      const fault = isComplete ? complete.shift() : undefined
+      if (fault === 'overload')
+        throw overloaded()
+      inBatch = true
+      let result: Awaited<ReturnType<typeof batch>>
+      try {
+        result = await batch(statements)
+      }
+      finally {
+        inBatch = false
+      }
+      if (fault === 'commit-then-lose')
+        throw lost()
+      return result
+    }
     d1.prepare = (<T>(query: string) => {
       const statement = prepare<T>(query)
       if (query.includes('SET completed_at = unixepoch()')) {
+        completeStatements.add(statement as D1PreparedStatementLike<unknown>)
         const run = statement.run.bind(statement)
         statement.run = async () => {
+          if (inBatch)
+            return await run()
           const fault = complete.shift()
           if (fault === 'overload')
             throw overloaded()
@@ -1312,5 +1335,284 @@ describe('createDurableJobsRuntime — follow-up recovery through reconcile', ()
     finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('createDurableJobsRuntime — settlement write-amplification fast paths', () => {
+  function recordQueries(d1: ReturnType<typeof createSqliteD1>) {
+    const executed: string[] = []
+    const prepare = d1.prepare.bind(d1)
+    d1.prepare = (<T>(query: string) => {
+      const statement = prepare<T>(query)
+      const run = statement.run.bind(statement)
+      const first = statement.first.bind(statement)
+      statement.run = async () => {
+        executed.push(query)
+        return await run()
+      }
+      statement.first = (async () => {
+        executed.push(query)
+        return await first()
+      }) as typeof statement.first
+      return statement
+    }) as typeof d1.prepare
+    return executed
+  }
+
+  it('completes a standalone job with 1 UPDATE jobs, 0 _cfJobsSettlement writes, and all observer hooks firing', async () => {
+    const metrics: JobMetricsEvent[] = []
+    const settledScopes: string[] = []
+    const continuations: string[] = []
+    const { d1, runtime } = await setup(
+      { work: async () => {} },
+      {
+        metricsSink: { record: (e: JobMetricsEvent) => void metrics.push(e) },
+        createJobScope: () => ({
+          onSettled: (s: { status: string }) => { settledScopes.push(s.status) },
+        }),
+        dispatchContinuations: ({ stage }: { stage: string }) => { continuations.push(stage) },
+      },
+    )
+    const job = await prepare('work', { n: 1 })
+    await runtime.enqueue(job)
+
+    const executed = recordQueries(d1)
+    const m = msg(job.id)
+    const result = await runtime.consumeMessage(m)
+
+    expect(result.run.status).toBe('completed')
+    expect(result.settled).toEqual({ batchComplete: false, onFinishDispatched: false })
+    expect(m.ack).toHaveBeenCalledOnce()
+    // 1 claim UPDATE + 1 completion UPDATE jobs; 0 settlement follow-up UPDATEs; 0 getJobBatchId reads.
+    const jobUpdates = executed.filter(sql => /UPDATE\s+jobs\b/i.test(sql))
+    expect(jobUpdates).toHaveLength(2)
+    expect(jobUpdates[1]).not.toContain('_cfJobsSettlement')
+    expect(executed.some(sql => sql.includes('_cfJobsSettlement'))).toBe(false)
+    expect(executed.some(sql => sql.includes('SELECT batch_id FROM'))).toBe(false)
+
+    const row = d1._db.prepare('SELECT payload, completed_at FROM jobs WHERE id = ?').get(job.id) as { payload: string, completed_at: number | null }
+    expect(row.completed_at).toBeTypeOf('number')
+    expect(JSON.parse(row.payload)).not.toHaveProperty('_cfJobsSettlement')
+
+    // Non-durable observer hooks still fire identically.
+    expect(metrics.map(e => e.status)).toEqual(['completed'])
+    expect(settledScopes).toEqual(['completed'])
+    expect(continuations).toEqual(['then', 'finally'])
+  })
+
+  it('skips _cfJobsSettlement for standalone jobs with only catch continuations, but keeps it for then/finally', async () => {
+    const { d1, runtime } = await setup({ work: async () => {}, next: async () => {} })
+    const catchOnly = await prepareDurableJob({
+      name: 'work',
+      payload: {},
+      route: { queue: 'q', jobType: 'work' },
+      continuations: { catch: [{ name: 'next', payload: {} }] },
+    })
+    const withThen = await prepareDurableJob({
+      name: 'work',
+      payload: {},
+      route: { queue: 'q', jobType: 'work' },
+      continuations: { then: [{ name: 'next', payload: {} }] },
+    })
+    await runtime.enqueue(catchOnly)
+    await runtime.enqueue(withThen)
+
+    const executed = recordQueries(d1)
+    await runtime.consumeMessage(msg(catchOnly.id))
+    expect(executed.some(sql => sql.includes('_cfJobsSettlement'))).toBe(false)
+    expect(JSON.parse((d1._db.prepare('SELECT payload FROM jobs WHERE id = ?').get(catchOnly.id) as { payload: string }).payload))
+      .not
+      .toHaveProperty('_cfJobsSettlement')
+
+    executed.length = 0
+    await runtime.consumeMessage(msg(withThen.id))
+    expect(executed.some(sql => sql.includes('$._cfJobsSettlement.done'))).toBe(true)
+    const thenPayload = JSON.parse((d1._db.prepare('SELECT payload FROM jobs WHERE id = ?').get(withThen.id) as { payload: string }).payload) as { _cfJobsSettlement?: { done?: boolean } }
+    expect(thenPayload._cfJobsSettlement?.done).toBe(true)
+  })
+
+  it('uses the atomic fast path for non-final batch members and durable settlement for the final member with parent propagation', async () => {
+    const metrics: JobMetricsEvent[] = []
+    const settledScopes: string[] = []
+    const progress: Array<{ batchId: string, completed: number, total: number }> = []
+    const onFinishCalls: string[] = []
+    const { d1, runtime } = await setup(
+      { work: async () => {}, childFinish: async () => {}, parentFinish: async () => {} },
+      {
+        metricsSink: { record: (e: JobMetricsEvent) => void metrics.push(e) },
+        createJobScope: () => ({
+          onSettled: (s: { status: string }) => { settledScopes.push(s.status) },
+        }),
+        onBatchProgress: (p: { batchId: string, completed: number, total: number }) => void progress.push(p),
+        dispatchOnFinish: async ({ continuation }: { continuation: { name: string } }) => {
+          onFinishCalls.push(continuation.name)
+        },
+      },
+    )
+
+    const parentId = await createParentJobBatch({
+      store: runtime.store,
+      name: 'parent',
+      onFinish: { name: 'parentFinish', payload: {} },
+    })
+    const { batchId, jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', { i: 1 }), await prepare('work', { i: 2 }), await prepare('work', { i: 3 })],
+      parentBatchId: parentId,
+      onFinish: { name: 'childFinish', payload: {} },
+    })
+
+    const executed = recordQueries(d1)
+
+    // Jobs #1 and #2: non-final (pending_jobs 3->2, 2->1) take the atomic 2-statement fast path.
+    for (const [idx, id] of [jobIds[0]!, jobIds[1]!].entries()) {
+      executed.length = 0
+      const r = await runtime.consumeMessage(msg(id))
+      expect(r.run.status).toBe('completed')
+      expect(r.settled?.batchComplete).toBe(false)
+      expect(r.settled?.progress).toMatchObject({ batchId, completed: idx + 1, total: 3 })
+      // Only claim + 1 completion UPDATE jobs + 1 batch decrement; 0 settlement save/done writes, 0 getJobBatchId reads.
+      expect(executed.filter(sql => /UPDATE\s+jobs\b/i.test(sql))).toHaveLength(2)
+      expect(executed.some(sql => sql.includes('$._cfJobsSettlement.batches'))).toBe(false)
+      expect(executed.some(sql => sql.includes('$._cfJobsSettlement.done'))).toBe(false)
+      expect(executed.some(sql => sql.includes('SELECT batch_id FROM'))).toBe(false)
+      const payload = JSON.parse((d1._db.prepare('SELECT payload FROM jobs WHERE id = ?').get(id) as { payload: string }).payload)
+      expect(payload).not.toHaveProperty('_cfJobsSettlement')
+    }
+    expect(onFinishCalls).toEqual([])
+    expect(d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(batchId)).toEqual({ pending_jobs: 1, finished_at: null })
+    expect(d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: 1, finished_at: null })
+
+    // Job #3: final member (pending_jobs 1->0) uses durable settlement, fires child + parent onFinish once.
+    executed.length = 0
+    const r3 = await runtime.consumeMessage(msg(jobIds[2]!))
+    expect(r3.run.status).toBe('completed')
+    expect(r3.settled?.batchComplete).toBe(true)
+    expect(r3.settled?.onFinishDispatched).toBe(true)
+    expect(executed.some(sql => sql.includes('$._cfJobsSettlement.done'))).toBe(true)
+    expect(executed.some(sql => sql.includes('SELECT batch_id FROM'))).toBe(false)
+
+    const payload3 = JSON.parse((d1._db.prepare('SELECT payload FROM jobs WHERE id = ?').get(jobIds[2]!) as { payload: string }).payload) as { _cfJobsSettlement?: { done?: boolean } }
+    expect(payload3._cfJobsSettlement?.done).toBe(true)
+    expect(onFinishCalls).toEqual(['childFinish', 'parentFinish'])
+    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(batchId)).toEqual({ pending_jobs: 0 })
+    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(parentId)).toEqual({ pending_jobs: 0 })
+    expect(progress.map(p => p.completed)).toEqual([1, 2, 3])
+    expect(metrics.map(e => e.status)).toEqual(['completed', 'completed', 'completed'])
+    expect(settledScopes).toEqual(['completed', 'completed', 'completed'])
+  })
+
+  it('rejects ownership loss on the non-final batch fast path without decrementing pending_jobs', async () => {
+    let d1Ref: ReturnType<typeof createSqliteD1>
+    const { d1, runtime } = await setup({
+      race: async () => {
+        // Simulate another worker reclaiming the row (and leaving sqlite changes() = 1 right before completion).
+        d1Ref._db.prepare('UPDATE jobs SET reserved_at = reserved_at + 1, attempts = attempts + 1 WHERE completed_at IS NULL AND failed_at IS NULL').run()
+      },
+    })
+    d1Ref = d1
+    const { batchId, jobIds } = await runtime.createBatch({
+      jobs: [await prepare('race', {}), await prepare('race', {}), await prepare('race', {})],
+    })
+    const m = msg(jobIds[0]!)
+    const result = await runtime.consumeMessage(m)
+
+    expect(result.run).toEqual({ status: 'in-flight', inFlight: { _tag: 'obsolete-delivery' } })
+    expect(result.settled).toBeNull()
+    expect(m.ack).toHaveBeenCalledOnce()
+    expect(d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(batchId))
+      .toEqual({ pending_jobs: 3, finished_at: null })
+  })
+
+  it('does not double-decrement when a non-final batch fast path commits and loses its response', async () => {
+    const { d1, runtime } = await setup(
+      { work: async () => {} },
+      { lifecycleWriteRetry: { backoffMs: () => 0 } },
+    )
+    const { batchId, jobIds } = await runtime.createBatch({
+      jobs: [await prepare('work', {}), await prepare('work', {}), await prepare('work', {})],
+    })
+
+    const batch = d1.batch!.bind(d1)
+    let loseOnce = true
+    d1.batch = async (statements) => {
+      const result = await batch(statements)
+      if (loseOnce) {
+        loseOnce = false
+        throw new Error('D1_ERROR: Network connection lost.')
+      }
+      return result
+    }
+
+    const r = await runtime.consumeMessage(msg(jobIds[0]!))
+    expect(r.run.status).toBe('completed')
+    // Fast-path decremented 3 -> 2 once; retry saw ownership miss + confirmed landed; no second decrement.
+    expect(d1._db.prepare('SELECT pending_jobs, finished_at FROM job_batches WHERE id = ?').get(batchId))
+      .toEqual({ pending_jobs: 2, finished_at: null })
+  })
+
+  it('keeps batch members with then/finally continuations on the durable settlement path', async () => {
+    const { d1, runtime } = await setup({ work: async () => {}, after: async () => {} })
+    const jobWithThen = await prepareDurableJob({
+      name: 'work',
+      payload: {},
+      route: { queue: 'q', jobType: 'work' },
+      continuations: { then: [{ name: 'after', payload: {} }] },
+    })
+    const { batchId, jobIds } = await runtime.createBatch({
+      jobs: [jobWithThen, await prepare('work', {}), await prepare('work', {})],
+    })
+
+    await runtime.consumeMessage(msg(jobIds[0]!))
+    const payload = JSON.parse((d1._db.prepare('SELECT payload FROM jobs WHERE id = ?').get(jobIds[0]!) as { payload: string }).payload) as { _cfJobsSettlement?: { done?: boolean } }
+    expect(payload._cfJobsSettlement?.done).toBe(true)
+    expect(d1._db.prepare('SELECT pending_jobs FROM job_batches WHERE id = ?').get(batchId)).toEqual({ pending_jobs: 2 })
+  })
+
+  it('keeps runDurableJobBatchMessage compatible with custom lifecycle mocks lacking completeJobForBatch', async () => {
+    const completeJob = vi.fn(async () => {})
+    const decrementPending = vi.fn(async () => ({
+      id: 'b1',
+      name: null,
+      parentBatchId: null,
+      totalJobs: 2,
+      pendingJobs: 1,
+      failedJobs: 0,
+      onFinish: null,
+      allowFailures: false,
+      siteId: null,
+      userId: null,
+      finishedAt: null,
+    }))
+    const stored = {
+      id: 'j1',
+      queue: 'q',
+      payload: { _task: 'work' },
+      attempts: 1,
+      batchId: 'b1',
+    }
+    const m = msg('j1')
+    const result = await runDurableJobBatchMessage({
+      message: m,
+      lifecycle: {
+        claimJob: vi.fn(async () => stored),
+        completeJob,
+        failJob: vi.fn(async () => {}),
+      },
+      store: {
+        insertBatch: vi.fn(async () => {}),
+        insertBatchWithJobs: vi.fn(async () => {}),
+        decrementPending,
+        getJobBatchId: vi.fn(async () => 'b1'),
+      },
+      registry: createRegistry({ work: async () => {} }),
+      toDispatchableJob: job => job,
+      createJobContext: ({ control }) => ctxFactory(control),
+    })
+
+    expect(result.run.status).toBe('completed')
+    expect(result.settled).toMatchObject({ batchComplete: false, progress: { batchId: 'b1', completed: 1, total: 2 } })
+    expect(completeJob).toHaveBeenCalledOnce()
+    expect(decrementPending).toHaveBeenCalledWith('b1', { failed: false })
+    expect(m.ack).toHaveBeenCalledOnce()
   })
 })

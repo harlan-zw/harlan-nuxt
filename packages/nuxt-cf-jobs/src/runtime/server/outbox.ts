@@ -216,6 +216,10 @@ export interface DurableJobFollowUpFlag {
   settlementDeferral?: DurableJobWriteDeferral
 }
 
+export type CompleteDurableJobBatchResult
+  = | { _tag: 'settled', batch: DurableBatchRecord }
+    | { _tag: 'pending-settlement' }
+
 export interface DurableJobLifecycle<
   Job,
   CompleteResult = void,
@@ -243,6 +247,13 @@ export interface DurableJobLifecycle<
    */
   completePendingSettlement?: (job: Job, status: DurableJobSettlementStatus, finish?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>
   completeJob: (job: Job, result?: unknown) => Promise<CompleteResult>
+  /**
+   * Optional batch-aware completion: completes the job and, when the member is
+   * non-final (`pending_jobs > 1`, open batch, no completion continuations),
+   * atomically decrements `job_batches.pending_jobs` in the same transaction
+   * without writing `$._cfJobsSettlement`.
+   */
+  completeJobForBatch?: (job: Job, result?: unknown) => Promise<CompleteDurableJobBatchResult>
   failJob: (job: Job, error: string, opts?: Partial<FailOptions> & FailDurableJobOptions) => Promise<void>
   releaseJob?: (job: Job, opts?: ReleaseDurableJobOptions) => Promise<ReleaseResult>
 }
@@ -615,6 +626,25 @@ export function getDurableJobContinuationsForStage<
   stage: DurableJobContinuationStage,
 ): Array<DurableJobContinuation<Name, Payload, Queue>> {
   return getDurableJobContinuations<Name, Payload, Queue>(payload)?.[stage] ?? []
+}
+
+/**
+ * Whether a payload carries durable `then`/`finally` continuations that require
+ * follow-up settlement recovery after a completion write.
+ */
+export function hasCompletionContinuations(payload: unknown): boolean {
+  if (typeof payload === 'string') {
+    if (!payload.includes('_continuations'))
+      return false
+    try {
+      payload = JSON.parse(payload)
+    }
+    catch {
+      return false
+    }
+  }
+  const continuations = getDurableJobContinuations(payload)
+  return Boolean(continuations?.then?.length || continuations?.finally?.length)
 }
 
 export function serializeDurableJobContinuation<
@@ -1061,7 +1091,7 @@ export interface RunDurableJobMessageOptions<
   // The runtime never has bespoke fail options — it settles a terminal failure with a
   // `cause` and nothing else. A repository's own `FailOptions` stays on
   // `DurableJobLifecycle` / `failDurableJob` for callers that drive `failJob` directly.
-  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'confirmLifecycleWrite' | 'claimPendingSettlement' | 'completePendingSettlement' | 'completeJob' | 'failJob' | 'releaseJob'>
+  lifecycle: Pick<DurableJobLifecycle<StoredJob, CompleteResult, FailDurableJobOptions>, 'claimJob' | 'resolveClaimMiss' | 'confirmLifecycleWrite' | 'claimPendingSettlement' | 'completePendingSettlement' | 'completeJob' | 'completeJobForBatch' | 'failJob' | 'releaseJob'>
   registry: {
     getHandler: (name: string) => JobHandler<unknown, Env, Db, Logger> | undefined | Promise<JobHandler<unknown, Env, Db, Logger> | undefined>
     getJobDefinition?: (name: string) => JobDefinition<string, unknown, string, Env, Db, Logger> | undefined
@@ -1500,12 +1530,15 @@ export async function runDurableJobMessage<
     return { status: 'released', dispatch }
   }
 
-  const unsettled = await writeOrDefer('complete', () => completeDurableJob(opts.lifecycle, storedJob, completeWith), 'completed')
+  // Standalone jobs with no completion continuations carry no durable follow-up
+  // work, so skip the `_cfJobsSettlement` payload flag and its done write.
+  const needsCompletionSettlement = job.batchId != null || hasCompletionContinuations(job.payload)
+  const unsettled = await writeOrDefer('complete', () => completeDurableJob(opts.lifecycle, storedJob, completeWith), needsCompletionSettlement ? 'completed' : undefined)
   if (unsettled)
     return unsettled
   await observeSettlement('completed', false)
   const continuationFailures = await dispatchTerminalContinuations('then', 'finally')
-  const followUpFlag = await finishFollowUp('completed')
+  const followUpFlag = needsCompletionSettlement ? await finishFollowUp('completed') : {}
   opts.message.ack()
   return { ...followUpFlag, status: 'completed', dispatch, ...(continuationFailures.length > 0 ? { continuationFailures } : {}) }
 }
