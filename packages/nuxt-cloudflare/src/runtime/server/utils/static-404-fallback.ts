@@ -49,6 +49,13 @@ export type Static404FetchResult
     | { _tag: 'miss', reason: 'no-assets-binding' | 'asset-not-found' | 'non-html-asset' | 'fetch-failed', cause?: unknown }
 
 const HTML_CONTENT_TYPE_RE = /^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/i
+const REDIRECT_STATUSES = new Set([301, 302, 307, 308])
+
+async function cancelBody(response: Response): Promise<void> {
+  // Drain/cancel unused body stream so Workers do not warn about leaked responses;
+  // ignore already-locked or already-closed stream errors.
+  await response.body?.cancel().catch(() => undefined)
+}
 
 export function resolveStatic404FallbackPolicy(
   input: boolean | Static404FallbackOptions | undefined,
@@ -136,25 +143,50 @@ export async function fetchStatic404Asset(input: FetchStatic404AssetInput): Prom
     return { _tag: 'miss', reason: 'no-assets-binding' }
 
   const isHead = (input.method ?? 'GET').toUpperCase() === 'HEAD'
+  const fetchMethod = isHead ? 'HEAD' : 'GET'
   const assetUrl = new URL(input.assetPath ?? DEFAULT_STATIC_404_ASSET_PATH, input.requestUrl)
 
   let assetResponse: Response
   try {
-    assetResponse = await input.assets.fetch(new Request(assetUrl.toString(), { method: isHead ? 'HEAD' : 'GET' }))
+    assetResponse = await input.assets.fetch(new Request(assetUrl.toString(), { method: fetchMethod }))
   }
   catch (cause) {
     return { _tag: 'miss', reason: 'fetch-failed', cause }
   }
 
+  if (REDIRECT_STATUSES.has(assetResponse.status)) {
+    const location = assetResponse.headers.get('location')
+    await cancelBody(assetResponse)
+    if (!location)
+      return { _tag: 'miss', reason: 'asset-not-found' }
+
+    let redirectUrl: URL
+    try {
+      redirectUrl = new URL(location, assetUrl)
+    }
+    catch {
+      return { _tag: 'miss', reason: 'asset-not-found' }
+    }
+
+    if (redirectUrl.origin !== assetUrl.origin)
+      return { _tag: 'miss', reason: 'asset-not-found' }
+
+    try {
+      assetResponse = await input.assets.fetch(new Request(redirectUrl.toString(), { method: fetchMethod }))
+    }
+    catch (cause) {
+      return { _tag: 'miss', reason: 'fetch-failed', cause }
+    }
+  }
+
   if (!assetResponse.ok) {
-    // Drain/cancel unused body stream so Workers do not warn about leaked responses.
-    await assetResponse.body?.cancel().catch(() => undefined)
+    await cancelBody(assetResponse)
     return { _tag: 'miss', reason: 'asset-not-found' }
   }
 
   const contentType = assetResponse.headers.get('content-type')
   if (contentType && !HTML_CONTENT_TYPE_RE.test(contentType)) {
-    await assetResponse.body?.cancel().catch(() => undefined)
+    await cancelBody(assetResponse)
     return { _tag: 'miss', reason: 'non-html-asset' }
   }
 
@@ -163,6 +195,9 @@ export async function fetchStatic404Asset(input: FetchStatic404AssetInput): Prom
     'cache-control': 'private, no-store',
     'x-robots-tag': assetResponse.headers.get('x-robots-tag') || 'noindex',
   })
+
+  if (isHead)
+    await cancelBody(assetResponse)
 
   return {
     _tag: 'hit',
@@ -258,12 +293,23 @@ export interface WrapLocalStatic404Options {
   onFetchError?: (cause: unknown) => void
 }
 
+function firstHeaderToken(value: string | null): string | undefined {
+  const token = value?.split(',', 1)[0]?.trim()
+  return token || undefined
+}
+
 function originFromHeaders(headers: Headers): string {
-  const host = headers.get('x-forwarded-host') ?? headers.get('host')
+  const host = firstHeaderToken(headers.get('x-forwarded-host')) ?? firstHeaderToken(headers.get('host'))
   if (!host)
     return 'https://localhost'
-  const proto = headers.get('x-forwarded-proto') ?? 'https'
-  return `${proto}://${host}`
+  const rawProto = firstHeaderToken(headers.get('x-forwarded-proto'))?.toLowerCase()
+  const proto = rawProto === 'http' || rawProto === 'https' ? rawProto : 'https'
+  try {
+    return new URL(`${proto}://${host}`).origin
+  }
+  catch {
+    return 'https://localhost'
+  }
 }
 
 export function wrapLocalFetchWithStatic404(
@@ -271,8 +317,17 @@ export function wrapLocalFetchWithStatic404(
   options: WrapLocalStatic404Options,
 ): LocalFetch {
   return async (input, init?: LocalFetchStatic404Init) => {
+    if (typeof input !== 'string' || !input.includes('__nuxt_error'))
+      return localFetch(input, init)
+
     const headers = new Headers(init?.headers)
-    const requestUrl = new URL(input, originFromHeaders(headers))
+    let requestUrl: URL
+    try {
+      requestUrl = new URL(input, originFromHeaders(headers))
+    }
+    catch {
+      return localFetch(input, init)
+    }
     if (!isNuxtErrorPathname(requestUrl.pathname))
       return localFetch(input, init)
 

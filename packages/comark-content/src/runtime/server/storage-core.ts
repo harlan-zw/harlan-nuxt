@@ -8,8 +8,8 @@ export interface ContentStorageOptions {
   /** Caching policy forwarded to `decodeCollectionAsset`. */
   cache?: AssetDecodeCachePolicy
   /**
-   * Memoizes resolved assets by path on this storage instance when `cache` is
-   * `Bounded`, skipping repeated storage lookups for immutable production builds.
+   * Memoizes resolved assets by path on this storage instance unless `cache` is
+   * `Disabled`, skipping repeated storage lookups for immutable production builds.
    */
   immutableAssets?: boolean
 }
@@ -24,12 +24,13 @@ function assertCollectionName(name: string) {
 }
 
 export function createContentStorage(readAsset: ContentAssetReader, options?: ContentStorageOptions) {
-  const immutableCache = options?.immutableAssets && options.cache?._tag === 'Bounded'
+  const cachePolicy = options?.cache
+  const maxEntries = cachePolicy?._tag === 'Bounded'
+    ? (cachePolicy.maxEntries ?? DEFAULT_STORAGE_CACHE_ENTRIES)
+    : DEFAULT_STORAGE_CACHE_ENTRIES
+  const immutableCache = options?.immutableAssets && cachePolicy?._tag !== 'Disabled'
     ? new Map<string, unknown>()
     : undefined
-  const maxEntries = options?.cache?._tag === 'Bounded'
-    ? (options.cache.maxEntries ?? DEFAULT_STORAGE_CACHE_ENTRIES)
-    : DEFAULT_STORAGE_CACHE_ENTRIES
 
   const loadAsset = async <T>(path: string, missingMessage: string): Promise<T> => {
     if (immutableCache?.has(path)) {
@@ -42,7 +43,7 @@ export function createContentStorage(readAsset: ContentAssetReader, options?: Co
     if (!value)
       throw new TypeError(missingMessage)
     const decoded = await decodeCollectionAsset<T>(value, path, options?.cache ? { cache: options.cache } : undefined)
-    if (immutableCache && maxEntries > 0) {
+    if (immutableCache && Number.isFinite(maxEntries) && maxEntries > 0) {
       immutableCache.delete(path)
       while (immutableCache.size >= maxEntries) {
         const oldest = immutableCache.keys().next().value

@@ -371,4 +371,35 @@ describe('collection asset decode cache', () => {
     expect(second).toBe(first)
     expect(reads).toEqual(['pages/index.json.gz'])
   })
+
+  it('memoizes immutable storage reads when cache option is omitted and respects non-finite maxEntries', async () => {
+    const plan = createContentAssetPlan({ collections: { pages }, sitemapCollections: ['pages'] })
+    const assets = new Map(plan.assets.map(asset => [asset.path, asset.data]))
+
+    const defaultReads: string[] = []
+    const defaultStorage = createContentStorage(async (path) => {
+      defaultReads.push(path)
+      return assets.get(path) ?? null
+    }, {
+      immutableAssets: true,
+    })
+
+    const first = await defaultStorage.loadCollectionIndex('pages')
+    const second = await defaultStorage.loadCollectionIndex('pages')
+    expect(second).toBe(first)
+    expect(defaultReads).toEqual(['pages/index.json.gz'])
+
+    const infiniteReads: string[] = []
+    const infiniteStorage = createContentStorage(async (path) => {
+      infiniteReads.push(path)
+      return assets.get(path) ?? null
+    }, {
+      cache: { _tag: 'Bounded', maxEntries: Number.POSITIVE_INFINITY },
+      immutableAssets: true,
+    })
+
+    await infiniteStorage.loadCollectionIndex('pages')
+    await infiniteStorage.loadCollectionIndex('pages')
+    expect(infiniteReads).toEqual(['pages/index.json.gz', 'pages/index.json.gz'])
+  })
 })

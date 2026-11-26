@@ -125,6 +125,125 @@ describe('fetchStatic404Asset', () => {
     expect(await fetchStatic404Asset({ assets: failingAssets, requestUrl: 'https://example.test/x' }))
       .toEqual({ _tag: 'miss', reason: 'fetch-failed', cause: failure })
   })
+
+  it('follows a single same-origin redirect from ASSETS (e.g. /404.html -> 307 /404)', async () => {
+    const redirectCancel = vi.fn(async () => {})
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async (input) => {
+        const req = input instanceof Request ? input : new Request(input)
+        const url = new URL(req.url)
+        if (url.pathname === '/404.html') {
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array([1]))
+            },
+            cancel: redirectCancel,
+          })
+          return new Response(stream, {
+            status: 307,
+            headers: { location: '/404' },
+          })
+        }
+        if (url.pathname === '/404') {
+          return new Response('<html><body>Redirected Static 404</body></html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          })
+        }
+        return new Response('unexpected', { status: 404 })
+      }),
+    }
+
+    const result = await fetchStatic404Asset({
+      assets,
+      requestUrl: 'https://example.test/docs/missing',
+      assetPath: '/404.html',
+      method: 'GET',
+    })
+
+    expect(assets.fetch).toHaveBeenCalledTimes(2)
+    expect(redirectCancel).toHaveBeenCalledTimes(1)
+    expect(result._tag).toBe('hit')
+    if (result._tag !== 'hit')
+      return
+    expect(result.response.status).toBe(404)
+    expect(result.response.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    await expect(result.response.text()).resolves.toBe('<html><body>Redirected Static 404</body></html>')
+  })
+
+  it('returns miss on cross-origin redirect without following it', async () => {
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async () => new Response(null, {
+        status: 307,
+        headers: { location: 'https://evil.test/404' },
+      })),
+    }
+
+    const result = await fetchStatic404Asset({
+      assets,
+      requestUrl: 'https://example.test/docs/missing',
+      assetPath: '/404.html',
+      method: 'GET',
+    })
+
+    expect(assets.fetch).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ _tag: 'miss', reason: 'asset-not-found' })
+  })
+
+  it('returns miss on a second redirect (307 -> 307)', async () => {
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async (input) => {
+        const req = input instanceof Request ? input : new Request(input)
+        const nextLocation = new URL(req.url).pathname === '/404.html' ? '/404' : '/404/'
+        return new Response(null, {
+          status: 307,
+          headers: { location: nextLocation },
+        })
+      }),
+    }
+
+    const result = await fetchStatic404Asset({
+      assets,
+      requestUrl: 'https://example.test/docs/missing',
+      assetPath: '/404.html',
+      method: 'GET',
+    })
+
+    expect(assets.fetch).toHaveBeenCalledTimes(2)
+    expect(result).toEqual({ _tag: 'miss', reason: 'asset-not-found' })
+  })
+
+  it('cancels a non-null response body when serving a HEAD request', async () => {
+    const cancel = vi.fn(async () => {})
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async () => {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array([65]))
+          },
+          cancel,
+        })
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        })
+      }),
+    }
+
+    const result = await fetchStatic404Asset({
+      assets,
+      requestUrl: 'https://example.test/docs/missing',
+      assetPath: '/404.html',
+      method: 'HEAD',
+    })
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(result._tag).toBe('hit')
+    if (result._tag !== 'hit')
+      return
+    expect(result.response.status).toBe(404)
+    expect(result.response.body).toBeNull()
+  })
 })
 
 describe('wrapNativeFetchWithStatic404 (Nitro 3)', () => {
@@ -239,5 +358,75 @@ describe('wrapLocalFetchWithStatic404 (Nitro 2)', () => {
     expect(onFetchError).toHaveBeenCalledWith(failure)
     expect(originalLocalFetch).toHaveBeenCalledTimes(1)
     await expect(res.text()).resolves.toBe('ssr error page')
+  })
+
+  it('does not throw on non-error inputs with malformed forwarded headers or protocol-relative inputs', async () => {
+    const originalLocalFetch = vi.fn<LocalFetch>(async () => new Response('ok', { status: 200 }))
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async () => new Response('<h1>Static 404</h1>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })),
+    }
+
+    const wrapped = wrapLocalFetchWithStatic404(originalLocalFetch, {
+      assetPath: '/404.html',
+      resolveAssets: () => assets,
+    })
+
+    await expect(wrapped('/', { headers: { 'x-forwarded-host': 'a.test, b.test' } } as never)).resolves.toBeInstanceOf(Response)
+    await expect(wrapped('/', { headers: { 'x-forwarded-proto': 'https, http', 'host': 'example.test' } } as never)).resolves.toBeInstanceOf(Response)
+    await expect(wrapped('/', { headers: { 'x-forwarded-host': 'bad host' } } as never)).resolves.toBeInstanceOf(Response)
+    await expect(wrapped('//bad host/foo')).resolves.toBeInstanceOf(Response)
+    await expect(wrapped('//bad host/__nuxt_error?statusCode=404')).resolves.toBeInstanceOf(Response)
+
+    expect(assets.fetch).not.toHaveBeenCalled()
+    expect(originalLocalFetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('handles /__nuxt_error with comma-separated or malformed forwarded headers safely', async () => {
+    const originalLocalFetch = vi.fn<LocalFetch>(async () => new Response('ssr error page', { status: 404 }))
+    const fetchedUrls: string[] = []
+    const assets: AssetsFetcher = {
+      fetch: vi.fn(async (input) => {
+        const req = input instanceof Request ? input : new Request(input)
+        fetchedUrls.push(req.url)
+        return new Response('<h1>Static 404</h1>', {
+          status: 200,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        })
+      }),
+    }
+
+    const wrapped = wrapLocalFetchWithStatic404(originalLocalFetch, {
+      assetPath: '/404.html',
+      resolveAssets: () => assets,
+    })
+
+    const resMulti = await wrapped('/__nuxt_error?statusCode=404&url=%2Fmissing', {
+      headers: {
+        'x-forwarded-host': 'a.test, b.test',
+        'x-forwarded-proto': 'https, http',
+        'accept': 'text/html',
+      },
+      context: { nuxt: { '~rendering-error': true } },
+    } as never)
+
+    expect(resMulti.status).toBe(404)
+    await expect(resMulti.text()).resolves.toBe('<h1>Static 404</h1>')
+
+    const resMalformed = await wrapped('/__nuxt_error?statusCode=404&url=%2Fmissing', {
+      headers: {
+        'x-forwarded-host': 'bad host',
+        'accept': 'text/html',
+      },
+      context: { nuxt: { '~rendering-error': true } },
+    } as never)
+
+    expect(resMalformed.status).toBe(404)
+    await expect(resMalformed.text()).resolves.toBe('<h1>Static 404</h1>')
+
+    expect(originalLocalFetch).not.toHaveBeenCalled()
+    expect(fetchedUrls).toEqual(['https://a.test/404.html', 'https://localhost/404.html'])
   })
 })
