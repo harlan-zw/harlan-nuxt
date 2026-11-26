@@ -69,3 +69,71 @@ describe('wrangler build diagnostic logging', () => {
     expect(logs.info).toHaveBeenCalledWith(expect.stringContaining('INFO observability-log-sampling-high'))
   })
 })
+
+describe('static404Fallback build-time configuration warnings', () => {
+  function runNitroConfigHook(options: {
+    static404Fallback?: boolean | { assetPath?: string }
+    compatibilityVersion?: number
+    inlineErrorRendering?: boolean
+    prerenderErrorPages?: boolean | number[]
+    prerenderRoutes?: string[]
+  }) {
+    let onNitroConfig: ((nitroConfig: Record<string, unknown>) => void) | undefined
+    const nuxt = {
+      hook(name: string, callback: unknown) {
+        if (name === 'nitro:config')
+          onNitroConfig = callback as typeof onNitroConfig
+      },
+      options: {
+        dev: false,
+        experimental: {
+          inlineErrorRendering: options.inlineErrorRendering,
+          prerenderErrorPages: options.prerenderErrorPages,
+        },
+        future: {
+          compatibilityVersion: options.compatibilityVersion ?? 4,
+        },
+        nitro: {},
+        runtimeConfig: {},
+        sourcemap: { server: false },
+      },
+    } as unknown as Nuxt
+
+    setupCloudflareModule({
+      bindingTypes: false,
+      enabled: true,
+      workersCache: { _tag: 'disabled' },
+      static404Fallback: options.static404Fallback,
+    }, nuxt)
+
+    onNitroConfig!({
+      prerender: options.prerenderRoutes ? { routes: options.prerenderRoutes } : undefined,
+    })
+  }
+
+  it('warns during nitro:config on Nuxt 5 defaults when static404Fallback is enabled', () => {
+    runNitroConfigHook({
+      static404Fallback: true,
+      compatibilityVersion: 5,
+    })
+
+    expect(logs.warn).toHaveBeenCalledTimes(1)
+    expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining('experimental.inlineErrorRendering: false'))
+    expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining('experimental.prerenderErrorPages: true'))
+  })
+
+  it('emits no static404Fallback warnings when Nuxt 5 flags are configured or option is disabled', () => {
+    runNitroConfigHook({
+      static404Fallback: true,
+      compatibilityVersion: 5,
+      inlineErrorRendering: false,
+      prerenderErrorPages: true,
+    })
+    runNitroConfigHook({
+      static404Fallback: false,
+      compatibilityVersion: 5,
+    })
+
+    expect(logs.warn).not.toHaveBeenCalled()
+  })
+})

@@ -20,6 +20,7 @@ import { findHtmlCacheRouteRuleViolations, formatHtmlCacheRouteRuleViolations } 
 import { resolveFast404Policy } from './runtime/server/utils/fast-404.ts'
 import { resolveStatic404FallbackPolicy } from './runtime/server/utils/static-404-fallback.ts'
 import { resolveHtmlCacheGuarantee, staleDirectivesAreDisabled } from './runtime/server/utils/workers-cache.ts'
+import { findStatic404FallbackWarnings, formatStatic404FallbackWarnings } from './static-404-fallback.ts'
 import { diagnoseStaticAssetRules, readStaticAssetRuleFiles, resolveBuildStaticAssetDirectory } from './static-assets.ts'
 import {
   applyCloudflareDefaults,
@@ -34,6 +35,8 @@ export type { Fast404Options, Fast404Policy } from './runtime/server/utils/fast-
 export { DEFAULT_FAST_404_ALLOW_PREFIXES, DEFAULT_FAST_404_EDGE_CACHE_TTL_SECONDS, resolveFast404Policy } from './runtime/server/utils/fast-404.ts'
 export type { Static404FallbackOptions, Static404FallbackPolicy } from './runtime/server/utils/static-404-fallback'
 export { DEFAULT_STATIC_404_ASSET_PATH, resolveStatic404FallbackPolicy } from './runtime/server/utils/static-404-fallback.ts'
+export type { Static404FallbackConfigInput, Static404FallbackWarning } from './static-404-fallback'
+export { findStatic404FallbackWarnings, formatStatic404FallbackWarnings } from './static-404-fallback.ts'
 
 export interface ModuleOptions {
   /** Register checks through the public check-in API. */
@@ -555,6 +558,27 @@ export function setupCloudflareModule(options: ModuleOptions, nuxt: Nuxt): void 
             }
           : {}),
       }
+    }
+
+    if (static404Policy._tag === 'enabled') {
+      const static404Warnings = findStatic404FallbackWarnings({
+        static404Fallback: options.static404Fallback,
+        compatibilityVersion: nuxt.options.future?.compatibilityVersion,
+        inlineErrorRendering: nuxt.options.experimental?.inlineErrorRendering,
+        prerenderErrorPages: nuxt.options.experimental?.prerenderErrorPages,
+        prerenderRoutes: [
+          ...(nuxt.options.nitro?.prerender?.routes ?? []),
+          ...(nitroConfig.prerender?.routes ?? []),
+        ].filter((route): route is string => typeof route === 'string'),
+        routeRules: {
+          ...nuxt.options.routeRules,
+          ...nuxt.options.nitro?.routeRules,
+          ...nitroConfig.routeRules,
+        },
+        staticPreset: nitroConfig.static ?? nuxt.options.nitro?.static,
+      })
+      if (static404Warnings.length > 0)
+        logger.warn(formatStatic404FallbackWarnings(static404Warnings))
     }
 
     const policy = resolveModuleWorkersCachePolicy(options)
