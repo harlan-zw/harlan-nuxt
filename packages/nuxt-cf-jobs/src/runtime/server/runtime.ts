@@ -18,7 +18,7 @@ import type {
   RunDurableJobMessageResult,
 } from './outbox'
 import type { DispatchableJob, JobDefinition, JobHandler, QueueBatch, QueueMessage } from './types'
-import { createD1DurableBatchStore, createJobBatch, settleBatchMember } from './batch'
+import { createD1DurableBatchStore, createJobBatch, settleBatchMember, toBatchProgress } from './batch'
 import { createCfJobsBroadcastBatchProgressHandler, createCfJobsBroadcastRepositoryHooks } from './broadcast'
 import { createD1DurableJobRepository } from './d1'
 import { dispatchRegisteredJob } from './dispatch'
@@ -82,10 +82,18 @@ export async function runDurableJobBatchMessage<
   let ack = false
   // The follow-up flag is cleared together with the batch decrement, after the run.
   let finish: ((settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>) | undefined
+  let fastSettledBatch: DurableBatchRecord | null = null
+  let knownBatchId: string | null | undefined
   const claimSettlement = opts.lifecycle.claimPendingSettlement
   const completeSettlement = opts.lifecycle.completePendingSettlement
-  const run = await runDurableJobMessage({
+  const completeForBatch = opts.lifecycle.completeJobForBatch
+  const run = await runDurableJobMessage<StoredJob, Job, Message, Env, Db, Logger>({
     ...opts,
+    toDispatchableJob: (storedJob) => {
+      const dispatchable = opts.toDispatchableJob(storedJob)
+      knownBatchId = dispatchable.batchId
+      return dispatchable
+    },
     message: {
       body: opts.message.body,
       attempts: opts.message.attempts,
@@ -94,6 +102,16 @@ export async function runDurableJobBatchMessage<
     },
     lifecycle: {
       ...opts.lifecycle,
+      ...(completeForBatch
+        ? {
+            completeJob: async (job, result) => {
+              const outcome = await completeForBatch(job, result)
+              if (outcome._tag === 'settled')
+                fastSettledBatch = outcome.batch
+              return undefined as never
+            },
+          }
+        : {}),
       ...(claimSettlement
         ? {
             claimPendingSettlement: async (id, pending) => {
@@ -113,6 +131,8 @@ export async function runDurableJobBatchMessage<
       ...(completeSettlement
         ? {
             completePendingSettlement: async (job, status) => {
+              if (fastSettledBatch)
+                return { batch: null }
               finish = settle => completeSettlement(job, status, settle)
               return { batch: null }
             },
@@ -128,6 +148,15 @@ export async function runDurableJobBatchMessage<
     return { run, settled: null }
   }
 
+  if (fastSettledBatch) {
+    const progress = toBatchProgress(fastSettledBatch)
+    if (opts.onBatchProgress)
+      await opts.onBatchProgress(progress)
+    if (ack)
+      opts.message.ack()
+    return { run, settled: { batchComplete: false, onFinishDispatched: false, progress } }
+  }
+
   const jobId = opts.getJobId?.(opts.message.body) ?? opts.message.body.jobId
   if (!jobId) {
     if (ack)
@@ -135,9 +164,16 @@ export async function runDurableJobBatchMessage<
     return { run, settled: null }
   }
 
+  if (knownBatchId === null && !finish) {
+    if (ack)
+      opts.message.ack()
+    return { run, settled: { batchComplete: false, onFinishDispatched: false } }
+  }
+
   const { settled, settlementDeferral } = await settleDurableJobBatch({
     ...opts,
     jobId,
+    batchId: knownBatchId,
     finish,
     failed: run.status === 'settlement-recovered' ? run.settlement.status !== 'completed' : run.status !== 'completed',
   })
@@ -150,6 +186,8 @@ export async function runDurableJobBatchMessage<
 async function settleDurableJobBatch(opts: {
   store: DurableBatchStore
   jobId: string
+  /** Known batch id from the claimed job (`null` = standalone, `undefined` = look up). */
+  batchId?: string | null
   failed: boolean
   finish?: (settle?: DurableJobSettlementFinish) => Promise<DurableJobSettlementFinished>
   dispatchOnFinish?: SettleBatchMemberOptions['dispatchOnFinish']
@@ -181,19 +219,22 @@ async function settleDurableJobBatch(opts: {
         },
       }
     : opts.store
-  const settled = await settleBatchMember({
-    store,
-    jobId: opts.jobId,
-    failed: opts.failed,
-    dispatchOnFinish: finish && opts.dispatchOnFinish
-      ? async (input) => {
-        if (results.get(input.batch.id)?.onFinishDispatched)
-          return
-        await opts.dispatchOnFinish!(input)
-        await writeSettlement({ batchId: input.batch.id, onFinishDispatched: true })
-      }
-      : opts.dispatchOnFinish,
-  })
+  const settled: SettleBatchMemberResult = opts.batchId === null
+    ? { batchComplete: false, onFinishDispatched: false }
+    : await settleBatchMember({
+        store,
+        jobId: opts.jobId,
+        ...(typeof opts.batchId === 'string' ? { batchId: opts.batchId } : {}),
+        failed: opts.failed,
+        dispatchOnFinish: finish && opts.dispatchOnFinish
+          ? async (input) => {
+            if (results.get(input.batch.id)?.onFinishDispatched)
+              return
+            await opts.dispatchOnFinish!(input)
+            await writeSettlement({ batchId: input.batch.id, onFinishDispatched: true })
+          }
+          : opts.dispatchOnFinish,
+      })
   if (settled.progress && opts.onBatchProgress)
     await opts.onBatchProgress(settled.progress)
 
@@ -570,6 +611,7 @@ export async function consumeQueueBatch<Queue extends string, Env, Db, Logger>(
             await settleDurableJobBatch({
               ...opts,
               jobId,
+              batchId: claimed.batch_id,
               failed: true,
               finish: opts.repository.completePendingSettlement
                 ? settle => opts.repository.completePendingSettlement!(claimed, 'failed', settle)

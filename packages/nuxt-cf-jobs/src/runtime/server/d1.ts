@@ -15,6 +15,7 @@ import type { Result } from './result'
 import { parseDurableBatchRow } from './batch'
 import { describeCause, DurableJobOwnershipError, headlineOf } from './errors'
 import { readPendingSettlement } from './lifecycle-write'
+import { hasCompletionContinuations } from './outbox'
 import { err, ok } from './result'
 
 export interface D1ResultLike<T = unknown> {
@@ -201,6 +202,9 @@ export const d1DurableJobMigrationSql = [
   'CREATE INDEX IF NOT EXISTS idx_job_batches_site ON job_batches (site_id) WHERE site_id IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_parent ON job_batches (parent_batch_id)',
   'CREATE INDEX IF NOT EXISTS idx_job_batches_finished_at ON job_batches (finished_at)',
+  // Partial index backing findOrphanedBatches / findUnrecoverableOrphanedBatches
+  // (finished_at IS NULL AND created_at <= ? ORDER BY created_at ASC) without scanning finished batches.
+  'CREATE INDEX IF NOT EXISTS idx_job_batches_open_created ON job_batches (created_at) WHERE finished_at IS NULL',
   // Recovery scans are global. Keep these partial indexes bounded to live rows and align
   // their leading columns with the range + ORDER BY used by each recovery query.
   'CREATE INDEX IF NOT EXISTS idx_jobs_dispatchable ON jobs (available_at) WHERE published_at IS NULL AND reserved_at IS NULL AND completed_at IS NULL AND failed_at IS NULL',
@@ -480,6 +484,68 @@ export function createD1DurableJobRepository<Queue extends string = string>(
     })
   }
 
+  const completeJob = async (job: D1DurableJobRecord<Queue>, result?: unknown): Promise<void> => {
+    const stats = readResultStat(result)
+    // Reported durationMs wins; else derive from the reservation (Laravel-style
+    // wall-clock) so duration is populated even when the handler reports none.
+    const reportedDuration = stats('durationMs')
+    const durationMs = reportedDuration ?? (job.reserved_at != null ? (currentUnixSeconds() - job.reserved_at) * 1000 : null)
+    // Standalone jobs with no completion continuations have no durable follow-up
+    // work to recover, so skip rewriting `payload` with `$._cfJobsSettlement`.
+    const needsSettlement = job.batch_id != null || hasCompletionContinuations(job.payload)
+    const resultUpdate = needsSettlement
+      ? await db.prepare(`
+          UPDATE ${jobsTable}
+          SET completed_at = unixepoch(), reserved_at = NULL,
+              payload = json_set(payload, '$._cfJobsSettlement', json(?)),
+              duration_ms = COALESCE(?, duration_ms),
+              rows_fetched = COALESCE(?, rows_fetched),
+              rows_inserted = COALESCE(?, rows_inserted),
+              d1_rows_read = COALESCE(?, d1_rows_read),
+              d1_rows_written = COALESCE(?, d1_rows_written)
+          WHERE id = ?
+            AND reserved_at = ?
+            AND attempts = ?
+            AND completed_at IS NULL
+            AND failed_at IS NULL
+        `).bind(
+          settlementState(job, 'completed'),
+          durationMs,
+          stats('rowsFetched') ?? null,
+          stats('rowsInserted') ?? null,
+          stats('d1RowsRead') ?? null,
+          stats('d1RowsWritten') ?? null,
+          job.id,
+          job.reserved_at,
+          job.attempts,
+        ).run()
+      : await db.prepare(`
+          UPDATE ${jobsTable}
+          SET completed_at = unixepoch(), reserved_at = NULL,
+              duration_ms = COALESCE(?, duration_ms),
+              rows_fetched = COALESCE(?, rows_fetched),
+              rows_inserted = COALESCE(?, rows_inserted),
+              d1_rows_read = COALESCE(?, d1_rows_read),
+              d1_rows_written = COALESCE(?, d1_rows_written)
+          WHERE id = ?
+            AND reserved_at = ?
+            AND attempts = ?
+            AND completed_at IS NULL
+            AND failed_at IS NULL
+        `).bind(
+          durationMs,
+          stats('rowsFetched') ?? null,
+          stats('rowsInserted') ?? null,
+          stats('d1RowsRead') ?? null,
+          stats('d1RowsWritten') ?? null,
+          job.id,
+          job.reserved_at,
+          job.attempts,
+        ).run()
+    assertOwnedMutation(resultUpdate, job.id)
+    await runLifecycleHook(() => opts.onJobCompleted?.({ job, durationMs, result }), opts.onObserverError, { stage: 'completed', jobId: job.id })
+  }
+
   return {
     async migrate() {
       const existingJobsTable = await db.prepare<{ name: string }>(`
@@ -743,16 +809,31 @@ export function createD1DurableJobRepository<Queue extends string = string>(
       ))
     },
 
-    async completeJob(job, result) {
+    completeJob,
+
+    async completeJobForBatch(job, result) {
+      if (!job.batch_id || typeof db.batch !== 'function' || hasCompletionContinuations(job.payload)) {
+        await completeJob(job, result)
+        return { _tag: 'pending-settlement' }
+      }
       const stats = readResultStat(result)
-      // Reported durationMs wins; else derive from the reservation (Laravel-style
-      // wall-clock) so duration is populated even when the handler reports none.
       const reportedDuration = stats('durationMs')
       const durationMs = reportedDuration ?? (job.reserved_at != null ? (currentUnixSeconds() - job.reserved_at) * 1000 : null)
-      const resultUpdate = await db.prepare(`
+      // Complete the job and decrement non-final open batches (`pending_jobs > 1`)
+      // in one D1 transaction without writing `$._cfJobsSettlement`. When the
+      // batch is at its final member (`pending_jobs <= 1`) or already finished,
+      // the ELSE branch persists `$._cfJobsSettlement` in the same round trip so
+      // durable settlement handles `on_finish` and parent propagation.
+      const completeStmt = db.prepare(`
         UPDATE ${jobsTable}
         SET completed_at = unixepoch(), reserved_at = NULL,
-            payload = json_set(payload, '$._cfJobsSettlement', json(?)),
+            payload = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM ${batchesTable}
+                WHERE id = ? AND pending_jobs > 1 AND finished_at IS NULL
+              ) THEN payload
+              ELSE json_set(payload, '$._cfJobsSettlement', json(?))
+            END,
             duration_ms = COALESCE(?, duration_ms),
             rows_fetched = COALESCE(?, rows_fetched),
             rows_inserted = COALESCE(?, rows_inserted),
@@ -764,6 +845,7 @@ export function createD1DurableJobRepository<Queue extends string = string>(
           AND completed_at IS NULL
           AND failed_at IS NULL
       `).bind(
+        job.batch_id,
         settlementState(job, 'completed'),
         durationMs,
         stats('rowsFetched') ?? null,
@@ -773,9 +855,26 @@ export function createD1DurableJobRepository<Queue extends string = string>(
         job.id,
         job.reserved_at,
         job.attempts,
-      ).run()
-      assertOwnedMutation(resultUpdate, job.id)
+      )
+      const decrementStmt = db.prepare<Record<string, unknown>>(`
+        UPDATE ${batchesTable}
+        SET pending_jobs = pending_jobs - 1,
+            updated_at = unixepoch()
+        WHERE changes() > 0
+          AND id = ?
+          AND pending_jobs > 1
+          AND finished_at IS NULL
+        RETURNING id, name, parent_batch_id, total_jobs, pending_jobs, failed_jobs, on_finish, allow_failures, site_id, user_id, finished_at
+      `).bind(job.batch_id)
+      const [jobResult, batchResult] = await db.batch([completeStmt, decrementStmt])
+      assertOwnedMutation(jobResult!, job.id)
+      const batchRow = batchResult?.results?.[0] as Record<string, unknown> | undefined
+      if ((batchResult?.meta?.changes ?? 0) > 0 && !batchRow)
+        throw new Error(`D1 batch RETURNING result missing after atomic batch decrement for ${job.batch_id}`)
       await runLifecycleHook(() => opts.onJobCompleted?.({ job, durationMs, result }), opts.onObserverError, { stage: 'completed', jobId: job.id })
+      return batchRow
+        ? { _tag: 'settled', batch: parseDurableBatchRow(batchRow) }
+        : { _tag: 'pending-settlement' }
     },
 
     async failJob(job, error, failOpts) {

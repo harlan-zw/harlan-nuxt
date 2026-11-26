@@ -545,7 +545,7 @@ export interface RecoverOrphanedBatchesResult {
   errors: Array<{ batchId: string, error: unknown }>
 }
 
-function toProgress(batch: DurableBatchRecord): BatchProgress {
+export function toBatchProgress(batch: DurableBatchRecord): BatchProgress {
   return {
     batchId: batch.id,
     name: batch.name,
@@ -671,7 +671,7 @@ export async function settleBatchMember<
   if (!batch)
     return { batchComplete: false, onFinishDispatched: false }
 
-  const progress = toProgress(batch)
+  const progress = toBatchProgress(batch)
   if (batch.pendingJobs !== 0)
     return { batchComplete: false, onFinishDispatched: false, progress }
 

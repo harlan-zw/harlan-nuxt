@@ -247,6 +247,7 @@ describe('d1 best-practice query shapes', () => {
     expect(indexes.has('idx_jobs_type')).toBe(true)
     expect(indexes.has('idx_job_batches_parent')).toBe(true)
     expect(indexes.has('idx_job_batches_finished_at')).toBe(true)
+    expect(indexes.get('idx_job_batches_open_created')).toMatch(/WHERE finished_at IS NULL/i)
   })
 
   it('keeps indexed query plans across all package and downstream query shapes after index reduction', () => {
@@ -457,5 +458,76 @@ describe('d1 best-practice query shapes', () => {
 
     // Replay on an already-finished batch is a no-op.
     expect(await store.decrementPending('batch_1')).toBeNull()
+  })
+
+  it('indexes findOrphanedBatches and findUnrecoverableOrphanedBatches with partial idx_job_batches_open_created', async () => {
+    const db = new DatabaseSync(':memory:')
+    const sent: Array<{ query: string, bound: unknown[] }> = []
+    const d1: D1DatabaseLike = {
+      async exec(query) { db.exec(query) },
+      prepare<T = unknown>(query: string): D1PreparedStatementLike<T> {
+        const stmt = db.prepare(query)
+        const entry = { query, bound: [] as unknown[] }
+        sent.push(entry)
+        const api: D1PreparedStatementLike<T> = {
+          bind(...values) {
+            entry.bound = values
+            return api
+          },
+          async run() {
+            return { success: true, meta: { changes: Number(stmt.run(...(entry.bound as never[])).changes) } }
+          },
+          async first<R = T>() { return (stmt.get(...(entry.bound as never[])) ?? null) as R | null },
+          async all<R = T>() { return { results: stmt.all(...(entry.bound as never[])) as R[] } },
+        }
+        return api
+      },
+    }
+
+    const repo = createD1DurableJobRepository(d1)
+    const store = createD1DurableBatchStore(d1)
+    await repo.migrate()
+
+    const now = 1_800_000_000
+    const insBatch = db.prepare(`INSERT INTO job_batches (id, total_jobs, pending_jobs, failed_jobs, created_at, updated_at, finished_at) VALUES (?, 5, ?, 0, ?, ?, ?)`)
+    for (let i = 0; i < 500; i++) {
+      const finished = i < 495 ? now - 3600 - i * 60 : null
+      insBatch.run(`b_${i}`, finished ? 0 : 2, now - 86400 - i * 10, now - 3600, finished)
+    }
+    db.exec('ANALYZE')
+
+    sent.length = 0
+    await store.findOrphanedBatches!({ before: now - 3600, limit: 100 })
+    const orphanedSql = sent.at(-1)!
+    const orphanedPlan = db.prepare(`EXPLAIN QUERY PLAN ${orphanedSql.query}`)
+      .all(...(orphanedSql.bound as never[]))
+      .map(row => String((row as { detail: unknown }).detail))
+      .join('\n')
+
+    sent.length = 0
+    await store.findUnrecoverableOrphanedBatches!({ before: now - 3600, limit: 100 })
+    const unrecoverableSql = sent.at(-1)!
+    const unrecoverablePlan = db.prepare(`EXPLAIN QUERY PLAN ${unrecoverableSql.query}`)
+      .all(...(unrecoverableSql.bound as never[]))
+      .map(row => String((row as { detail: unknown }).detail))
+      .join('\n')
+
+    expect(orphanedPlan).toContain('SEARCH job_batches USING INDEX idx_job_batches_open_created (created_at<?)')
+    expect(orphanedPlan).not.toMatch(/SCAN job_batches/)
+    expect(orphanedPlan).not.toContain('USE TEMP B-TREE')
+    expect(unrecoverablePlan).toContain('SEARCH job_batches USING INDEX idx_job_batches_open_created (created_at<?)')
+    expect(unrecoverablePlan).not.toMatch(/SCAN job_batches/)
+    expect(unrecoverablePlan).not.toContain('USE TEMP B-TREE')
+
+    // Intermediate decrements must not open idx_job_batches_open_created or idx_job_batches_finished_at for writes.
+    const byRoot = new Map(
+      (db.prepare(`SELECT rootpage, name FROM sqlite_master WHERE type = 'index'`).all() as Array<{ rootpage: number, name: string }>)
+        .map(row => [row.rootpage, row.name]),
+    )
+    const opened = (db.prepare(`EXPLAIN UPDATE job_batches SET pending_jobs = pending_jobs - 1, updated_at = unixepoch() WHERE changes() > 0 AND id = ? AND pending_jobs > 1 AND finished_at IS NULL`).all() as Array<{ opcode: string, p2: number }>)
+      .filter(op => op.opcode === 'OpenWrite' && byRoot.has(op.p2))
+      .map(op => byRoot.get(op.p2)!)
+    expect(opened).not.toContain('idx_job_batches_open_created')
+    expect(opened).not.toContain('idx_job_batches_finished_at')
   })
 })

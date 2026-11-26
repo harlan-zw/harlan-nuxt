@@ -20,6 +20,7 @@ export const cfJobBatches = sqliteTable('job_batches', {
   index('idx_job_batches_site').on(t.siteId).where(sql`site_id IS NOT NULL`),
   index('idx_job_batches_parent').on(t.parentBatchId),
   index('idx_job_batches_finished_at').on(t.finishedAt),
+  index('idx_job_batches_open_created').on(t.createdAt).where(sql`finished_at IS NULL`),
 ])
 
 export const cfJobs = sqliteTable('jobs', {
