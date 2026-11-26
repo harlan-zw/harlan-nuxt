@@ -6,8 +6,10 @@ name: Harlan Desktop site CI
 # `harlan-desktop-` prefix.
 #
 # The pull request gate shared by every Harlan site. A calling repository keeps a
-# ten line workflow and gets lint, typecheck, and test as three separate,
-# separately required checks.
+# ten line workflow and exposes lint, typecheck, and test as three required check
+# names. By default (`single-job: true`) the `lint` job runs lint, prepare,
+# typecheck, and test in one container while `typecheck` and `test` report
+# SKIPPED. Set `single-job: false` to run all three jobs in parallel.
 #
 # Build is deliberately absent. A build needs that site's own production secrets,
 # and a reusable workflow cannot take an open-ended env block, so build stays in
@@ -66,6 +68,16 @@ on:
         type: boolean
         required: false
         default: false
+      single-job:
+        description: >-
+          Run lint, prepare, typecheck, and test in one container under the
+          `lint` job. The `typecheck` and `test` jobs report SKIPPED so
+          repositories requiring all three check names still pass without
+          spawning extra containers. Set to `false` to run the three jobs in
+          parallel.
+        type: boolean
+        required: false
+        default: true
       runs-on:
         description: JSON array of runner labels. Self-hosted pools are private repositories only.
         type: string
@@ -138,7 +150,7 @@ permissions:
 
 jobs:
   lint:
-    if: ${{ !inputs.skip && (inputs.task-cache || inputs.lint-command != '') }}
+    if: ${{ !inputs.skip && (inputs.task-cache || inputs.lint-command != '' || (inputs.single-job && (inputs.typecheck-command != '' || inputs.test-command != ''))) }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -159,15 +171,36 @@ jobs:
           package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
       - if: ${{ !inputs.task-cache }}
         run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
-      # ESLint does no type-aware linting on these sites, so it never reads a
-      # `.nuxt` directory and `prepare-command` is pure cost here.
-      - if: ${{ inputs.task-cache }}
+      # ESLint does no type-aware linting on these sites, so it runs before
+      # `prepare-command` and skips prepare when `single-job` is false.
+      - name: Lint
+        if: ${{ inputs.task-cache }}
         run: pnpm pipeline lint ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
-      - if: ${{ !inputs.task-cache }}
+      - name: Lint
+        if: ${{ !inputs.task-cache && inputs.lint-command != '' }}
         run: ${{ inputs.lint-command }}
+      - name: Prepare
+        if: ${{ inputs.single-job && !inputs.task-cache && inputs.prepare-command != '' && (inputs.typecheck-command != '' || inputs.test-command != '') }}
+        run: ${{ inputs.prepare-command }}
+      - name: Typecheck
+        if: ${{ inputs.single-job && inputs.task-cache }}
+        run: pnpm pipeline typecheck ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
+        env:
+          NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
+      - name: Typecheck
+        if: ${{ inputs.single-job && !inputs.task-cache && inputs.typecheck-command != '' }}
+        run: ${{ inputs.typecheck-command }}
+        env:
+          NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
+      - name: Test
+        if: ${{ inputs.single-job && inputs.task-cache }}
+        run: pnpm pipeline test ${{ github.event_name != 'pull_request' && '--full' || '' }} ${{ inputs.install-args }}
+      - name: Test
+        if: ${{ inputs.single-job && !inputs.task-cache && inputs.test-command != '' }}
+        run: ${{ inputs.test-command }}
 
   typecheck:
-    if: ${{ !inputs.skip && (inputs.task-cache || inputs.typecheck-command != '') }}
+    if: ${{ !inputs.skip && !inputs.single-job && (inputs.task-cache || inputs.typecheck-command != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
@@ -195,7 +228,7 @@ jobs:
           NODE_OPTIONS: ${{ inputs.typecheck-node-options }}
 
   test:
-    if: ${{ !inputs.skip && (inputs.task-cache || inputs.test-command != '') }}
+    if: ${{ !inputs.skip && !inputs.single-job && (inputs.task-cache || inputs.test-command != '') }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
