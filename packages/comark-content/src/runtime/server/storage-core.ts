@@ -1,8 +1,20 @@
 import type { ContentCollectionManifestEntry, ContentSearchSection, IndexedContentDocument, NavigationCollectionItem, PageCollectionItemBase } from '../types'
+import type { AssetDecodeCachePolicy } from './asset'
 import { decodeCollectionAsset } from './asset'
 
 export type ContentAssetReader = (path: string) => Promise<Uint8Array | null | undefined>
 
+export interface ContentStorageOptions {
+  /** Caching policy forwarded to `decodeCollectionAsset`. */
+  cache?: AssetDecodeCachePolicy
+  /**
+   * Memoizes resolved assets by path on this storage instance when `cache` is
+   * `Bounded`, skipping repeated storage lookups for immutable production builds.
+   */
+  immutableAssets?: boolean
+}
+
+const DEFAULT_STORAGE_CACHE_ENTRIES = 256
 const collectionName = /^[A-Z]\w*$/i
 const bodyAssetName = /^[a-f0-9]{32}\.json\.gz$/
 
@@ -11,12 +23,36 @@ function assertCollectionName(name: string) {
     throw new TypeError(`<request>:1:1 Invalid collection name "${name}".`)
 }
 
-export function createContentStorage(readAsset: ContentAssetReader) {
+export function createContentStorage(readAsset: ContentAssetReader, options?: ContentStorageOptions) {
+  const immutableCache = options?.immutableAssets && options.cache?._tag === 'Bounded'
+    ? new Map<string, unknown>()
+    : undefined
+  const maxEntries = options?.cache?._tag === 'Bounded'
+    ? (options.cache.maxEntries ?? DEFAULT_STORAGE_CACHE_ENTRIES)
+    : DEFAULT_STORAGE_CACHE_ENTRIES
+
   const loadAsset = async <T>(path: string, missingMessage: string): Promise<T> => {
+    if (immutableCache?.has(path)) {
+      const cached = immutableCache.get(path) as T
+      immutableCache.delete(path)
+      immutableCache.set(path, cached)
+      return cached
+    }
     const value = await readAsset(`${path}.json.gz`)
     if (!value)
       throw new TypeError(missingMessage)
-    return decodeCollectionAsset<T>(value, path)
+    const decoded = await decodeCollectionAsset<T>(value, path, options?.cache ? { cache: options.cache } : undefined)
+    if (immutableCache && maxEntries > 0) {
+      immutableCache.delete(path)
+      while (immutableCache.size >= maxEntries) {
+        const oldest = immutableCache.keys().next().value
+        if (oldest === undefined)
+          break
+        immutableCache.delete(oldest)
+      }
+      immutableCache.set(path, decoded)
+    }
+    return decoded
   }
   const loadCollectionIndex = (name: string): Promise<IndexedContentDocument[]> => {
     assertCollectionName(name)
