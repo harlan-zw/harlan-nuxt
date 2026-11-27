@@ -161,14 +161,15 @@ jobs:
           # origin/main, which a shallow checkout cannot resolve. Other events
           # run `--full`, which needs no history.
           fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          # Self-hosted containers share one persistent pnpm store. Restoring a
-          # GitHub cache over it adds network work and can stall setup-node.
-          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
-          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          package-manager-cache: false
+      # Self-hosted containers share one persistent pnpm store; enable cache only on GitHub runners.
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          install: false
       - if: ${{ !inputs.task-cache }}
         run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       # ESLint does no type-aware linting on these sites, so it runs before
@@ -208,12 +209,14 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
-          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          package-manager-cache: false
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          install: false
       - if: ${{ !inputs.task-cache }}
         run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
@@ -236,12 +239,14 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: ${{ (inputs.task-cache && github.event_name == 'pull_request') && '0' || '1' }}
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') && 'pnpm' || '' }}
-          package-manager-cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          package-manager-cache: false
+      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+        with:
+          cache: ${{ !contains(fromJSON(inputs.runs-on), 'self-hosted') }}
+          install: false
       - if: ${{ !inputs.task-cache }}
         run: pnpm install --frozen-lockfile ${{ inputs.install-args }}
       - if: ${{ !inputs.task-cache && inputs.prepare-command != '' }}
