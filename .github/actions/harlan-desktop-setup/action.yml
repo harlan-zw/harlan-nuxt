@@ -28,18 +28,19 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-
-    # Self-hosted containers mount one shared `/pnpm-store` volume and resolve
-    # packages from local disk. Restoring a GitHub cache over that store is
-    # slower than no cache at all (1.3-4.3 MB/s on a shared uplink) and can
-    # stall setup-node. Enable GitHub's pnpm cache only on GitHub-hosted
-    # runners, which have no shared store.
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: ${{ inputs.node-version }}
-        cache: ${{ runner.environment != 'self-hosted' && 'pnpm' || '' }}
-        package-manager-cache: ${{ runner.environment != 'self-hosted' }}
+        package-manager-cache: false
+
+    # Self-hosted containers mount one shared `/pnpm-store` volume and resolve
+    # packages from local disk. Restoring a GitHub cache over that store is
+    # slower than no cache at all (1.3-4.3 MB/s on a shared uplink). Enable
+    # GitHub's pnpm cache only on GitHub-hosted runners, which have no shared store.
+    - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      with:
+        cache: ${{ runner.environment != 'self-hosted' }}
+        install: false
 
     - if: inputs.install == 'true'
       shell: bash
